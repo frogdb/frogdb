@@ -85,17 +85,21 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 
 ### Decision Log
 
-| Date | Decision | Rationale | Alternatives Considered |
-|------|----------|-----------|------------------------|
-| 2025-01-07 | Shared-nothing threading | Avoids lock contention, scales linearly with cores, proven by Dragonfly | Lock-based sharding, Actor model (Actix) |
-| 2025-01-07 | Message-passing between threads | Clean coordination for scatter-gather, easier to reason about than shared state | Shared memory with atomics, Lock-free data structures |
-| 2025-01-07 | In-memory + RocksDB persistence | Fast hot path, durable restarts, proven combination | Pure in-memory (no durability), Custom storage engine |
-| 2025-01-07 | Forkless snapshots | Avoids Redis's fork() memory spike (2x worst case), better for large datasets | Fork + COW (Redis-style), Incremental checkpointing |
-| 2025-01-07 | RESP2 first | Simpler protocol, wider client compatibility, faster to implement | RESP3 first, Custom protocol |
-| 2025-01-07 | Scatter-gather with fail-all | Predictable semantics, easier to reason about failures | Partial results with errors, Timeout + retry |
-| 2025-01-07 | Block-shard Lua execution | Redis-compatible semantics, atomic execution guaranteed | Async scripts on snapshot, Parallel script execution |
-| 2025-01-07 | Tokio async runtime | Industry standard, excellent ecosystem, well-documented | async-std, Glommio (io_uring, Linux-only) |
-| 2025-01-07 | Eventual consistency model | Appropriate for caching/session use cases, simpler implementation | Strong consistency (more complex coordination) |
+| Decision | Rationale | Alternatives Considered |
+|----------|-----------|------------------------|
+| Shared-nothing threading | Avoids lock contention, scales linearly with cores, proven by Dragonfly | Lock-based sharding, Actor model |
+| Message-passing between threads | Clean coordination for scatter-gather, easier to reason about | Shared memory with atomics |
+| Pinned connections (Dragonfly-style) | Simple lifecycle, no migration complexity | Key-owner handles connection |
+| Single RocksDB with column families | Simpler backup/restore, shared WAL | Separate RocksDB per shard |
+| In-memory + RocksDB persistence | Fast hot path, durable restarts | Pure in-memory, custom engine |
+| Forkless snapshots | Avoids fork() memory spike (2x worst case) | Fork + COW (Redis-style) |
+| RESP2 first | Simpler, wider client compatibility | RESP3 first |
+| Scatter-gather fail-all + timeout | Predictable semantics, configurable timeout | Partial results with errors |
+| Hybrid key expiry (lazy + active) | Matches Redis/Valkey, balances memory and CPU | Lazy only, active only |
+| OOM rejects writes | Explicit, predictable behavior | LRU eviction |
+| Block-shard Lua execution | Redis-compatible atomicity | Async scripts on snapshot |
+| Tokio async runtime | Industry standard, excellent ecosystem | async-std, Glommio |
+| Eventual consistency model | Appropriate for caching use cases | Strong consistency |
 
 ### Key Tradeoffs
 
@@ -155,16 +159,58 @@ Main Thread
     │
     ├── Spawns Acceptor Thread (1)
     │       └── Accepts TCP connections
-    │       └── Assigns connection to shard via consistent hash of client ID
+    │       └── Assigns connection to thread via round-robin or least-connections
     │
     └── Spawns Shard Workers (N = num_cpus)
             └── Each owns:
                 ├── Exclusive data store (HashMap<Key, FrogValue>)
                 ├── Lua VM instance
-                ├── RocksDB column family (for persistence)
                 ├── mpsc::Receiver for incoming messages
                 └── Connection handlers for assigned clients
 ```
+
+### Connection Model (Dragonfly-style)
+
+Connections are **pinned** to a single thread for their entire lifetime but act as **coordinators** that can access any shard via message-passing:
+
+```
+Client Connection
+         │
+         │ Accepted by Acceptor, assigned to Thread 2
+         │
+         ▼
+    ┌─────────────────────────────────────────────────────┐
+    │ Thread 2                                            │
+    │  ┌──────────────────┐    ┌──────────────────┐      │
+    │  │ Connection Fiber │    │    Shard 2       │      │
+    │  │  (coordinator)   │    │   (local data)   │      │
+    │  └────────┬─────────┘    └──────────────────┘      │
+    └───────────┼─────────────────────────────────────────┘
+                │
+                │ Client sends: SET user:42 "data"
+                │ hash("user:42") % num_shards = 0
+                │
+                │ Key owned by Shard 0 (Thread 0)
+                │
+    ┌───────────┼─────────────────────────────────────────┐
+    │ Thread 0  │                                         │
+    │           ▼                                         │
+    │  ┌──────────────────┐                              │
+    │  │    Shard 0       │ ◄── Execute SET, return OK   │
+    │  │   (owns key)     │                              │
+    │  └──────────────────┘                              │
+    └─────────────────────────────────────────────────────┘
+                │
+                │ Response flows back to Thread 2
+                ▼
+         Client receives: +OK\r\n
+```
+
+**Key points:**
+- Connection lifetime is bound to one thread (no migration)
+- Connection fiber coordinates commands, messaging other shards as needed
+- Local shard access is direct; remote shard access via message-passing
+- Each thread handles both I/O (connections) and data (its shard)
 
 ### Key Hashing
 
@@ -177,6 +223,34 @@ fn shard_for_key(key: &[u8], num_shards: usize) -> usize {
     let hash = xxhash64(hash_key);
     hash as usize % num_shards
 }
+```
+
+### Hash Tags (Redis-compatible)
+
+Hash tags allow related keys to be colocated on the same shard:
+
+```
+Key                    Hash Input      Result
+─────────────────────────────────────────────
+user:1:profile         user:1:profile  hash(full key)
+{user:1}:profile       user:1          hash("user:1")
+{user:1}:settings      user:1          hash("user:1") → same shard!
+foo{bar}baz            bar             hash("bar")
+{}{user:1}             {               hash("{") - empty tag = first {
+foo{}bar               (empty)         hash("") - empty tag
+```
+
+**Rules (matching Redis):**
+1. Find first `{` in key
+2. Find first `}` after that `{`
+3. If found and content between is non-empty, use content as hash input
+4. Otherwise, hash the entire key
+
+**Use case:** Lua scripts and multi-key commands (MGET, MSET) require all keys to be on the same shard. Hash tags guarantee colocation:
+
+```
+-- All keys hash to same shard via {user:1} tag
+EVAL "..." 3 {user:1}:name {user:1}:email {user:1}:prefs
 ```
 
 ### Message Types
@@ -227,13 +301,26 @@ Client: MGET key1 key2 key3
          │   Shard 2: [key2]
          │
          ├── Await all responses (fail-all semantics)
-         │   - If any shard fails, entire operation fails
+         │   - Configurable timeout (default: 1000ms)
+         │   - If any shard fails OR times out, entire operation fails
+         │   - All partial results discarded on failure
          │
          └── Gather results, reorder by original key position
               │
               ▼
          Response: [val1, val2, val3]
 ```
+
+### Scatter-Gather Failure Modes
+
+| Scenario | Behavior |
+|----------|----------|
+| All shards respond | Success, return aggregated results |
+| Any shard returns error | Fail entire operation, return error |
+| Any shard times out | Fail entire operation, return `-TIMEOUT` |
+| Partial responses | Discarded (no partial results ever returned) |
+
+**Rationale:** Fail-all semantics are predictable and easier to reason about than partial results with error markers.
 
 ---
 
@@ -276,7 +363,105 @@ Alternative: Skip list implementation for cache-friendlier traversal.
 
 ---
 
+## Key Expiry (TTL)
+
+FrogDB uses a **hybrid expiration model** matching Redis/Valkey behavior:
+
+### Expiration Strategies
+
+1. **Lazy expiration**: On every key access, check if expired. Delete immediately if so.
+2. **Active expiration**: Background task runs ~10Hz per shard, samples keys with TTL, deletes expired ones within time budget.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                  Per-Shard Expiry                        │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  Access Path (Lazy):                                    │
+│    GET key → check expiry → if expired: delete, nil    │
+│                                                         │
+│  Background Task (Active, ~10Hz):                       │
+│    1. Sample N keys from expiry index                  │
+│    2. Delete expired ones                              │
+│    3. Stop when time budget (~1ms) exhausted           │
+│    4. If >25% expired, continue next cycle             │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Data Structure
+
+Per-shard expiry index for efficient sampling:
+
+```rust
+pub struct ExpiryIndex {
+    /// Keys with expiry, sorted by expiration time
+    by_time: BTreeMap<(Instant, Bytes), ()>,
+    /// Quick lookup: key -> expiration time
+    by_key: HashMap<Bytes, Instant>,
+}
+```
+
+### Configuration
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `active_expiry_hz` | 10 | Background sweep frequency per shard |
+| `active_expiry_cycle_ms` | 1 | Max time budget per sweep cycle |
+| `active_expiry_sample_size` | 20 | Keys sampled per cycle |
+
+---
+
+## Memory Management
+
+### Memory Limit Behavior
+
+When configured memory limit (`max_memory`) is reached:
+
+| Operation | Behavior |
+|-----------|----------|
+| Write (SET, ZADD, etc.) | Return `-OOM out of memory` error |
+| Read (GET, ZRANGE, etc.) | Continue normally |
+| Delete (DEL, EXPIRE) | Continue normally |
+| Expiry background task | Continues to reclaim memory |
+
+**Rationale:** Explicit OOM errors are predictable. Users must manage capacity or enable expiry policies.
+
+### Non-Goals (Initial)
+
+- LRU/LFU eviction policies (future enhancement)
+- Tiered storage to disk for larger-than-memory datasets
+
+---
+
 ## Persistence
+
+### RocksDB Topology
+
+FrogDB uses a **single shared RocksDB instance** with one column family per shard:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    RocksDB Instance                      │
+├─────────────────────────────────────────────────────────┤
+│  ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌─────────┐ │
+│  │  CF: s0   │ │  CF: s1   │ │  CF: s2   │ │ CF: sN  │ │
+│  │ (Shard 0) │ │ (Shard 1) │ │ (Shard 2) │ │(Shard N)│ │
+│  └───────────┘ └───────────┘ └───────────┘ └─────────┘ │
+│                                                         │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │              Shared WAL                          │   │
+│  └─────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Benefits:**
+- Single backup/restore operation for entire database
+- Shared WAL simplifies recovery
+- Atomic cross-shard operations possible via WriteBatch
+
+**Trade-off:**
+- Potential lock contention on WAL writes (mitigated by batching)
 
 ### Write-Ahead Log (WAL)
 
@@ -425,6 +610,52 @@ pub trait Command: Send + Sync {
 }
 ```
 
+### Arity
+
+Specifies the expected number of arguments for a command:
+
+```rust
+pub enum Arity {
+    /// Exactly N arguments (e.g., GET = Fixed(1))
+    Fixed(usize),
+    /// At least N arguments (e.g., MGET = AtLeast(1))
+    AtLeast(usize),
+    /// Between min and max arguments inclusive
+    Range { min: usize, max: usize },
+}
+```
+
+### Command Flags
+
+Bitflags describing command behavior for routing and optimization:
+
+```rust
+bitflags! {
+    pub struct CommandFlags: u32 {
+        /// Command modifies data (SET, DEL, ZADD)
+        const WRITE = 0b0000_0001;
+        /// Command only reads data (GET, ZRANGE)
+        const READONLY = 0b0000_0010;
+        /// O(1) operation, suitable for latency-sensitive paths
+        const FAST = 0b0000_0100;
+        /// May block the connection (BLPOP, BRPOP)
+        const BLOCKING = 0b0000_1000;
+        /// Operates on multiple keys (MGET, MSET, DEL with multiple keys)
+        const MULTI_KEY = 0b0001_0000;
+        /// Pub/sub command, connection enters pub/sub mode
+        const PUBSUB = 0b0010_0000;
+        /// Script execution (EVAL, EVALSHA)
+        const SCRIPT = 0b0100_0000;
+    }
+}
+```
+
+**Usage:** Flags inform the router about command characteristics:
+- `WRITE` commands update the WAL
+- `READONLY` commands can be load-balanced to replicas (future)
+- `MULTI_KEY` commands may trigger scatter-gather
+- `BLOCKING` commands require special timeout handling
+
 ---
 
 ## Lua Scripting
@@ -467,358 +698,60 @@ FrogDB supports two pub/sub modes with a unified architecture:
 
 | Mode | Commands | Routing | Use Case |
 |------|----------|---------|----------|
-| **Broadcast** | SUBSCRIBE, PUBLISH | All shards | General pub/sub, low-medium volume |
-| **Sharded** | SSUBSCRIBE, SPUBLISH | Hash to owner shard | High-throughput, Redis 7.0+ compatible |
+| **Broadcast** | SUBSCRIBE, PUBLISH, PSUBSCRIBE | All shards | General pub/sub, patterns |
+| **Sharded** | SSUBSCRIBE, SPUBLISH | Hash to owner shard | High-throughput, Redis 7.0+ |
 
-### Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Pub/Sub System                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    PubSubRouter                          │   │
-│  │  ┌─────────────────┐    ┌─────────────────┐             │   │
-│  │  │ Broadcast Mode  │    │  Sharded Mode   │             │   │
-│  │  │ (all shards)    │    │ (hash to owner) │             │   │
-│  │  └────────┬────────┘    └────────┬────────┘             │   │
-│  │           │                      │                       │   │
-│  │           └──────────┬───────────┘                       │   │
-│  │                      ▼                                   │   │
-│  │           ┌─────────────────────┐                       │   │
-│  │           │   Routing Decision  │                       │   │
-│  │           └─────────────────────┘                       │   │
-│  └──────────────────────┼──────────────────────────────────┘   │
-│                         ▼                                       │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │              Per-Shard PubSubHandler                     │   │
-│  │  ┌───────────────────────────────────────────────────┐  │   │
-│  │  │            ShardSubscriptions                      │  │   │
-│  │  │  • channel_subs: HashMap<Channel, Set<ConnId>>    │  │   │
-│  │  │  • pattern_subs: Vec<(Pattern, ConnId)>           │  │   │
-│  │  └───────────────────────────────────────────────────┘  │   │
-│  │                         │                                │   │
-│  │                         ▼                                │   │
-│  │  ┌───────────────────────────────────────────────────┐  │   │
-│  │  │              deliver_locally()                     │  │   │
-│  │  │  • Match exact channels                           │  │   │
-│  │  │  • Match patterns (glob)                          │  │   │
-│  │  │  • Send to connections                            │  │   │
-│  │  └───────────────────────────────────────────────────┘  │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Broadcast vs Sharded Comparison
+### Architecture
 
 ```
-BROADCAST: PUBLISH news:sports "goal"     SHARDED: SPUBLISH news:sports "goal"
-              │                                        │
-              ▼                                        ▼
-         ┌────────┐                              ┌────────┐
-         │ Shard  │                              │ Shard  │
-         │   0    │                              │   0    │
-         └────┬───┘                              └────────┘
-              │                                        │
-     ┌────────┼────────┐                    hash("news:sports") = 2
-     ▼        ▼        ▼                               │
-┌────────┐┌────────┐┌────────┐                        ▼
-│Shard 0 ││Shard 1 ││Shard 2 │               ┌────────────────┐
-│deliver ││deliver ││deliver │               │    Shard 2     │
-│locally ││locally ││locally │               │ (owner only)   │
-└────────┘└────────┘└────────┘               │ deliver locally│
-     │        │        │                      └────────────────┘
-     └────────┴────────┘                               │
-              │                                        │
-              ▼                                        ▼
-    Total subscribers: 15                   Subscribers: 5
-    (sum from all shards)                   (single shard)
+┌───────────────────────────────────────────────────────────┐
+│                   Per-Shard PubSubHandler                  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │  ShardSubscriptions (shared by both modes)          │  │
+│  │  • channel_subs: HashMap<Channel, Set<ConnId>>      │  │
+│  │  • pattern_subs: Vec<(Pattern, ConnId)>             │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                          │                                 │
+│  ┌───────────────────────┴───────────────────────────┐    │
+│  │                  Routing Decision                  │    │
+│  │  Broadcast: fan-out to all shards                 │    │
+│  │  Sharded: route to hash(channel) % num_shards     │    │
+│  └────────────────────────────────────────────────────┘   │
+└───────────────────────────────────────────────────────────┘
 ```
 
-### Core Components
+### Key Design Decisions
 
-```rust
-/// Pub/Sub mode determines routing behavior
-#[derive(Clone, Copy)]
-pub enum PubSubMode {
-    /// SUBSCRIBE/PUBLISH - broadcast to all shards
-    Broadcast,
-    /// SSUBSCRIBE/SPUBLISH - route to channel's owning shard
-    Sharded,
-}
+1. **Unified data structure**: `ShardSubscriptions` used by both modes
+2. **Routing is the only difference**: Broadcast fans out, Sharded routes to owner
+3. **~90% code reuse**: Only routing logic differs between modes
+4. **Pattern subscriptions**: Broadcast mode only (PSUBSCRIBE)
 
-/// Per-connection pub/sub state (shared by both modes)
-pub struct PubSubState {
-    /// Exact channel subscriptions: (channel, mode)
-    channels: HashMap<Bytes, PubSubMode>,
-    /// Pattern subscriptions (broadcast mode only)
-    patterns: Vec<Pattern>,
-    /// Is this connection in pub/sub mode?
-    is_subscribed: bool,
-}
+### Mode Comparison
 
-/// Per-shard subscription index (shared by both modes)
-pub struct ShardSubscriptions {
-    /// Channel -> Set of subscribed connection IDs
-    /// Used by both modes - broadcast stores all local, sharded stores owned only
-    channel_subs: HashMap<Bytes, HashSet<ConnectionId>>,
-    /// Pattern subscribers (broadcast mode only, checked on every publish)
-    pattern_subs: Vec<(Pattern, ConnectionId)>,
-}
-
-/// Unified pub/sub handler per shard
-pub struct PubSubHandler {
-    shard_id: ShardId,
-    num_shards: usize,
-    subscriptions: ShardSubscriptions,
-}
-
-impl PubSubHandler {
-    /// Subscribe to a channel
-    pub fn subscribe(
-        &mut self,
-        channel: Bytes,
-        conn: ConnectionId,
-        mode: PubSubMode,
-    ) -> SubscribeResult {
-        match mode {
-            PubSubMode::Broadcast => {
-                // Always subscribe locally - each shard tracks its own connections
-                self.subscriptions.add(channel, conn);
-                SubscribeResult::Subscribed
-            }
-            PubSubMode::Sharded => {
-                let owner = self.channel_owner(&channel);
-                if owner == self.shard_id {
-                    // We own this channel - subscribe locally
-                    self.subscriptions.add(channel, conn);
-                    SubscribeResult::Subscribed
-                } else {
-                    // Forward to owning shard
-                    SubscribeResult::Forward { shard: owner }
-                }
-            }
-        }
-    }
-
-    /// Determine where to route a publish
-    pub fn route_publish(&self, channel: &Bytes, mode: PubSubMode) -> PublishRoute {
-        match mode {
-            PubSubMode::Broadcast => PublishRoute::AllShards,
-            PubSubMode::Sharded => {
-                let owner = self.channel_owner(channel);
-                PublishRoute::SingleShard(owner)
-            }
-        }
-    }
-
-    /// Deliver message to local subscribers (SAME for both modes)
-    pub fn deliver_locally(&self, channel: &Bytes, message: &Bytes) -> usize {
-        let mut delivered = 0;
-
-        // Exact channel matches
-        if let Some(subscribers) = self.subscriptions.channel_subs.get(channel) {
-            for conn_id in subscribers {
-                self.send_to_connection(*conn_id, channel, message);
-                delivered += 1;
-            }
-        }
-
-        // Pattern matches (broadcast mode subscriptions)
-        for (pattern, conn_id) in &self.subscriptions.pattern_subs {
-            if pattern.matches(channel) {
-                self.send_to_connection(*conn_id, channel, message);
-                delivered += 1;
-            }
-        }
-
-        delivered
-    }
-
-    /// Hash channel to owning shard (same algorithm as keys)
-    fn channel_owner(&self, channel: &Bytes) -> ShardId {
-        let hash = xxhash64(channel);
-        (hash as usize % self.num_shards) as ShardId
-    }
-}
-
-/// Result of subscribe operation
-pub enum SubscribeResult {
-    Subscribed,
-    Forward { shard: ShardId },
-}
-
-/// Routing decision for publish
-pub enum PublishRoute {
-    AllShards,
-    SingleShard(ShardId),
-}
-```
-
-### Message Flow: Broadcast Mode
-
-**SUBSCRIBE (Broadcast):**
-```
-1. Client sends: SUBSCRIBE news:sports
-2. Connection's shard adds channel to LOCAL ShardSubscriptions
-3. Connection enters "pub/sub mode"
-4. No cross-shard communication needed
-5. Response: subscription confirmation
-```
-
-**PUBLISH (Broadcast):**
-```
-1. Client sends: PUBLISH news:sports "goal scored"
-2. Receiving shard:
-   a. route_publish() -> AllShards
-   b. Broadcast PubSubBroadcast message to ALL shards
-   c. Each shard calls deliver_locally()
-   d. Gather subscriber counts from all shards
-3. Response: total subscriber count (sum)
-```
-
-**PSUBSCRIBE (Broadcast only):**
-```
-1. Client sends: PSUBSCRIBE news:*
-2. Connection's shard stores pattern in pattern_subs
-3. On any publish, pattern is evaluated against channel name
-4. Pattern subscriptions are LOCAL only (no cross-shard)
-```
-
-### Message Flow: Sharded Mode
-
-**SSUBSCRIBE (Sharded):**
-```
-1. Client sends: SSUBSCRIBE news:sports
-2. Connection's shard calculates: hash("news:sports") % shards -> Shard 2
-3. If current shard IS owner (Shard 2):
-   a. Add to local ShardSubscriptions
-   b. Response: subscription confirmation
-4. If current shard is NOT owner:
-   a. Forward SubscribeRequest to Shard 2
-   b. Shard 2 adds subscription (with reference to original connection)
-   c. Response: subscription confirmation
-```
-
-**SPUBLISH (Sharded):**
-```
-1. Client sends: SPUBLISH news:sports "goal scored"
-2. Receiving shard:
-   a. route_publish() -> SingleShard(2)
-   b. If we ARE Shard 2: deliver_locally()
-   c. If we are NOT Shard 2: forward to Shard 2
-3. Owning shard delivers to its subscribers
-4. Response: subscriber count (single shard only)
-```
-
-### Inter-Shard Messages
-
-```rust
-pub enum ShardMessage {
-    // ... existing messages ...
-
-    /// Broadcast pub/sub message to all shards (broadcast mode)
-    PubSubBroadcast {
-        channel: Bytes,
-        message: Bytes,
-        /// Sender collects counts via this channel
-        count_tx: mpsc::Sender<usize>,
-    },
-
-    /// Sharded pub/sub - route to specific shard (sharded mode)
-    PubSubSharded {
-        channel: Bytes,
-        message: Bytes,
-        response_tx: oneshot::Sender<usize>,
-    },
-
-    /// Forward subscription to owning shard (sharded mode)
-    PubSubSubscribe {
-        channel: Bytes,
-        subscriber: RemoteSubscriber,
-        response_tx: oneshot::Sender<SubscribeResult>,
-    },
-}
-
-/// Reference to a subscriber on another shard
-pub struct RemoteSubscriber {
-    /// Original connection's shard
-    home_shard: ShardId,
-    /// Connection ID on home shard
-    conn_id: ConnectionId,
-}
-```
-
-### Sharded Mode: Cross-Shard Delivery
-
-When a subscriber is on a different shard than the channel owner:
-
-```
-Shard 0 (subscriber)          Shard 2 (channel owner)
-        │                              │
-        │  SSUBSCRIBE news:sports      │
-        ├─────────────────────────────>│
-        │                              │ Store: news:sports -> RemoteSubscriber(0, conn_42)
-        │                              │
-        │      ... later ...           │
-        │                              │
-        │                              │ SPUBLISH news:sports "goal"
-        │                              │
-        │  PubSubDeliver(conn_42, msg) │
-        │<─────────────────────────────┤
-        │                              │
-        │ Deliver to conn_42           │
-        │                              │
-```
+| Aspect | Broadcast | Sharded |
+|--------|-----------|---------|
+| Publish cost | O(shards) | O(1) |
+| Subscribe cost | O(1) local | O(1) or forward |
+| Pattern support | Yes | No |
+| Use case | General, low-volume | High-throughput |
 
 ### Commands
 
 | Command | Mode | Description |
 |---------|------|-------------|
-| SUBSCRIBE | Broadcast | Subscribe to channels (all shards track locally) |
-| UNSUBSCRIBE | Broadcast | Unsubscribe from channels |
+| SUBSCRIBE/UNSUBSCRIBE | Broadcast | Channel subscription |
+| PSUBSCRIBE/PUNSUBSCRIBE | Broadcast | Pattern subscription |
 | PUBLISH | Broadcast | Publish to all shards |
-| PSUBSCRIBE | Broadcast | Subscribe to pattern (local only) |
-| PUNSUBSCRIBE | Broadcast | Unsubscribe from pattern |
-| SSUBSCRIBE | Sharded | Subscribe to channel (routed to owner) |
-| SUNSUBSCRIBE | Sharded | Unsubscribe from channel |
-| SPUBLISH | Sharded | Publish to owning shard only |
-| PUBSUB CHANNELS | Both | List active channels |
-| PUBSUB NUMSUB | Both | Get subscriber counts |
-| PUBSUB SHARDCHANNELS | Sharded | List channels owned by this shard |
-| PUBSUB SHARDNUMSUB | Sharded | Get subscriber counts for owned channels |
-
-### Code Reuse Summary
-
-| Component | Shared? | Notes |
-|-----------|---------|-------|
-| `ShardSubscriptions` | Yes | Same data structure, different population |
-| `PubSubState` | Yes | Tracks mode per subscription |
-| `deliver_locally()` | Yes | Identical delivery logic |
-| Pattern matching | Yes | Same glob implementation |
-| RESP encoding | Yes | Same message format |
-| Channel hashing | Yes | Same as key hashing |
-| **Routing logic** | No | Mode determines broadcast vs single-shard |
-| **Cross-shard subscribe** | Sharded only | RemoteSubscriber forwarding |
-
-### Considerations
-
-| Aspect | Broadcast | Sharded |
-|--------|-----------|---------|
-| **Publish cost** | O(shards) | O(1) |
-| **Subscribe cost** | O(1) local | O(1) or forward |
-| **Memory** | Duplicated across shards | Single shard per channel |
-| **Latency** | Higher (fan-out) | Lower (direct) |
-| **Pattern support** | Yes (PSUBSCRIBE) | No |
-| **Use case** | General, low-volume | High-throughput |
+| SSUBSCRIBE/SUNSUBSCRIBE | Sharded | Sharded channel subscription |
+| SPUBLISH | Sharded | Publish to owner shard only |
+| PUBSUB CHANNELS/NUMSUB | Both | Introspection |
 
 ### Delivery Guarantees
 
-Both modes provide:
-- **At-most-once delivery**: Messages may be lost if client disconnects
-- **Per-channel FIFO**: Messages on same channel delivered in publish order
-- **No persistence**: Pub/sub messages are not persisted to disk
+- **At-most-once delivery**: Messages may be lost on disconnect
+- **Per-channel FIFO**: Order preserved within a channel
+- **No persistence**: Pub/sub messages are not persisted
 
 ---
 
@@ -892,6 +825,48 @@ frogdb/
     └── src/
         └── *.rs               # Test files
 ```
+
+---
+
+## Configuration
+
+### Server Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `bind` | `127.0.0.1` | Address to bind to |
+| `port` | `6379` | Port to listen on |
+| `num_shards` | `num_cpus` | Number of shard workers (threads) |
+
+### Memory Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `max_memory` | `0` (unlimited) | Memory limit in bytes; 0 = no limit |
+
+### Persistence Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `durability_mode` | `periodic` | `async`, `periodic`, or `sync` |
+| `periodic_sync_ms` | `100` | Sync interval for periodic mode |
+| `periodic_sync_writes` | `1000` | Write count trigger for periodic mode |
+| `snapshot_interval_s` | `3600` | Seconds between snapshots (0 = disabled) |
+| `data_dir` | `./data` | Directory for RocksDB and snapshots |
+
+### Timeout Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `scatter_gather_timeout_ms` | `1000` | Timeout for multi-shard operations |
+| `client_timeout_s` | `0` | Idle client timeout (0 = no timeout) |
+
+### Expiry Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `active_expiry_hz` | `10` | Background expiry sweep frequency |
+| `active_expiry_cycle_ms` | `1` | Max time per sweep cycle |
 
 ---
 
