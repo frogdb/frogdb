@@ -305,6 +305,8 @@ FrogDB uses structured logging via the `tracing` crate.
 
 ## Security
 
+For ACL architecture, traits, and design details, see [AUTH.md](AUTH.md).
+
 ### Authentication
 
 #### Simple Password (requirepass)

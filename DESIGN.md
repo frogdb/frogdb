@@ -307,7 +307,7 @@ Planned Redis-compatible eviction policies:
 
 **DragonflyDB LFRU:** Consider hybrid LFU+LRU with zero per-key overhead.
 
-See [docs/COMMANDS.md](docs/COMMANDS.md) for eviction implementation details.
+See [docs/EVICTION.md](docs/EVICTION.md) for eviction implementation details.
 
 ---
 
@@ -511,22 +511,17 @@ See [docs/OPERATIONS.md](docs/OPERATIONS.md) for detailed observability configur
 
 ---
 
-## Security (Future)
+## Security
 
-### ACL (Access Control Lists)
+FrogDB implements Redis-compatible authentication and ACL (Access Control Lists).
+The ACL system uses an abstracted checker interface that starts as "allow all" and
+can be enabled for full Redis 6.0 ACL support, with a path to Redis 7.0 selectors.
 
-Redis 6+ compatible ACL system:
-- User creation/management: `ACL SETUSER`, `ACL DELUSER`, `ACL LIST`
-- Password authentication (SHA256 hashed)
-- Command restrictions: `+command`, `-command`, `+@category`
-- Key pattern restrictions: `~pattern`
+Authentication state is per-connection with immutable permission snapshots. ACL checks
+occur at three hook points: command permission, key access (read/write), and pub/sub channels.
 
-### AUTH
-
-- Legacy: `AUTH password` (authenticates as 'default' user)
-- Redis 6+: `AUTH username password`
-
-See [docs/OPERATIONS.md](docs/OPERATIONS.md) for security configuration details.
+See [docs/AUTH.md](docs/AUTH.md) for ACL architecture, traits, and command reference.
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for security configuration.
 
 ---
 
