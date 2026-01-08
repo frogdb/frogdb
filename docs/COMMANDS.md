@@ -1,149 +1,23 @@
 # FrogDB Command Reference
 
-This document provides detailed command implementation notes, algorithms, and future features.
+Index of command groups and cross-cutting execution concerns.
 
-## Command Categories
+## Command Groups
 
-| Category | Examples | Notes |
-|----------|----------|-------|
-| Generic | DEL, EXISTS, EXPIRE, TTL, TYPE, RENAME | Key management |
-| String | GET, SET, INCR, APPEND | Basic operations |
-| Hash | HGET, HSET, HGETALL | Field-value maps |
-| List | LPUSH, RPUSH, LRANGE | Ordered sequences |
-| Set | SADD, SMEMBERS, SINTER | Unique collections |
-| Sorted Set | ZADD, ZRANGE, ZSCORE | Score-ordered |
-| Pub/Sub | SUBSCRIBE, PUBLISH | Messaging |
-| Transactions | MULTI, EXEC, WATCH | Atomicity |
-| Scripting | EVAL, EVALSHA | Lua scripts |
-| Server | INFO, CONFIG, DEBUG | Administration |
-| Connection | AUTH, PING, QUIT | Client management |
-| Cluster | (Future) | Distribution |
-
----
-
-## Key Iteration: SCAN
-
-### Overview
-
-SCAN provides cursor-based iteration over the keyspace without blocking. Unlike KEYS, it returns results incrementally and is safe for production use.
-
-### Cursor Format (Shard-Aware)
-
-FrogDB encodes shard information in the cursor for transparent cross-shard iteration:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     64-bit Cursor                            │
-├─────────────────────────┬───────────────────────────────────┤
-│      Shard ID           │      Position within Shard        │
-│      (bits 48-63)       │      (bits 0-47)                  │
-└─────────────────────────┴───────────────────────────────────┘
-```
-
-**Bit allocation:**
-- Bits 48-63 (16 bits): Shard ID (supports up to 65,535 shards)
-- Bits 0-47 (48 bits): Position within shard (supports very large dictionaries)
-
-### Algorithm
-
-```rust
-fn scan(cursor: u64, count: usize, pattern: Option<&str>) -> (u64, Vec<Bytes>) {
-    let shard_id = (cursor >> 48) as u16;
-    let position = cursor & 0x0000_FFFF_FFFF_FFFF;
-
-    // Determine target shard
-    let target_shard = shard_id as usize;
-    if target_shard >= num_shards {
-        return (0, vec![]); // Invalid cursor
-    }
-
-    // Execute SCAN on target shard
-    let (new_position, keys) = shards[target_shard].scan_local(position, count, pattern);
-
-    // Determine next cursor
-    let next_cursor = if new_position == 0 {
-        // Shard exhausted, move to next
-        let next_shard = target_shard + 1;
-        if next_shard >= num_shards {
-            0 // All shards exhausted
-        } else {
-            (next_shard as u64) << 48 // Start of next shard
-        }
-    } else {
-        // Continue in same shard
-        ((target_shard as u64) << 48) | new_position
-    };
-
-    (next_cursor, keys)
-}
-```
-
-### Local Shard SCAN
-
-Each shard implements dictionary iteration using the hash table cursor technique:
-
-```rust
-fn scan_local(position: u64, count: usize, pattern: Option<&str>) -> (u64, Vec<Bytes>) {
-    let mut keys = Vec::new();
-    let mut cursor = position;
-
-    // Iterate hash buckets
-    while keys.len() < count {
-        let bucket = cursor % table_size;
-        for key in bucket_entries(bucket) {
-            if pattern.map_or(true, |p| matches(key, p)) {
-                keys.push(key.clone());
-            }
-        }
-        cursor = next_cursor(cursor);
-        if cursor == 0 {
-            break; // Wrapped around
-        }
-    }
-
-    (cursor, keys)
-}
-
-// Reverse bits for cursor advancement (handles table resizing)
-fn next_cursor(cursor: u64) -> u64 {
-    reverse_bits(reverse_bits(cursor) + 1)
-}
-```
-
-### Properties
-
-| Property | Guarantee |
-|----------|-----------|
-| Blocking | No - returns incrementally |
-| Completeness | All keys present for entire scan are returned |
-| Duplicates | May return duplicates |
-| Missing | Keys added/removed during scan may be missed |
-| State | Stateless on server - cursor encodes all state |
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| SCAN cursor [MATCH pattern] [COUNT hint] [TYPE type] | Iterate keys |
-| SSCAN key cursor [MATCH pattern] [COUNT hint] | Iterate Set members |
-| HSCAN key cursor [MATCH pattern] [COUNT hint] | Iterate Hash fields |
-| ZSCAN key cursor [MATCH pattern] [COUNT hint] | Iterate Sorted Set members |
-
-### KEYS Command
-
-**Warning:** KEYS blocks the server while matching. Avoid in production.
-
-```
-KEYS pattern
-```
-
-Implementation: Scatter to all shards, gather matching keys, return combined result.
-
----
-
-## Key Eviction
-
-See [EVICTION.md](EVICTION.md) for eviction policies, LRU/LFU implementation, and memory thresholds.
+| Group | Description | File |
+|-------|-------------|------|
+| Generic | Key management (DEL, EXISTS, EXPIRE, TTL, TYPE, SCAN) | [GENERIC.md](command-groups/GENERIC.md) |
+| String | Binary-safe strings (GET, SET, INCR, APPEND) | [STRING.md](command-groups/STRING.md) |
+| Sorted Set | Score-ordered sets (ZADD, ZRANGE, ZSCORE, ZRANK) | [SORTED_SET.md](command-groups/SORTED_SET.md) |
+| Hash | Field-value maps (HGET, HSET, HGETALL) | *Future* |
+| List | Ordered sequences (LPUSH, RPUSH, LRANGE) | *Future* |
+| Set | Unique collections (SADD, SMEMBERS, SINTER) | *Future* |
+| Stream | Append-only log (XADD, XREAD, XREADGROUP) | *Future* |
+| Pub/Sub | Messaging (SUBSCRIBE, PUBLISH) | *Future* |
+| Scripting | Lua scripts (EVAL, EVALSHA) | *Future* |
+| Connection | Client management (AUTH, PING, QUIT) | *Future* |
+| Server | Administration (INFO, CONFIG, DEBUG) | *Future* |
+| Cluster | Distribution (CLUSTER NODES, CLUSTER SLOTS) | *Future* |
 
 ---
 

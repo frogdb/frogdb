@@ -24,6 +24,7 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 - Full Redis API compatibility from day one (gradual adoption)
 - Clustering (single-node first, see [docs/CLUSTER.md](docs/CLUSTER.md) for design)
 - RESP3 (RESP2 first with abstraction layer)
+- Blocking commands (BLPOP, BRPOP, BLMOVE) in initial phases (defer to later)
 
 ---
 
@@ -73,9 +74,9 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 
 | Component | Responsibility |
 |-----------|----------------|
-| **Acceptor** | Accept TCP connections, assign to shards via consistent hashing |
+| **Acceptor** | Accept TCP connections, assign to threads via round-robin (ConnectionAssigner abstraction) |
 | **Shard Worker** | Own a partition of data, execute commands, manage connections |
-| **Data Store** | In-memory key-value storage (HashMap-based) |
+| **Data Store** | In-memory key-value storage (HashMap-based). See [docs/STORAGE.md](docs/STORAGE.md) |
 | **Lua VM** | Execute Lua scripts atomically within shard |
 | **Persistence Layer** | WAL writes, snapshot management, recovery |
 
@@ -105,6 +106,8 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 | Defer eviction policies | OOM-reject simpler for v1, add LRU/LFU/LFRU later | Implement eviction immediately |
 | Full observability from start | Production-ready, OpenTelemetry standard, Prometheus metrics | Add observability later |
 | Hybrid documentation | DESIGN.md overview + detailed spec files in docs/ | Single large file |
+| Round-robin connection assignment | Simple load balancing, proven approach (DragonflyDB), swappable via ConnectionAssigner trait | Consistent hash, Least-connections |
+| xxhash64 for internal key sharding | Fast, good distribution, separate from cluster CRC16, swappable via KeyHasher trait | CRC16, FNV-1a |
 
 ### Key Tradeoffs
 
@@ -222,7 +225,7 @@ Alternative: Skip list implementation for cache-friendlier traversal.
 | Bloom Filter | Bit array + hashes | Future | Planned |
 | Time Series | Sorted by timestamp | Future | Planned |
 
-See [docs/DATA_STRUCTURES.md](docs/DATA_STRUCTURES.md) for detailed implementation specifications.
+See [docs/COMMANDS.md](docs/COMMANDS.md) for command reference and [docs/command-groups/](docs/command-groups/) for detailed type implementations.
 
 ---
 
@@ -337,6 +340,9 @@ Array:         *2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n
 Null:          $-1\r\n
 ```
 
+FrogDB uses the [`redis-protocol`](https://crates.io/crates/redis-protocol) crate for parsing and encoding.
+See [docs/PROTOCOL.md](docs/PROTOCOL.md) for integration details.
+
 ### Protocol Abstraction
 
 ```rust
@@ -349,6 +355,15 @@ pub trait Protocol: Send + Sync {
 ```
 
 This abstraction allows RESP3 to be added later without changing command implementations.
+
+### Connection State
+
+Each connection maintains state for transactions, pub/sub, authentication, and blocking operations.
+The ConnectionState struct is owned by the connection handler and tracks the current mode
+(normal, transaction, pub/sub, blocked) along with associated data.
+
+See [docs/CONNECTION.md](docs/CONNECTION.md) for connection lifecycle, state machine,
+ConnectionAssigner abstraction, and client commands.
 
 ---
 
@@ -507,7 +522,8 @@ FrogDB exposes Prometheus-compatible metrics:
 - `MEMORY DOCTOR`: Memory health analysis
 - `INFO`: Comprehensive server statistics
 
-See [docs/OPERATIONS.md](docs/OPERATIONS.md) for detailed observability configuration.
+See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) for detailed logging, tracing, metrics, and debugging documentation.
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for operational configuration.
 
 ---
 
@@ -733,6 +749,15 @@ See [docs/OPERATIONS.md](docs/OPERATIONS.md) for complete configuration guide an
 - [RocksDB Rust](https://github.com/rust-rocksdb/rust-rocksdb) - RocksDB bindings
 - [mlua](https://github.com/khvzak/mlua) - Lua bindings for Rust
 - [bytes](https://docs.rs/bytes/) - Zero-copy byte handling
+
+---
+
+## Server Lifecycle
+
+FrogDB follows a structured startup and shutdown sequence for reliable operation and recovery.
+
+See [docs/LIFECYCLE.md](docs/LIFECYCLE.md) for detailed startup sequence, shutdown procedure,
+recovery process, and health check endpoints.
 
 ---
 

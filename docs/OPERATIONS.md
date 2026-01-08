@@ -157,6 +157,8 @@ impl Default for Config {
 
 ## Observability
 
+For comprehensive observability documentation including logging configuration, distributed tracing, metrics reference, and debugging commands, see [OBSERVABILITY.md](OBSERVABILITY.md).
+
 ### Metrics (Prometheus)
 
 FrogDB exposes Prometheus-compatible metrics at `/metrics` endpoint.

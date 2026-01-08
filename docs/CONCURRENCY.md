@@ -9,7 +9,7 @@ Main Thread
     │
     ├── Spawns Acceptor Thread (1)
     │       └── Accepts TCP connections
-    │       └── Assigns connection to thread via round-robin or least-connections
+    │       └── Assigns connection to thread via round-robin (see CONNECTION.md)
     │
     └── Spawns Shard Workers (N = num_cpus)
             └── Each owns:
@@ -143,6 +143,31 @@ pub enum ShardMessage {
 
 ---
 
+## Channel Configuration
+
+Shard message channels use bounded capacity for backpressure:
+
+```rust
+// Per-shard message channel
+let (tx, rx) = mpsc::channel::<ShardMessage>(SHARD_CHANNEL_CAPACITY);
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `shard_channel_capacity` | 1024 | Messages buffered per shard |
+
+### Backpressure Behavior
+
+When a shard's channel fills:
+1. Sending connection blocks (async await)
+2. Connection stops reading new commands
+3. Client TCP buffer fills
+4. Client experiences latency
+
+This creates natural backpressure from overloaded shards to clients.
+
+---
+
 ## Scatter-Gather Flow
 
 For multi-key operations like MGET:
@@ -185,3 +210,11 @@ Client: MGET key1 key2 key3
 | Partial responses | Discarded (no partial results ever returned) |
 
 **Rationale:** Fail-all semantics are predictable and easier to reason about than partial results with error markers.
+
+---
+
+## References
+
+- [CONNECTION.md](CONNECTION.md) - Connection assignment, ConnectionAssigner trait, connection state
+- [LIFECYCLE.md](LIFECYCLE.md) - Server startup/shutdown sequences
+- [DESIGN.md](../DESIGN.md) - Overall architecture
