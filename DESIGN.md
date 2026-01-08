@@ -100,6 +100,11 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 | Block-shard Lua execution | Redis-compatible atomicity | Async scripts on snapshot |
 | Tokio async runtime | Industry standard, excellent ecosystem | async-std, Glommio |
 | Eventual consistency model | Appropriate for caching use cases | Strong consistency |
+| Figment for configuration | Hierarchical merging (CLI > env > file), TOML support, derive macro | config-rs, manual parsing |
+| Cursor-encodes-shard for SCAN | Stateless, Redis-compatible, transparent cross-shard iteration | Per-shard cursors, server-side state |
+| Defer eviction policies | OOM-reject simpler for v1, add LRU/LFU/LFRU later | Implement eviction immediately |
+| Full observability from start | Production-ready, OpenTelemetry standard, Prometheus metrics | Add observability later |
+| Hybrid documentation | DESIGN.md overview + detailed spec files in docs/ | Single large file |
 
 ### Key Tradeoffs
 
@@ -152,175 +157,13 @@ We prioritize Redis protocol and command compatibility for easy adoption, but di
 
 ## Concurrency Model
 
-### Thread Architecture
+FrogDB uses a shared-nothing, thread-per-core architecture inspired by DragonflyDB.
+Connections are pinned to threads for their lifetime but can coordinate with any shard
+via message-passing. Keys are hashed to determine shard ownership, with hash tags
+supporting key colocation.
 
-```
-Main Thread
-    │
-    ├── Spawns Acceptor Thread (1)
-    │       └── Accepts TCP connections
-    │       └── Assigns connection to thread via round-robin or least-connections
-    │
-    └── Spawns Shard Workers (N = num_cpus)
-            └── Each owns:
-                ├── Exclusive data store (HashMap<Key, FrogValue>)
-                ├── Lua VM instance
-                ├── mpsc::Receiver for incoming messages
-                └── Connection handlers for assigned clients
-```
-
-### Connection Model (Dragonfly-style)
-
-Connections are **pinned** to a single thread for their entire lifetime but act as **coordinators** that can access any shard via message-passing:
-
-```
-Client Connection
-         │
-         │ Accepted by Acceptor, assigned to Thread 2
-         │
-         ▼
-    ┌─────────────────────────────────────────────────────┐
-    │ Thread 2                                            │
-    │  ┌──────────────────┐    ┌──────────────────┐      │
-    │  │ Connection Fiber │    │    Shard 2       │      │
-    │  │  (coordinator)   │    │   (local data)   │      │
-    │  └────────┬─────────┘    └──────────────────┘      │
-    └───────────┼─────────────────────────────────────────┘
-                │
-                │ Client sends: SET user:42 "data"
-                │ hash("user:42") % num_shards = 0
-                │
-                │ Key owned by Shard 0 (Thread 0)
-                │
-    ┌───────────┼─────────────────────────────────────────┐
-    │ Thread 0  │                                         │
-    │           ▼                                         │
-    │  ┌──────────────────┐                              │
-    │  │    Shard 0       │ ◄── Execute SET, return OK   │
-    │  │   (owns key)     │                              │
-    │  └──────────────────┘                              │
-    └─────────────────────────────────────────────────────┘
-                │
-                │ Response flows back to Thread 2
-                ▼
-         Client receives: +OK\r\n
-```
-
-**Key points:**
-- Connection lifetime is bound to one thread (no migration)
-- Connection fiber coordinates commands, messaging other shards as needed
-- Local shard access is direct; remote shard access via message-passing
-- Each thread handles both I/O (connections) and data (its shard)
-
-### Key Hashing
-
-Keys are hashed to determine shard ownership:
-
-```rust
-fn shard_for_key(key: &[u8], num_shards: usize) -> usize {
-    // Support Redis hash tags: {tag}rest -> hash("tag")
-    let hash_key = extract_hash_tag(key).unwrap_or(key);
-    let hash = xxhash64(hash_key);
-    hash as usize % num_shards
-}
-```
-
-### Hash Tags (Redis-compatible)
-
-Hash tags allow related keys to be colocated on the same shard:
-
-```
-Key                    Hash Input      Result
-─────────────────────────────────────────────
-user:1:profile         user:1:profile  hash(full key)
-{user:1}:profile       user:1          hash("user:1")
-{user:1}:settings      user:1          hash("user:1") → same shard!
-foo{bar}baz            bar             hash("bar")
-{}{user:1}             {               hash("{") - empty tag = first {
-foo{}bar               (empty)         hash("") - empty tag
-```
-
-**Rules (matching Redis):**
-1. Find first `{` in key
-2. Find first `}` after that `{`
-3. If found and content between is non-empty, use content as hash input
-4. Otherwise, hash the entire key
-
-**Use case:** Lua scripts and multi-key commands (MGET, MSET) require all keys to be on the same shard. Hash tags guarantee colocation:
-
-```
--- All keys hash to same shard via {user:1} tag
-EVAL "..." 3 {user:1}:name {user:1}:email {user:1}:prefs
-```
-
-### Message Types
-
-```rust
-pub enum ShardMessage {
-    /// Execute command on this shard, return via oneshot
-    Execute {
-        command: ParsedCommand,
-        response_tx: oneshot::Sender<Result<Response, Error>>,
-    },
-
-    /// Scatter-gather: partial request for multi-key operation
-    ScatterRequest {
-        request_id: u64,
-        keys: Vec<Bytes>,
-        operation: ScatterOp,
-        response_tx: oneshot::Sender<PartialResult>,
-    },
-
-    /// Snapshot: iterate and send batches
-    SnapshotRequest {
-        batch_tx: mpsc::Sender<SnapshotBatch>,
-    },
-
-    /// Shutdown signal
-    Shutdown,
-}
-```
-
-### Scatter-Gather Flow
-
-For multi-key operations like MGET:
-
-```
-Client: MGET key1 key2 key3
-         │
-         ▼
-    Coordinator (receiving shard)
-         │
-         ├── Hash keys to shards
-         │   key1 -> Shard 0
-         │   key2 -> Shard 2
-         │   key3 -> Shard 0
-         │
-         ├── Send ScatterRequest to each unique shard
-         │   Shard 0: [key1, key3]
-         │   Shard 2: [key2]
-         │
-         ├── Await all responses (fail-all semantics)
-         │   - Configurable timeout (default: 1000ms)
-         │   - If any shard fails OR times out, entire operation fails
-         │   - All partial results discarded on failure
-         │
-         └── Gather results, reorder by original key position
-              │
-              ▼
-         Response: [val1, val2, val3]
-```
-
-### Scatter-Gather Failure Modes
-
-| Scenario | Behavior |
-|----------|----------|
-| All shards respond | Success, return aggregated results |
-| Any shard returns error | Fail entire operation, return error |
-| Any shard times out | Fail entire operation, return `-TIMEOUT` |
-| Partial responses | Discarded (no partial results ever returned) |
-
-**Rationale:** Fail-all semantics are predictable and easier to reason about than partial results with error markers.
+See [docs/CONCURRENCY.md](docs/CONCURRENCY.md) for thread architecture, connection model,
+and scatter-gather implementation details.
 
 ---
 
@@ -360,6 +203,26 @@ pub struct FrogSortedSet {
 ```
 
 Alternative: Skip list implementation for cache-friendlier traversal.
+
+### All Supported Data Types
+
+| Type | Implementation | Phase | Status |
+|------|---------------|-------|--------|
+| String | `Bytes` | 1 | Core |
+| Hash | `HashMap<Bytes, Bytes>` | 3+ | Planned |
+| List | `VecDeque<Bytes>` | 3+ | Planned |
+| Set | `HashSet<Bytes>` | 3+ | Planned |
+| Sorted Set | `HashMap` + `BTreeMap` | 3 | Core |
+| Stream | Radix tree + listpack | Future | Planned |
+| Bitmap | Operations on String | Future | Planned |
+| Bitfield | Operations on String | Future | Planned |
+| Geospatial | Sorted Set + geohash | Future | Planned |
+| JSON | `serde_json::Value` | Future | Planned |
+| HyperLogLog | 12KB fixed structure | Future | Planned |
+| Bloom Filter | Bit array + hashes | Future | Planned |
+| Time Series | Sorted by timestamp | Future | Planned |
+
+See [docs/DATA_STRUCTURES.md](docs/DATA_STRUCTURES.md) for detailed implementation specifications.
 
 ---
 
@@ -427,101 +290,35 @@ When configured memory limit (`max_memory`) is reached:
 
 **Rationale:** Explicit OOM errors are predictable. Users must manage capacity or enable expiry policies.
 
-### Non-Goals (Initial)
+### Key Eviction Policies (Future)
 
-- LRU/LFU eviction policies (future enhancement)
-- Tiered storage to disk for larger-than-memory datasets
+Planned Redis-compatible eviction policies:
+
+| Policy | Scope | Description |
+|--------|-------|-------------|
+| noeviction | - | Return OOM error (current default) |
+| volatile-lru | Keys with TTL | Evict least recently used |
+| allkeys-lru | All keys | Evict least recently used |
+| volatile-lfu | Keys with TTL | Evict least frequently used |
+| allkeys-lfu | All keys | Evict least frequently used |
+| volatile-random | Keys with TTL | Evict random keys |
+| allkeys-random | All keys | Evict random keys |
+| volatile-ttl | Keys with TTL | Evict keys with shortest TTL |
+
+**DragonflyDB LFRU:** Consider hybrid LFU+LRU with zero per-key overhead.
+
+See [docs/COMMANDS.md](docs/COMMANDS.md) for eviction implementation details.
 
 ---
 
 ## Persistence
 
-### RocksDB Topology
+FrogDB uses a single shared RocksDB instance with one column family per shard.
+All writes append to the WAL with configurable durability modes (async/periodic/sync).
+Forkless snapshots avoid the 2x memory spike of fork-based approaches.
 
-FrogDB uses a **single shared RocksDB instance** with one column family per shard:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    RocksDB Instance                      │
-├─────────────────────────────────────────────────────────┤
-│  ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌─────────┐ │
-│  │  CF: s0   │ │  CF: s1   │ │  CF: s2   │ │ CF: sN  │ │
-│  │ (Shard 0) │ │ (Shard 1) │ │ (Shard 2) │ │(Shard N)│ │
-│  └───────────┘ └───────────┘ └───────────┘ └─────────┘ │
-│                                                         │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │              Shared WAL                          │   │
-│  └─────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
-```
-
-**Benefits:**
-- Single backup/restore operation for entire database
-- Shared WAL simplifies recovery
-- Atomic cross-shard operations possible via WriteBatch
-
-**Trade-off:**
-- Potential lock contention on WAL writes (mitigated by batching)
-
-### Write-Ahead Log (WAL)
-
-Every write operation is appended to RocksDB's WAL before acknowledgment:
-
-```
-Client Write (SET key value)
-         │
-         ▼
-    Shard Worker
-         │
-         ├── 1. Apply to in-memory store
-         │
-         ├── 2. Append to WAL (async batch)
-         │      └── RocksDB WriteBatch
-         │
-         └── 3. Return OK to client
-```
-
-### Durability Modes
-
-```rust
-pub enum DurabilityMode {
-    /// Fastest: WAL write, no fsync (data loss on crash possible)
-    Async,
-
-    /// Balanced: fsync every N ms or M writes
-    Periodic { interval_ms: u64, write_count: usize },
-
-    /// Safest: fsync every write (slowest)
-    Sync,
-}
-```
-
-### Forkless Snapshot Algorithm
-
-Based on Dragonfly's approach - no fork(), no memory spike:
-
-```
-1. Coordinator signals all shards: "Start snapshot epoch N"
-
-2. Each shard:
-   a. Sets snapshot_epoch = N
-   b. Continues processing commands normally
-   c. In background, iterates owned keys:
-      - For each key, serialize (key, value, expiry)
-      - Send batch to snapshot writer
-   d. For writes DURING snapshot:
-      - If key not yet visited, serialize OLD value first (COW semantics)
-      - Then apply new value
-
-3. Snapshot writer:
-   - Receives batches from all shards
-   - Writes to RocksDB snapshot column family
-   - On completion, updates metadata with epoch N
-
-4. Recovery:
-   - Load latest snapshot epoch
-   - Replay WAL entries after snapshot LSN
-```
+See [docs/PERSISTENCE.md](docs/PERSISTENCE.md) for RocksDB topology, WAL implementation,
+and snapshot algorithm details.
 
 ---
 
@@ -557,201 +354,96 @@ This abstraction allows RESP3 to be added later without changing command impleme
 
 ## Command Execution
 
-### Command Flow
+Commands flow through protocol parsing, key routing, shard dispatch, execution,
+persistence, and response encoding. Each command implements the `Command` trait
+with arity validation and behavior flags (WRITE, READONLY, MULTI_KEY, etc.).
+
+See [docs/EXECUTION.md](docs/EXECUTION.md) for command flow, trait definition, and flag documentation.
+
+---
+
+## Transactions & Pipelining
+
+### Pipelining
+
+Client-side optimization - batch commands in single network round-trip:
+- No server state required
+- Commands may interleave with other clients
+- NOT atomic - purely a performance optimization
+- Supported automatically by RESP protocol
+
+### Transactions (MULTI/EXEC)
+
+Atomic command execution with queuing:
+
+1. **MULTI**: Start transaction, server enters queuing mode
+2. **Commands**: Queued, server responds QUEUED
+3. **EXEC**: Execute all queued commands atomically
+4. **DISCARD**: Abort transaction, clear queue
+
+**Key semantics:**
+- Atomic: All commands execute without interleaving
+- NOT rollback: If one command fails, others still execute
+- Single-shard requirement: All keys must hash to same shard (use hash tags)
+
+**Cross-shard transactions:** Rejected at EXEC time if keys span multiple shards.
+
+### WATCH (Optimistic Locking)
+
+- `WATCH key [key...]`: Monitor keys for changes
+- If watched key modified before EXEC, transaction aborts (returns nil)
+- `UNWATCH`: Clear all watches
+
+See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed transaction implementation.
+
+---
+
+## Key Iteration (SCAN/KEYS)
+
+### KEYS Command
+
+Pattern matching across all keys. **Warning:** Blocks entire keyspace - avoid in production.
+
+### SCAN Command (Recommended)
+
+Cursor-based iteration without blocking. Uses shard-aware cursor encoding:
 
 ```
-1. Connection accepted by Acceptor
-   └── Assigned to Shard N based on client hash
-
-2. Client sends: SET mykey myvalue
-   └── Shard N's event loop receives bytes
-
-3. Protocol parser (RESP2)
-   └── Parses into ParsedCommand { name: "SET", args: ["mykey", "myvalue"] }
-
-4. Command lookup
-   └── Registry.get("SET") -> SetCommand
-
-5. Key routing check
-   └── SetCommand.keys(args) -> ["mykey"]
-   └── hash("mykey") % num_shards -> Shard M
-
-6. If M == N (local):
-   └── Execute directly on local store
-
-   If M != N (remote):
-   └── Send ShardMessage::Execute to Shard M
-   └── Await response via oneshot channel
-
-7. Execute command
-   └── SetCommand.execute(ctx, args)
-   └── ctx.store.set("mykey", FrogString::new("myvalue"))
-
-8. Persistence (async)
-   └── Append to WAL batch
-
-9. Encode response
-   └── Protocol.encode(Response::Ok) -> "+OK\r\n"
-
-10. Send to client
+┌─────────────────────────────────────────┐
+│           64-bit Cursor                  │
+├─────────────────┬───────────────────────┤
+│   Shard ID      │  Position in Shard    │
+│   (bits 48-63)  │  (bits 0-47)          │
+└─────────────────┴───────────────────────┘
 ```
 
-### Command Trait
+**Properties:**
+- Stateless: No server-side cursor state
+- Resumable: Can stop/resume anytime
+- Eventual: May return duplicates, may miss keys added during scan
 
-```rust
-pub trait Command: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn arity(&self) -> Arity;
-    fn flags(&self) -> CommandFlags;
+**Related:** SSCAN, HSCAN, ZSCAN for iterating data structure members.
 
-    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError>;
-
-    fn keys(&self, args: &[Bytes]) -> Vec<&[u8]>;
-}
-```
-
-### Arity
-
-Specifies the expected number of arguments for a command:
-
-```rust
-pub enum Arity {
-    /// Exactly N arguments (e.g., GET = Fixed(1))
-    Fixed(usize),
-    /// At least N arguments (e.g., MGET = AtLeast(1))
-    AtLeast(usize),
-    /// Between min and max arguments inclusive
-    Range { min: usize, max: usize },
-}
-```
-
-### Command Flags
-
-Bitflags describing command behavior for routing and optimization:
-
-```rust
-bitflags! {
-    pub struct CommandFlags: u32 {
-        /// Command modifies data (SET, DEL, ZADD)
-        const WRITE = 0b0000_0001;
-        /// Command only reads data (GET, ZRANGE)
-        const READONLY = 0b0000_0010;
-        /// O(1) operation, suitable for latency-sensitive paths
-        const FAST = 0b0000_0100;
-        /// May block the connection (BLPOP, BRPOP)
-        const BLOCKING = 0b0000_1000;
-        /// Operates on multiple keys (MGET, MSET, DEL with multiple keys)
-        const MULTI_KEY = 0b0001_0000;
-        /// Pub/sub command, connection enters pub/sub mode
-        const PUBSUB = 0b0010_0000;
-        /// Script execution (EVAL, EVALSHA)
-        const SCRIPT = 0b0100_0000;
-    }
-}
-```
-
-**Usage:** Flags inform the router about command characteristics:
-- `WRITE` commands update the WAL
-- `READONLY` commands can be load-balanced to replicas (future)
-- `MULTI_KEY` commands may trigger scatter-gather
-- `BLOCKING` commands require special timeout handling
+See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed SCAN algorithm.
 
 ---
 
 ## Lua Scripting
 
-### Execution Model
+Lua scripts execute atomically within a single shard, blocking that shard's event loop
+during execution. Cross-shard scripts require all keys to use hash tags for colocation.
 
-Lua scripts execute atomically within a single shard (Redis-compatible):
-
-```
-EVAL "return redis.call('GET', KEYS[1])" 1 mykey
-         │
-         ▼
-    Shard (owner of mykey)
-         │
-         ├── Block shard event loop
-         │
-         ├── Execute Lua in shard's VM
-         │   └── redis.call('GET', 'mykey') -> local store lookup
-         │
-         └── Unblock, return result
-```
-
-### Cross-Shard Scripts
-
-Scripts with keys on multiple shards require all keys to hash to the same shard (use hash tags):
-
-```
--- This works: all keys hash to same shard via {user:1} tag
-EVAL "..." 2 {user:1}:name {user:1}:email
-
--- This fails: keys may be on different shards
-EVAL "..." 2 user:1:name user:2:email
-```
+See [docs/SCRIPTING.md](docs/SCRIPTING.md) for execution model and cross-shard requirements.
 
 ---
 
 ## Pub/Sub
 
-FrogDB supports two pub/sub modes with a unified architecture:
+FrogDB supports broadcast (SUBSCRIBE/PUBLISH) and sharded (SSUBSCRIBE/SPUBLISH) pub/sub
+modes with a unified per-shard architecture. Broadcast fans out to all shards while
+sharded routes to the channel's owner shard for higher throughput.
 
-| Mode | Commands | Routing | Use Case |
-|------|----------|---------|----------|
-| **Broadcast** | SUBSCRIBE, PUBLISH, PSUBSCRIBE | All shards | General pub/sub, patterns |
-| **Sharded** | SSUBSCRIBE, SPUBLISH | Hash to owner shard | High-throughput, Redis 7.0+ |
-
-### Architecture
-
-```
-┌───────────────────────────────────────────────────────────┐
-│                   Per-Shard PubSubHandler                  │
-│  ┌─────────────────────────────────────────────────────┐  │
-│  │  ShardSubscriptions (shared by both modes)          │  │
-│  │  • channel_subs: HashMap<Channel, Set<ConnId>>      │  │
-│  │  • pattern_subs: Vec<(Pattern, ConnId)>             │  │
-│  └─────────────────────────────────────────────────────┘  │
-│                          │                                 │
-│  ┌───────────────────────┴───────────────────────────┐    │
-│  │                  Routing Decision                  │    │
-│  │  Broadcast: fan-out to all shards                 │    │
-│  │  Sharded: route to hash(channel) % num_shards     │    │
-│  └────────────────────────────────────────────────────┘   │
-└───────────────────────────────────────────────────────────┘
-```
-
-### Key Design Decisions
-
-1. **Unified data structure**: `ShardSubscriptions` used by both modes
-2. **Routing is the only difference**: Broadcast fans out, Sharded routes to owner
-3. **~90% code reuse**: Only routing logic differs between modes
-4. **Pattern subscriptions**: Broadcast mode only (PSUBSCRIBE)
-
-### Mode Comparison
-
-| Aspect | Broadcast | Sharded |
-|--------|-----------|---------|
-| Publish cost | O(shards) | O(1) |
-| Subscribe cost | O(1) local | O(1) or forward |
-| Pattern support | Yes | No |
-| Use case | General, low-volume | High-throughput |
-
-### Commands
-
-| Command | Mode | Description |
-|---------|------|-------------|
-| SUBSCRIBE/UNSUBSCRIBE | Broadcast | Channel subscription |
-| PSUBSCRIBE/PUNSUBSCRIBE | Broadcast | Pattern subscription |
-| PUBLISH | Broadcast | Publish to all shards |
-| SSUBSCRIBE/SUNSUBSCRIBE | Sharded | Sharded channel subscription |
-| SPUBLISH | Sharded | Publish to owner shard only |
-| PUBSUB CHANNELS/NUMSUB | Both | Introspection |
-
-### Delivery Guarantees
-
-- **At-most-once delivery**: Messages may be lost on disconnect
-- **Per-channel FIFO**: Order preserved within a channel
-- **No persistence**: Pub/sub messages are not persisted
+See [docs/PUBSUB.md](docs/PUBSUB.md) for architecture, mode comparison, and command details.
 
 ---
 
@@ -782,6 +474,59 @@ async fn test_set_get() {
 5. **Lua tests** - Script execution, atomicity
 6. **Stress tests** - High throughput, memory pressure
 7. **Future: Jepsen tests** - Distributed correctness
+
+---
+
+## Observability
+
+### Metrics (Prometheus)
+
+FrogDB exposes Prometheus-compatible metrics:
+- Connection stats: `connected_clients`, `blocked_clients`
+- Memory: `used_memory`, `peak_memory`, `fragmentation_ratio`
+- Commands: `commands_processed`, latency percentiles (p50, p95, p99)
+- Keyspace: `keys_total`, `hit_rate`, `miss_rate`, `expired_keys`
+- Per-shard breakdown available
+
+### Tracing (OpenTelemetry)
+
+- Span per command execution
+- Child spans for cross-shard operations
+- Integration via `tracing` crate + OTLP exporter
+
+### Logging
+
+- Structured logging (JSON format for production)
+- Configurable log levels: ERROR, WARN, INFO, DEBUG, TRACE
+
+### Debug Commands
+
+- `SLOWLOG`: Commands exceeding latency threshold
+- `DEBUG OBJECT`: Inspect key internals
+- `CLIENT LIST`: Connected client details
+- `MEMORY DOCTOR`: Memory health analysis
+- `INFO`: Comprehensive server statistics
+
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for detailed observability configuration.
+
+---
+
+## Security (Future)
+
+### ACL (Access Control Lists)
+
+Redis 6+ compatible ACL system:
+- User creation/management: `ACL SETUSER`, `ACL DELUSER`, `ACL LIST`
+- Password authentication (SHA256 hashed)
+- Command restrictions: `+command`, `-command`, `+@category`
+- Key pattern restrictions: `~pattern`
+
+### AUTH
+
+- Legacy: `AUTH password` (authenticates as 'default' user)
+- Redis 6+: `AUTH username password`
+
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for security configuration details.
 
 ---
 
@@ -829,6 +574,14 @@ frogdb/
 ---
 
 ## Configuration
+
+FrogDB uses [Figment](https://docs.rs/figment) for hierarchical configuration with priority:
+1. Command-line arguments
+2. Environment variables (prefix: `FROGDB_`)
+3. Configuration file (TOML format)
+4. Built-in defaults
+
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for complete configuration guide and example TOML file.
 
 ### Server Options
 
@@ -908,16 +661,25 @@ frogdb/
 - [ ] redis.call() bindings
 
 ### Phase 6: Production Readiness
-- [ ] Metrics/observability
-- [ ] Configuration file support
+- [ ] Prometheus metrics endpoint (/metrics)
+- [ ] OpenTelemetry tracing integration
+- [ ] Structured logging (JSON format)
+- [ ] SLOWLOG command
+- [ ] Figment configuration (TOML + env vars)
 - [ ] Graceful shutdown
-- [ ] Resource limits
+- [ ] Memory limits and OOM handling
+
+### Phase 7: Advanced Features
+- [ ] Key eviction policies (LRU/LFU)
+- [ ] ACL implementation (Redis 6+ compatible)
+- [ ] Additional data types (Hash, List, Set)
+- [ ] Stream data type with consumer groups
+- [ ] Transactions (MULTI/EXEC/WATCH)
 
 ### Future
 - RESP3 protocol
-- Additional data types
-- Clustering
-- Replication
+- Bitmap, Geo, JSON, HyperLogLog types
+- Clustering and replication
 - Jepsen testing
 
 ---
