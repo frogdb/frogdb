@@ -117,3 +117,70 @@ Based on Dragonfly's approach - no fork(), no memory spike:
 |--------|---------|-------------|
 | `snapshot_interval_s` | `3600` | Seconds between snapshots (0 = disabled) |
 | `data_dir` | `./data` | Directory for RocksDB and snapshots |
+
+---
+
+## WAL Retention for Replication
+
+When clustering is enabled, WAL files are retained beyond normal durability needs to support replica synchronization.
+
+### Purpose
+
+Replicas that disconnect briefly need to catch up without full resynchronization:
+
+```
+Primary                              Replica
+   │                                    │
+   │ ── WAL entries 1000-1500 ─────────▶│
+   │                                    │
+   │              [Replica disconnects] │
+   │                                    │
+   │  WAL entries 1501-2000 (buffered)  │
+   │                                    │
+   │              [Replica reconnects]  │
+   │                                    │
+   │◀──── PSYNC repl_id 1500 ──────────│
+   │                                    │
+   │ ── WAL entries 1501-2000 ─────────▶│  (Partial sync succeeds)
+```
+
+If WAL entries 1501-2000 were already purged, a full resync would be required.
+
+### RocksDB WAL Archive
+
+RocksDB moves obsolete WAL files to an archive directory before deletion:
+
+```
+data/
+├── rocksdb/
+│   ├── 000001.log      (current WAL)
+│   └── archive/
+│       ├── 000000.log  (archived for replication)
+│       └── ...
+```
+
+### APIs for Replication
+
+| API | Purpose |
+|-----|---------|
+| `GetLatestSequenceNumber()` | Get current WAL position |
+| `GetUpdatesSince(seq)` | Iterate WAL entries from sequence |
+| `GetSortedWalFiles()` | List available WAL files |
+
+### Configuration
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `wal_retention_size` | `100MB` | Keep at least this much WAL for replicas |
+| `wal_retention_time` | `3600s` | Keep WAL files for at least this duration |
+| `repl_backlog_size` | `1MB` | In-memory buffer for fast reconnection |
+
+### Trade-offs
+
+| Aspect | Larger Retention | Smaller Retention |
+|--------|------------------|-------------------|
+| Disk usage | Higher | Lower |
+| Partial sync success | More likely | Less likely |
+| Stale replica recovery | Better | Worse (triggers full sync) |
+
+See [CLUSTER.md](CLUSTER.md) for complete replication protocol details.

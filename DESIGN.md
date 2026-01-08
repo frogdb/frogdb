@@ -22,7 +22,7 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 ### Non-Goals (Initial)
 
 - Full Redis API compatibility from day one (gradual adoption)
-- Clustering (single-node first, abstractions for future)
+- Clustering (single-node first, see [docs/CLUSTER.md](docs/CLUSTER.md) for design)
 - RESP3 (RESP2 first with abstraction layer)
 
 ---
@@ -525,6 +525,39 @@ See [docs/OPERATIONS.md](docs/OPERATIONS.md) for security configuration.
 
 ---
 
+## Clustering (Future)
+
+FrogDB is designed for single-node operation initially, but includes abstractions for future clustering support.
+
+### Architecture Overview
+
+| Aspect | Design Choice |
+|--------|---------------|
+| Control plane | Orchestrated (DragonflyDB-style), no gossip |
+| Hash slots | 16384 (Redis Cluster compatible) |
+| Replication | Full dataset, RocksDB WAL streaming |
+| Client protocol | MOVED/ASK redirections, CLUSTER commands |
+
+### Key Concepts
+
+- **Internal shards** (threads) are separate from **cluster slots** (distribution units)
+- External orchestrator pushes topology to nodes via admin API
+- Replicas copy full dataset for simpler failover
+- Replication leverages existing RocksDB WAL infrastructure
+
+### Abstractions Needed Now
+
+These types and traits should be designed into single-node implementation:
+
+- `NodeId`, `SlotId`, `SlotRange`, `ReplicationId` types
+- `ClusterTopology` trait for slot→node mapping
+- `ReplicationStream` abstraction over WAL tailing
+- Admin API for topology updates
+
+See [docs/CLUSTER.md](docs/CLUSTER.md) for full clustering architecture, replication protocol, failover, and slot migration design.
+
+---
+
 ## Crate Structure
 
 ```
@@ -674,7 +707,7 @@ See [docs/OPERATIONS.md](docs/OPERATIONS.md) for complete configuration guide an
 ### Future
 - RESP3 protocol
 - Bitmap, Geo, JSON, HyperLogLog types
-- Clustering and replication
+- Clustering and replication (see [docs/CLUSTER.md](docs/CLUSTER.md))
 - Jepsen testing
 
 ---

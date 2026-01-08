@@ -369,12 +369,41 @@ impl Command for SetCommand {
 
 ### Cluster (Future)
 
+See [CLUSTER.md](CLUSTER.md) for full clustering architecture.
+
+**Topology Commands:**
+
 | Command | Description |
 |---------|-------------|
-| CLUSTER NODES | List cluster nodes |
-| CLUSTER SLOTS | Get slot assignments |
-| CLUSTER KEYSLOT | Get slot for key |
-| CLUSTER REPLICATE | Set replication |
+| `CLUSTER NODES` | Full cluster state in Redis format |
+| `CLUSTER SLOTS` | Get slot→node mapping (array format) |
+| `CLUSTER SHARDS` | Get slot→node mapping (dict format, newer) |
+| `CLUSTER INFO` | Cluster status summary |
+| `CLUSTER KEYSLOT <key>` | Get slot for key |
+| `CLUSTER COUNTKEYSINSLOT <slot>` | Count keys in slot |
+| `CLUSTER GETKEYSINSLOT <slot> <count>` | Get keys for migration |
+
+**Client Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `READONLY` | Enable reads from replica |
+| `READWRITE` | Disable replica reads (default) |
+| `ASKING` | Allow next command during slot import |
+
+**Failover Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `CLUSTER FAILOVER [FORCE]` | Manual failover (replica only) |
+| `CLUSTER REPLICATE <node-id>` | Make this node replica of another |
+
+**Redirections:**
+
+| Response | Meaning | Client Action |
+|----------|---------|---------------|
+| `-MOVED <slot> <host>:<port>` | Wrong node | Update slot map, retry |
+| `-ASK <slot> <host>:<port>` | Slot migrating | Send ASKING, then retry (once) |
 
 ### Modules (Future)
 
