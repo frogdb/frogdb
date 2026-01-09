@@ -31,6 +31,55 @@ FrogDB uses a **single shared RocksDB instance** with one column family per shar
 
 - Potential lock contention on WAL writes (mitigated by batching)
 
+### Key-Value Schema
+
+Each column family (shard) stores keys with this format:
+
+**Key Format:**
+```
+[user_key_bytes]
+```
+
+**Value Format:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Header (fixed 24 bytes)                                      │
+├─────────────────────────────────────────────────────────────┤
+│ type: u8           │ Value type (0=String, 1=List, etc.)    │
+│ flags: u8          │ Reserved for future use                 │
+│ expires_at: i64    │ Unix timestamp ms (0 = no expiry)       │
+│ lfu_counter: u8    │ LFU access counter                      │
+│ padding: [u8; 5]   │ Alignment padding                       │
+│ value_len: u64     │ Length of value data                    │
+├─────────────────────────────────────────────────────────────┤
+│ Value Data (variable)                                        │
+│ - String: raw bytes                                          │
+│ - List: length-prefixed elements                             │
+│ - Set: length-prefixed members                               │
+│ - Hash: length-prefixed key-value pairs                      │
+│ - SortedSet: length-prefixed (score, member) pairs           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Type Encoding:**
+
+| Type | Code | Serialization |
+|------|------|---------------|
+| String | 0 | Raw bytes |
+| List | 1 | `[len:u32][elem1_len:u32][elem1]...` |
+| Set | 2 | `[len:u32][member1_len:u32][member1]...` |
+| Hash | 3 | `[len:u32][k1_len:u32][k1][v1_len:u32][v1]...` |
+| SortedSet | 4 | `[len:u32][score:f64][member_len:u32][member]...` |
+
+**Expiry Index:**
+- NOT persisted separately
+- Rebuilt during recovery from `expires_at` field in each value
+- Active expiry index is in-memory only
+
+**LRU/LFU Metadata:**
+- `lfu_counter` persisted with value
+- `last_access` (LRU) NOT persisted - reset to recovery time on startup
+
 ---
 
 ## Write-Ahead Log (WAL)

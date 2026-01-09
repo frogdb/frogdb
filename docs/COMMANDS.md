@@ -117,6 +117,36 @@ INCR {user:123}:visits
 EXEC
 ```
 
+### Transaction Durability
+
+**WAL Behavior:**
+- Commands within MULTI are buffered in memory
+- On EXEC: Entire transaction written as single RocksDB WriteBatch
+- WriteBatch is atomic - all or nothing
+
+**Durability by Mode:**
+
+| Mode | EXEC Behavior |
+|------|---------------|
+| `async` | WriteBatch queued, EXEC returns immediately |
+| `periodic` | WriteBatch queued, EXEC returns immediately, fsync on next interval |
+| `sync` | WriteBatch written + fsync, then EXEC returns |
+
+**Failure Scenarios:**
+
+| Failure Point | Outcome |
+|---------------|---------|
+| Crash before EXEC | Transaction never applied |
+| Crash during EXEC (async) | Transaction may be lost |
+| Crash during EXEC (sync) | Transaction either fully applied or not |
+| Crash after EXEC returns (sync) | Transaction guaranteed durable |
+
+**Partial Failure:**
+- If any command in transaction fails validation, entire EXEC fails
+- RocksDB WriteBatch ensures atomicity at storage level
+
+See [CONSISTENCY.md](CONSISTENCY.md) for detailed consistency semantics.
+
 ---
 
 ## Pipelining

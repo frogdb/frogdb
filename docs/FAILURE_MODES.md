@@ -58,7 +58,7 @@ fn check_memory_limit(&self) -> Result<(), Error> {
 1. Delete keys to free memory
 2. Wait for TTL expiration to reclaim space
 3. Increase `max_memory` configuration
-4. Enable eviction policy (when implemented)
+4. Enable eviction policy (future feature, see [EVICTION.md](EVICTION.md))
 
 **Client Handling:**
 - Retry write operations after delay

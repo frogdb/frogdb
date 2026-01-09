@@ -1,5 +1,7 @@
 # FrogDB Key Eviction
 
+> **Status: PLANNED** - This document describes the future eviction system design. Current behavior is `noeviction` only (OOM rejects writes).
+
 This document covers key eviction policies, algorithms, and memory threshold handling.
 
 ## Overview

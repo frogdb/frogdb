@@ -75,10 +75,38 @@ pub struct KeyMetadata {
 
 ### LFU Counter
 
-The `lfu_counter` uses a probabilistic logarithmic counter (like Redis):
-- Starts at 5 (new keys aren't immediately evicted)
-- Increments with probability `1 / (counter * lfu_log_factor + 1)`
-- Decays over time based on `lfu_decay_time`
+The `lfu_counter` uses a probabilistic logarithmic counter (Redis-compatible):
+
+**Increment Algorithm:**
+```rust
+fn lfu_log_incr(counter: u8) -> u8 {
+    if counter == 255 { return 255; }
+    let r: f64 = random();  // 0.0 to 1.0
+    let base_probability = 1.0 / (counter as f64 * LFU_LOG_FACTOR + 1.0);
+    if r < base_probability { counter + 1 } else { counter }
+}
+```
+- New keys start at 5 (not immediately evicted)
+- Higher counter = lower increment probability
+- `lfu_log_factor` default: 10
+
+**Decay Algorithm:**
+```rust
+fn lfu_decay(counter: u8, last_access: Instant, now: Instant) -> u8 {
+    let minutes_elapsed = (now - last_access).as_secs() / 60;
+    let decay_amount = minutes_elapsed / LFU_DECAY_TIME;
+    counter.saturating_sub(decay_amount as u8)
+}
+```
+- `lfu_decay_time` default: 1 (decay by 1 per minute of inactivity)
+- Decay applied lazily on access, not continuously
+
+**Configuration:**
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `lfu_log_factor` | 10 | Higher = slower counter growth |
+| `lfu_decay_time` | 1 | Minutes of inactivity per decay point |
 
 This allows representing high access counts in a single byte.
 
@@ -184,5 +212,5 @@ See [PERSISTENCE.md](PERSISTENCE.md) for RocksDB integration, WAL, and snapshots
 
 - [DESIGN.md - FrogValue](../DESIGN.md#data-structures)
 - [COMMANDS.md](COMMANDS.md) - Command reference and type implementations
-- [EVICTION.md](EVICTION.md) - Memory thresholds and policies
+- [EVICTION.md](EVICTION.md) - Memory eviction policies (planned)
 - [PERSISTENCE.md](PERSISTENCE.md) - RocksDB integration

@@ -84,6 +84,8 @@ pub struct BlockedState {
 }
 ```
 
+> **Note:** `BlockedState` is defined for future compatibility but blocking commands (BLPOP, BRPOP, BLMOVE, etc.) are not yet implemented. Current behavior: these commands return `-ERR not implemented`. See [FAILURE_MODES.md](FAILURE_MODES.md#blocking-command-queue) for planned implementation.
+
 ---
 
 ## State Transitions

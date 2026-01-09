@@ -11,6 +11,8 @@ FrogDB is designed for single-node operation initially, with clustering as a fut
 - **Full dataset replication** - replicas copy all data from primary
 - **RocksDB WAL streaming** for incremental replication
 
+For consistency guarantees (single-node and cluster), see [CONSISTENCY.md](CONSISTENCY.md).
+
 ---
 
 ## Architecture
@@ -139,6 +141,38 @@ FrogDB uses an orchestrated control plane (DragonflyDB-style) rather than Redis 
                                        └─────────────────────────┘
 ```
 
+### Orchestrator Requirements
+
+The external orchestrator must satisfy these requirements:
+
+**High Availability:**
+- Minimum 3 orchestrator instances recommended
+- Odd number required for quorum (3, 5, 7)
+- Can use Raft, Paxos, or external consensus (etcd, Consul, ZooKeeper)
+
+**Quorum Semantics:**
+- Topology changes require majority agreement
+- Health check threshold: 3 consecutive failures before failover
+- Orchestrator partition: nodes continue serving existing topology
+
+**Orchestrator Failure Modes:**
+
+| Scenario | Cluster Behavior |
+|----------|------------------|
+| Single orchestrator down | Others continue, no impact |
+| Orchestrator minority partitioned | Majority continues making decisions |
+| Orchestrator majority down | Cluster frozen (no topology changes, no failover) |
+| All orchestrators down | Nodes continue with last known topology, no failover possible |
+
+**Recovery:**
+- Orchestrator state should be persisted (slot assignments, node registry)
+- On orchestrator restart: reload state, health check all nodes, resume operations
+
+**Reference Implementations:**
+- Kubernetes StatefulSet with etcd
+- Consul cluster
+- Custom Raft-based orchestrator
+
 ### Topology Configuration
 
 The orchestrator pushes configuration like:
@@ -249,6 +283,47 @@ Primary                              Replica
    │                                    │
    │───── [WAL stream] ───────────────▶│  Continue streaming
 ```
+
+### Replica Memory Constraints
+
+**Problem:** Primary dataset may exceed replica memory during full sync.
+
+**Detection:**
+- Replica monitors memory usage during checkpoint load
+- If `used_memory` exceeds `max_memory * 0.9`, abort sync
+
+**Behavior:**
+```
+Replica                              Primary
+   │                                    │
+   │◀──── FULLRESYNC <id> <seq> ───────│
+   │                                    │
+   │  Loading checkpoint...             │
+   │  Memory: 80%... 85%... 90%         │
+   │                                    │
+   │───── SYNC_ABORTED OOM ───────────▶│
+   │                                    │
+   │  (Wait, retry with backoff)        │
+```
+
+**Recovery Options:**
+1. Increase replica `max_memory`
+2. Enable eviction on replica (when implemented)
+3. Use replica with larger memory
+4. Reduce primary dataset size
+
+**Configuration:**
+```toml
+[replication]
+# Abort full sync if memory exceeds this percentage
+sync_memory_limit_pct = 90
+
+# Retry sync after this delay (with exponential backoff)
+sync_retry_delay_ms = 5000
+```
+
+**Metrics:**
+- `frogdb_sync_aborted_oom_total`: Counter of OOM-aborted syncs
 
 ### Partial Synchronization (PSYNC)
 
@@ -432,22 +507,54 @@ Valkey 9.0-style server-side migration:
 
 Orchestrator-driven failover process:
 
+**Step 1: Detect Primary Failure**
+- Health check fails N consecutive times (default: 3)
+- Or primary explicitly reports FAILING state
+
+**Step 2: Select Best Replica**
+
+Selection criteria (in priority order):
+1. **Replication lag**: Prefer replica with highest `sequence_number` (least data loss)
+2. **Connection stability**: Prefer replica with longest continuous connection to primary
+3. **Node priority**: Configurable `replica_priority` (0 = never promote, higher = prefer)
+4. **Deterministic tiebreaker**: Lexicographic NodeId comparison
+
+```
+replica_score = (max_seq - replica_seq) * 1000 + (now - connected_since).seconds()
+# Lower score = better candidate
+# replica_priority = 0 excludes from selection
+```
+
+**Step 3: Promote Replica**
+- Send `ROLE PRIMARY` command to selected replica
+- Replica generates new ReplicationId
+- Replica stores previous primary's ReplicationId as secondary_id
+
+**Step 4: Update Topology**
+- Push new topology to all nodes
+- Epoch number incremented
+- Nodes reject commands for old epoch
+
+**Step 5: Fence Old Primary (Recommended)**
+- If old primary recovers, it receives topology update
+- Sees higher epoch than local → refuses writes
+- Becomes replica of new primary
+
 ```
 Orchestrator                 Primary (A)              Replica (B)
      │                           │                        │
-     │  Health check fails       │ (down)                 │
+     │  Health check fails x3    │ (down)                 │
      │                           │                        │
-     │  1. Select best replica   │                        │
-     │     (most up-to-date)     │                        │
+     │  Select B (highest seq)   │                        │
      │                           │                        │
-     │  2. Promote B to primary  │                        │
+     │  ROLE PRIMARY             │                        │
      │─────────────────────────────────────────────────▶  │
      │                           │                        │ Become primary
-     │                           │                        │
-     │  3. Update all nodes      │                        │
+     │                           │                        │ New ReplicationId
+     │  Push topology (epoch+1)  │                        │
      │─────────────────────────────────────────────────▶  │
      │                           │                        │
-     │  (Optional: Fence A when it returns)               │
+     │  (A recovers, receives topology, becomes replica)  │
 ```
 
 ### Manual Failover
@@ -461,9 +568,39 @@ Using CLUSTER FAILOVER command:
 
 ### Split-Brain Prevention
 
-- **Quorum required**: Orchestrator needs quorum to make decisions
-- **Fencing**: Optional mechanism to prevent old primary from accepting writes
-- **Odd voters**: Recommended odd number of orchestrator instances
+**Architecture:** Orchestrated topology prevents classic split-brain (no gossip voting).
+
+**Partition Scenarios:**
+
+| Partition | Behavior |
+|-----------|----------|
+| Orchestrator ↔ Primary | Orchestrator may trigger failover after timeout; primary continues serving until demoted |
+| Orchestrator ↔ Replica | Replica continues replicating; not considered for failover |
+| Primary ↔ Replica | Replica falls behind; PSYNC will catch up or trigger full sync |
+| Primary ↔ Clients (some) | Affected clients timeout; others continue |
+| Node ↔ All | Node isolated; orchestrator promotes replica if primary |
+
+**Fencing Mechanism:**
+
+When a primary is demoted (or recovers after partition):
+1. Orchestrator pushes topology with higher epoch
+2. Node compares `received_epoch > local_epoch`
+3. If true: Node transitions to replica role, connects to new primary
+4. Writes during partition window are rejected after demotion
+
+**Fencing Limitations:**
+- Requires network connectivity to orchestrator
+- Brief window where old primary may accept writes before receiving new topology
+- **Recommendation:** Use `min_replicas_to_write` to require replica acknowledgment
+
+**Configuration:**
+```toml
+[cluster]
+# Require N replicas to acknowledge before write succeeds
+# 0 = disabled (async replication, potential data loss)
+# 1+ = synchronous to N replicas (higher durability, higher latency)
+min_replicas_to_write = 0
+```
 
 ---
 

@@ -160,6 +160,41 @@ On startup, if data exists, FrogDB recovers state:
 | No data | Fresh start |
 | Corrupted WAL | Recover up to corruption point, log error |
 
+### Data Structure Recovery Details
+
+**SortedSet Recovery:**
+```
+1. Load from RocksDB: [(score1, member1), (score2, member2), ...]
+2. Rebuild HashMap (member → score): O(n) insertions
+3. Rebuild BTreeMap (score, member) → (): O(n log n) insertions
+4. Total complexity: O(n log n) per sorted set
+```
+
+**Expiry Index Rebuild:**
+```
+1. For each key loaded from RocksDB:
+2.   If expires_at > 0:
+3.     Parse timestamp from value header
+4.     Insert into ExpiryIndex.by_expiry (BTreeMap)
+5.     Insert into ExpiryIndex.key_expiry (HashMap)
+```
+
+**Memory Tracking Rebuild:**
+- Recalculate `memory_size` for each key during load
+- Aggregate per-shard totals
+- Compare with pre-crash metrics for validation
+
+**Recovery Time Estimates:**
+
+| Dataset Size | Approximate Recovery Time |
+|--------------|---------------------------|
+| 1 GB | 10-30 seconds |
+| 10 GB | 1-5 minutes |
+| 100 GB | 10-30 minutes |
+| 1 TB | 1-3 hours |
+
+*Times depend on disk speed, sorted set count, and available CPU.*
+
 ---
 
 ## Startup Failures
