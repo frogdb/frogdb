@@ -1,6 +1,6 @@
 # FrogDB Connection Management
 
-This document details connection handling, state management, and the client lifecycle in FrogDB.
+This document details connection handling, state management, rate limiting, and the client lifecycle in FrogDB.
 
 ## Connection Model
 
@@ -84,7 +84,7 @@ pub struct BlockedState {
 }
 ```
 
-> **Note:** `BlockedState` is defined for future compatibility but blocking commands (BLPOP, BRPOP, BLMOVE, etc.) are not yet implemented. Current behavior: these commands return `-ERR not implemented`. See [FAILURE_MODES.md](FAILURE_MODES.md#blocking-command-queue) for planned implementation.
+> **Note:** `BlockedState` is defined for future compatibility but blocking commands (BLPOP, BRPOP, BLMOVE, etc.) are not yet implemented. Current behavior: these commands return `-ERR not implemented`. See [BLOCKING.md](BLOCKING.md) for planned implementation.
 
 ---
 
@@ -130,6 +130,8 @@ Entered via `MULTI`. Commands are queued, not executed.
 | DISCARD | Abort, return to normal |
 | WATCH | Set key watches (before MULTI) |
 
+See [TRANSACTIONS.md](TRANSACTIONS.md) for full transaction documentation.
+
 ### Pub/Sub Mode
 
 Entered via `SUBSCRIBE`, `PSUBSCRIBE`, `SSUBSCRIBE`.
@@ -150,6 +152,8 @@ Entered via blocking commands (BLPOP, BRPOP, BLMOVE).
 - Connection waits for data or timeout
 - Unblocked when: data pushed, timeout expires, or client disconnects
 - Returns to normal mode after unblocking
+
+See [BLOCKING.md](BLOCKING.md) for blocking command design.
 
 ---
 
@@ -193,18 +197,189 @@ impl ConnectionAssigner for RoundRobinAssigner {
 
 ## Connection Limits
 
+### Maximum Clients
+
+**Configuration:**
+```toml
+[server]
+maxclients = 10000  # Maximum simultaneous connections (0 = OS limit)
+```
+
+**Behavior when limit reached:**
+- New connections rejected immediately
+- Error: `max number of clients reached`
+- `connection_rejected_total` metric increments
+
+### Reserved Connections
+
+FrogDB reserves a small number of connections for admin operations:
+
+```toml
+[server]
+reserved_connections = 32  # Always allow admin commands
+```
+
+Reserved connections ensure operators can always connect for debugging even when `maxclients` is reached.
+
+### TCP Keepalive
+
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `maxclients` | 10000 | Maximum simultaneous connections |
-| `timeout` | 0 | Idle connection timeout (0 = disabled) |
 | `tcp_keepalive` | 300 | TCP keepalive interval (seconds) |
 
-### Exceeding Limits
+---
 
-When `maxclients` is reached:
-1. New connections are accepted
-2. Server sends `-ERR max number of clients reached`
-3. Connection is immediately closed
+## Client Timeout
+
+Idle clients are disconnected after timeout:
+
+```toml
+[server]
+timeout = 0  # Seconds of idle before disconnect (0 = never)
+```
+
+**Recommendation:** Set `timeout > 0` in production to reclaim abandoned connections.
+
+### Timeout Behavior
+
+- Timer resets on any client activity (commands or responses)
+- `PING` commands reset timeout (use for keepalive)
+- Blocked commands (BLPOP, etc.) do not count as idle
+
+---
+
+## Output Buffer Limits
+
+Per-client output buffer limits prevent slow clients from consuming unbounded memory.
+
+### Configuration
+
+```toml
+[client]
+# Normal clients (default)
+client_output_buffer_limit_normal = "0 0 0"  # Unlimited
+
+# Pub/Sub clients (can accumulate messages)
+client_output_buffer_limit_pubsub = "32mb 8mb 60"  # Hard 32MB, soft 8MB for 60s
+
+# Replica clients (replication stream)
+client_output_buffer_limit_replica = "256mb 64mb 60"
+```
+
+**Format:** `<hard_limit> <soft_limit> <soft_seconds>`
+
+### Limit Types
+
+| Limit | Behavior |
+|-------|----------|
+| **Hard limit** | Disconnect immediately when exceeded |
+| **Soft limit** | Disconnect if exceeded for `soft_seconds` continuously |
+| **No limit (0 0 0)** | Unlimited buffer growth |
+
+### Client Types
+
+| Type | Default | Rationale |
+|------|---------|-----------|
+| `normal` | Unlimited | Most clients consume responses quickly |
+| `pubsub` | 32MB hard, 8MB soft/60s | Subscribers can lag behind publishers |
+| `replica` | 256MB hard, 64MB soft/60s | Replication streams are large but critical |
+
+### Behavior on Disconnect
+
+When buffer limit exceeded:
+- Connection closed immediately
+- Client receives no response (already overloaded)
+- `client_output_buffer_limit_disconnections_total` metric increments
+- Log entry: `"Client disconnected: output buffer limit exceeded"`
+
+---
+
+## Buffer Management
+
+### Read Buffer
+
+- Initial size: 16KB
+- Max size: Configurable (default 1GB for queries)
+- Grows as needed for large commands
+
+### Write Buffer
+
+- Ring buffer for responses
+- Flushes on: buffer full, command complete, or idle
+- Backpressure when write buffer fills
+
+### Backpressure Strategy
+
+FrogDB uses TCP backpressure as natural rate limiting rather than explicit throttling.
+
+**Backpressure Flow:**
+
+```
+Slow client (not reading responses)
+    │
+    ▼
+TCP send buffer fills (OS-level)
+    │
+    ▼
+Shard worker blocks on socket write
+    │
+    ▼
+Shard message channel fills (1024 messages)
+    │
+    ▼
+Coordinator blocks on channel send
+    │
+    ▼
+Other clients on same thread experience latency
+```
+
+**Why backpressure over rate limiting:**
+- Automatically throttles at the source
+- No configuration needed
+- Works across all command types
+- No token bucket state to maintain
+- Matches Redis behavior
+
+**Trade-off:** A slow client can affect other clients on the same thread. Mitigations:
+- Output buffer limits disconnect slow clients
+- Client timeouts reclaim abandoned connections
+- Connection distribution spreads load across threads
+
+---
+
+## Command-Level Rate Limiting
+
+FrogDB does not provide built-in command-level rate limiting. Implement at application layer if needed.
+
+### Application-Layer Example
+
+```python
+# Python example using ratelimit library
+from ratelimit import limits, sleep_and_retry
+
+@sleep_and_retry
+@limits(calls=1000, period=1)  # 1000 ops/second
+def rate_limited_set(key, value):
+    return redis.set(key, value)
+```
+
+### Proxy-Layer Example
+
+Use a Redis-compatible proxy with rate limiting:
+- **Envoy** with Redis filter and rate limit service
+- **Twemproxy** with connection pooling
+- **Redis Cluster Proxy** with traffic shaping
+
+### Future Consideration
+
+Per-ACL-user rate limiting is not currently planned but could be added:
+
+```toml
+# Hypothetical future syntax
+[acl.users.limited_user]
+commands_per_second = 1000
+bytes_per_second = 10485760  # 10MB/s
+```
 
 ---
 
@@ -239,30 +414,6 @@ id=123 addr=192.168.1.10:54321 fd=5 name=myapp age=100 idle=0 flags=N db=0 ...
 
 ---
 
-## Buffer Management
-
-### Read Buffer
-
-- Initial size: 16KB
-- Max size: Configurable (default 1GB for queries)
-- Grows as needed for large commands
-
-### Write Buffer
-
-- Ring buffer for responses
-- Flushes on: buffer full, command complete, or idle
-- Backpressure when write buffer fills
-
-### Backpressure Strategy
-
-When a client can't consume responses fast enough:
-1. Write buffer fills
-2. Connection stops reading new commands
-3. Shard message channel applies backpressure
-4. Eventually, connection times out or catches up
-
----
-
 ## Metrics
 
 | Metric | Type | Description |
@@ -272,5 +423,16 @@ When a client can't consume responses fast enough:
 | `frogdb_connections_rejected` | Counter | Rejected (maxclients) |
 | `frogdb_blocked_clients` | Gauge | Clients in blocked state |
 | `frogdb_pubsub_clients` | Gauge | Clients in pub/sub mode |
+| `frogdb_client_output_buffer_limit_disconnections_total` | Counter | Buffer limit disconnects |
+| `frogdb_client_timeout_disconnections_total` | Counter | Timeout disconnects |
 
-See [OPERATIONS.md](OPERATIONS.md) for metrics endpoint configuration.
+---
+
+## References
+
+- [TRANSACTIONS.md](TRANSACTIONS.md) - Transaction state and MULTI/EXEC
+- [BLOCKING.md](BLOCKING.md) - Blocking command design
+- [CONCURRENCY.md](CONCURRENCY.md) - Channel backpressure details
+- [FAILURE_MODES.md](FAILURE_MODES.md) - Connection and network failures
+- [OBSERVABILITY.md](OBSERVABILITY.md) - Full metrics reference
+- [OPERATIONS.md](OPERATIONS.md) - Metrics endpoint configuration

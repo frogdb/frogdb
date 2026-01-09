@@ -4,11 +4,7 @@ A Redis-compatible, high-performance in-memory database written in Rust.
 
 ## Overview
 
-FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Rust's ownership model to provide thread-safety without the overhead of garbage collection. The primary use cases are:
-
-- High-throughput caching
-- Session storage
-- Fast operations on data structures
+FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Rust's ownership model to provide thread-safety without the overhead of garbage collection. The primary use cases are high-throughput caching, session storage, and fast operations on data structures.
 
 ### Goals
 
@@ -24,13 +20,11 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 - Full Redis API compatibility from day one (gradual adoption)
 - Clustering (single-node first, see [CLUSTER.md](CLUSTER.md) for design)
 - RESP3 (RESP2 first with abstraction layer)
-- Blocking commands (BLPOP, BRPOP, BLMOVE) in initial phases (defer to later)
+- Blocking commands (BLPOP, BRPOP, BLMOVE) in initial phases
 
 ---
 
 ## Architecture
-
-### High-Level System Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -40,44 +34,30 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 │  │  Acceptor   │  (Single thread, accepts connections)          │
 │  └──────┬──────┘                                                │
 │         │ Distributes connections via round-robin               │
-│         │ (swappable via ConnectionAssigner trait)              │
 │         ▼                                                       │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                    Shard Workers                         │   │
 │  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐        │   │
 │  │  │ Shard 0 │ │ Shard 1 │ │ Shard 2 │ │ Shard N │        │   │
-│  │  │         │ │         │ │         │ │         │        │   │
-│  │  │ ┌─────┐ │ │ ┌─────┐ │ │ ┌─────┐ │ │ ┌─────┐ │        │   │
-│  │  │ │Data │ │ │ │Data │ │ │ │Data │ │ │ │Data │ │        │   │
-│  │  │ │Store│ │ │ │Store│ │ │ │Store│ │ │ │Store│ │        │   │
-│  │  │ └─────┘ │ │ └─────┘ │ │ └─────┘ │ │ └─────┘ │        │   │
-│  │  │ ┌─────┐ │ │ ┌─────┐ │ │ ┌─────┐ │ │ ┌─────┐ │        │   │
-│  │  │ │ Lua │ │ │ │ Lua │ │ │ │ Lua │ │ │ │ Lua │ │        │   │
-│  │  │ │ VM  │ │ │ │ VM  │ │ │ │ VM  │ │ │ │ VM  │ │        │   │
-│  │  │ └─────┘ │ │ └─────┘ │ │ └─────┘ │ │ └─────┘ │        │   │
+│  │  │  Data   │ │  Data   │ │  Data   │ │  Data   │        │   │
+│  │  │  Lua VM │ │  Lua VM │ │  Lua VM │ │  Lua VM │        │   │
 │  │  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘        │   │
-│  │       │           │           │           │              │   │
 │  │       └───────────┴─────┬─────┴───────────┘              │   │
-│  │                         │ Message Passing (mpsc channels) │   │
+│  │                         │ Message Passing                 │   │
 │  └─────────────────────────┼───────────────────────────────┘   │
-│                            │                                    │
-│  ┌─────────────────────────▼───────────────────────────────┐   │
+│                            ▼                                    │
+│  ┌─────────────────────────────────────────────────────────┐   │
 │  │                  Persistence Layer                       │   │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │   │
-│  │  │   RocksDB    │  │   Snapshot   │  │     WAL      │   │   │
-│  │  │   Engine     │  │   Manager    │  │   Writer     │   │   │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘   │   │
+│  │  RocksDB Engine  │  Snapshot Manager  │  WAL Writer      │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Component Responsibilities
-
 | Component | Responsibility |
 |-----------|----------------|
-| **Acceptor** | Accept TCP connections, assign to threads via round-robin (ConnectionAssigner abstraction) |
+| **Acceptor** | Accept TCP connections, assign to threads via round-robin |
 | **Shard Worker** | Own a partition of data, execute commands, manage connections |
-| **Data Store** | In-memory key-value storage (HashMap-based). See [STORAGE.md](STORAGE.md) |
+| **Data Store** | In-memory key-value storage. See [STORAGE.md](STORAGE.md) |
 | **Lua VM** | Execute Lua scripts atomically within shard |
 | **Persistence Layer** | WAL writes, snapshot management, recovery |
 
@@ -85,680 +65,185 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 
 ## Design Decisions
 
-### Decision Log
-
-| Decision | Rationale | Alternatives Considered |
-|----------|-----------|------------------------|
-| Shared-nothing threading | Avoids lock contention, scales linearly with cores, proven by Dragonfly | Lock-based sharding, Actor model |
-| Message-passing between threads | Clean coordination for scatter-gather, easier to reason about | Shared memory with atomics |
-| Pinned connections (Dragonfly-style) | Simple lifecycle, no migration complexity | Key-owner handles connection |
-| Single RocksDB with column families | Simpler backup/restore, shared WAL | Separate RocksDB per shard |
-| In-memory + RocksDB persistence | Fast hot path, durable restarts | Pure in-memory, custom engine |
-| Forkless snapshots | Avoids fork() memory spike (2x worst case) | Fork + COW (Redis-style) |
-| RESP2 first | Simpler, wider client compatibility | RESP3 first |
-| Scatter-gather fail-all + timeout | Predictable semantics, configurable timeout | Partial results with errors |
-| Hybrid key expiry (lazy + active) | Matches Redis/Valkey, balances memory and CPU | Lazy only, active only |
-| OOM rejects writes | Explicit, predictable behavior | LRU eviction |
-| Block-shard Lua execution | Redis-compatible atomicity | Async scripts on snapshot |
-| Tokio async runtime | Industry standard, excellent ecosystem | async-std, Glommio |
-| Eventual consistency model | Appropriate for caching use cases | Strong consistency |
-| Figment for configuration | Hierarchical merging (CLI > env > file), TOML support, derive macro | config-rs, manual parsing |
-| Cursor-encodes-shard for SCAN | Stateless, Redis-compatible, transparent cross-shard iteration | Per-shard cursors, server-side state |
-| Defer eviction policies | OOM-reject simpler for v1, add LRU/LFU/LFRU later | Implement eviction immediately |
-| Full observability from start | Production-ready, OpenTelemetry standard, Prometheus metrics | Add observability later |
-| Hybrid documentation | INDEX.md overview + detailed spec files in spec/ | Single large file |
-| Round-robin connection assignment | Simple load balancing, proven approach (DragonflyDB), swappable via ConnectionAssigner trait | Consistent hash, Least-connections |
-| xxhash64 for internal key sharding | Fast, good distribution, separate from cluster CRC16, swappable via KeyHasher trait | CRC16, FNV-1a |
-| VLL-style transaction ordering | Atomic multi-shard operations via global txid counter and shard queues (DragonflyDB approach) | Lock-based 2PC, eventual consistency only |
-| Hash tag full colocation | Hash tags guarantee both cluster slot AND internal shard colocation for transactions/scripts | Cluster-only colocation (simpler but breaks atomicity) |
-| Strict Lua key validation | Fail on undeclared key access by default (DragonflyDB-style), optional compatibility flag | Allow undeclared keys (Redis-style, requires global lock) |
+| Decision | Rationale |
+|----------|-----------|
+| Shared-nothing threading | Avoids lock contention, scales linearly with cores |
+| Message-passing between threads | Clean coordination for scatter-gather |
+| Pinned connections (Dragonfly-style) | Simple lifecycle, no migration complexity |
+| Single RocksDB with column families | Simpler backup/restore, shared WAL |
+| Forkless snapshots | Avoids fork() memory spike (2x worst case) |
+| VLL-style transaction ordering | Atomic multi-shard operations via global txid counter |
+| Strict Lua key validation | DragonflyDB-style; optional compatibility flag |
 
 ### Key Tradeoffs
 
-#### 1. Shared-Nothing vs Shared-State
+**Shared-Nothing vs Shared-State:** We chose shared-nothing with message passing. This avoids lock contention on hot paths and enables linear scalability with cores. The tradeoff is that cross-shard operations require coordination via scatter-gather. Hash tags mitigate this by colocating related keys.
 
-**Chosen: Shared-nothing with message passing**
-
-*Pros:*
-- No lock contention on hot paths
-- Linear scalability with cores
-- Each thread can be pinned to a CPU core
-- Simpler reasoning about data ownership
-
-*Cons:*
-- Cross-shard operations require coordination
-- Memory overhead from per-shard data structures
-- Scatter-gather latency for multi-key operations
-
-*Mitigation:*
-- Efficient message passing via Tokio mpsc channels
-- Support for hash tags to colocate related keys
-
-#### 2. In-Memory vs Disk-Based
-
-**Chosen: In-memory primary with RocksDB for durability**
-
-*Pros:*
-- Microsecond latencies for all operations
-- Simple data structure implementations
-- RocksDB handles persistence complexity
-
-*Cons:*
-- Data must fit in RAM
-- Crash can lose unflushed writes (configurable)
-
-*Mitigation:*
-- Configurable durability modes (async/periodic/sync)
-- Clear documentation of durability guarantees
-
-#### 3. Redis Compatibility vs Innovation
-
-**Chosen: Compatibility first, innovate where beneficial**
-
-We prioritize Redis protocol and command compatibility for easy adoption, but diverge where we can provide better guarantees:
-- Forkless snapshots (no memory spike)
-- Shared-nothing multi-threading (vs Redis's single-threaded model)
-- Better eventual consistency documentation
+**In-Memory vs Disk-Based:** We chose in-memory primary with RocksDB for durability. This provides microsecond latencies while RocksDB handles persistence complexity. The tradeoff is that data must fit in RAM.
 
 ---
 
 ## Concurrency Model
 
-FrogDB uses a shared-nothing, thread-per-core architecture inspired by DragonflyDB.
-Connections are pinned to threads for their lifetime but can coordinate with any shard
-via message-passing. Keys are hashed to determine shard ownership, with hash tags
-supporting key colocation.
+FrogDB uses a shared-nothing, thread-per-core architecture inspired by DragonflyDB. Connections are pinned to threads for their lifetime but can coordinate with any shard via message-passing. Keys are hashed to determine shard ownership, with hash tags supporting key colocation.
 
-See [CONCURRENCY.md](CONCURRENCY.md) for thread architecture, connection model,
-and scatter-gather implementation details.
-
-### Multi-Shard Atomicity (VLL)
-
-FrogDB provides **serializable execution order** for multi-key operations across shards using a VLL-inspired
-(Very Lightweight Locking) transaction ordering system, similar to DragonflyDB:
-
-1. **Global Transaction IDs**: Atomic counter assigns monotonically increasing txid to each operation
-2. **Shard Queues**: Each shard maintains ordered queue of pending operations by txid
-3. **Ordered Execution**: Lower txid operations execute before higher ones on each shard
-4. **Consistent Ordering**: All observers see operations in the same global order
-
-```
-MSET key1 val1 key2 val2 (keys on different shards)
-         │
-         ├── Acquire txid = 1000 from atomic counter
-         │
-         ├── Send to Shard 0: Execute(txid=1000, SET key1 val1)
-         ├── Send to Shard 2: Execute(txid=1000, SET key2 val2)
-         │
-         ├── Each shard queues by txid, executes in order
-         │
-         └── All shards complete → return OK
-```
-
-This approach avoids mutex contention while providing serializable multi-key guarantees.
-
-**Important: Atomicity Semantics**
-
-VLL provides **serializable execution order**, not transactional rollback:
-
-| Scenario | Guarantee |
-|----------|-----------|
-| **Single-shard operations** | True atomicity (all-or-nothing), same as Redis |
-| **Multi-shard success** | All shards commit, consistent global ordering |
-| **Multi-shard timeout/failure** | Partial commits may persist; no rollback |
-| **Coordinator crash mid-operation** | Some shards may have committed |
-
-**Recommendation:** For operations requiring strict atomicity guarantees, use **hash tags** to ensure
-all keys land on the same shard: `MSET {user:1}:name Alice {user:1}:email alice@example.com`
-
-See [CONCURRENCY.md](CONCURRENCY.md) for implementation details.
-
-**Clarification: VLL vs MULTI/EXEC**
-
-| Operation Type | Cross-Shard | Behavior |
-|----------------|-------------|----------|
-| **MGET, MSET, DEL** (multi-key) | Yes | VLL ordering, fail-all semantics, partial commits possible |
-| **MULTI/EXEC** (transactions) | No | `-CROSSSHARD` error, all keys must be on same shard |
-| **Lua EVAL** (scripts) | No | `-CROSSSLOT` error, all keys must be on same shard |
-
-Multi-key commands like MSET use VLL to provide serializable ordering across shards, but do not guarantee atomicity on failure. MULTI/EXEC transactions require all keys on the same shard to provide true atomicity with no partial commits.
+See [CONCURRENCY.md](CONCURRENCY.md) for thread architecture, VLL transaction ordering, and scatter-gather implementation.
 
 ### Hash Tag Colocation
 
-Hash tags (e.g., `{user:1}:profile`) guarantee that related keys land on the **same internal shard**,
-not just the same cluster slot. This enables:
-- Atomic transactions across hash-tagged keys
-- Lua scripts accessing multiple keys
-- WATCH with consistent visibility
-
-```rust
-// Hash tag determines BOTH cluster slot AND internal shard
-fn shard_for_key(key: &[u8], num_shards: usize) -> usize {
-    let hash_input = extract_hash_tag(key).unwrap_or(key);
-    xxhash64(hash_input) as usize % num_shards
-}
-```
+Hash tags (e.g., `{user:1}:profile`) guarantee that related keys land on the **same internal shard**, enabling atomic transactions and Lua scripts across tagged keys.
 
 ---
 
 ## Data Structures
 
-### Value Types
+FrogDB supports multiple Redis-compatible data types including Strings, Sorted Sets, and planned support for Hashes, Lists, Sets, and Streams. Each type has optimized internal representations.
 
-```rust
-pub enum FrogValue {
-    String(FrogString),
-    SortedSet(FrogSortedSet),
-    // Future: List, Hash, Set, Stream, etc.
-}
-```
-
-### String Type
-
-Simple byte string with optional metadata:
-
-```rust
-pub struct FrogString {
-    data: Bytes,
-}
-```
-
-### Sorted Set Type
-
-Dual-indexed structure for O(log n) operations by score and member:
-
-```rust
-pub struct FrogSortedSet {
-    // Member -> Score mapping for O(1) score lookup
-    members: HashMap<Bytes, f64>,
-    // Score-ordered structure for range queries
-    scores: BTreeMap<(OrderedFloat<f64>, Bytes), ()>,
-}
-```
-
-Alternative: Skip list implementation for cache-friendlier traversal.
-
-### All Supported Data Types
-
-| Type | Implementation | Phase | Status |
-|------|---------------|-------|--------|
-| String | `Bytes` | 1 | Core |
-| Hash | `HashMap<Bytes, Bytes>` | 3+ | Planned |
-| List | `VecDeque<Bytes>` | 3+ | Planned |
-| Set | `HashSet<Bytes>` | 3+ | Planned |
-| Sorted Set | `HashMap` + `BTreeMap` | 3 | Core |
-| Stream | Radix tree + listpack | Future | Planned |
-| Bitmap | Operations on String | Future | Planned |
-| Bitfield | Operations on String | Future | Planned |
-| Geospatial | Sorted Set + geohash | Future | Planned |
-| JSON | `serde_json::Value` | Future | Planned |
-| HyperLogLog | 12KB fixed structure | Future | Planned |
-| Bloom Filter | Bit array + hashes | Future | Planned |
-| Time Series | Sorted by timestamp | Future | Planned |
-
-See [COMMANDS.md](COMMANDS.md) for command reference and [command-groups/](command-groups/) for detailed type implementations.
+See [DATA_TYPES.md](DATA_TYPES.md) for type implementations and [command-groups/](command-groups/) for type-specific commands.
 
 ---
 
 ## Limits
 
-FrogDB enforces Redis-compatible size limits:
+FrogDB enforces Redis-compatible size limits: 512 MB max key/value size, 2^32-1 max collection elements, and 65,536 max internal shards per node (for cursor encoding).
 
-| Limit | Value | Configuration |
-|-------|-------|---------------|
-| Max key size | 512 MB | `proto-max-bulk-len` |
-| Max value size | 512 MB | `proto-max-bulk-len` |
-| Max elements per List/Set/Hash/SortedSet | 2^32 - 1 (~4 billion) | Hardcoded |
-| Max Lua script size | 512 MB | `proto-max-bulk-len` |
-| Max command arguments | Unlimited (memory-bound) | - |
-| Max internal shards per node | 65,536 | 16-bit cursor encoding |
-
-**Configuration:**
-```toml
-[protocol]
-proto_max_bulk_len = 536870912  # 512 MB default, in bytes
-```
-
-**Notes:**
-- `proto-max-bulk-len` controls maximum size of any bulk string in RESP protocol
-- Exceeding limits returns `-ERR` with descriptive message
-- Collection element limits are theoretical; practical limit is available memory
+See [LIMITS.md](LIMITS.md) for complete limit documentation and configuration.
 
 ---
 
 ## Key Expiry (TTL)
 
-FrogDB uses a **hybrid expiration model** matching Redis/Valkey behavior:
+FrogDB uses a **hybrid expiration model** matching Redis/Valkey behavior: lazy expiration on every key access, plus an active background task (~10Hz per shard) that samples and deletes expired keys within a time budget.
 
-### Expiration Strategies
-
-1. **Lazy expiration**: On every key access, check if expired. Delete immediately if so.
-2. **Active expiration**: Background task runs ~10Hz per shard, samples keys with TTL, deletes expired ones within time budget.
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                  Per-Shard Expiry                        │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  Access Path (Lazy):                                    │
-│    GET key → check expiry → if expired: delete, nil    │
-│                                                         │
-│  Background Task (Active, ~10Hz):                       │
-│    1. Sample N keys from expiry index                  │
-│    2. Delete expired ones                              │
-│    3. Stop when time budget (~1ms) exhausted           │
-│    4. If >25% expired, continue next cycle             │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Data Structure
-
-Per-shard expiry index for efficient sampling:
-
-```rust
-pub struct ExpiryIndex {
-    /// Keys with expiry, sorted by expiration time
-    by_time: BTreeMap<(Instant, Bytes), ()>,
-    /// Quick lookup: key -> expiration time
-    by_key: HashMap<Bytes, Instant>,
-}
-```
-
-### Configuration
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `active_expiry_hz` | 10 | Background sweep frequency per shard |
-| `active_expiry_cycle_ms` | 1 | Max time budget per sweep cycle |
-| `active_expiry_sample_size` | 20 | Keys sampled per cycle |
+See [STORAGE.md](STORAGE.md) for expiry index implementation.
 
 ---
 
 ## Memory Management
 
-### Memory Limit Behavior
+When configured memory limit (`max_memory`) is reached, write operations return `-OOM` errors while reads continue normally. Planned eviction policies include LRU, LFU, and volatile variants.
 
-When configured memory limit (`max_memory`) is reached:
-
-| Operation | Behavior |
-|-----------|----------|
-| Write (SET, ZADD, etc.) | Return `-OOM out of memory` error |
-| Read (GET, ZRANGE, etc.) | Continue normally |
-| Delete (DEL, EXPIRE) | Continue normally |
-| Expiry background task | Continues to reclaim memory |
-
-**Rationale:** Explicit OOM errors are predictable. Users must manage capacity or enable expiry policies.
-
-### Key Eviction Policies (Future)
-
-Planned Redis-compatible eviction policies:
-
-| Policy | Scope | Description |
-|--------|-------|-------------|
-| noeviction | - | Return OOM error (current default) |
-| volatile-lru | Keys with TTL | Evict least recently used |
-| allkeys-lru | All keys | Evict least recently used |
-| volatile-lfu | Keys with TTL | Evict least frequently used |
-| allkeys-lfu | All keys | Evict least frequently used |
-| volatile-random | Keys with TTL | Evict random keys |
-| allkeys-random | All keys | Evict random keys |
-| volatile-ttl | Keys with TTL | Evict keys with shortest TTL |
-
-**DragonflyDB LFRU:** Consider hybrid LFU+LRU with zero per-key overhead.
-
-See [EVICTION.md](EVICTION.md) for eviction implementation details.
+See [EVICTION.md](EVICTION.md) for eviction policy implementation.
 
 ---
 
 ## Persistence
 
-FrogDB uses a single shared RocksDB instance with one column family per shard.
-All writes append to the WAL with configurable durability modes (async/periodic/sync).
-Forkless snapshots avoid the 2x memory spike of fork-based approaches.
+FrogDB uses a single shared RocksDB instance with one column family per shard. All writes append to the WAL with configurable durability modes (async/periodic/sync). Forkless snapshots avoid the 2x memory spike of fork-based approaches.
 
-See [PERSISTENCE.md](PERSISTENCE.md) for RocksDB topology, WAL implementation,
-and snapshot algorithm details.
+See [PERSISTENCE.md](PERSISTENCE.md) for RocksDB topology, WAL, snapshots, and backup/restore procedures.
 
 ---
 
 ## Protocol
 
-### RESP2 Implementation
+FrogDB implements RESP2 (Redis Serialization Protocol version 2) using the `redis-protocol` crate. A `Protocol` trait abstraction allows RESP3 to be added later without changing command implementations.
 
-RESP2 is the Redis Serialization Protocol version 2:
+See [PROTOCOL.md](PROTOCOL.md) for frame processing and Response type details.
 
-```
-Simple String: +OK\r\n
-Error:         -ERR message\r\n
-Integer:       :1000\r\n
-Bulk String:   $5\r\nhello\r\n
-Array:         *2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n
-Null:          $-1\r\n
-```
+---
 
-FrogDB uses the [`redis-protocol`](https://crates.io/crates/redis-protocol) crate for parsing and encoding.
-See [PROTOCOL.md](PROTOCOL.md) for integration details.
+## Connection Management
 
-### Protocol Abstraction
+Each connection maintains state for transactions, pub/sub, authentication, and blocking operations. Connections are pinned to threads with configurable limits, timeouts, and output buffer controls.
 
-```rust
-pub trait Protocol: Send + Sync {
-    type Frame: ProtocolFrame;
-
-    fn parse(&self, buf: &mut BytesMut) -> Result<Option<Self::Frame>, ProtocolError>;
-    fn encode(&self, response: &Response) -> BytesMut;
-}
-```
-
-This abstraction allows RESP3 to be added later without changing command implementations.
-
-### Response Type
-
-The `Response` enum includes both RESP2 types (implemented) and RESP3 types (defined for future use).
-RESP3 variants are included from the start to enable future protocol upgrades without breaking changes.
-
-See [PROTOCOL.md](PROTOCOL.md) for the full `Response` enum definition, RESP3 wire formats,
-and protocol negotiation details.
-
-### Error Response Taxonomy
-
-FrogDB uses consistent error prefixes for different error categories:
-
-| Prefix | Meaning | Example |
-|--------|---------|---------|
-| `-ERR` | Generic/uncategorized error | `-ERR unknown command 'FOO'` |
-| `-WRONGTYPE` | Operation against wrong type | `-WRONGTYPE Operation against a key holding the wrong kind of value` |
-| `-OOM` | Out of memory | `-OOM command not allowed when used memory > 'maxmemory'` |
-| `-TIMEOUT` | Operation timed out | `-TIMEOUT scatter-gather timed out` |
-| `-CROSSSHARD` | Keys span multiple shards | `-CROSSSHARD Keys in MULTI must be on same shard` |
-| `-MOVED` | Key on different node (cluster) | `-MOVED 3999 127.0.0.1:6381` |
-| `-ASK` | Key migrating (cluster) | `-ASK 3999 127.0.0.1:6381` |
-| `-CLUSTERDOWN` | Cluster unavailable | `-CLUSTERDOWN The cluster is down` |
-| `-NOSCRIPT` | Script not in cache | `-NOSCRIPT No matching script. Please use EVAL.` |
-| `-BUSY` | Script running | `-BUSY Redis is busy running a script` |
-| `-READONLY` | Write to replica | `-READONLY You can't write against a read only replica` |
-| `-NOAUTH` | Authentication required | `-NOAUTH Authentication required` |
-| `-NOPERM` | Permission denied | `-NOPERM this user has no permissions to run the 'config' command` |
-
-### Connection State
-
-Each connection maintains state for transactions, pub/sub, authentication, and blocking operations.
-The ConnectionState struct is owned by the connection handler and tracks the current mode
-(normal, transaction, pub/sub, blocked) along with associated data.
-
-See [CONNECTION.md](CONNECTION.md) for connection lifecycle, state machine,
-ConnectionAssigner abstraction, and client commands.
+See [CONNECTION.md](CONNECTION.md) for lifecycle, state machine, and rate limiting.
 
 ---
 
 ## Command Execution
 
-Commands flow through protocol parsing, key routing, shard dispatch, execution,
-persistence, and response encoding. Each command implements the `Command` trait
-with arity validation and behavior flags (WRITE, READONLY, MULTI_KEY, etc.).
+Commands flow through protocol parsing, key routing, shard dispatch, execution, persistence, and response encoding. Each command implements the `Command` trait with arity validation and behavior flags.
 
-See [EXECUTION.md](EXECUTION.md) for command flow, trait definition, and flag documentation.
+See [EXECUTION.md](EXECUTION.md) for command flow and trait definition, [COMMANDS.md](COMMANDS.md) for command index.
 
 ---
 
 ## Transactions & Pipelining
 
-### Pipelining
+FrogDB supports MULTI/EXEC transactions with WATCH for optimistic locking. All keys in a transaction must be on the same shard (use hash tags). Pipelining is a separate client-side optimization that batches commands without atomicity guarantees.
 
-Client-side optimization - batch commands in single network round-trip:
-- No server state required
-- Commands may interleave with other clients
-- NOT atomic - purely a performance optimization
-- Supported automatically by RESP protocol
-
-### Transactions (MULTI/EXEC)
-
-Atomic command execution with queuing:
-
-1. **MULTI**: Start transaction, server enters queuing mode
-2. **Commands**: Queued, server responds QUEUED
-3. **EXEC**: Execute all queued commands atomically
-4. **DISCARD**: Abort transaction, clear queue
-
-**Key semantics:**
-- Atomic: All commands execute without interleaving
-- NOT rollback: If one command fails, others still execute
-- Single-shard requirement: All keys must hash to same shard (use hash tags)
-
-**Cross-shard detection:** When a command is queued that references a key on a different shard
-than previously queued keys, FrogDB returns `-CROSSSHARD` error immediately (not at EXEC time).
-This provides early feedback rather than wasting round trips.
-
-### WATCH (Optimistic Locking)
-
-- `WATCH key [key...]`: Monitor keys for changes
-- If watched key modified before EXEC, transaction aborts (returns nil)
-- `UNWATCH`: Clear all watches
-- **Single-shard requirement**: Watched keys must be on the same shard as transaction keys
-
-See [COMMANDS.md](COMMANDS.md) for detailed transaction implementation.
+See [TRANSACTIONS.md](TRANSACTIONS.md) for implementation details.
 
 ---
 
-## Key Iteration (SCAN/KEYS)
+## Key Iteration (SCAN)
 
-### KEYS Command
+SCAN provides cursor-based iteration without blocking. The 64-bit cursor encodes shard ID (16 bits) and position (48 bits), making iteration stateless and resumable.
 
-Pattern matching across all keys. **Warning:** Blocks entire keyspace - avoid in production.
-
-### SCAN Command (Recommended)
-
-Cursor-based iteration without blocking. Uses shard-aware cursor encoding:
-
-```
-┌─────────────────────────────────────────┐
-│           64-bit Cursor                  │
-├─────────────────┬───────────────────────┤
-│   Shard ID      │  Position in Shard    │
-│   (bits 48-63)  │  (bits 0-47)          │
-└─────────────────┴───────────────────────┘
-```
-
-**Properties:**
-- Stateless: No server-side cursor state
-- Resumable: Can stop/resume anytime
-- Eventual: May return duplicates, may miss keys added during scan
-
-**Cursor Limits:**
-- Shard ID: 16 bits → max 65,536 internal shards per node
-- Position: 48 bits → max ~281 trillion keys per shard
-- These limits are theoretical; practical deployments use far fewer shards (typically ≤ CPU count)
-
-**Related:** SSCAN, HSCAN, ZSCAN for iterating data structure members.
-
-See [COMMANDS.md](COMMANDS.md) for detailed SCAN algorithm.
+See [COMMANDS.md](COMMANDS.md) for SCAN algorithm details.
 
 ---
 
 ## Lua Scripting
 
-Lua scripts execute atomically within a single shard, blocking that shard's event loop
-during execution. Cross-shard scripts require all keys to use hash tags for colocation.
+Lua scripts execute atomically within a single shard, blocking that shard's event loop. Scripts must declare all keys in the KEYS array (DragonflyDB-style strict validation). Cross-shard scripts require hash tags for colocation.
 
-### Key Validation (DragonflyDB-style)
-
-Scripts must declare all keys in the KEYS array. Accessing undeclared keys fails by default:
-
-```
-EVAL "return redis.call('GET', 'undeclared')" 0
--ERR script tried accessing undeclared key: undeclared
-```
-
-**Rationale:** In a multi-threaded shared-nothing architecture, undeclared key access would
-require global locking, defeating the performance benefits. This matches DragonflyDB's default.
-
-**Compatibility flag:** For legacy scripts, `--default_lua_flags=allow-undeclared-keys` enables
-undeclared access by locking the entire datastore (significantly slower).
-
-See [SCRIPTING.md](SCRIPTING.md) for execution model and cross-shard requirements.
+See [SCRIPTING.md](SCRIPTING.md) for execution model and resource limits.
 
 ---
 
 ## Pub/Sub
 
-FrogDB supports broadcast (SUBSCRIBE/PUBLISH) and sharded (SSUBSCRIBE/SPUBLISH) pub/sub
-modes with a unified per-shard architecture. Broadcast fans out to all shards while
-sharded routes to the channel's owner shard for higher throughput.
+FrogDB supports broadcast (SUBSCRIBE/PUBLISH) and sharded (SSUBSCRIBE/SPUBLISH) pub/sub modes with a unified per-shard architecture. Broadcast fans out to all shards; sharded routes to the channel's owner shard.
 
-See [PUBSUB.md](PUBSUB.md) for architecture, mode comparison, and command details.
+See [PUBSUB.md](PUBSUB.md) for architecture and commands.
+
+---
+
+## Blocking Commands
+
+Blocking commands (BLPOP, BRPOP, BLMOVE, etc.) are a future feature. They require special handling in the shared-nothing architecture, with keys constrained to the same shard via hash tags.
+
+See [BLOCKING.md](BLOCKING.md) for design considerations.
 
 ---
 
 ## Testing Strategy
 
-### Integration-First Approach
+Testing follows an integration-first approach using real Redis clients against a test server. Categories include protocol tests, command tests, concurrency tests, persistence tests, and stress tests.
 
-```rust
-#[tokio::test]
-async fn test_set_get() {
-    let server = TestServer::start().await;
-    let client = redis::Client::open(server.url()).unwrap();
-    let mut con = client.get_connection().unwrap();
-
-    let _: () = con.set("mykey", "myvalue").unwrap();
-    let val: String = con.get("mykey").unwrap();
-
-    assert_eq!(val, "myvalue");
-}
-```
-
-### Test Categories
-
-1. **Protocol tests** - Verify RESP2 parsing/encoding
-2. **Command tests** - Each command via redis-cli/client
-3. **Concurrency tests** - Multi-client, multi-key operations
-4. **Persistence tests** - Crash recovery, snapshot correctness
-5. **Lua tests** - Script execution, atomicity
-6. **Stress tests** - High throughput, memory pressure
-7. **Future: Jepsen tests** - Distributed correctness
-
-See [TESTING.md](TESTING.md) for how to run tests, coverage expectations, and CI configuration.
+See [TESTING.md](TESTING.md) for test categories and CI configuration.
 
 ---
 
 ## Observability
 
-### Metrics (Prometheus)
+FrogDB provides Prometheus-compatible metrics (connections, memory, commands, keyspace), OpenTelemetry tracing (span per command), and structured logging. Debug commands include SLOWLOG, DEBUG OBJECT, and INFO.
 
-FrogDB exposes Prometheus-compatible metrics:
-- Connection stats: `connected_clients`, `blocked_clients`
-- Memory: `used_memory`, `peak_memory`, `fragmentation_ratio`
-- Commands: `commands_processed`, latency percentiles (p50, p95, p99)
-- Keyspace: `keys_total`, `hit_rate`, `miss_rate`, `expired_keys`
-- Per-shard breakdown available
-
-### Tracing (OpenTelemetry)
-
-- Span per command execution
-- Child spans for cross-shard operations
-- Integration via `tracing` crate + OTLP exporter
-
-### Logging
-
-- Structured logging (JSON format for production)
-- Configurable log levels: ERROR, WARN, INFO, DEBUG, TRACE
-
-### Debug Commands
-
-- `SLOWLOG`: Commands exceeding latency threshold
-- `DEBUG OBJECT`: Inspect key internals
-- `CLIENT LIST`: Connected client details
-- `MEMORY DOCTOR`: Memory health analysis
-- `INFO`: Comprehensive server statistics
-
-See [OBSERVABILITY.md](OBSERVABILITY.md) for detailed logging, tracing, metrics, and debugging documentation.
-See [OPERATIONS.md](OPERATIONS.md) for operational configuration.
-See [FAILURE_MODES.md](FAILURE_MODES.md) for error handling, failure recovery, and client recommendations.
+See [OBSERVABILITY.md](OBSERVABILITY.md) for metrics reference and [OPERATIONS.md](OPERATIONS.md) for configuration.
 
 ---
 
 ## Security
 
-FrogDB implements Redis-compatible authentication and ACL (Access Control Lists).
-The ACL system uses an abstracted checker interface that starts as "allow all" and
-can be enabled for full Redis 6.0 ACL support, with a path to Redis 7.0 selectors.
+FrogDB implements Redis-compatible ACL (Access Control Lists) with an abstracted checker interface. ACL checks occur at command permission, key access, and pub/sub channel hook points.
 
-Authentication state is per-connection with immutable permission snapshots. ACL checks
-occur at three hook points: command permission, key access (read/write), and pub/sub channels.
-
-See [AUTH.md](AUTH.md) for ACL architecture, traits, and command reference.
-See [OPERATIONS.md](OPERATIONS.md) for security configuration.
+See [AUTH.md](AUTH.md) for ACL architecture and commands.
 
 ---
 
-## Blocking Commands (Future)
+## Clustering
 
-> **Status:** Non-goal for initial implementation. This section outlines future design considerations.
+FrogDB is designed for single-node operation initially, with abstractions for future clustering. The design uses an orchestrated control plane (no gossip), 16384 hash slots (Redis Cluster compatible), and RocksDB WAL streaming for replication.
 
-Blocking commands (BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BZPOPMIN, BZPOPMAX) require special handling in a shared-nothing architecture.
-
-### Design Considerations
-
-**Per-Connection Blocking State:**
-```rust
-struct BlockedConnection {
-    keys: Vec<Bytes>,           // Keys being waited on
-    timeout: Option<Instant>,   // When to unblock
-    shard_id: usize,            // Owning shard
-}
-```
-
-**Challenges:**
-- Keys may be on different shards than the blocking connection's home thread
-- Timeout management across distributed state
-- Cross-shard notification when key becomes available
-
-**Proposed Approach:**
-1. Blocking command validates all keys on same shard (use hash tags)
-2. Connection registers with target shard's wait queue
-3. PUSH commands check wait queue before storing
-4. Timeout handled by connection's home thread with cancellation token
-
-**Cross-Shard Blocking (Not Supported):**
-```
-BLPOP key1 key2 0  # Fails if key1 and key2 on different shards
-```
-
-Clients must use hash tags for multi-key blocking: `BLPOP {queue}:high {queue}:low 0`
+See [CLUSTER.md](CLUSTER.md) for full clustering architecture.
 
 ---
 
-## Clustering (Future)
+## Server Lifecycle
 
-FrogDB is designed for single-node operation initially, but includes abstractions for future clustering support.
+FrogDB follows a structured startup and shutdown sequence including RocksDB recovery, shard initialization, and graceful connection draining.
 
-### Architecture Overview
+See [LIFECYCLE.md](LIFECYCLE.md) for startup/shutdown procedures and health checks.
 
-| Aspect | Design Choice |
-|--------|---------------|
-| Control plane | Orchestrated (DragonflyDB-style), no gossip |
-| Hash slots | 16384 (Redis Cluster compatible) |
-| Replication | Full dataset, RocksDB WAL streaming |
-| Client protocol | MOVED/ASK redirections, CLUSTER commands |
+---
 
-### Key Concepts
+## Consistency Model
 
-- **Internal shards** (threads) are separate from **cluster slots** (distribution units)
-- External orchestrator pushes topology to nodes via admin API
-- Replicas copy full dataset for simpler failover
-- Replication leverages existing RocksDB WAL infrastructure
+FrogDB provides **eventual consistency** within a single node: read-your-writes, monotonic reads, and total order per key. Cross-key atomicity requires same-shard colocation. Durability depends on the configured mode.
 
-### Abstractions Needed Now
-
-These types and traits should be designed into single-node implementation:
-
-- `NodeId`, `SlotId`, `SlotRange`, `ReplicationId` types
-- `ClusterTopology` trait for slot→node mapping
-- `ReplicationStream` abstraction over WAL tailing
-- Admin API for topology updates
-
-See [CLUSTER.md](CLUSTER.md) for full clustering architecture, replication protocol, failover, and slot migration design.
+See [CONSISTENCY.md](CONSISTENCY.md) for detailed guarantees.
 
 ---
 
@@ -766,162 +251,37 @@ See [CLUSTER.md](CLUSTER.md) for full clustering architecture, replication proto
 
 ```
 frogdb/
-├── Cargo.toml                 # Workspace root
-├── INDEX.md                  # This document
-│
-├── frogdb-server/             # Main server binary
-│   └── src/
-│       ├── main.rs            # Entry point, CLI
-│       ├── server.rs          # Server lifecycle
-│       └── config.rs          # Configuration
-│
-├── frogdb-core/               # Core data structures & logic
-│   └── src/
-│       ├── shard/             # Shard worker, executor
-│       ├── data/              # Value types (String, SortedSet)
-│       ├── store/             # Storage trait + implementations
-│       └── command/           # Command trait + implementations
-│
-├── frogdb-protocol/           # RESP protocol handling
-│   └── src/
-│       ├── trait.rs           # Protocol abstraction
-│       └── resp2/             # RESP2 parser/encoder
-│
-├── frogdb-lua/                # Lua scripting support
-│   └── src/
-│       ├── vm.rs              # Lua VM wrapper
-│       └── commands.rs        # redis.call() bindings
-│
-├── frogdb-persistence/        # Persistence layer
-│   └── src/
-│       ├── snapshot.rs        # Forkless snapshot
-│       ├── wal.rs             # Write-ahead log
-│       └── recovery.rs        # Startup recovery
-│
-└── tests/                     # Integration tests
-    └── src/
-        └── *.rs               # Test files
+├── frogdb-server/        # Main server binary
+├── frogdb-core/          # Core data structures & logic
+├── frogdb-protocol/      # RESP protocol handling
+├── frogdb-lua/           # Lua scripting support
+├── frogdb-persistence/   # Persistence layer
+└── tests/                # Integration tests
 ```
 
 ---
 
 ## Configuration
 
-FrogDB uses [Figment](https://docs.rs/figment) for hierarchical configuration with priority:
-1. Command-line arguments
-2. Environment variables (prefix: `FROGDB_`)
-3. Configuration file (TOML format)
-4. Built-in defaults
+FrogDB uses [Figment](https://docs.rs/figment) for hierarchical configuration: CLI > environment variables (prefix: `FROGDB_`) > config file (TOML) > defaults.
 
-See [OPERATIONS.md](OPERATIONS.md) for complete configuration guide and example TOML file.
-See [DEPLOYMENT.md](DEPLOYMENT.md) for Docker, systemd, and Kubernetes deployment.
-
-### Server Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `bind` | `127.0.0.1` | Address to bind to |
-| `port` | `6379` | Port to listen on |
-| `num_shards` | `num_cpus` | Number of shard workers (threads) |
-
-### Memory Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `max_memory` | `0` (unlimited) | Memory limit in bytes; 0 = no limit |
-
-### Persistence Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `durability_mode` | `periodic` | `async`, `periodic`, or `sync` |
-| `periodic_sync_ms` | `100` | Sync interval for periodic mode |
-| `periodic_sync_writes` | `1000` | Write count trigger for periodic mode |
-| `snapshot_interval_s` | `3600` | Seconds between snapshots (0 = disabled) |
-| `data_dir` | `./data` | Directory for RocksDB and snapshots |
-
-### Timeout Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `scatter_gather_timeout_ms` | `1000` | Timeout for multi-shard operations |
-| `client_timeout_s` | `0` | Idle client timeout (0 = no timeout) |
-
-**Timeout Relationships:**
-- `client_timeout_s` applies to idle connections (no commands sent)
-- `scatter_gather_timeout_ms` applies to individual multi-shard operations
-- If `client_timeout_s > 0`, it must be greater than `scatter_gather_timeout_ms / 1000`
-- Lua script timeout (`lua_time_limit_ms`) is independent of scatter-gather timeout
-
-**Validation:** On startup, FrogDB warns if `client_timeout_s` is non-zero but less than `scatter_gather_timeout_ms / 1000`, as this could cause client disconnection during long scatter-gather operations.
-
-### Expiry Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `active_expiry_hz` | `10` | Background expiry sweep frequency |
-| `active_expiry_cycle_ms` | `1` | Max time per sweep cycle |
+See [OPERATIONS.md](OPERATIONS.md) for complete configuration guide and [DEPLOYMENT.md](DEPLOYMENT.md) for Docker/K8s deployment.
 
 ---
 
 ## Roadmap
 
-### Phase 0: Design Document (Current)
-- [x] Create INDEX.md
-- [x] Document architecture decisions
-- [x] Define abstractions and interfaces
-
-### Phase 1: Foundation
-- [ ] Project scaffolding (Cargo workspace)
-- [ ] RESP2 protocol parser/encoder
-- [ ] Single-threaded server
-- [ ] In-memory store with String type
-- [ ] Basic commands: PING, SET, GET, DEL, EXISTS, EXPIRE, TTL
-- [ ] Integration tests with redis-cli
-
-### Phase 2: Multi-Threading
-- [ ] Shard worker implementation
-- [ ] Message passing infrastructure
-- [ ] Acceptor with connection distribution
-- [ ] Key hashing and routing
-- [ ] Scatter-gather for MGET/MSET
-
-### Phase 3: Sorted Sets
-- [ ] FrogSortedSet data structure
-- [ ] ZADD, ZREM, ZSCORE, ZRANK, ZRANGE commands
-
-### Phase 4: Persistence
-- [ ] RocksDB integration
-- [ ] WAL implementation
-- [ ] Forkless snapshot algorithm
-- [ ] Recovery on startup
-
-### Phase 5: Lua Scripting
-- [ ] Lua VM integration (mlua)
-- [ ] EVAL, EVALSHA commands
-- [ ] redis.call() bindings
-
-### Phase 6: Production Readiness
-- [ ] Prometheus metrics endpoint (/metrics)
-- [ ] OpenTelemetry tracing integration
-- [ ] Structured logging (JSON format)
-- [ ] SLOWLOG command
-- [ ] Figment configuration (TOML + env vars)
-- [ ] Graceful shutdown
-- [ ] Memory limits and OOM handling
-
-### Phase 7: Advanced Features
-- [ ] Key eviction policies (LRU/LFU)
-- [ ] ACL implementation (Redis 6+ compatible)
-- [ ] Additional data types (Hash, List, Set)
-- [ ] Stream data type with consumer groups
-- [ ] Transactions (MULTI/EXEC/WATCH)
-
-### Future
-- RESP3 protocol
-- Bitmap, Geo, JSON, HyperLogLog types
-- Clustering and replication (see [CLUSTER.md](CLUSTER.md))
-- Jepsen testing
+| Phase | Focus |
+|-------|-------|
+| 0 | Design documents (current) |
+| 1 | Foundation: RESP2, single-threaded, Strings |
+| 2 | Multi-threading: shards, message passing, scatter-gather |
+| 3 | Sorted Sets |
+| 4 | Persistence: RocksDB, WAL, snapshots |
+| 5 | Lua Scripting |
+| 6 | Production: metrics, tracing, config |
+| 7 | Advanced: eviction, ACL, more types, transactions |
+| Future | RESP3, clustering, Jepsen tests |
 
 ---
 
@@ -934,12 +294,6 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for Docker, systemd, and Kubernetes deploymen
 - [Valkey](https://valkey.io/) - Redis fork by Linux Foundation
 - [KeyDB](https://keydb.dev/) - Multi-threaded Redis fork
 
-### Papers & Articles
-
-- [Dragonfly Architecture](https://www.dragonflydb.io/blog/scaling-performance-redis-vs-dragonfly) - Shared-nothing design
-- [Redis Persistence](https://redis.io/docs/management/persistence/) - RDB + AOF model
-- [RESP Protocol](https://redis.io/docs/reference/protocol-spec/) - Redis serialization protocol
-
 ### Rust Ecosystem
 
 - [Tokio](https://tokio.rs/) - Async runtime
@@ -949,35 +303,30 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for Docker, systemd, and Kubernetes deploymen
 
 ---
 
-## Server Lifecycle
+## Document Index
 
-FrogDB follows a structured startup and shutdown sequence for reliable operation and recovery.
-
-See [LIFECYCLE.md](LIFECYCLE.md) for detailed startup sequence, shutdown procedure,
-recovery process, and health check endpoints.
-
----
-
-## Consistency Model
-
-### Guarantees
-
-FrogDB provides **eventual consistency** within a single node:
-
-1. **Read-your-writes**: A client will always see its own writes
-2. **Monotonic reads**: Once a value is seen, older values won't be returned
-3. **Total order per key**: All operations on a single key are totally ordered
-
-### Non-Guarantees
-
-1. **Cross-key atomicity**: Multi-key operations (MGET, MSET) are not atomic unless all keys are on the same shard
-2. **Linearizability**: Operations may be reordered across shards
-3. **Durability by default**: Async durability mode may lose recent writes on crash
-
-### Configuration Impact
-
-| Mode | Durability | Latency |
-|------|------------|---------|
-| `Async` | Best-effort (may lose data) | ~1-10 μs |
-| `Periodic(100ms, 1000)` | Bounded loss (100ms or 1000 writes) | ~1-10 μs |
-| `Sync` | Guaranteed (fsync per write) | ~100-500 μs |
+| Document | Description |
+|----------|-------------|
+| [CONCURRENCY.md](CONCURRENCY.md) | Thread architecture, VLL, scatter-gather |
+| [STORAGE.md](STORAGE.md) | Store trait, key metadata, expiry |
+| [PERSISTENCE.md](PERSISTENCE.md) | RocksDB, WAL, snapshots, backup/restore |
+| [PROTOCOL.md](PROTOCOL.md) | RESP2/RESP3, frame processing |
+| [CONNECTION.md](CONNECTION.md) | Connection lifecycle, rate limiting |
+| [COMMANDS.md](COMMANDS.md) | Command index, DUMP/RESTORE |
+| [EXECUTION.md](EXECUTION.md) | Command trait, arity, flags |
+| [DATA_TYPES.md](DATA_TYPES.md) | Value types and implementations |
+| [LIMITS.md](LIMITS.md) | Size limits and enforcement |
+| [TRANSACTIONS.md](TRANSACTIONS.md) | MULTI/EXEC, WATCH, pipelining |
+| [BLOCKING.md](BLOCKING.md) | Blocking commands design |
+| [SCRIPTING.md](SCRIPTING.md) | Lua execution model |
+| [PUBSUB.md](PUBSUB.md) | Pub/sub architecture |
+| [CLUSTER.md](CLUSTER.md) | Clustering design |
+| [AUTH.md](AUTH.md) | ACL system |
+| [EVICTION.md](EVICTION.md) | Memory eviction policies |
+| [LIFECYCLE.md](LIFECYCLE.md) | Startup/shutdown |
+| [TESTING.md](TESTING.md) | Test strategy |
+| [OBSERVABILITY.md](OBSERVABILITY.md) | Metrics, logging, tracing |
+| [OPERATIONS.md](OPERATIONS.md) | Configuration, debugging |
+| [FAILURE_MODES.md](FAILURE_MODES.md) | Error handling, recovery |
+| [CONSISTENCY.md](CONSISTENCY.md) | Consistency guarantees |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Docker, K8s deployment |
