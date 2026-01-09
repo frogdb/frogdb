@@ -152,4 +152,4 @@ Connections are not closed on protocol errors (matches Redis behavior).
 
 - [RESP Protocol Spec](https://redis.io/docs/reference/protocol-spec/)
 - [redis-protocol crate docs](https://docs.rs/redis-protocol)
-- [DESIGN.md](../DESIGN.md#protocol)
+- [DESIGN.md](INDEX.md#protocol)

@@ -214,6 +214,16 @@ FrogDB uses an orchestrated control plane (DragonflyDB-style) rather than Redis 
 
 ### Orchestrator Requirements
 
+> **CRITICAL: Single Point of Failure**
+>
+> The orchestrator is the control plane for cluster operations. If ALL orchestrators are unavailable:
+> - No automatic failover can occur
+> - No slot migrations can happen
+> - No new nodes can join
+> - Data plane continues (existing topology serves traffic)
+>
+> **Recommendation:** Always deploy 3+ orchestrator instances in production.
+
 The external orchestrator must satisfy these requirements:
 
 **High Availability:**
@@ -823,7 +833,41 @@ When a primary is demoted (or recovers after partition):
 # 0 = disabled (async replication, potential data loss)
 # 1+ = synchronous to N replicas (higher durability, higher latency)
 min_replicas_to_write = 0
+
+# Time before orchestrator considers node unreachable
+node_timeout_ms = 15000
+
+# Additional time to wait before triggering failover (debounce)
+failover_timeout_ms = 5000
+
+# Time for old primary to receive demotion after failover decision
+fencing_timeout_ms = 10000
 ```
+
+**Fencing Timeline (Worst Case):**
+
+```
+T=0:     Primary loses connection to orchestrator
+T=15s:   Orchestrator marks primary as unreachable (node_timeout_ms)
+T=20s:   Orchestrator initiates failover (failover_timeout_ms)
+T=21s:   Replica promoted, receives new epoch
+T=30s:   Old primary receives demotion (fencing_timeout_ms)
+
+SPLIT-BRAIN WINDOW: T=21s to T=30s (up to 9 seconds)
+```
+
+During the split-brain window:
+- Old primary continues accepting writes (no epoch update yet)
+- New primary also accepting writes
+- Data divergence possible
+
+**Reducing Split-Brain Window:**
+
+| Approach | Configuration | Trade-off |
+|----------|---------------|-----------|
+| Lower fencing timeout | `fencing_timeout_ms = 5000` | Faster convergence, more aggressive |
+| Synchronous replication | `min_replicas_to_write = 1` | No data loss, higher latency |
+| Client-side validation | Check epoch on response | Application complexity |
 
 ### In-Flight Commands During Failover
 
@@ -1129,10 +1173,68 @@ ACL updates are **eventually consistent** across the cluster:
 |--------|------|-------------|
 | `frogdb_replication_offset` | Gauge | Current replication offset (seq number) |
 | `frogdb_replication_lag_seconds` | Gauge | Lag behind primary |
+| `frogdb_replication_lag_bytes` | Gauge | Lag in bytes behind primary |
 | `frogdb_connected_replicas` | Gauge | Number of connected replicas (primary only) |
 | `frogdb_sync_full_count` | Counter | Full syncs performed |
 | `frogdb_sync_partial_ok` | Counter | Successful partial syncs |
 | `frogdb_sync_partial_err` | Counter | Failed partial syncs (triggered full) |
+
+### Replication Lag Measurement
+
+**Calculation:**
+
+```
+lag_bytes = primary_offset - replica_offset
+lag_seconds = lag_bytes / throughput_bytes_per_second
+```
+
+Where:
+- `primary_offset`: Current WAL sequence number on primary
+- `replica_offset`: Last acknowledged sequence number from replica
+- `throughput`: Smoothed moving average of replication throughput
+
+**Lag Visibility:**
+
+On primary (via INFO replication):
+```
+# Replication
+role:master
+connected_slaves:2
+slave0:ip=10.0.0.2,port=6379,state=online,offset=12345678,lag=0
+slave1:ip=10.0.0.3,port=6379,state=online,offset=12345600,lag=1
+```
+
+On replica:
+```
+# Replication
+role:slave
+master_link_status:up
+master_last_io_seconds_ago:0
+master_sync_in_progress:0
+slave_repl_offset:12345678
+slave_read_repl_offset:12345678
+master_repl_offset:12345700
+```
+
+**Alerting Thresholds:**
+
+| Threshold | Status | Action |
+|-----------|--------|--------|
+| < 1 second | Healthy | Normal operation |
+| 1-5 seconds | Elevated | Monitor closely |
+| 5-30 seconds | Warning | Investigate primary load or network |
+| > 30 seconds | Critical | Risk of data loss on failover |
+
+**Data Loss Bound:**
+
+On failover, maximum data loss = replication lag at time of failure.
+With `lag_seconds = 5`, up to 5 seconds of writes may be lost.
+
+**Reducing Lag:**
+- Ensure sufficient network bandwidth
+- Monitor primary CPU and disk I/O
+- Consider dedicated replication network
+- Use synchronous replication (`WAIT` command) for critical writes
 
 ---
 

@@ -195,6 +195,55 @@ When exceeded:
 
 **Warning:** Setting to 0 (unlimited) risks blocking a shard indefinitely.
 
+### Timeout Behavior Details
+
+**During Timeout:**
+
+| Phase | Behavior |
+|-------|----------|
+| Script running | Other commands to same shard queue (shard blocked) |
+| Timeout exceeded | Script continues briefly while FrogDB attempts graceful stop |
+| Script doesn't yield | Forcibly terminated after grace period |
+| After termination | Shard resumes processing queued commands |
+
+**SCRIPT KILL Command:**
+
+Manually terminate a running script:
+
+```
+SCRIPT KILL
+```
+
+| Scenario | Result |
+|----------|--------|
+| Script has no writes | Script terminated, `+OK` returned |
+| Script has writes | `-UNKILLABLE script has performed writes` |
+| No script running | `-NOTBUSY No scripts in execution right now` |
+
+**Why scripts with writes can't be killed:**
+- No rollback mechanism exists
+- Partial writes are already committed
+- Only `SHUTDOWN NOSAVE` can stop (loses all data)
+
+**VM State After Timeout/Kill:**
+
+| State | Preserved | Notes |
+|-------|-----------|-------|
+| Cached scripts | Yes | EVALSHA still works |
+| Global variables | Reset | VM is reset to clean state |
+| Pending operations | Discarded | In-flight commands fail |
+| Written data | Committed | No rollback |
+
+**BUSY Response:**
+
+While a long script runs, other commands return:
+
+```
+-BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.
+```
+
+This matches Redis behavior and prevents client confusion about command ordering.
+
 ### Memory Limit
 
 Maximum heap memory per Lua VM:
@@ -310,3 +359,56 @@ Replicas maintain their own script cache, NOT synchronized with primary:
 - Scripts executed on primary are NOT propagated to replicas
 - `READONLY` + `EVALSHA` may return NOSCRIPT even if primary has the script
 - Either pre-load scripts to replicas, or use `EVAL` for replica reads
+
+### Slot Migration and EVALSHA
+
+During slot migration, scripts may fail in various ways:
+
+**Scenario 1: Script execution during migration**
+```
+Client: EVALSHA abc123 1 {slot:123}:key
+        │
+        └── Slot 123 migrating from Node A → Node B
+```
+
+| Migration Phase | Behavior |
+|-----------------|----------|
+| **MIGRATING state** | Node A returns `-ASK` redirect |
+| **IMPORTING state** | Node B requires `ASKING` first |
+| **Script accesses migrated key** | `-TRYAGAIN` if key mid-transfer |
+| **Completed** | Normal routing to Node B |
+
+**Scenario 2: Multi-key script spanning migration**
+
+If a script's keys span a slot being migrated:
+- Keys may be on different nodes during migration
+- Script receives `-CROSSSLOT` (if keys on different nodes)
+- Use hash tags to ensure colocation
+
+**Scenario 3: Script cache on new node**
+
+After migration completes:
+- Scripts cached on old node (A) are NOT transferred
+- New node (B) returns `-NOSCRIPT` on `EVALSHA`
+- Client must re-load script via `EVAL`
+
+**Client Handling:**
+
+```python
+def execute_script_safe(cluster, sha, keys, args):
+    while True:
+        try:
+            return cluster.evalsha(sha, keys, args)
+        except MovedError as e:
+            cluster.update_slot_map()
+        except AskError as e:
+            node = cluster.get_node(e.host, e.port)
+            node.asking()
+            return node.evalsha(sha, keys, args)
+        except NoScriptError:
+            return cluster.eval(SCRIPT_SOURCE, keys, args)
+        except TryAgainError:
+            time.sleep(0.1)  # Retry after brief delay
+```
+
+**Best Practice:** Pre-load scripts to all nodes, re-load after topology changes.

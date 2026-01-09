@@ -22,7 +22,7 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 ### Non-Goals (Initial)
 
 - Full Redis API compatibility from day one (gradual adoption)
-- Clustering (single-node first, see [docs/CLUSTER.md](docs/CLUSTER.md) for design)
+- Clustering (single-node first, see [CLUSTER.md](CLUSTER.md) for design)
 - RESP3 (RESP2 first with abstraction layer)
 - Blocking commands (BLPOP, BRPOP, BLMOVE) in initial phases (defer to later)
 
@@ -77,7 +77,7 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 |-----------|----------------|
 | **Acceptor** | Accept TCP connections, assign to threads via round-robin (ConnectionAssigner abstraction) |
 | **Shard Worker** | Own a partition of data, execute commands, manage connections |
-| **Data Store** | In-memory key-value storage (HashMap-based). See [docs/STORAGE.md](docs/STORAGE.md) |
+| **Data Store** | In-memory key-value storage (HashMap-based). See [STORAGE.md](STORAGE.md) |
 | **Lua VM** | Execute Lua scripts atomically within shard |
 | **Persistence Layer** | WAL writes, snapshot management, recovery |
 
@@ -106,7 +106,7 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 | Cursor-encodes-shard for SCAN | Stateless, Redis-compatible, transparent cross-shard iteration | Per-shard cursors, server-side state |
 | Defer eviction policies | OOM-reject simpler for v1, add LRU/LFU/LFRU later | Implement eviction immediately |
 | Full observability from start | Production-ready, OpenTelemetry standard, Prometheus metrics | Add observability later |
-| Hybrid documentation | DESIGN.md overview + detailed spec files in docs/ | Single large file |
+| Hybrid documentation | INDEX.md overview + detailed spec files in spec/ | Single large file |
 | Round-robin connection assignment | Simple load balancing, proven approach (DragonflyDB), swappable via ConnectionAssigner trait | Consistent hash, Least-connections |
 | xxhash64 for internal key sharding | Fast, good distribution, separate from cluster CRC16, swappable via KeyHasher trait | CRC16, FNV-1a |
 | VLL-style transaction ordering | Atomic multi-shard operations via global txid counter and shard queues (DragonflyDB approach) | Lock-based 2PC, eventual consistency only |
@@ -169,7 +169,7 @@ Connections are pinned to threads for their lifetime but can coordinate with any
 via message-passing. Keys are hashed to determine shard ownership, with hash tags
 supporting key colocation.
 
-See [docs/CONCURRENCY.md](docs/CONCURRENCY.md) for thread architecture, connection model,
+See [CONCURRENCY.md](CONCURRENCY.md) for thread architecture, connection model,
 and scatter-gather implementation details.
 
 ### Multi-Shard Atomicity (VLL)
@@ -211,7 +211,17 @@ VLL provides **serializable execution order**, not transactional rollback:
 **Recommendation:** For operations requiring strict atomicity guarantees, use **hash tags** to ensure
 all keys land on the same shard: `MSET {user:1}:name Alice {user:1}:email alice@example.com`
 
-See [docs/CONCURRENCY.md](docs/CONCURRENCY.md) for implementation details.
+See [CONCURRENCY.md](CONCURRENCY.md) for implementation details.
+
+**Clarification: VLL vs MULTI/EXEC**
+
+| Operation Type | Cross-Shard | Behavior |
+|----------------|-------------|----------|
+| **MGET, MSET, DEL** (multi-key) | Yes | VLL ordering, fail-all semantics, partial commits possible |
+| **MULTI/EXEC** (transactions) | No | `-CROSSSHARD` error, all keys must be on same shard |
+| **Lua EVAL** (scripts) | No | `-CROSSSLOT` error, all keys must be on same shard |
+
+Multi-key commands like MSET use VLL to provide serializable ordering across shards, but do not guarantee atomicity on failure. MULTI/EXEC transactions require all keys on the same shard to provide true atomicity with no partial commits.
 
 ### Hash Tag Colocation
 
@@ -286,7 +296,7 @@ Alternative: Skip list implementation for cache-friendlier traversal.
 | Bloom Filter | Bit array + hashes | Future | Planned |
 | Time Series | Sorted by timestamp | Future | Planned |
 
-See [docs/COMMANDS.md](docs/COMMANDS.md) for command reference and [docs/command-groups/](docs/command-groups/) for detailed type implementations.
+See [COMMANDS.md](COMMANDS.md) for command reference and [command-groups/](command-groups/) for detailed type implementations.
 
 ---
 
@@ -397,7 +407,7 @@ Planned Redis-compatible eviction policies:
 
 **DragonflyDB LFRU:** Consider hybrid LFU+LRU with zero per-key overhead.
 
-See [docs/EVICTION.md](docs/EVICTION.md) for eviction implementation details.
+See [EVICTION.md](EVICTION.md) for eviction implementation details.
 
 ---
 
@@ -407,7 +417,7 @@ FrogDB uses a single shared RocksDB instance with one column family per shard.
 All writes append to the WAL with configurable durability modes (async/periodic/sync).
 Forkless snapshots avoid the 2x memory spike of fork-based approaches.
 
-See [docs/PERSISTENCE.md](docs/PERSISTENCE.md) for RocksDB topology, WAL implementation,
+See [PERSISTENCE.md](PERSISTENCE.md) for RocksDB topology, WAL implementation,
 and snapshot algorithm details.
 
 ---
@@ -428,7 +438,7 @@ Null:          $-1\r\n
 ```
 
 FrogDB uses the [`redis-protocol`](https://crates.io/crates/redis-protocol) crate for parsing and encoding.
-See [docs/PROTOCOL.md](docs/PROTOCOL.md) for integration details.
+See [PROTOCOL.md](PROTOCOL.md) for integration details.
 
 ### Protocol Abstraction
 
@@ -448,7 +458,7 @@ This abstraction allows RESP3 to be added later without changing command impleme
 The `Response` enum includes both RESP2 types (implemented) and RESP3 types (defined for future use).
 RESP3 variants are included from the start to enable future protocol upgrades without breaking changes.
 
-See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the full `Response` enum definition, RESP3 wire formats,
+See [PROTOCOL.md](PROTOCOL.md) for the full `Response` enum definition, RESP3 wire formats,
 and protocol negotiation details.
 
 ### Error Response Taxonomy
@@ -477,7 +487,7 @@ Each connection maintains state for transactions, pub/sub, authentication, and b
 The ConnectionState struct is owned by the connection handler and tracks the current mode
 (normal, transaction, pub/sub, blocked) along with associated data.
 
-See [docs/CONNECTION.md](docs/CONNECTION.md) for connection lifecycle, state machine,
+See [CONNECTION.md](CONNECTION.md) for connection lifecycle, state machine,
 ConnectionAssigner abstraction, and client commands.
 
 ---
@@ -488,7 +498,7 @@ Commands flow through protocol parsing, key routing, shard dispatch, execution,
 persistence, and response encoding. Each command implements the `Command` trait
 with arity validation and behavior flags (WRITE, READONLY, MULTI_KEY, etc.).
 
-See [docs/EXECUTION.md](docs/EXECUTION.md) for command flow, trait definition, and flag documentation.
+See [EXECUTION.md](EXECUTION.md) for command flow, trait definition, and flag documentation.
 
 ---
 
@@ -527,7 +537,7 @@ This provides early feedback rather than wasting round trips.
 - `UNWATCH`: Clear all watches
 - **Single-shard requirement**: Watched keys must be on the same shard as transaction keys
 
-See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed transaction implementation.
+See [COMMANDS.md](COMMANDS.md) for detailed transaction implementation.
 
 ---
 
@@ -562,7 +572,7 @@ Cursor-based iteration without blocking. Uses shard-aware cursor encoding:
 
 **Related:** SSCAN, HSCAN, ZSCAN for iterating data structure members.
 
-See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed SCAN algorithm.
+See [COMMANDS.md](COMMANDS.md) for detailed SCAN algorithm.
 
 ---
 
@@ -586,7 +596,7 @@ require global locking, defeating the performance benefits. This matches Dragonf
 **Compatibility flag:** For legacy scripts, `--default_lua_flags=allow-undeclared-keys` enables
 undeclared access by locking the entire datastore (significantly slower).
 
-See [docs/SCRIPTING.md](docs/SCRIPTING.md) for execution model and cross-shard requirements.
+See [SCRIPTING.md](SCRIPTING.md) for execution model and cross-shard requirements.
 
 ---
 
@@ -596,7 +606,7 @@ FrogDB supports broadcast (SUBSCRIBE/PUBLISH) and sharded (SSUBSCRIBE/SPUBLISH) 
 modes with a unified per-shard architecture. Broadcast fans out to all shards while
 sharded routes to the channel's owner shard for higher throughput.
 
-See [docs/PUBSUB.md](docs/PUBSUB.md) for architecture, mode comparison, and command details.
+See [PUBSUB.md](PUBSUB.md) for architecture, mode comparison, and command details.
 
 ---
 
@@ -628,7 +638,7 @@ async fn test_set_get() {
 6. **Stress tests** - High throughput, memory pressure
 7. **Future: Jepsen tests** - Distributed correctness
 
-See [docs/TESTING.md](docs/TESTING.md) for how to run tests, coverage expectations, and CI configuration.
+See [TESTING.md](TESTING.md) for how to run tests, coverage expectations, and CI configuration.
 
 ---
 
@@ -662,9 +672,9 @@ FrogDB exposes Prometheus-compatible metrics:
 - `MEMORY DOCTOR`: Memory health analysis
 - `INFO`: Comprehensive server statistics
 
-See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) for detailed logging, tracing, metrics, and debugging documentation.
-See [docs/OPERATIONS.md](docs/OPERATIONS.md) for operational configuration.
-See [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) for error handling, failure recovery, and client recommendations.
+See [OBSERVABILITY.md](OBSERVABILITY.md) for detailed logging, tracing, metrics, and debugging documentation.
+See [OPERATIONS.md](OPERATIONS.md) for operational configuration.
+See [FAILURE_MODES.md](FAILURE_MODES.md) for error handling, failure recovery, and client recommendations.
 
 ---
 
@@ -677,8 +687,8 @@ can be enabled for full Redis 6.0 ACL support, with a path to Redis 7.0 selector
 Authentication state is per-connection with immutable permission snapshots. ACL checks
 occur at three hook points: command permission, key access (read/write), and pub/sub channels.
 
-See [docs/AUTH.md](docs/AUTH.md) for ACL architecture, traits, and command reference.
-See [docs/OPERATIONS.md](docs/OPERATIONS.md) for security configuration.
+See [AUTH.md](AUTH.md) for ACL architecture, traits, and command reference.
+See [OPERATIONS.md](OPERATIONS.md) for security configuration.
 
 ---
 
@@ -748,7 +758,7 @@ These types and traits should be designed into single-node implementation:
 - `ReplicationStream` abstraction over WAL tailing
 - Admin API for topology updates
 
-See [docs/CLUSTER.md](docs/CLUSTER.md) for full clustering architecture, replication protocol, failover, and slot migration design.
+See [CLUSTER.md](CLUSTER.md) for full clustering architecture, replication protocol, failover, and slot migration design.
 
 ---
 
@@ -757,7 +767,7 @@ See [docs/CLUSTER.md](docs/CLUSTER.md) for full clustering architecture, replica
 ```
 frogdb/
 ├── Cargo.toml                 # Workspace root
-├── DESIGN.md                  # This document
+├── INDEX.md                  # This document
 │
 ├── frogdb-server/             # Main server binary
 │   └── src/
@@ -803,8 +813,8 @@ FrogDB uses [Figment](https://docs.rs/figment) for hierarchical configuration wi
 3. Configuration file (TOML format)
 4. Built-in defaults
 
-See [docs/OPERATIONS.md](docs/OPERATIONS.md) for complete configuration guide and example TOML file.
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Docker, systemd, and Kubernetes deployment.
+See [OPERATIONS.md](OPERATIONS.md) for complete configuration guide and example TOML file.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for Docker, systemd, and Kubernetes deployment.
 
 ### Server Options
 
@@ -857,7 +867,7 @@ See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Docker, systemd, and Kubernetes
 ## Roadmap
 
 ### Phase 0: Design Document (Current)
-- [x] Create DESIGN.md
+- [x] Create INDEX.md
 - [x] Document architecture decisions
 - [x] Define abstractions and interfaces
 
@@ -910,7 +920,7 @@ See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Docker, systemd, and Kubernetes
 ### Future
 - RESP3 protocol
 - Bitmap, Geo, JSON, HyperLogLog types
-- Clustering and replication (see [docs/CLUSTER.md](docs/CLUSTER.md))
+- Clustering and replication (see [CLUSTER.md](CLUSTER.md))
 - Jepsen testing
 
 ---
@@ -943,7 +953,7 @@ See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Docker, systemd, and Kubernetes
 
 FrogDB follows a structured startup and shutdown sequence for reliable operation and recovery.
 
-See [docs/LIFECYCLE.md](docs/LIFECYCLE.md) for detailed startup sequence, shutdown procedure,
+See [LIFECYCLE.md](LIFECYCLE.md) for detailed startup sequence, shutdown procedure,
 recovery process, and health check endpoints.
 
 ---

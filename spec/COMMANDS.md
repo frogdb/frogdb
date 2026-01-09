@@ -12,7 +12,7 @@ Index of command groups and cross-cutting execution concerns.
 | Hash | Field-value maps (HGET, HSET, HGETALL) | *Future* |
 | List | Ordered sequences (LPUSH, RPUSH, LRANGE) | *Future* |
 | Set | Unique collections (SADD, SMEMBERS, SINTER) | *Future* |
-| Stream | Append-only log (XADD, XREAD, XREADGROUP) | *Future* |
+| Stream | Append-only log (XADD, XREAD, XREADGROUP) | [STREAM.md](command-groups/STREAM.md) |
 | Pub/Sub | Messaging (SUBSCRIBE, PUBLISH) | *Future* |
 | Scripting | Lua scripts (EVAL, EVALSHA) | *Future* |
 | Connection | Client management (AUTH, PING, QUIT) | *Future* |
@@ -32,18 +32,52 @@ FrogDB enforces Redis-compatible size limits on command input:
 | Max elements per collection | 2^32 - 1 | ~4 billion elements |
 | Max bulk string | 512 MB | Any single RESP bulk string |
 
-**Error on Exceeded:**
-```
--ERR Protocol error: bulk string length exceeds maximum allowed
-```
-
 **Configuration:**
 ```toml
 [protocol]
 proto_max_bulk_len = 536870912  # 512 MB default
 ```
 
-See [DESIGN.md#limits](../DESIGN.md#limits) for full limit documentation.
+### Enforcement Points
+
+| Point | Behavior |
+|-------|----------|
+| **Protocol parsing** | Reject before reading data if declared size exceeds limit |
+| **SET command** | Key/value size checked during parsing |
+| **APPEND command** | Rejected if result would exceed limit |
+| **SETRANGE command** | Rejected if offset + value would exceed limit |
+| **Aggregate operations** | Checked before execution (ZUNIONSTORE, etc.) |
+
+### Error Messages
+
+| Scenario | Error |
+|----------|-------|
+| Bulk string too large | `-ERR Protocol error: bulk string length exceeds maximum allowed` |
+| APPEND would exceed | `-ERR string exceeds maximum allowed size (512MB)` |
+| SETRANGE would exceed | `-ERR string exceeds maximum allowed size (512MB)` |
+| Collection too large | `-ERR number of elements exceeds maximum allowed` |
+
+### Protocol-Level Enforcement
+
+Size limits are checked during RESP parsing before command execution:
+
+```rust
+fn parse_bulk_string(reader: &mut BufReader) -> Result<Bytes, Error> {
+    let len: i64 = parse_length(reader)?;
+
+    if len > config.proto_max_bulk_len as i64 {
+        // Reject immediately without reading data
+        return Err(Error::Protocol("bulk string length exceeds maximum"));
+    }
+
+    // Read the actual data
+    read_exact(reader, len as usize)
+}
+```
+
+This prevents denial-of-service by rejecting oversized data before buffering.
+
+See [INDEX.md#limits](INDEX.md#limits) for full limit documentation.
 
 ---
 

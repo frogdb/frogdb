@@ -703,7 +703,7 @@ Key panels for a FrogDB dashboard:
 ## References
 
 - [OPERATIONS.md](OPERATIONS.md) - Configuration and deployment
-- [DESIGN.md](../DESIGN.md) - Architecture overview
+- [DESIGN.md](INDEX.md) - Architecture overview
 - [EVICTION.md](EVICTION.md) - Eviction policies and memory management
 - [OpenTelemetry Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/database/)
 - [Prometheus Best Practices](https://prometheus.io/docs/practices/naming/)

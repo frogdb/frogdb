@@ -103,6 +103,43 @@ Replicas converge with primary within bounded lag:
 **VLL Ordering:** Cross-shard operations execute in global transaction ID order on each shard.
 See [CONCURRENCY.md](CONCURRENCY.md#transaction-ordering-vll) for implementation details.
 
+### Cross-Shard Read Semantics (MGET)
+
+When MGET reads keys from multiple shards:
+
+```
+MGET {a}key1 {b}key2 {c}key3  # Keys on shards A, B, C
+```
+
+**What is guaranteed:**
+- Each key's value is read atomically from its shard
+- All shards are queried at the "same" logical time (same txid)
+- Response includes all values or fails completely (fail-all)
+
+**What is NOT guaranteed:**
+- Point-in-time snapshot across shards (no barrier)
+- Values may reflect different wall-clock times
+
+**Example - Non-Atomic Read:**
+```
+Time 0: key1=1, key2=2
+Time 1: Client A starts MGET key1 key2
+Time 2: Shard A returns key1=1
+Time 3: Client B: SET key2 3
+Time 4: Shard B returns key2=3  (new value!)
+Result: MGET returns [1, 3] - not a point-in-time snapshot
+```
+
+**Why no read barrier?**
+- VLL orders writes but doesn't block reads
+- Reads execute immediately on each shard
+- Adding read barriers would significantly increase latency
+
+**Recommendation:** For consistent multi-key reads:
+1. Use hash tags to colocate keys on same shard
+2. Accept eventual consistency for cross-shard reads
+3. Use MULTI/EXEC (same-shard only) for true isolation
+
 ---
 
 ## Failover Consistency

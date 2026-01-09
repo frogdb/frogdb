@@ -65,18 +65,63 @@ fn check_memory_limit(&self) -> Result<(), Error> {
 - Implement exponential backoff
 - Consider circuit breaker pattern for sustained OOM
 
+### OOM Edge Cases
+
+Commands that allocate during execution have nuanced behavior:
+
+| Scenario | Behavior |
+|----------|----------|
+| **Read with temporary allocation** (SORT, SMEMBERS) | Executed; may allocate temporarily |
+| **SORT with STORE** | Rejected if result would exceed limit |
+| **Lua script allocations** | Continues until `lua_max_memory` exceeded, then `-ENOMEM` |
+| **Protocol buffers** | Separate limit (`client_output_buffer_limit`) |
+| **Internal overhead** | HashMap resize may temporarily exceed limit |
+
+**Internal Overhead Tolerance:**
+FrogDB may temporarily exceed `max_memory` during internal operations (hash table growth). This prevents thrashing at the limit boundary.
+
 ### Memory Fragmentation
 
 **Trigger:** Allocator fragmentation causes `used_memory_rss` >> `used_memory`.
 
-**Detection:** Monitor `memory_fragmentation_ratio` metric:
-- Ratio > 1.5: Moderate fragmentation
-- Ratio > 2.0: High fragmentation, consider restart
+**Calculation:**
+```
+fragmentation_ratio = used_memory_rss / used_memory
+```
+
+Where:
+- `used_memory_rss`: Resident Set Size (actual physical memory from OS)
+- `used_memory`: Logical memory tracked by FrogDB
+
+**Thresholds:**
+
+| Ratio | Status | Action |
+|-------|--------|--------|
+| < 1.0 | **Swapping** | Critical: System is swapping, add RAM immediately |
+| 1.0 - 1.4 | **Healthy** | Normal operation |
+| 1.4 - 1.5 | **Elevated** | Monitor closely |
+| 1.5 - 2.0 | **High** | Schedule maintenance restart |
+| > 2.0 | **Critical** | Restart soon; significant memory waste |
+
+**Detection:**
+```
+INFO memory
+
+# Memory
+used_memory:1073741824
+used_memory_rss:1610612736
+mem_fragmentation_ratio:1.50
+```
 
 **Mitigation:**
-- Restart during maintenance window
+- Restart during maintenance window (most effective)
 - Use jemalloc allocator (default) for better fragmentation handling
+- Reduce key churn (frequent create/delete causes fragmentation)
 - Consider `MEMORY PURGE` command (if implemented)
+
+**Alerting:**
+- Warn at `fragmentation_ratio > 1.5`
+- Critical at `fragmentation_ratio > 2.0` or `< 1.0`
 
 ### Shard Memory Imbalance
 
@@ -258,6 +303,106 @@ max_connections = 10000  # 0 = unlimited (OS limit)
 
 ---
 
+## Shard Worker Failures
+
+### Shard Worker Panic
+
+**Trigger:** Tokio task (shard worker) panics due to bug, assertion failure, or unrecoverable error.
+
+**Detection:**
+- Panic handler logs stack trace at ERROR level
+- `shard_panic_total` metric increments
+- Connections on affected shard receive errors
+
+**Behavior:**
+
+```
+Shard 2 Worker panics
+         │
+         ├── 1. Tokio runtime catches panic
+         │
+         ├── 2. Shard marked unhealthy
+         │       └── Health check returns degraded
+         │
+         ├── 3. Pending operations on Shard 2:
+         │       └── Return -ERR shard unavailable
+         │
+         ├── 4. Connections with in-flight requests to Shard 2:
+         │       └── Receive error response
+         │
+         └── 5. Other shards continue serving
+```
+
+**Recovery:**
+
+| Strategy | Description | Trade-off |
+|----------|-------------|-----------|
+| **Manual restart** | Operator restarts server | Full recovery, downtime |
+| **Automatic shard restart** | Shard worker respawned from WAL | Faster, but complex |
+| **Graceful degradation** | Shard offline, others continue | Partial service |
+
+**Automatic Shard Recovery (if implemented):**
+
+```rust
+async fn shard_supervisor(shard_id: usize) {
+    loop {
+        let result = std::panic::catch_unwind(|| {
+            run_shard_worker(shard_id)
+        });
+
+        match result {
+            Ok(_) => break, // Clean shutdown
+            Err(panic) => {
+                error!("Shard {} panicked: {:?}", shard_id, panic);
+                metrics.shard_panic_total.inc();
+
+                // Exponential backoff before restart
+                let delay = backoff.next_delay();
+                if delay > MAX_RESTART_DELAY {
+                    error!("Shard {} exceeded restart limit, staying down", shard_id);
+                    break;
+                }
+                tokio::time::sleep(delay).await;
+
+                // Reload shard state from RocksDB
+                info!("Restarting shard {}", shard_id);
+            }
+        }
+    }
+}
+```
+
+**Client Handling:**
+- Retry operations that received `-ERR shard unavailable`
+- Use circuit breaker pattern to avoid hammering unhealthy shards
+- Consider `READONLY` flag to fall back to replica (in cluster mode)
+
+### Shard Worker Deadlock
+
+**Trigger:** Async task blocks on operation that never completes (rare, indicates bug).
+
+**Detection:**
+- Watchdog timer: If shard doesn't process any message for `watchdog_timeout_s`, considered stuck
+- `shard_watchdog_timeouts_total` metric
+
+**Configuration:**
+```toml
+[server]
+watchdog_timeout_s = 60  # 0 = disabled
+```
+
+**Behavior (if watchdog enabled):**
+1. Log error with shard state
+2. Mark shard unhealthy
+3. Optionally abort and restart shard (implementation-dependent)
+
+**Prevention:**
+- All shard operations must be non-blocking
+- Use timeouts on all channel operations
+- Avoid `block_on` within async context
+
+---
+
 ## Node Failures (Cluster Mode)
 
 *Note: Cluster mode is planned for future implementation.*
@@ -303,6 +448,129 @@ max_connections = 10000  # 0 = unlimited (OS limit)
 - Single orchestrator is source of truth
 - Nodes only accept topology from authenticated orchestrator
 - Fencing: Old primary rejects writes after demotion
+
+---
+
+## Graceful Degradation
+
+How FrogDB behaves under overload and partial failure conditions.
+
+### Overload Response
+
+When system resources are exhausted, FrogDB degrades gracefully rather than failing completely:
+
+| Resource | Behavior | Client Impact |
+|----------|----------|---------------|
+| **Memory (OOM)** | Reject writes, allow reads/deletes | Write errors, reads succeed |
+| **CPU (high load)** | Increased latency, backpressure | Slower responses |
+| **Disk I/O** | Persistence backpressure | Higher write latency |
+| **Connections** | Reject new, serve existing | New clients fail to connect |
+| **Single shard down** | Other shards continue | Errors for affected keys only |
+
+### Partial Availability
+
+FrogDB prioritizes partial availability over total failure:
+
+```
+Shard 0: Healthy ✓
+Shard 1: Healthy ✓
+Shard 2: FAILED ✗
+Shard 3: Healthy ✓
+```
+
+**Behavior:**
+- Commands for keys on shards 0, 1, 3: Execute normally
+- Commands for keys on shard 2: Return `-ERR shard unavailable`
+- Multi-key commands touching shard 2: Fail (fail-all semantics)
+
+### Adaptive Load Shedding
+
+Under extreme load, FrogDB sheds load progressively:
+
+**Level 1 - Backpressure:**
+- Channel buffers fill, senders block
+- Natural slowdown, no errors
+
+**Level 2 - Queue rejection:**
+- VLL queue exceeds `vll_max_queue_depth`
+- New operations rejected: `-ERR shard queue full, try again later`
+
+**Level 3 - Connection rejection:**
+- `maxclients` exceeded
+- New connections refused
+
+**Level 4 - OOM:**
+- Memory limit exceeded
+- Writes rejected, reads continue
+
+### Health Endpoints
+
+```
+GET /health          # Returns 200 if any shard healthy, 503 if all down
+GET /health/ready    # Returns 200 if fully operational, 503 if degraded
+GET /health/live     # Returns 200 if process alive
+```
+
+**Response format:**
+```json
+{
+  "status": "degraded",
+  "shards": {
+    "healthy": 3,
+    "unhealthy": 1,
+    "total": 4
+  },
+  "memory_pressure": false,
+  "accepting_writes": true
+}
+```
+
+### Circuit Breaker Pattern (Client-Side)
+
+FrogDB does not implement server-side circuit breakers. Clients should implement:
+
+```python
+# Client-side circuit breaker example
+class FrogDBCircuitBreaker:
+    def __init__(self, failure_threshold=5, reset_timeout=30):
+        self.failures = 0
+        self.state = "closed"  # closed, open, half-open
+        self.last_failure_time = None
+
+    def call(self, operation):
+        if self.state == "open":
+            if time.time() - self.last_failure_time > self.reset_timeout:
+                self.state = "half-open"
+            else:
+                raise CircuitOpenError()
+
+        try:
+            result = operation()
+            if self.state == "half-open":
+                self.state = "closed"
+                self.failures = 0
+            return result
+        except FrogDBError as e:
+            self.failures += 1
+            self.last_failure_time = time.time()
+            if self.failures >= self.failure_threshold:
+                self.state = "open"
+            raise
+```
+
+### Priority (Future)
+
+Command priority is not currently implemented. Future consideration:
+
+```toml
+# Hypothetical priority configuration
+[server]
+priority_queues = true
+admin_priority = "high"      # CONFIG, INFO, DEBUG
+read_priority = "normal"     # GET, MGET, SCAN
+write_priority = "normal"    # SET, DEL
+bulk_priority = "low"        # KEYS, FLUSHDB
+```
 
 ---
 

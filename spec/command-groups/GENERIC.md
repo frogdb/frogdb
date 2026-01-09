@@ -298,6 +298,45 @@ fn next_cursor(cursor: u64) -> u64 {
 | Missing | Keys added/removed during scan may be missed |
 | State | Stateless on server - cursor encodes all state |
 
+### Cursor Validation and Security
+
+**Cursor Format:**
+- Cursors are opaque 64-bit integers encoding iteration state
+- Clients should treat cursors as opaque (not parse or modify them)
+- Cursors are stateless - no server-side cursor management needed
+
+**Validation:**
+
+```rust
+fn validate_cursor(cursor: u64, num_shards: usize) -> Result<(usize, u64), Error> {
+    let shard_id = (cursor >> 48) as usize;
+    let position = cursor & 0x0000_FFFF_FFFF_FFFF;
+
+    if shard_id >= num_shards {
+        // Invalid shard ID - restart iteration
+        return Ok((0, 0)); // Shard 0, position 0
+    }
+
+    Ok((shard_id, position))
+}
+```
+
+**Invalid Cursor Behavior:**
+- Malformed cursor (shard ID out of range): Restart iteration from shard 0
+- Returns empty result array and cursor 0
+- No error returned - matches Redis behavior
+
+**Security Considerations:**
+- Cursors are **not** injection vectors (they're iteration state, not query logic)
+- No SQL/command injection possible through cursor values
+- Position value is bounds-checked against hash table size
+- Worst case: Invalid cursor restarts iteration (no data exposure)
+
+**No TTL/Expiration:**
+- Cursors are stateless - no server-side expiration needed
+- Clients can resume iteration at any time (unless keyspace changed significantly)
+- After major keyspace changes (rehashing), cursor position may be invalid (iteration restarts)
+
 ### Related SCAN Commands
 
 | Command | Description |

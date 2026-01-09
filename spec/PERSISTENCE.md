@@ -107,6 +107,49 @@ Client Write (SET key value)
          └── 3. Return OK to client
 ```
 
+### WAL Failure Handling
+
+WAL writes can fail due to disk full, I/O errors, or RocksDB internal errors. FrogDB handles failures based on when they occur:
+
+| Failure Point | In-Memory State | Client Response | Recovery |
+|---------------|-----------------|-----------------|----------|
+| Before in-memory apply | Unchanged | Error returned | None needed |
+| After in-memory, WAL fails | **Write visible** | Error returned | May be lost on restart |
+| After WAL, before fsync (Async) | Write visible | OK returned | May be lost on crash |
+| After fsync (Sync) | Write visible | OK returned | Guaranteed durable |
+
+**Critical Behavior:** In `Async` and `Periodic` modes, the in-memory write is applied **before** WAL durability is guaranteed. This matches Redis AOF behavior where:
+- Writes are immediately visible to other clients
+- Durability depends on fsync timing
+- No rollback mechanism exists
+
+**WAL Write Failure Response:**
+
+```rust
+match wal.append(&write_batch) {
+    Ok(_) => Response::Ok,
+    Err(e) => {
+        // In-memory write already applied - cannot rollback
+        // Log error, increment metric
+        metrics.wal_errors.inc();
+        error!("WAL append failed: {}", e);
+
+        // Return error to client (write is visible but may not survive restart)
+        Response::Error(format!("-ERR WAL write failed: {}", e).into())
+    }
+}
+```
+
+**Degraded State Handling:**
+
+When WAL errors persist:
+1. Log `WARN` on first failure, `ERROR` on repeated failures
+2. Increment `frogdb_wal_errors_total` metric
+3. Continue accepting writes (in-memory operations succeed)
+4. **No automatic write rejection** - operational decision to stop traffic
+
+**Recommendation:** Monitor `frogdb_wal_errors_total` and `frogdb_disk_usage_bytes`. Alert operators before disk fills. For critical data, use `Sync` durability mode.
+
 ---
 
 ## Durability Modes
@@ -181,6 +224,34 @@ Based on Dragonfly's approach - no fork(), no memory spike:
 Unlike fork-based snapshots (Redis), our epoch-based approach does NOT capture a perfect point-in-time.
 A key that exists at snapshot start may be excluded if deleted before the iterator visits it.
 This is an acceptable trade-off vs. fork's 2x memory spike. DragonflyDB uses the same approach.
+
+**Recovery Consistency Guarantees:**
+
+| Scenario | Recovery State | Notes |
+|----------|---------------|-------|
+| Clean snapshot, clean shutdown | Exact point-in-time | All data preserved |
+| Snapshot + WAL replay | Consistent | WAL fills gaps from snapshot |
+| Key deleted during snapshot | Key absent | Correct: delete captured in WAL |
+| Key created during snapshot | Key present | Correct: create captured in WAL |
+| Crash during snapshot | Previous snapshot | In-progress snapshot discarded |
+
+**Cross-Shard Transaction Interaction:**
+
+Multi-shard operations (MSET, MGET, DEL) interact with snapshots as follows:
+
+| Timing | Behavior |
+|--------|----------|
+| **Transaction starts before snapshot epoch** | All changes included in snapshot (COW captures old values) |
+| **Transaction starts during snapshot** | Changes go to WAL, not snapshot |
+| **Transaction spans snapshot boundary** | Partial changes possible - WAL replay ensures consistency |
+
+**Important:** Because snapshots are not perfect point-in-time, a multi-shard operation may appear "split" in the snapshot:
+- Shard A: old value (not yet visited when write occurred)
+- Shard B: new value (already visited, write went to COW)
+
+WAL replay resolves this by re-applying the transaction, resulting in consistent final state. However, if the snapshot is loaded without WAL (e.g., WAL corrupted), inconsistent cross-shard state may be visible.
+
+**Recommendation:** Always ensure WAL integrity. Use checksums and monitor `frogdb_wal_corruption_total` metric.
 
 **Keys Created During Snapshot:**
 - New keys are NOT part of this snapshot (snapshot captures point-in-time at epoch start)
@@ -391,3 +462,11 @@ Client experiences latency
 | `persistence_queue_size` | 64 | Max pending WriteBatches |
 | `persistence_batch_max_size` | 4MB | Max size per WriteBatch |
 | `persistence_batch_timeout_ms` | 10 | Max time to accumulate batch |
+
+---
+
+## References
+
+- [BACKUP.md](BACKUP.md) - Online backup procedures, BGSAVE, restore operations
+- [CLUSTER.md](CLUSTER.md) - Replication and cluster persistence
+- [FAILURE_MODES.md](FAILURE_MODES.md) - Recovery from failures

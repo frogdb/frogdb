@@ -137,6 +137,50 @@ Lua scripts and multi-key commands (MGET, MSET) require all keys to be on the sa
 EVAL "..." 3 {user:1}:name {user:1}:email {user:1}:prefs
 ```
 
+### Edge Cases
+
+Comprehensive hash tag parsing behavior:
+
+| Key | Parsed Tag | Hash Input | Notes |
+|-----|------------|------------|-------|
+| `foo` | (none) | `foo` | No braces |
+| `{foo}bar` | `foo` | `foo` | Standard usage |
+| `bar{foo}baz` | `foo` | `foo` | Tag in middle |
+| `{foo}` | `foo` | `foo` | Tag is entire key |
+| `{}` | (empty) | `` | Empty tag, hash empty string |
+| `foo{}bar` | (empty) | `` | Empty tag in middle |
+| `{}{foo}` | (empty) | `` | First tag is empty, wins |
+| `foo{bar}baz{qux}` | `bar` | `bar` | First tag wins |
+| `foo{bar` | (none) | `foo{bar` | No closing brace |
+| `foo}bar` | (none) | `foo}bar` | No opening brace |
+| `{foo` | (none) | `{foo` | Unclosed tag |
+| `foo}` | (none) | `foo}` | Unmatched close |
+| `{{foo}}` | `{foo` | `{foo` | First `{` to first `}` after it |
+| `{foo{bar}}` | `foo{bar` | `foo{bar` | Content includes nested `{` |
+
+**Binary Data:**
+Hash tags work with arbitrary byte sequences:
+```rust
+// Binary key: bytes 0x7B ('{''), 0x00, 0x7D ('}')
+let key = b"{\\x00}rest";
+// Tag is: 0x00 (single null byte)
+// Hash input: [0x00]
+```
+
+**Implementation:**
+```rust
+fn extract_hash_tag(key: &[u8]) -> Option<&[u8]> {
+    let open = key.iter().position(|&b| b == b'{')?;
+    let close = key[open + 1..].iter().position(|&b| b == b'}')?;
+    let tag = &key[open + 1..open + 1 + close];
+    if tag.is_empty() {
+        Some(b"")  // Empty tag hashes empty string
+    } else {
+        Some(tag)
+    }
+}
+```
+
 ---
 
 ## Message Types
@@ -255,6 +299,27 @@ fn acquire_txid() -> u64 {
     NEXT_TXID.fetch_add(1, Ordering::SeqCst)
 }
 ```
+
+**Scalability Analysis:**
+
+The global `SeqCst` atomic counter is a theoretical contention point. Analysis:
+
+| Factor | Impact |
+|--------|--------|
+| **Operation cost** | ~10-50 cycles on x86-64 (LOCK XADD instruction) |
+| **Throughput ceiling** | ~50-100M txids/second per core accessing |
+| **Real-world bottleneck** | Unlikely before network I/O becomes limiting |
+
+**Why SeqCst?** Sequential consistency ensures all threads observe txids in the same order, critical for VLL correctness. Weaker orderings (Relaxed, Acquire/Release) could cause ordering anomalies.
+
+**DragonflyDB Comparison:** DragonflyDB uses a similar global counter without reported scaling issues. At 1M ops/second, counter acquisition is ~0.01% of operation latency.
+
+**Future Optimization (if needed):**
+- Per-thread counter with periodic sync (adds complexity)
+- Hybrid logical clocks (HLC) for distributed scenarios
+- Batched txid acquisition (amortize atomic operation)
+
+Current design prioritizes simplicity. Counter bottleneck has not been observed in practice at expected workloads.
 
 ### Per-Shard Transaction Queues
 
@@ -377,10 +442,49 @@ When an operation waits longer than `vll_queue_timeout_ms`:
 - Client receives `-TIMEOUT operation timed out waiting in VLL queue`
 - If operation was part of multi-shard scatter-gather, entire operation fails
 
+### Client Recovery for Partial Commits
+
+When a multi-shard operation fails, clients cannot determine which shards committed. FrogDB does not provide automatic rollback. Clients must implement their own recovery strategies:
+
+**Detection:**
+- Error response (`-TIMEOUT`, `-ERR`) indicates potential partial commit
+- Success response (`+OK`) guarantees all shards committed
+- No API to query which shards committed after failure
+
+**Recovery Strategies:**
+
+| Strategy | Description | Use Case |
+|----------|-------------|----------|
+| **Idempotent Operations** | Design operations to be safely retryable | MSET (overwrites are safe) |
+| **Hash Tags** | Colocate keys on same shard for atomicity | User profiles, related entities |
+| **Application-Level Saga** | Track operation state, implement compensating actions | Complex multi-entity updates |
+| **Read-After-Write** | Read keys after failure to determine actual state | Verification before retry |
+
+**Idempotency Guidelines:**
+
+```
+// SAFE to retry (idempotent)
+MSET key1 val1 key2 val2          // Overwrites are deterministic
+DEL key1 key2 key3                // Deleting non-existent key is no-op
+
+// UNSAFE to retry (not idempotent)
+INCRBY counter1 10                // Would increment twice
+LPUSH list1 value                 // Would add duplicate
+ZADD set1 1.0 member              // Safe if NX/XX options used appropriately
+```
+
+**Design Recommendation:** For cross-shard operations requiring atomicity:
+1. **Prefer hash tags** to guarantee same-shard execution
+2. **Design for idempotency** when hash tags aren't feasible
+3. **Accept eventual consistency** with application-level reconciliation
+4. **Avoid cross-shard writes** for critical transactional data
+
+This matches Redis Cluster behavior where multi-key commands across slots provide no atomicity guarantees on failure.
+
 ---
 
 ## References
 
 - [CONNECTION.md](CONNECTION.md) - Connection assignment, ConnectionAssigner trait, connection state
 - [LIFECYCLE.md](LIFECYCLE.md) - Server startup/shutdown sequences
-- [DESIGN.md](../DESIGN.md) - Overall architecture
+- [DESIGN.md](INDEX.md) - Overall architecture

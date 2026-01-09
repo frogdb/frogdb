@@ -80,6 +80,43 @@ all keys have fresh access timestamps (idle time = 0). This matches Redis behavi
 eviction accuracy self-corrects within minutes. See [PERSISTENCE.md](PERSISTENCE.md#lrulfu-metadata-matches-redis-behavior)
 for details.
 
+### Clock Sources
+
+FrogDB uses different clock sources for different purposes:
+
+| Use Case | Clock Type | Implementation | Rationale |
+|----------|------------|----------------|-----------|
+| **TTL checking** | Monotonic | `std::time::Instant` | Immune to clock adjustments |
+| **last_access** | Monotonic | `std::time::Instant` | LRU needs relative time only |
+| **Persistence format** | Wall clock | Unix timestamp ms | Portable across restarts |
+| **Latency metrics** | Monotonic | `std::time::Instant` | Accurate measurement |
+| **EXPIREAT command** | Wall clock | Unix timestamp | User specifies absolute time |
+
+**Conversion on Recovery:**
+
+```rust
+// When loading persisted expiry time
+fn load_expiry(persisted_unix_ms: u64) -> Option<Instant> {
+    let now_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    if persisted_unix_ms <= now_unix {
+        None // Already expired
+    } else {
+        let remaining_ms = persisted_unix_ms - now_unix;
+        Some(Instant::now() + Duration::from_millis(remaining_ms))
+    }
+}
+```
+
+**Clock Skew Considerations:**
+- Monotonic clocks avoid issues with NTP adjustments
+- Wall clock only used at persistence boundaries
+- Cluster nodes should use NTP (±1s skew acceptable for TTL)
+- EXPIREAT with past timestamp immediately expires key
+
 ### LFU Counter
 
 The `lfu_counter` uses a probabilistic logarithmic counter (Redis-compatible):
@@ -197,7 +234,7 @@ FrogDB uses hybrid expiry (lazy + active):
 1. **Lazy expiry**: Check TTL on every read; delete if expired
 2. **Active expiry**: Background task samples keys periodically
 
-See [DESIGN.md Key Expiry](../DESIGN.md#key-expiry-ttl) for configuration options.
+See [DESIGN.md Key Expiry](INDEX.md#key-expiry-ttl) for configuration options.
 
 ---
 
@@ -221,7 +258,7 @@ See [PERSISTENCE.md](PERSISTENCE.md) for RocksDB integration, WAL, and snapshots
 
 ## References
 
-- [DESIGN.md - FrogValue](../DESIGN.md#data-structures)
+- [DESIGN.md - FrogValue](INDEX.md#data-structures)
 - [COMMANDS.md](COMMANDS.md) - Command reference and type implementations
 - [EVICTION.md](EVICTION.md) - Memory eviction policies (planned)
 - [PERSISTENCE.md](PERSISTENCE.md) - RocksDB integration

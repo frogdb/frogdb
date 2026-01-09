@@ -427,7 +427,7 @@ See [Jepsen](https://jepsen.io/) for methodology.
 
 ## References
 
-- [DESIGN.md Testing Strategy](../DESIGN.md#testing-strategy) - Test category overview
+- [DESIGN.md Testing Strategy](INDEX.md#testing-strategy) - Test category overview
 - [Rust Book: Testing](https://doc.rust-lang.org/book/ch11-00-testing.html) - Rust testing basics
 - [proptest](https://proptest-rs.github.io/proptest/) - Property-based testing
 - [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) - Coverage tooling

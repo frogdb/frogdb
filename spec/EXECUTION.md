@@ -6,10 +6,10 @@ This document details the command execution pipeline, command trait interface, a
 
 ```
 1. Connection accepted by Acceptor
-   └── Assigned to Shard N based on client hash
+   └── Assigned to Thread N via round-robin (connection pinned for I/O)
 
 2. Client sends: SET mykey myvalue
-   └── Shard N's event loop receives bytes
+   └── Thread N's event loop receives bytes
 
 3. Protocol parser (RESP2)
    └── Parses into ParsedCommand { name: "SET", args: ["mykey", "myvalue"] }

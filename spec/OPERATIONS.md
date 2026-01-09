@@ -376,13 +376,40 @@ AUTH username password
 
 ### TLS (Future)
 
+**Status:** TODO - Not yet implemented.
+
+**Planned Design (DragonflyDB-aligned):**
+
+| Feature | Description |
+|---------|-------------|
+| **Library** | `rustls` crate (memory-safe TLS) |
+| **Protocols** | TLS 1.2, TLS 1.3 |
+| **Client Auth** | Optional mTLS with client certificates |
+| **SNI** | Server Name Indication for multi-tenant deployments |
+| **ALPN** | Application-Layer Protocol Negotiation support |
+
+**Planned Configuration:**
+
 ```toml
 [tls]
 enabled = true
 cert_file = "/path/to/cert.pem"
 key_file = "/path/to/key.pem"
-ca_file = "/path/to/ca.pem"  # For client cert verification
+ca_file = "/path/to/ca.pem"           # For client cert verification (mTLS)
+require_client_cert = false           # Set true for mTLS
+min_protocol_version = "TLS1.2"
+ciphers = []                          # Empty = rustls defaults
 ```
+
+**Performance Considerations:**
+- TLS handshake adds ~1-2ms latency per connection
+- Session resumption recommended for high-connection-rate scenarios
+- Hardware acceleration (AES-NI) utilized automatically
+
+**Security Notes:**
+- TLS is orthogonal to ACL authentication - both can be enabled
+- Use `require_client_cert = true` for zero-trust environments
+- Monitor `frogdb_tls_handshake_errors_total` metric
 
 ### Network Security
 
