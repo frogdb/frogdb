@@ -490,6 +490,8 @@ async fn test_set_get() {
 6. **Stress tests** - High throughput, memory pressure
 7. **Future: Jepsen tests** - Distributed correctness
 
+See [docs/TESTING.md](docs/TESTING.md) for how to run tests, coverage expectations, and CI configuration.
+
 ---
 
 ## Observability
@@ -524,6 +526,7 @@ FrogDB exposes Prometheus-compatible metrics:
 
 See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) for detailed logging, tracing, metrics, and debugging documentation.
 See [docs/OPERATIONS.md](docs/OPERATIONS.md) for operational configuration.
+See [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) for error handling, failure recovery, and client recommendations.
 
 ---
 
@@ -626,6 +629,7 @@ FrogDB uses [Figment](https://docs.rs/figment) for hierarchical configuration wi
 4. Built-in defaults
 
 See [docs/OPERATIONS.md](docs/OPERATIONS.md) for complete configuration guide and example TOML file.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Docker, systemd, and Kubernetes deployment.
 
 ### Server Options
 

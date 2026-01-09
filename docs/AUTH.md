@@ -530,3 +530,16 @@ pub struct AclManager {
     checker: Arc<dyn AclChecker>,
 }
 ```
+
+---
+
+## Transport Security (TLS)
+
+For encrypted connections, see [OPERATIONS.md TLS configuration](OPERATIONS.md#tls-future).
+
+TLS provides:
+- Encrypted client-server communication
+- Optional client certificate authentication
+- Protection against eavesdropping and MITM attacks
+
+**Note:** TLS is orthogonal to ACL - both can be enabled independently.

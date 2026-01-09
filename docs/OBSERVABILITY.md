@@ -624,6 +624,8 @@ Recommended alerts for production deployments:
 | ReplicationLag | `replication_lag > 10s` | Warning | Check network, replica health |
 | ShardImbalance | `max_shard_keys / min_shard_keys > 2` | Warning | Review key distribution |
 
+For detailed failure handling, recovery procedures, and client recommendations, see [FAILURE_MODES.md](FAILURE_MODES.md).
+
 ### Example Prometheus Alert Rules
 
 ```yaml

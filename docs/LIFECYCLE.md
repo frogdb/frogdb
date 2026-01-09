@@ -162,6 +162,35 @@ On startup, if data exists, FrogDB recovers state:
 
 ---
 
+## Startup Failures
+
+| Failure | Cause | Resolution |
+|---------|-------|------------|
+| Port already in use | Another process on same port | Kill other process or change `port` config |
+| Permission denied (port) | Can't bind port <1024 as non-root | Run as root, use higher port, or use `setcap` |
+| Data directory not writable | Permission issue | `chown`/`chmod` the directory |
+| RocksDB open failed | Lock held or corruption | Check for other instances; see [FAILURE_MODES.md](FAILURE_MODES.md#rocksdb-corruption) |
+| Snapshot load failed | Corrupted snapshot | Delete snapshot, rely on WAL replay |
+| Out of memory during recovery | Dataset larger than RAM | Increase memory or reduce dataset |
+| ACL file parse error | Invalid ACL syntax | Fix ACL file and restart |
+
+---
+
+## Shutdown Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| SIGTERM during startup | Abort startup, exit immediately |
+| SIGKILL anytime | Immediate exit, no cleanup, potential data loss |
+| Drain timeout exceeded | Force close connections, may lose in-flight commands |
+| In-flight transaction | Transaction aborted, client sees error |
+| Pipelined commands | Commands in send buffer may be lost |
+| Mid-snapshot shutdown | Snapshot aborted, previous snapshot retained |
+
+For detailed failure handling and recovery procedures, see [FAILURE_MODES.md](FAILURE_MODES.md).
+
+---
+
 ## Health Checks
 
 ### Liveness
