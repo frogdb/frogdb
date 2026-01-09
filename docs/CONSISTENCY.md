@@ -7,7 +7,12 @@ This document defines FrogDB's consistency guarantees for single-node operation,
 These guarantees apply to all deployments:
 
 ### Read-Your-Writes
-A client always sees its own writes. After a successful write, subsequent reads from the same connection return the written value.
+A client always sees its own writes on the **same connection**. After a successful write,
+subsequent reads from the same connection return the written value.
+
+**Scope:** This guarantee is per-connection, not per-client. In cluster mode, if a client
+reconnects to a different node or the connection is reset, previously written values may
+not be immediately visible (due to replication lag or slot routing changes).
 
 ### Monotonic Reads
 Once a client reads a value, it will never see an older value for that key on the same connection.
@@ -16,7 +21,17 @@ Once a client reads a value, it will never see an older value for that key on th
 All operations on a single key are totally ordered. Concurrent writes from different clients are serialized.
 
 ### Per-Shard Linearizability
-Within a single internal shard, operations are linearizable. Cross-shard operations (MGET, MSET) are not atomic unless keys share a hash tag.
+Within a single internal shard, operations are linearizable.
+
+### Cross-Shard Atomicity (VLL)
+Multi-shard operations (MGET, MSET, DEL with multiple keys) use VLL-style transaction ordering:
+- Operations are serialized via global transaction IDs
+- Execution order is deterministic across all shards
+- Client receives all-or-nothing response (fail-all semantics)
+
+**Important:** This provides serializable ordering, NOT transactional rollback. If a multi-shard
+write partially succeeds before failure/timeout, committed portions persist. Use hash tags to
+guarantee true atomicity for related keys.
 
 ---
 
@@ -81,9 +96,12 @@ Replicas converge with primary within bounded lag:
 | Operation | Consistency |
 |-----------|-------------|
 | Single key | Linearizable within shard |
-| MGET/MSET (same hash tag) | Atomic, linearizable |
-| MGET/MSET (different slots) | Not atomic, all-or-nothing semantics |
+| MGET/MSET (same hash tag) | Atomic, linearizable (same internal shard) |
+| MGET/MSET (different shards) | Serializable via VLL, fail-all response |
 | KEYS, SCAN | Eventually consistent snapshot |
+
+**VLL Ordering:** Cross-shard operations execute in global transaction ID order on each shard.
+See [CONCURRENCY.md](CONCURRENCY.md#transaction-ordering-vll) for implementation details.
 
 ---
 
@@ -175,6 +193,7 @@ EXEC
 - EXEC fails if watched key modified by another client
 - No guarantee key wasn't modified and reverted
 - Retry logic required in application
+- **Same-shard requirement:** Watched keys must be on the same internal shard as transaction keys (use hash tags)
 
 ---
 

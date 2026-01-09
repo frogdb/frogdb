@@ -533,6 +533,109 @@ pub struct AclManager {
 
 ---
 
+## Cluster Mode
+
+### ACL Propagation
+
+In cluster mode, ACLs are **per-node** and not automatically synchronized. This matches
+Redis Cluster behavior where each node maintains its own independent ACL.
+
+**Recommended Approach: Orchestrator Distribution**
+
+The orchestrator pushes identical ACL configuration to all nodes:
+
+```
+Orchestrator (source of truth)
+      │
+      │── POST /admin/acl { users: [...] } ──▶ Node 1 ─┐
+      │── POST /admin/acl { users: [...] } ──▶ Node 2 ─┼── All nodes receive
+      │── POST /admin/acl { users: [...] } ──▶ Node 3 ─┘   identical config
+      │
+      ▼
+   ACL stored centrally
+   (e.g., etcd, config file)
+```
+
+### Admin API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/admin/acl` | POST | Apply ACL configuration (full replacement) |
+| `/admin/acl` | GET | Return current ACL state |
+
+### Consistency Model
+
+ACL updates are **eventually consistent** across the cluster:
+
+1. Orchestrator updates its source of truth
+2. Orchestrator pushes to all nodes (sequential or parallel)
+3. Brief window where nodes have different ACL states
+4. All nodes converge to identical config
+
+**Timing considerations:**
+- Push in parallel for minimal divergence window
+- Consider rolling updates during maintenance windows
+- Monitor for failed pushes (node may have stale ACL)
+
+### Client Behavior During ACL Update
+
+| Scenario | Behavior |
+|----------|----------|
+| Client connected to updated node | New permissions on re-auth |
+| Client connected to stale node | Old permissions until node updated |
+| Client reconnects to different node | May see different permissions briefly |
+
+**Important:** ACL changes don't affect existing connections. Clients continue with
+their permission snapshot until they re-authenticate or reconnect.
+
+### Alternative Approaches (Not Recommended)
+
+| Approach | Why Not Recommended |
+|----------|---------------------|
+| ACL SAVE + shared file | Requires shared filesystem, complex coordination |
+| ACL commands via gossip | FrogDB uses orchestrated model, no gossip |
+| Real-time replication | Complexity, eventual consistency is acceptable |
+
+### Configuration Example
+
+Orchestrator stores ACL config and pushes to all nodes:
+
+```json
+{
+  "version": 2,
+  "timestamp": "2024-01-15T10:30:00Z",
+  "users": [
+    {
+      "name": "default",
+      "enabled": true,
+      "passwords": ["sha256:e3b0c44298fc1c149afbf4c8996fb924..."],
+      "permissions": {
+        "commands": ["+@all", "-@dangerous"],
+        "keys": ["*"],
+        "channels": ["*"]
+      }
+    },
+    {
+      "name": "app_readonly",
+      "enabled": true,
+      "passwords": ["sha256:..."],
+      "permissions": {
+        "commands": ["+@read", "-@write"],
+        "keys": ["app:*"],
+        "channels": []
+      }
+    }
+  ]
+}
+```
+
+**Version and timestamp** allow nodes to detect stale configurations and orchestrator
+to track which version each node has applied.
+
+See [CLUSTER.md](CLUSTER.md#acl-in-cluster-mode) for additional cluster ACL details.
+
+---
+
 ## Transport Security (TLS)
 
 For encrypted connections, see [OPERATIONS.md TLS configuration](OPERATIONS.md#tls-future).

@@ -129,6 +129,46 @@ fn check_memory_on_write(shard: &mut Shard) -> Result<(), Error> {
 
 ---
 
+## Per-Shard Memory Behavior
+
+FrogDB tracks memory per-shard, not globally. This has implications for multi-key operations:
+
+### Memory Distribution
+
+```
+Total max_memory: 10GB
+Shards: 4
+Per-shard limit: ~2.5GB (approximate, not strictly enforced)
+```
+
+**Note:** Memory tracking is approximate per-shard. Shards may vary in actual usage.
+
+### Multi-Key Operation OOM
+
+For operations like MSET that touch multiple shards:
+
+| Scenario | Behavior |
+|----------|----------|
+| All shards have space | Operation succeeds |
+| One shard at limit | Entire operation fails with OOM |
+| Partial failure (pre-VLL) | Not possible - VLL ensures atomic check |
+
+**VLL Guarantee:** With VLL transaction ordering, multi-key writes pre-check memory on all target shards before execution. Either all keys are written, or the entire operation returns `-OOM`.
+
+### Configuration
+
+Memory is configured globally but distributed across shards:
+
+```toml
+[memory]
+max_memory = "10gb"              # Total memory limit
+max_memory_policy = "noeviction" # or eviction policy
+```
+
+**Recommendation:** When using per-shard eviction, ensure sufficient headroom for write bursts to avoid frequent cross-shard OOM failures.
+
+---
+
 ## Configuration Summary
 
 | Setting | Default | Description |
@@ -140,3 +180,37 @@ fn check_memory_on_write(shard: &mut Shard) -> Result<(), Error> {
 | `lfu-decay-time` | 1 | LFU decay period (minutes) |
 
 See [OPERATIONS.md](OPERATIONS.md) for configuration details.
+
+---
+
+## Post-Recovery Eviction Behavior
+
+After server restart or recovery from persistence, eviction metadata has specific characteristics:
+
+### LRU After Recovery
+
+**All keys appear "fresh" (idle time = 0)** immediately after recovery because `last_access` timestamps
+are NOT persisted. This matches Redis behavior ([GitHub Issue #1261](https://github.com/redis/redis/issues/1261)).
+
+**Impact:**
+- `volatile-lru` and `allkeys-lru` policies will evict essentially at random immediately after restart
+- Eviction accuracy **self-corrects within minutes** as keys are accessed during normal operation
+- The more traffic the server receives, the faster accuracy restores
+
+**Workaround for migration tools:** The `RESTORE` command supports `IDLETIME seconds` modifier
+to explicitly set idle time during data migration.
+
+### LFU After Recovery
+
+**LFU counters ARE persisted** with each key, so `volatile-lfu` and `allkeys-lfu` policies
+maintain accuracy across restarts. Keys with historically high access counts will have
+appropriately high `lfu_counter` values after recovery.
+
+**Note:** LFU decay is applied lazily on access, so counters may be stale until keys are first accessed after recovery.
+
+### Recommendation
+
+For production deployments with eviction enabled:
+- **LFU policies** (`volatile-lfu`, `allkeys-lfu`) provide better accuracy after recovery
+- **LRU policies** require warm-up period; consider a brief grace period before enabling strict memory limits
+- Monitor `frogdb_eviction_keys_total` metric to track eviction behavior

@@ -84,6 +84,77 @@ FrogDB has two levels of sharding that are separate concepts:
 1. **Cluster routing:** `slot = CRC16(key) % 16384` → determines which node
 2. **Internal routing:** `internal_shard = hash(key) % N` → determines which thread within node
 
+### Hash Tag Full Colocation
+
+Hash tags (e.g., `{user:1}:profile`) guarantee colocation at **both** levels:
+
+```rust
+// For keys with hash tags, both cluster slot AND internal shard
+// are computed from the hash tag content, not the full key
+fn route_key(key: &[u8]) -> (SlotId, InternalShardId) {
+    let hash_input = extract_hash_tag(key).unwrap_or(key);
+
+    let slot = crc16(hash_input) % 16384;           // Cluster slot
+    let shard = xxhash64(hash_input) % num_shards;  // Internal shard
+
+    (slot, shard)
+}
+```
+
+This ensures hash-tagged keys are always on the same internal shard within a node, enabling:
+- Atomic MULTI/EXEC transactions
+- Lua scripts accessing multiple keys
+- WATCH with consistent visibility
+
+### Configuration Homogeneity
+
+**Recommendation:** All nodes in a cluster should have the same `num_shards` configuration.
+
+| Aspect | Same `num_shards` | Different `num_shards` |
+|--------|-------------------|------------------------|
+| Hash tag colocation | Guaranteed | Guaranteed (per-node) |
+| Internal shard distribution | Predictable | Changes after migration |
+| Performance characteristics | Uniform | Variable per node |
+| Migration complexity | Simple | Adapts via SHARDS_NUM |
+
+**Why it matters:**
+
+Hash tag colocation is computed *per-node* using `xxhash64(tag) % num_shards`. This means:
+- Keys with the same hash tag always land on the same internal shard *within* each node
+- But with different `num_shards`, the *which* shard differs between nodes
+
+**Example:**
+```
+Node A (8 shards):  xxhash64("user:1") % 8  = shard 3
+Node B (16 shards): xxhash64("user:1") % 16 = shard 11
+```
+
+After slot migration from A to B, hash-tagged keys remain colocated (all on shard 11),
+but the distribution changes. This is correct but may affect performance predictability.
+
+**Slot Migration with Heterogeneous Configs:**
+
+During migration, the source node communicates its shard count:
+```
+DFLYMIGRATE INIT [SOURCE_NODE_ID, SHARDS_NUM, SLOT_RANGES]
+```
+
+The target adapts by establishing one flow per source shard, then redistributes
+keys to its own internal shards based on hash computation.
+
+**Orchestrator Validation (Optional):**
+
+For strict homogeneity, the orchestrator can validate `num_shards` when nodes join:
+```json
+{
+  "cluster_id": "frogdb-prod-1",
+  "required_num_shards": 8,
+  "nodes": [...]
+}
+```
+
+Nodes with mismatched `num_shards` would be rejected from joining.
+
 ---
 
 ## Node Roles
@@ -149,6 +220,12 @@ The external orchestrator must satisfy these requirements:
 - Minimum 3 orchestrator instances recommended
 - Odd number required for quorum (3, 5, 7)
 - Can use Raft, Paxos, or external consensus (etcd, Consul, ZooKeeper)
+
+**Single Orchestrator Warning:** Running with a single orchestrator is supported for development and testing only. In this configuration:
+- Orchestrator failure = no automatic failover possible
+- No quorum decisions (all decisions are unilateral)
+- Recommended only for non-production environments
+- FrogDB logs a warning on startup when cluster mode is enabled with only one orchestrator endpoint configured
 
 **Quorum Semantics:**
 - Topology changes require majority agreement
@@ -228,6 +305,113 @@ Each node exposes an admin API on a separate port:
 | `/admin/cluster` | GET | Return current topology |
 | `/admin/health` | GET | Health check |
 | `/admin/replication` | GET | Replication status |
+
+### Health Check Definition
+
+The `/admin/health` endpoint returns `200 OK` when the node is healthy, or `503 Service Unavailable` when unhealthy.
+
+**Health Criteria:**
+
+| Check | Healthy | Unhealthy |
+|-------|---------|-----------|
+| **Process** | Running | - |
+| **Acceptor** | Accepting connections | Not listening |
+| **Shard Workers** | All responding to ping within 100ms | Any shard unresponsive |
+| **Memory** | Below critical threshold (default: 95%) | Above critical threshold |
+| **Persistence** | Not blocked (queue depth < high watermark) | Blocked > 30s |
+| **Cluster State** | Has valid topology | No topology or stale epoch |
+
+**Response Format:**
+```json
+{
+  "status": "healthy",
+  "checks": {
+    "acceptor": "ok",
+    "shards": "ok",
+    "memory": "ok",
+    "persistence": "ok",
+    "cluster": "ok"
+  },
+  "memory_used_bytes": 1234567890,
+  "memory_max_bytes": 10737418240,
+  "uptime_seconds": 86400
+}
+```
+
+**Unhealthy Response:**
+```json
+{
+  "status": "unhealthy",
+  "checks": {
+    "acceptor": "ok",
+    "shards": "fail:shard_3_unresponsive",
+    "memory": "ok",
+    "persistence": "ok",
+    "cluster": "ok"
+  },
+  "reason": "shard_3_unresponsive"
+}
+```
+
+**Configuration:**
+```toml
+[health]
+memory_critical_percent = 95   # Memory threshold for unhealthy
+shard_ping_timeout_ms = 100    # Max time to wait for shard response
+persistence_block_timeout_s = 30  # Max persistence queue block time
+```
+
+### Orchestrator Security
+
+The orchestrator admin API (`/admin/cluster`, `/admin/acl`) must be secured to prevent unauthorized topology changes.
+
+**Security Options (in order of recommendation):**
+
+| Method | Description | Use Case |
+|--------|-------------|----------|
+| **Network Isolation** | Bind admin port to localhost or private network only | Default, simplest |
+| **mTLS** | Mutual TLS with client certificates | Production, external access |
+| **Bearer Token** | Shared secret in Authorization header | Simple auth for trusted networks |
+
+**Configuration:**
+```toml
+[cluster.admin]
+# Bind to localhost only (default, safest)
+bind = "127.0.0.1"
+port = 6380
+
+# Or bind to all interfaces with auth
+# bind = "0.0.0.0"
+# port = 6380
+# auth_token = "your-secret-token"  # Required if bind != localhost
+
+# mTLS (recommended for production)
+# tls_cert = "/path/to/server.crt"
+# tls_key = "/path/to/server.key"
+# tls_ca = "/path/to/ca.crt"  # Required client certs signed by this CA
+```
+
+**Authentication Flow (Bearer Token):**
+```
+POST /admin/cluster HTTP/1.1
+Authorization: Bearer your-secret-token
+Content-Type: application/json
+
+{"epoch": 42, "nodes": [...]}
+```
+
+**Unauthorized Response:**
+```
+HTTP/1.1 401 Unauthorized
+Content-Type: application/json
+
+{"error": "invalid or missing authentication"}
+```
+
+**Redis/Valkey Comparison:**
+- Redis/Valkey use ACLs for all commands including `CLUSTER` commands via the Redis protocol
+- FrogDB follows DragonflyDB's approach: separate admin HTTP API for orchestration
+- ACLs still apply to `CLUSTER` commands sent via Redis protocol
 
 ---
 
@@ -490,6 +674,45 @@ Orchestrator              Source (A)              Target (B)
      │                        │                       │ Slot 1234 owned
 ```
 
+### Migration Data Preservation
+
+**TTL Handling:**
+- TTL stored as absolute Unix timestamp in value header (`expires_at` field)
+- Timestamp preserved exactly during key migration (part of serialized value)
+- **Clock skew consideration:** Nodes should use NTP for synchronized clocks
+- Skew of ±1 second may cause keys to expire slightly early/late on target node
+- For critical TTL accuracy, ensure cluster nodes are time-synchronized
+
+**Value Format During Migration:**
+```
+MIGRATE host port key|"" dest-db timeout [COPY] [REPLACE] [AUTH password] [KEYS key...]
+```
+Each key is serialized with its full metadata (type, expiry, value) using DUMP format.
+
+### Internal Shard Distribution
+
+When keys migrate to a new node, they are assigned to internal shards on the target:
+
+- **Hash tag preservation:** Keys with hash tags (`{tag}key`) use the tag for internal shard assignment
+- **Internal shard assignment:** `xxhash64(hash_tag_or_key) % num_shards`
+- **Configuration homogeneity:** All cluster nodes should use the same `num_shards` setting
+
+**Important:** If source and target nodes have different `num_shards` configurations, hash-tagged keys may land on different internal shards, but colocation within the same hash tag is still preserved on each node.
+
+### Connection State During Migration
+
+Client connection state may be affected during slot migration:
+
+| State | Behavior |
+|-------|----------|
+| **MULTI/EXEC in progress** | If any key migrates mid-transaction, EXEC returns `-MOVED` or `-ASK` for affected keys. Client must retry. |
+| **WATCH** | Watched keys that migrate are implicitly unwatched. EXEC returns nil (transaction aborted). |
+| **SUBSCRIBE (global)** | Unaffected - global pub/sub not tied to slots |
+| **SSUBSCRIBE (sharded)** | Client receives `-MOVED` and must re-subscribe on new node |
+| **Blocking commands** | If key migrates during BLPOP/BRPOP wait, command times out (future feature) |
+
+**Client responsibility:** Handle `-MOVED` and `-ASK` redirects, retry failed transactions.
+
 ### Atomic Migration (Future)
 
 Valkey 9.0-style server-side migration:
@@ -602,6 +825,38 @@ When a primary is demoted (or recovers after partition):
 min_replicas_to_write = 0
 ```
 
+### In-Flight Commands During Failover
+
+When a primary fails, commands in various stages are affected:
+
+| Command State | Outcome |
+|---------------|---------|
+| **In TCP buffer (client→server)** | Lost. Client times out, should retry. |
+| **In shard message queue** | Lost. Server never processes. Client times out. |
+| **Mid-execution** | Lost. Result never sent. Client times out. |
+| **Executed, in response buffer** | Lost. Client times out despite server success. |
+| **Acknowledged to client** | Safe (client received response). |
+
+**Client Behavior:**
+```
+Client                    Primary                    (failover)
+   │                         │                           │
+   │── SET key value ───────▶│                           │
+   │                         │ (queued)                  │
+   │                         │ ✕ PRIMARY FAILS           │
+   │                         │                           │
+   │  [timeout: no response] │                           │
+   │                         │                           │
+   │── retry to new primary ─────────────────────────────▶│
+   │◀── +OK ──────────────────────────────────────────────│
+```
+
+**Idempotency Requirement:** Clients should use idempotent operations or implement deduplication for non-idempotent commands (e.g., INCR) when retrying after failover.
+
+**Monitoring:**
+- `frogdb_failover_commands_lost` - Estimated commands in flight during failover
+- `frogdb_client_retry_total` - Client-reported retries (if client library supports)
+
 ---
 
 ## Persistence Integration
@@ -695,6 +950,163 @@ These abstractions should be designed into the single-node implementation to avo
 | `node_id` | This node's identifier |
 | `repl_backlog_size` | Replication backlog buffer size |
 | `wal_retention_*` | WAL retention for replication |
+
+---
+
+## Pub/Sub in Cluster Mode
+
+### Broadcast Pub/Sub (SUBSCRIBE/PUBLISH)
+
+In cluster mode, PUBLISH broadcasts to all nodes:
+
+```
+Client A (Node 1)           Node 1              Node 2              Node 3
+      │                        │                   │                   │
+      │── PUBLISH chan msg ──▶│                   │                   │
+      │                        │                   │                   │
+      │                        │── Forward ───────▶│                   │
+      │                        │── Forward ────────────────────────────▶│
+      │                        │                   │                   │
+      │                        │ Deliver to local  │ Deliver to local  │ Deliver to local
+      │                        │ subscribers       │ subscribers       │ subscribers
+```
+
+**Cost:** O(nodes) for each PUBLISH
+
+### Sharded Pub/Sub (SSUBSCRIBE/SPUBLISH)
+
+Sharded pub/sub routes by channel name (Redis 7.0+ compatible):
+
+```
+Channel "mychan" → slot = CRC16("mychan") % 16384 → Node owning slot
+```
+
+**Cost:** O(1) - only the owning node handles the channel
+
+### Sharded Pub/Sub During Slot Migration
+
+When a slot migrates, sharded pub/sub subscriptions are affected:
+
+```
+Client                    Source (A)                 Target (B)
+   │                          │                          │
+   │ SSUBSCRIBE mychan        │                          │
+   │─────────────────────────▶│                          │
+   │ (subscribed to mychan)   │                          │
+   │                          │                          │
+   │                          │  [Slot migration starts] │
+   │                          │                          │
+   │                          │  [Slot migration ends]   │
+   │                          │                          │
+   │    Server unsubscribes   │                          │
+   │◀── -MOVED 1234 B:6379 ───│                          │
+   │                          │                          │
+   │ Client must resubscribe  │                          │
+   │── SSUBSCRIBE mychan ─────────────────────────────────▶│
+   │◀── (subscribed) ──────────────────────────────────────│
+```
+
+**Server-Side Behavior (matches Redis 7.0+):**
+1. When slot migration completes, source node iterates sharded subscriptions
+2. For each subscription to a channel in the migrated slot:
+   - Server sends `-MOVED slot target:port` to the subscribed client
+   - Server removes the subscription from its local state
+3. Client must reconnect to target node and resubscribe
+
+**Client Responsibility:**
+- Handle `-MOVED` responses in subscription context
+- Reconnect to new node and issue `SSUBSCRIBE` again
+- Messages published during migration window may be lost
+
+See [PUBSUB.md](PUBSUB.md#cluster-integration) for complete pub/sub cluster behavior.
+
+### Pattern Subscriptions
+
+- PSUBSCRIBE patterns work within broadcast mode only
+- Each node evaluates patterns locally
+- No pattern support in sharded pub/sub
+
+### Cluster Pub/Sub Commands
+
+| Command | Scope | Behavior |
+|---------|-------|----------|
+| SUBSCRIBE | Broadcast | Fan-out to all nodes |
+| PSUBSCRIBE | Broadcast | Pattern matching, all nodes |
+| PUBLISH | Broadcast | Forward to all nodes |
+| SSUBSCRIBE | Sharded | Route to slot owner |
+| SPUBLISH | Sharded | Route to slot owner |
+
+### Abstraction
+
+The `ClusterPubSubForwarder` trait abstracts cluster pub/sub forwarding, allowing single-node
+deployments to use a no-op implementation. See [PUBSUB.md](PUBSUB.md#cluster-mode) for the
+full interface definition and message flow diagrams.
+
+---
+
+## ACL in Cluster Mode
+
+### ACL Distribution
+
+ACLs are managed per-node. For consistent authentication across a cluster:
+
+**Recommended Approach:** Orchestrator distributes ACL configuration:
+
+```
+Orchestrator
+      │
+      │── POST /admin/acl ──▶ Node 1
+      │── POST /admin/acl ──▶ Node 2
+      │── POST /admin/acl ──▶ Node 3
+      │
+      │  (All nodes receive identical ACL config)
+```
+
+### ACL Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/admin/acl` | POST | Receive ACL configuration update |
+| `/admin/acl` | GET | Return current ACL configuration |
+
+### Consistency Model
+
+ACL updates are **eventually consistent** across the cluster:
+- Orchestrator pushes updates to all nodes
+- Nodes apply updates independently
+- Brief window where nodes may have different ACL states
+
+**Recommendation:** Update ACL during low-traffic periods or use rolling updates.
+
+### ACL Configuration Format
+
+```json
+{
+  "version": 1,
+  "users": [
+    {
+      "name": "default",
+      "enabled": true,
+      "passwords": ["sha256:..."],
+      "permissions": {
+        "commands": ["+@all"],
+        "keys": ["*"],
+        "channels": ["*"]
+      }
+    },
+    {
+      "name": "readonly",
+      "enabled": true,
+      "passwords": ["sha256:..."],
+      "permissions": {
+        "commands": ["+@read", "-@write"],
+        "keys": ["prefix:*"],
+        "channels": []
+      }
+    }
+  ]
+}
+```
 
 ---
 

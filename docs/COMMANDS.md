@@ -21,6 +21,86 @@ Index of command groups and cross-cutting execution concerns.
 
 ---
 
+## Size Limits
+
+FrogDB enforces Redis-compatible size limits on command input:
+
+| Limit | Value | Notes |
+|-------|-------|-------|
+| Max key size | 512 MB | Configurable via `proto-max-bulk-len` |
+| Max value size | 512 MB | Configurable via `proto-max-bulk-len` |
+| Max elements per collection | 2^32 - 1 | ~4 billion elements |
+| Max bulk string | 512 MB | Any single RESP bulk string |
+
+**Error on Exceeded:**
+```
+-ERR Protocol error: bulk string length exceeds maximum allowed
+```
+
+**Configuration:**
+```toml
+[protocol]
+proto_max_bulk_len = 536870912  # 512 MB default
+```
+
+See [DESIGN.md#limits](../DESIGN.md#limits) for full limit documentation.
+
+---
+
+## DUMP and RESTORE
+
+The DUMP and RESTORE commands serialize/deserialize keys for migration:
+
+### DUMP
+
+```
+DUMP key
+```
+
+Returns a serialized representation of the value including type, TTL, and LFU counter.
+Returns nil if key doesn't exist.
+
+### RESTORE
+
+```
+RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency]
+```
+
+Deserialize a value (from DUMP) and store it at key.
+
+| Argument | Description |
+|----------|-------------|
+| `key` | Destination key |
+| `ttl` | Time-to-live in milliseconds (0 = no expiry) |
+| `serialized-value` | Output from DUMP command |
+| `REPLACE` | Overwrite if key exists (default: error if exists) |
+| `ABSTTL` | Interpret `ttl` as absolute Unix timestamp (ms) |
+| `IDLETIME seconds` | Set initial idle time for LRU eviction |
+| `FREQ frequency` | Set initial LFU counter (0-255) |
+
+**LRU/LFU Modifiers (Redis 5.0+):**
+
+Since LRU timestamps are not persisted, migration tools can use `IDLETIME` and `FREQ`
+to preserve eviction metadata:
+
+```
+# Restore with 60 seconds idle time (for LRU)
+RESTORE mykey 0 "\x00..." REPLACE IDLETIME 60
+
+# Restore with LFU frequency counter
+RESTORE mykey 0 "\x00..." REPLACE FREQ 100
+```
+
+**Use Cases:**
+- Cluster slot migration (keys retain eviction metadata)
+- Backup/restore tools that preserve eviction behavior
+- Manual data migration between instances
+
+See [EVICTION.md#post-recovery-eviction-behavior](EVICTION.md#post-recovery-eviction-behavior)
+for how eviction metadata behaves after recovery.
+
+---
+
 ## Transactions
 
 ### MULTI/EXEC Flow

@@ -506,6 +506,40 @@ echo "vm.overcommit_memory = 1" >> /etc/sysctl.conf
 sysctl -p
 ```
 
+### Memory Allocator
+
+FrogDB uses the system allocator by default. For production workloads, **jemalloc is recommended** to reduce memory fragmentation:
+
+**Building with jemalloc:**
+```bash
+# Install jemalloc development files
+# Ubuntu/Debian
+sudo apt-get install libjemalloc-dev
+
+# macOS
+brew install jemalloc
+
+# Build FrogDB with jemalloc feature
+cargo build --release --features jemalloc
+```
+
+**Why jemalloc?**
+- Reduced memory fragmentation (important for long-running processes)
+- Better performance with many allocations/deallocations
+- More predictable memory usage over time
+- Used by Redis in production
+
+**Alternative: mimalloc**
+```bash
+cargo build --release --features mimalloc
+```
+
+| Allocator | Use Case | Trade-off |
+|-----------|----------|-----------|
+| System (default) | Development, testing | Simple, no dependencies |
+| jemalloc | Production (recommended) | Best fragmentation handling |
+| mimalloc | High-allocation workloads | Faster allocations, slightly higher memory |
+
 ### Verification
 
 ```bash

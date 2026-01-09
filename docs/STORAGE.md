@@ -62,16 +62,23 @@ pub struct KeyMetadata {
     pub expires_at: Option<Instant>,
 
     /// Last access time (for LRU eviction)
+    /// NOTE: NOT persisted - reset to recovery time on startup
     pub last_access: Instant,
 
     /// Access frequency counter (for LFU eviction)
     /// Uses logarithmic counter like Redis
+    /// NOTE: Persisted with value
     pub lfu_counter: u8,
 
     /// Approximate memory size of this entry
     pub memory_size: usize,
 }
 ```
+
+**Persistence Note:** The `last_access` field is NOT persisted to disk. After recovery,
+all keys have fresh access timestamps (idle time = 0). This matches Redis behavior and
+eviction accuracy self-corrects within minutes. See [PERSISTENCE.md](PERSISTENCE.md#lrulfu-metadata-matches-redis-behavior)
+for details.
 
 ### LFU Counter
 
@@ -158,10 +165,10 @@ Each shard maintains an expiry index for efficient TTL handling:
 
 ```rust
 pub struct ExpiryIndex {
-    /// Keys sorted by expiration time
-    by_expiry: BTreeMap<Instant, HashSet<Bytes>>,
-    /// Reverse lookup: key → expiry time
-    key_expiry: HashMap<Bytes, Instant>,
+    /// Keys with expiry, sorted by (expiration_time, key) for uniqueness
+    by_time: BTreeMap<(Instant, Bytes), ()>,
+    /// Quick lookup: key -> expiration time
+    by_key: HashMap<Bytes, Instant>,
 }
 
 impl ExpiryIndex {
@@ -178,6 +185,10 @@ impl ExpiryIndex {
     pub fn sample(&self, n: usize) -> Vec<Bytes>;
 }
 ```
+
+**Note:** The `by_time` BTreeMap uses `(Instant, Bytes)` as the key instead of `BTreeMap<Instant, HashSet<Bytes>>`
+to avoid HashSet allocation overhead per expiry time. Since (time, key) is unique, this provides O(log n)
+insertion/removal with lower memory overhead.
 
 ### Expiry Strategy
 

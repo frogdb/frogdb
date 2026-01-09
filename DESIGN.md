@@ -39,7 +39,8 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 │  ┌─────────────┐                                                │
 │  │  Acceptor   │  (Single thread, accepts connections)          │
 │  └──────┬──────┘                                                │
-│         │ Distributes connections by consistent hash            │
+│         │ Distributes connections via round-robin               │
+│         │ (swappable via ConnectionAssigner trait)              │
 │         ▼                                                       │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                    Shard Workers                         │   │
@@ -108,6 +109,9 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 | Hybrid documentation | DESIGN.md overview + detailed spec files in docs/ | Single large file |
 | Round-robin connection assignment | Simple load balancing, proven approach (DragonflyDB), swappable via ConnectionAssigner trait | Consistent hash, Least-connections |
 | xxhash64 for internal key sharding | Fast, good distribution, separate from cluster CRC16, swappable via KeyHasher trait | CRC16, FNV-1a |
+| VLL-style transaction ordering | Atomic multi-shard operations via global txid counter and shard queues (DragonflyDB approach) | Lock-based 2PC, eventual consistency only |
+| Hash tag full colocation | Hash tags guarantee both cluster slot AND internal shard colocation for transactions/scripts | Cluster-only colocation (simpler but breaks atomicity) |
+| Strict Lua key validation | Fail on undeclared key access by default (DragonflyDB-style), optional compatibility flag | Allow undeclared keys (Redis-style, requires global lock) |
 
 ### Key Tradeoffs
 
@@ -168,6 +172,63 @@ supporting key colocation.
 See [docs/CONCURRENCY.md](docs/CONCURRENCY.md) for thread architecture, connection model,
 and scatter-gather implementation details.
 
+### Multi-Shard Atomicity (VLL)
+
+FrogDB provides **serializable execution order** for multi-key operations across shards using a VLL-inspired
+(Very Lightweight Locking) transaction ordering system, similar to DragonflyDB:
+
+1. **Global Transaction IDs**: Atomic counter assigns monotonically increasing txid to each operation
+2. **Shard Queues**: Each shard maintains ordered queue of pending operations by txid
+3. **Ordered Execution**: Lower txid operations execute before higher ones on each shard
+4. **Consistent Ordering**: All observers see operations in the same global order
+
+```
+MSET key1 val1 key2 val2 (keys on different shards)
+         │
+         ├── Acquire txid = 1000 from atomic counter
+         │
+         ├── Send to Shard 0: Execute(txid=1000, SET key1 val1)
+         ├── Send to Shard 2: Execute(txid=1000, SET key2 val2)
+         │
+         ├── Each shard queues by txid, executes in order
+         │
+         └── All shards complete → return OK
+```
+
+This approach avoids mutex contention while providing serializable multi-key guarantees.
+
+**Important: Atomicity Semantics**
+
+VLL provides **serializable execution order**, not transactional rollback:
+
+| Scenario | Guarantee |
+|----------|-----------|
+| **Single-shard operations** | True atomicity (all-or-nothing), same as Redis |
+| **Multi-shard success** | All shards commit, consistent global ordering |
+| **Multi-shard timeout/failure** | Partial commits may persist; no rollback |
+| **Coordinator crash mid-operation** | Some shards may have committed |
+
+**Recommendation:** For operations requiring strict atomicity guarantees, use **hash tags** to ensure
+all keys land on the same shard: `MSET {user:1}:name Alice {user:1}:email alice@example.com`
+
+See [docs/CONCURRENCY.md](docs/CONCURRENCY.md) for implementation details.
+
+### Hash Tag Colocation
+
+Hash tags (e.g., `{user:1}:profile`) guarantee that related keys land on the **same internal shard**,
+not just the same cluster slot. This enables:
+- Atomic transactions across hash-tagged keys
+- Lua scripts accessing multiple keys
+- WATCH with consistent visibility
+
+```rust
+// Hash tag determines BOTH cluster slot AND internal shard
+fn shard_for_key(key: &[u8], num_shards: usize) -> usize {
+    let hash_input = extract_hash_tag(key).unwrap_or(key);
+    xxhash64(hash_input) as usize % num_shards
+}
+```
+
 ---
 
 ## Data Structures
@@ -226,6 +287,32 @@ Alternative: Skip list implementation for cache-friendlier traversal.
 | Time Series | Sorted by timestamp | Future | Planned |
 
 See [docs/COMMANDS.md](docs/COMMANDS.md) for command reference and [docs/command-groups/](docs/command-groups/) for detailed type implementations.
+
+---
+
+## Limits
+
+FrogDB enforces Redis-compatible size limits:
+
+| Limit | Value | Configuration |
+|-------|-------|---------------|
+| Max key size | 512 MB | `proto-max-bulk-len` |
+| Max value size | 512 MB | `proto-max-bulk-len` |
+| Max elements per List/Set/Hash/SortedSet | 2^32 - 1 (~4 billion) | Hardcoded |
+| Max Lua script size | 512 MB | `proto-max-bulk-len` |
+| Max command arguments | Unlimited (memory-bound) | - |
+| Max internal shards per node | 65,536 | 16-bit cursor encoding |
+
+**Configuration:**
+```toml
+[protocol]
+proto_max_bulk_len = 536870912  # 512 MB default, in bytes
+```
+
+**Notes:**
+- `proto-max-bulk-len` controls maximum size of any bulk string in RESP protocol
+- Exceeding limits returns `-ERR` with descriptive message
+- Collection element limits are theoretical; practical limit is available memory
 
 ---
 
@@ -356,6 +443,34 @@ pub trait Protocol: Send + Sync {
 
 This abstraction allows RESP3 to be added later without changing command implementations.
 
+### Response Type
+
+The `Response` enum includes both RESP2 types (implemented) and RESP3 types (defined for future use).
+RESP3 variants are included from the start to enable future protocol upgrades without breaking changes.
+
+See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the full `Response` enum definition, RESP3 wire formats,
+and protocol negotiation details.
+
+### Error Response Taxonomy
+
+FrogDB uses consistent error prefixes for different error categories:
+
+| Prefix | Meaning | Example |
+|--------|---------|---------|
+| `-ERR` | Generic/uncategorized error | `-ERR unknown command 'FOO'` |
+| `-WRONGTYPE` | Operation against wrong type | `-WRONGTYPE Operation against a key holding the wrong kind of value` |
+| `-OOM` | Out of memory | `-OOM command not allowed when used memory > 'maxmemory'` |
+| `-TIMEOUT` | Operation timed out | `-TIMEOUT scatter-gather timed out` |
+| `-CROSSSHARD` | Keys span multiple shards | `-CROSSSHARD Keys in MULTI must be on same shard` |
+| `-MOVED` | Key on different node (cluster) | `-MOVED 3999 127.0.0.1:6381` |
+| `-ASK` | Key migrating (cluster) | `-ASK 3999 127.0.0.1:6381` |
+| `-CLUSTERDOWN` | Cluster unavailable | `-CLUSTERDOWN The cluster is down` |
+| `-NOSCRIPT` | Script not in cache | `-NOSCRIPT No matching script. Please use EVAL.` |
+| `-BUSY` | Script running | `-BUSY Redis is busy running a script` |
+| `-READONLY` | Write to replica | `-READONLY You can't write against a read only replica` |
+| `-NOAUTH` | Authentication required | `-NOAUTH Authentication required` |
+| `-NOPERM` | Permission denied | `-NOPERM this user has no permissions to run the 'config' command` |
+
 ### Connection State
 
 Each connection maintains state for transactions, pub/sub, authentication, and blocking operations.
@@ -401,13 +516,16 @@ Atomic command execution with queuing:
 - NOT rollback: If one command fails, others still execute
 - Single-shard requirement: All keys must hash to same shard (use hash tags)
 
-**Cross-shard transactions:** Rejected at EXEC time if keys span multiple shards.
+**Cross-shard detection:** When a command is queued that references a key on a different shard
+than previously queued keys, FrogDB returns `-CROSSSHARD` error immediately (not at EXEC time).
+This provides early feedback rather than wasting round trips.
 
 ### WATCH (Optimistic Locking)
 
 - `WATCH key [key...]`: Monitor keys for changes
 - If watched key modified before EXEC, transaction aborts (returns nil)
 - `UNWATCH`: Clear all watches
+- **Single-shard requirement**: Watched keys must be on the same shard as transaction keys
 
 See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed transaction implementation.
 
@@ -437,6 +555,11 @@ Cursor-based iteration without blocking. Uses shard-aware cursor encoding:
 - Resumable: Can stop/resume anytime
 - Eventual: May return duplicates, may miss keys added during scan
 
+**Cursor Limits:**
+- Shard ID: 16 bits → max 65,536 internal shards per node
+- Position: 48 bits → max ~281 trillion keys per shard
+- These limits are theoretical; practical deployments use far fewer shards (typically ≤ CPU count)
+
 **Related:** SSCAN, HSCAN, ZSCAN for iterating data structure members.
 
 See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed SCAN algorithm.
@@ -447,6 +570,21 @@ See [docs/COMMANDS.md](docs/COMMANDS.md) for detailed SCAN algorithm.
 
 Lua scripts execute atomically within a single shard, blocking that shard's event loop
 during execution. Cross-shard scripts require all keys to use hash tags for colocation.
+
+### Key Validation (DragonflyDB-style)
+
+Scripts must declare all keys in the KEYS array. Accessing undeclared keys fails by default:
+
+```
+EVAL "return redis.call('GET', 'undeclared')" 0
+-ERR script tried accessing undeclared key: undeclared
+```
+
+**Rationale:** In a multi-threaded shared-nothing architecture, undeclared key access would
+require global locking, defeating the performance benefits. This matches DragonflyDB's default.
+
+**Compatibility flag:** For legacy scripts, `--default_lua_flags=allow-undeclared-keys` enables
+undeclared access by locking the entire datastore (significantly slower).
 
 See [docs/SCRIPTING.md](docs/SCRIPTING.md) for execution model and cross-shard requirements.
 
@@ -541,6 +679,43 @@ occur at three hook points: command permission, key access (read/write), and pub
 
 See [docs/AUTH.md](docs/AUTH.md) for ACL architecture, traits, and command reference.
 See [docs/OPERATIONS.md](docs/OPERATIONS.md) for security configuration.
+
+---
+
+## Blocking Commands (Future)
+
+> **Status:** Non-goal for initial implementation. This section outlines future design considerations.
+
+Blocking commands (BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BZPOPMIN, BZPOPMAX) require special handling in a shared-nothing architecture.
+
+### Design Considerations
+
+**Per-Connection Blocking State:**
+```rust
+struct BlockedConnection {
+    keys: Vec<Bytes>,           // Keys being waited on
+    timeout: Option<Instant>,   // When to unblock
+    shard_id: usize,            // Owning shard
+}
+```
+
+**Challenges:**
+- Keys may be on different shards than the blocking connection's home thread
+- Timeout management across distributed state
+- Cross-shard notification when key becomes available
+
+**Proposed Approach:**
+1. Blocking command validates all keys on same shard (use hash tags)
+2. Connection registers with target shard's wait queue
+3. PUSH commands check wait queue before storing
+4. Timeout handled by connection's home thread with cancellation token
+
+**Cross-Shard Blocking (Not Supported):**
+```
+BLPOP key1 key2 0  # Fails if key1 and key2 on different shards
+```
+
+Clients must use hash tags for multi-key blocking: `BLPOP {queue}:high {queue}:low 0`
 
 ---
 
@@ -661,6 +836,14 @@ See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Docker, systemd, and Kubernetes
 |--------|---------|-------------|
 | `scatter_gather_timeout_ms` | `1000` | Timeout for multi-shard operations |
 | `client_timeout_s` | `0` | Idle client timeout (0 = no timeout) |
+
+**Timeout Relationships:**
+- `client_timeout_s` applies to idle connections (no commands sent)
+- `scatter_gather_timeout_ms` applies to individual multi-shard operations
+- If `client_timeout_s > 0`, it must be greater than `scatter_gather_timeout_ms / 1000`
+- Lua script timeout (`lua_time_limit_ms`) is independent of scatter-gather timeout
+
+**Validation:** On startup, FrogDB warns if `client_timeout_s` is non-zero but less than `scatter_gather_timeout_ms / 1000`, as this could cause client disconnection during long scatter-gather operations.
 
 ### Expiry Options
 

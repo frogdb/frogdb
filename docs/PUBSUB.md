@@ -107,6 +107,148 @@ $<message_len>\r\n<message>\r\n
 
 ---
 
+## Cluster Mode
+
+In cluster mode, pub/sub behavior extends beyond internal shards to coordinate across cluster nodes.
+
+### Cluster Pub/Sub Abstraction
+
+```rust
+/// Trait for cluster-wide pub/sub message forwarding.
+/// Single-node deployments use a no-op implementation.
+pub trait ClusterPubSubForwarder: Send + Sync {
+    /// Forward PUBLISH message to all other cluster nodes (global pub/sub).
+    /// Called after local delivery completes.
+    fn broadcast_to_cluster(&self, channel: &[u8], message: &[u8]);
+
+    /// Forward SPUBLISH to the node owning this channel's slot.
+    /// Returns true if forwarded (remote owner), false if local.
+    fn forward_to_slot_owner(&self, channel: &[u8], message: &[u8]) -> bool;
+
+    /// Check if this node owns the slot for a sharded channel.
+    fn is_local_slot(&self, channel: &[u8]) -> bool;
+}
+
+/// No-op implementation for single-node deployments.
+pub struct LocalOnlyForwarder;
+
+impl ClusterPubSubForwarder for LocalOnlyForwarder {
+    fn broadcast_to_cluster(&self, _channel: &[u8], _message: &[u8]) {
+        // No-op: single node, no cluster to broadcast to
+    }
+
+    fn forward_to_slot_owner(&self, _channel: &[u8], _message: &[u8]) -> bool {
+        false // Always local in single-node mode
+    }
+
+    fn is_local_slot(&self, _channel: &[u8]) -> bool {
+        true // All slots are "local" in single-node mode
+    }
+}
+```
+
+### Cluster Message Flow
+
+**Global Pub/Sub (PUBLISH):**
+```
+Client: PUBLISH channel message
+         │
+         ▼
+    Local Node
+         │
+         ├── 1. Deliver to local subscribers (all internal shards)
+         │
+         └── 2. ClusterPubSubForwarder::broadcast_to_cluster()
+                  │
+                  ├── Node B: Deliver to local subscribers
+                  ├── Node C: Deliver to local subscribers
+                  └── Node N: Deliver to local subscribers
+```
+
+**Sharded Pub/Sub (SPUBLISH):**
+```
+Client: SPUBLISH channel message
+         │
+         ▼
+    Receiving Node
+         │
+         ├── if is_local_slot(channel):
+         │       └── Deliver to local subscribers (owner shard only)
+         │
+         └── else:
+                 └── forward_to_slot_owner(channel, message)
+                          │
+                          ▼
+                     Slot Owner Node
+                          └── Deliver to local subscribers
+```
+
+### Cluster Routing Summary
+
+| Command | Single-Node Routing | Cluster Routing |
+|---------|---------------------|-----------------|
+| PUBLISH | Fan-out to all internal shards | Fan-out to all nodes → each fans out internally |
+| SPUBLISH | Route to `hash(channel) % num_shards` | Route to slot owner node → owner shard |
+| SUBSCRIBE | Store on all internal shards | Store locally (global: any node receives) |
+| SSUBSCRIBE | Store on owner shard | Store on slot owner node's owner shard |
+
+### Slot Migration (Sharded Channels) {#cluster-integration}
+
+During slot migration, sharded pub/sub subscriptions require special handling.
+
+**Server-Side Behavior (matches Redis 7.0+):**
+
+1. **Pre-migration:** Source node owns the slot, handles SPUBLISH/SSUBSCRIBE
+2. **Migration in progress:** Source continues handling subscriptions
+3. **Migration complete:** Source **actively unsubscribes** all clients from migrated channels
+4. **Notification:** Server sends `-MOVED slot target:port` to each affected subscriber
+5. **State cleanup:** Subscription removed from source node's local state
+
+```
+Source Node                              Target Node
+     │                                        │
+     │ ◀── SSUBSCRIBE {channel}:foo ──────── Client
+     │     (subscription stored locally)      │
+     │                                        │
+     │  [Slot migration to Target starts]     │
+     │  [Slot migration completes]            │
+     │                                        │
+     │  Server iterates sharded subscriptions │
+     │  for migrated slot                     │
+     │                                        │
+     │  Server removes subscription ────────▶ │
+     │  -MOVED 12345 target:6379 ───────────▶ Client
+     │                                        │
+     │                              Client ── SSUBSCRIBE {channel}:foo ──▶│
+     │                                        │  (subscription on new owner)
+```
+
+**Why Server-Side Unsubscription?**
+- Clients may not actively poll for messages
+- Passive `-MOVED` on next publish could leave clients waiting indefinitely
+- Proactive notification ensures timely reconnection
+
+**Message Loss Window:**
+Messages published after migration completes but before client resubscribes on target are lost.
+This is inherent to pub/sub's at-most-once delivery model.
+
+**No State Transfer:**
+Pub/sub subscriptions are connection-bound and not persisted. The source node doesn't transfer
+subscription state to the target; clients must resubscribe.
+
+### Scalability Considerations
+
+| Aspect | Global Pub/Sub | Sharded Pub/Sub |
+|--------|----------------|-----------------|
+| Cluster bus traffic | O(nodes × messages) | O(1) per message |
+| Scaling behavior | Degrades with cluster size | Scales horizontally |
+| Recommended for | Low-volume cluster-wide events | High-throughput messaging |
+
+**Warning:** Global pub/sub (PUBLISH) broadcasts to all cluster nodes. For high-throughput
+workloads, use sharded pub/sub (SPUBLISH) to confine traffic to slot owners.
+
+---
+
 ## Delivery Guarantees
 
 - **At-most-once delivery**: Messages may be lost on disconnect

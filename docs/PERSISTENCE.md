@@ -76,9 +76,16 @@ Each column family (shard) stores keys with this format:
 - Rebuilt during recovery from `expires_at` field in each value
 - Active expiry index is in-memory only
 
-**LRU/LFU Metadata:**
+**LRU/LFU Metadata (Matches Redis Behavior):**
 - `lfu_counter` persisted with value
-- `last_access` (LRU) NOT persisted - reset to recovery time on startup
+- `last_access` (LRU) **NOT persisted** - reset to recovery time on startup
+
+**Recovery Impact on Eviction:**
+After recovery, all keys appear "fresh" for LRU purposes (idle time = 0). This matches Redis behavior:
+- Redis intentionally does not persist LRU timestamps ([GitHub Issue #1261](https://github.com/redis/redis/issues/1261))
+- Salvatore rejected persisting LRU due to limited benefit vs. implementation cost
+- Eviction accuracy **self-corrects within minutes** as keys are accessed during normal operation
+- The `RESTORE` command supports `IDLETIME` and `FREQ` modifiers for explicit migration tools
 
 ---
 
@@ -160,6 +167,45 @@ Based on Dragonfly's approach - no fork(), no memory spike:
 - Server continues processing during snapshot
 - Consistent point-in-time capture across all shards
 
+### Edge Cases During Snapshot
+
+**Keys Modified During Snapshot:**
+- If key not yet visited by iterator: Serialize OLD value first (COW), then apply new value
+- If key already visited: Just apply new value (old value already in snapshot)
+
+**Keys Deleted During Snapshot:**
+- If not yet visited by iterator: **Skip** (key excluded from snapshot)
+- If already visited: Already serialized, deletion is part of subsequent WAL entries
+
+**Note on Point-in-Time Semantics:**
+Unlike fork-based snapshots (Redis), our epoch-based approach does NOT capture a perfect point-in-time.
+A key that exists at snapshot start may be excluded if deleted before the iterator visits it.
+This is an acceptable trade-off vs. fork's 2x memory spike. DragonflyDB uses the same approach.
+
+**Keys Created During Snapshot:**
+- New keys are NOT part of this snapshot (snapshot captures point-in-time at epoch start)
+- New key writes go to WAL and will be captured in next snapshot
+- Recovery: Load snapshot, replay WAL (includes new keys)
+
+**Concurrent Iteration State:**
+
+```rust
+struct SnapshotIterator {
+    epoch: u64,
+    visited: HashSet<Bytes>,   // Keys already serialized
+    current_position: usize,   // Iterator position in shard's HashMap
+}
+
+fn on_write_during_snapshot(key: &Bytes, old_value: &FrogValue, new_value: &FrogValue) {
+    if !self.visited.contains(key) {
+        // COW: Serialize old value before overwriting
+        self.batch_tx.send((key.clone(), old_value.clone())).await;
+        self.visited.insert(key.clone());
+    }
+    // Now safe to apply new value
+}
+```
+
 ### Configuration
 
 | Option | Default | Description |
@@ -233,3 +279,115 @@ data/
 | Stale replica recovery | Better | Worse (triggers full sync) |
 
 See [CLUSTER.md](CLUSTER.md) for complete replication protocol details.
+
+---
+
+## Recovery Process
+
+### Startup Sequence
+
+1. **Open RocksDB** with all column families (one per shard)
+2. **Find latest snapshot** from metadata
+3. **Replay WAL** from snapshot's sequence number to end
+4. **Rebuild expiry index** from `expires_at` field in each value
+5. **Initialize shard workers** with recovered data
+
+### Column Families and Sequence Numbers
+
+RocksDB uses a **single global sequence number** across all column families:
+
+```
+Sequence 1000: CF:s0 PUT key1 value1
+Sequence 1001: CF:s2 PUT key2 value2
+Sequence 1002: CF:s0 DEL key3
+...
+```
+
+**Recovery implications:**
+- Snapshot captures global sequence number at start
+- WAL replay begins from that global sequence
+- Cross-shard operations in a WriteBatch are atomic (single sequence)
+
+### Partial Snapshot Handling
+
+If server crashes during snapshot:
+- Incomplete snapshot is detected (missing completion marker)
+- Previous complete snapshot is used instead
+- WAL contains all operations since that older snapshot
+
+---
+
+## Persistence Backpressure
+
+When RocksDB can't keep up with write rate, backpressure propagates to clients.
+
+### Write Pipeline
+
+```
+Client → Shard Worker → Persistence Queue → RocksDB
+                              │
+                              └── WriteBatch accumulator
+```
+
+### Backpressure Mechanism
+
+```rust
+struct PersistenceQueue {
+    /// Bounded queue of pending WriteBatches
+    queue: ArrayQueue<WriteBatch>,
+    /// High watermark (80% full)
+    high_watermark: usize,
+}
+
+impl PersistenceQueue {
+    async fn enqueue(&self, batch: WriteBatch) {
+        // If queue is at high watermark, block
+        while self.queue.len() >= self.high_watermark {
+            // Apply backpressure - shard worker blocks here
+            tokio::task::yield_now().await;
+        }
+        self.queue.push(batch);
+    }
+}
+```
+
+### Backpressure Flow
+
+```
+RocksDB slow (disk I/O)
+       │
+       ▼
+PersistenceQueue fills
+       │
+       ▼
+Shard worker blocks on enqueue
+       │
+       ▼
+Shard channel fills (1024 messages)
+       │
+       ▼
+Connection blocks on send
+       │
+       ▼
+Client TCP buffer fills
+       │
+       ▼
+Client experiences latency
+```
+
+### Monitoring
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_persistence_queue_depth` | Current queue size |
+| `frogdb_persistence_write_latency_ms` | RocksDB write latency |
+| `frogdb_persistence_batch_size` | Average WriteBatch size |
+| `frogdb_persistence_backpressure_events` | Times backpressure applied |
+
+### Configuration
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `persistence_queue_size` | 64 | Max pending WriteBatches |
+| `persistence_batch_max_size` | 4MB | Max size per WriteBatch |
+| `persistence_batch_timeout_ms` | 10 | Max time to accumulate batch |
