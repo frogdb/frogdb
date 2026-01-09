@@ -4,7 +4,8 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:valkey.io)",
       "Bash(grep:*)",
-      "WebFetch(domain:www.dragonflydb.io)"
+      "WebFetch(domain:www.dragonflydb.io)",
+      "Bash(ls:*)"
     ]
   }
 }

@@ -449,6 +449,125 @@ watchdog_timeout_s = 60  # 0 = disabled
 - Nodes only accept topology from authenticated orchestrator
 - Fencing: Old primary rejects writes after demotion
 
+### Split-Brain Recovery Procedure
+
+Despite prevention mechanisms, a split-brain window exists during failover. When detected:
+
+**Automatic Actions:**
+1. Old primary receives demotion topology with higher epoch
+2. Compares local sequence vs last replicated sequence
+3. Divergent writes logged to `data/split_brain_discarded.log`
+4. Local data rolled back to last replicated state
+5. Node connects as replica to new primary
+
+**Log File Format:**
+```
+# data/split_brain_discarded.log
+# Header
+timestamp=2024-01-15T10:30:45Z
+old_primary=node-abc
+new_primary=node-def
+epoch_old=41
+epoch_new=42
+seq_diverge_start=12345
+seq_diverge_end=12400
+ops_discarded=55
+
+# Discarded operations (RESP format)
+*3\r\n$3\r\nSET\r\n$4\r\nkey1\r\n$6\r\nvalue1\r\n
+*2\r\n$4\r\nINCR\r\n$7\r\ncounter\r\n
+...
+```
+
+**Manual Recovery Options:**
+
+| Option | When to Use | Procedure |
+|--------|-------------|-----------|
+| **Discard** | Data not critical, conflicts likely | Delete log file |
+| **Review & Replay** | Data critical, conflicts resolvable | Parse log, apply via CLI |
+| **Merge** | Business logic can resolve conflicts | Custom script with conflict resolution |
+
+**Replay Tool (Future):**
+```bash
+# Dry-run to show what would be applied
+frogdb-admin split-brain-replay --dry-run data/split_brain_discarded.log
+
+# Apply with conflict handling
+frogdb-admin split-brain-replay --on-conflict=skip data/split_brain_discarded.log
+```
+
+**Monitoring:**
+```
+frogdb_split_brain_events_total           # Split-brain detections
+frogdb_split_brain_ops_discarded_total    # Operations lost
+frogdb_split_brain_recovery_pending       # 1 if log file exists unprocessed
+```
+
+### Replication Stream Corruption Detection
+
+FrogDB validates replication data integrity using checksums:
+
+**Frame Validation:**
+```
+┌─────────────────────────────────────────────────────┐
+│ Replication Frame                                    │
+├─────────────────────────────────────────────────────┤
+│ magic: u32        │ 0x46524F47 ("FROG")             │
+│ version: u8       │ Protocol version                │
+│ flags: u8         │ 0x02 = has_checksum             │
+│ sequence: u64     │ RocksDB sequence number         │
+│ batch_len: u32    │ Length of payload               │
+│ batch_data: [u8]  │ WriteBatch bytes                │
+│ checksum: u32     │ CRC32 of batch_data             │
+└─────────────────────────────────────────────────────┘
+```
+
+**Corruption Detection Points:**
+
+| Check | Location | Action on Failure |
+|-------|----------|-------------------|
+| Magic number | Frame start | Close connection, reconnect |
+| CRC32 mismatch | Frame end | Log error, request retransmit from seq |
+| Sequence gap | Frame sequence | Log warning, may trigger FULLRESYNC |
+| Invalid WriteBatch | RocksDB parse | Close connection, FULLRESYNC |
+
+**On Corruption Detected:**
+
+```
+Replica                                Primary
+   │                                      │
+   │◀── [Frame seq=100, CRC=bad] ────────│
+   │                                      │
+   │  CRC mismatch detected               │
+   │  Log: "Replication corruption at     │
+   │        seq=100, requesting resync"   │
+   │                                      │
+   │── PSYNC <repl_id> 99 ───────────────▶│  Request from last good seq
+   │                                      │
+   │◀── +CONTINUE ───────────────────────│
+   │◀── [Frame seq=100, CRC=ok] ─────────│  Retransmit
+```
+
+**Configuration:**
+```toml
+[replication]
+# Enable CRC32 validation (recommended, small CPU overhead)
+repl_checksum_enabled = true
+
+# Action on corruption
+repl_corruption_action = "reconnect"  # "reconnect" or "fullresync"
+
+# Max retries before FULLRESYNC
+repl_corruption_max_retries = 3
+```
+
+**Metrics:**
+```
+frogdb_repl_checksum_failures_total     # CRC mismatches detected
+frogdb_repl_corruption_reconnects_total # Reconnections due to corruption
+frogdb_repl_corruption_fullresyncs_total # FULLRESYNCs due to corruption
+```
+
 ---
 
 ## Graceful Degradation

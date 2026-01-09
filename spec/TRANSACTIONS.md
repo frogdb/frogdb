@@ -35,9 +35,16 @@ Client                     Server (Shard)
 
 | Property | Guarantee |
 |----------|-----------|
-| **Atomic** | All commands execute without interleaving |
-| **NOT rollback** | If one command fails, others still execute |
-| **Single-shard** | All keys must hash to same shard |
+| **Execution Atomic** | All commands execute without interleaving from other clients |
+| **NOT Durable Atomic** | Acknowledged transactions may be lost on failover (async replication) |
+| **NOT Rollback** | If one command fails, others still execute |
+| **Single-Slot** | All keys must hash to same slot (use hash tags) |
+
+**Important Distinction:**
+- **Execution Atomicity:** Commands in a transaction are not interleaved with other clients' commands
+- **Durability Atomicity:** Whether the transaction survives failures - depends on replication mode
+
+See [Transaction Durability](#transaction-durability) for failure scenarios.
 
 ---
 
@@ -56,25 +63,25 @@ struct ConnectionState {
 
 ---
 
-## Cross-Shard Transactions
+## Cross-Slot Transactions
 
-FrogDB requires all keys in a transaction to be on the same shard:
+FrogDB requires all keys in a transaction to be in the same hash slot:
 
 ```rust
 fn validate_transaction(cmds: &[ParsedCommand]) -> Result<(), Error> {
-    let shards: HashSet<_> = cmds.iter()
+    let slots: HashSet<_> = cmds.iter()
         .flat_map(|c| c.keys())
-        .map(|k| shard_for_key(k))
+        .map(|k| hash_slot(k))
         .collect();
 
-    if shards.len() > 1 {
-        return Err(Error::CrossShardTransaction);
+    if slots.len() > 1 {
+        return Err(Error::CrossSlot);
     }
     Ok(())
 }
 ```
 
-**Cross-shard detection:** When a command is queued that references a key on a different shard than previously queued keys, FrogDB returns `-CROSSSHARD` error immediately (not at EXEC time). This provides early feedback rather than wasting round trips.
+**Cross-slot detection:** When a command is queued that references a key in a different hash slot than previously queued keys, FrogDB returns `-CROSSSLOT` error immediately (not at EXEC time). This provides early feedback rather than wasting round trips.
 
 **Recommendation:** Use hash tags to colocate transaction keys:
 
@@ -160,6 +167,22 @@ fn exec(conn: &mut Connection) -> Result<Vec<Response>, Error> {
 | Crash during EXEC (sync) | Transaction either fully applied or not |
 | Crash after EXEC returns (sync) | Transaction guaranteed durable |
 
+### Atomicity and Failover
+
+**Important:** Transaction atomicity guarantees apply to single-node operation only.
+In cluster mode with asynchronous replication (default):
+
+- A transaction acknowledged by the primary may be **lost** during failover
+- Data loss bounded by replication lag at time of failure
+- For stronger guarantees, use `min_replicas_to_write = 1` (higher latency)
+
+| Replication Mode | Transaction Durability on Failover |
+|------------------|-----------------------------------|
+| Async (default)  | May lose up to `replication_lag_seconds` of transactions |
+| Sync (`min_replicas_to_write >= 1`) | Acknowledged transactions survive failover |
+
+See [CLUSTER.md - Failover Consistency](CLUSTER.md#failover) for details.
+
 ### Partial Failure
 
 - If any command in transaction fails validation, entire EXEC fails
@@ -233,17 +256,23 @@ async fn handle_connection(conn: TcpStream) {
 
 ---
 
-## VLL Multi-Shard Operations
+## Cross-Slot Behavior
 
-For multi-key commands like MSET/MGET that span shards, FrogDB uses VLL-inspired ordering (not transactions):
+FrogDB rejects multi-key operations that span different hash slots, matching Redis Cluster behavior:
 
-| Operation Type | Cross-Shard | Behavior |
-|----------------|-------------|----------|
-| **MGET, MSET, DEL** (multi-key) | Yes | VLL ordering, fail-all semantics, partial commits possible |
-| **MULTI/EXEC** (transactions) | No | `-CROSSSHARD` error, all keys must be on same shard |
-| **Lua EVAL** (scripts) | No | `-CROSSSLOT` error, all keys must be on same shard |
+| Operation Type | Cross-Slot | Behavior |
+|----------------|------------|----------|
+| **MGET, MSET, DEL** (multi-key) | Rejected | `-CROSSSLOT` error |
+| **MULTI/EXEC** (transactions) | Rejected | `-CROSSSLOT` error |
+| **Lua EVAL** (scripts) | Rejected | `-CROSSSLOT` error |
 
-See [CONCURRENCY.md](CONCURRENCY.md) for VLL implementation details.
+**Using Hash Tags:** Colocate related keys using hash tags:
+```
+MSET {user:1}name Alice {user:1}email alice@example.com  # OK - same slot
+MSET user1 Alice user2 Bob                                # ERROR - different slots
+```
+
+See [CONSISTENCY.md](CONSISTENCY.md#cross-slot-handling) for details on hash tags.
 
 ---
 
@@ -261,7 +290,7 @@ See [CONCURRENCY.md](CONCURRENCY.md) for VLL implementation details.
 
 ## References
 
-- [CONCURRENCY.md](CONCURRENCY.md) - VLL multi-shard atomicity
-- [CONSISTENCY.md](CONSISTENCY.md) - Durability guarantees
+- [CONSISTENCY.md](CONSISTENCY.md) - Consistency and durability guarantees
 - [PERSISTENCE.md](PERSISTENCE.md) - WAL and WriteBatch details
 - [CONNECTION.md](CONNECTION.md) - Connection state machine
+- [CLUSTER.md](CLUSTER.md) - Hash slots and cluster behavior

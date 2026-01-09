@@ -371,6 +371,53 @@ shard_ping_timeout_ms = 100    # Max time to wait for shard response
 persistence_block_timeout_s = 30  # Max persistence queue block time
 ```
 
+### Epoch Staleness
+
+An epoch is considered **stale** when the node's local epoch is lower than the cluster's current epoch. This indicates the node has missed topology updates.
+
+**Staleness Detection:**
+
+| Condition | Staleness | Action |
+|-----------|-----------|--------|
+| `local_epoch == cluster_epoch` | Current | Normal operation |
+| `local_epoch < cluster_epoch` | Stale | Fetch updated topology from orchestrator |
+| `local_epoch > cluster_epoch` | Invalid | Should never happen - indicates corruption or bug |
+
+**How Nodes Detect Staleness:**
+
+1. **Orchestrator push:** Receives topology with higher epoch
+2. **Client redirect:** Receives `-MOVED` from another node with higher epoch in response
+3. **Replica sync:** Primary sends epoch in replication handshake
+4. **Periodic poll:** Node polls orchestrator every `topology_refresh_interval_ms`
+
+**Staleness TTL:**
+
+Topology has no inherent TTL - a node with epoch 42 can operate indefinitely if no topology changes occur. However, nodes are considered unhealthy if:
+
+```toml
+[cluster]
+# Max time without orchestrator contact before unhealthy
+orchestrator_contact_timeout_ms = 60000
+
+# Periodic topology refresh interval
+topology_refresh_interval_ms = 30000
+```
+
+**Epoch vs Topology:**
+- **Epoch:** Monotonic counter, incremented on any topology change
+- **Topology:** Full cluster state (nodes, slots, roles)
+
+A node can have a current epoch but stale topology details if:
+- Epoch matches but node list is outdated (rare race condition)
+- Mitigated by including topology hash in health checks
+
+**Metrics:**
+```
+frogdb_cluster_epoch                     # Current local epoch
+frogdb_cluster_epoch_stale_detections    # Times stale epoch detected
+frogdb_cluster_last_orchestrator_contact # Timestamp of last orchestrator message
+```
+
 ### Orchestrator Security
 
 The orchestrator admin API (`/admin/cluster`, `/admin/acl`) must be secured to prevent unauthorized topology changes.
@@ -519,6 +566,32 @@ sync_retry_delay_ms = 5000
 **Metrics:**
 - `frogdb_sync_aborted_oom_total`: Counter of OOM-aborted syncs
 
+**Checkpoint Cleanup on Abort:**
+
+When replica aborts full sync due to OOM:
+
+1. **Partial checkpoint discarded:** Incomplete RocksDB checkpoint deleted
+2. **Local state unchanged:** Replica retains pre-sync data (if any)
+3. **Availability:** Replica can serve READONLY from stale data during retry
+4. **Backoff:** Wait `sync_retry_delay_ms * 2^attempt` before retry
+
+```rust
+fn on_sync_abort_oom(checkpoint_path: &Path, state: &mut ReplicaState) {
+    // Delete incomplete checkpoint
+    std::fs::remove_dir_all(checkpoint_path).ok();
+
+    // Keep serving stale reads if we have prior data
+    if state.has_data() {
+        state.mode = ReplicaMode::Stale;
+    } else {
+        state.mode = ReplicaMode::Empty;
+    }
+}
+```
+
+**Additional Metrics:**
+- `frogdb_replica_state`: Gauge (0=empty, 1=syncing, 2=stale, 3=connected)
+
 ### Partial Synchronization (PSYNC)
 
 When replica reconnects with valid state:
@@ -533,6 +606,26 @@ Primary                              Replica
    │───── CONTINUE ───────────────────▶│  "Yes, continuing"
    │                                    │
    │───── [WAL entries from seq] ─────▶│  Stream missing entries
+```
+
+### PSYNC Error Responses
+
+| Response | Meaning | Replica Action |
+|----------|---------|----------------|
+| `+FULLRESYNC <id> <seq>` | Full sync required | Load checkpoint, stream WAL |
+| `+CONTINUE` | Partial sync OK | Stream WAL from last seq |
+| `-ERR unknown replication ID` | repl_id doesn't match | Retry PSYNC ? -1 (full sync) |
+| `-ERR sequence too old` | seq outside WAL retention | Retry PSYNC ? -1 (full sync) |
+| `-ERR primary shutting down` | Primary in shutdown | Wait, reconnect to new primary |
+| `-ERR not primary` | Node is not a primary | Query orchestrator for primary |
+| `-ERR too many replicas` | `max_replicas` exceeded | Alert operator, retry later |
+
+**Example Error Handling:**
+```
+Replica: PSYNC abc123... 50000
+Primary: -ERR sequence too old, last retained: 75000
+Replica: PSYNC ? -1
+Primary: +FULLRESYNC abc123... 80000
 ```
 
 ### WAL Streaming
@@ -564,6 +657,67 @@ fn stream_to_replica(replica: &mut Connection, from_seq: u64) {
 }
 ```
 
+### Replication Connection Management
+
+**Heartbeat Protocol:**
+```
+Primary                              Replica
+   │                                    │
+   │───── PING ────────────────────────▶│  Every `repl_ping_interval_ms`
+   │◀──── PONG <last_seq> ─────────────│  Replica reports progress
+   │                                    │
+```
+
+**Connection Timeouts:**
+
+| Timeout | Default | Description |
+|---------|---------|-------------|
+| `repl_timeout_ms` | 60000 | No data received → close connection |
+| `repl_ping_interval_ms` | 10000 | Heartbeat frequency |
+| `repl_reconnect_base_ms` | 1000 | Initial reconnect delay |
+| `repl_reconnect_max_ms` | 30000 | Maximum reconnect delay |
+
+**Reconnection Backoff:**
+```
+delay = min(repl_reconnect_base_ms * 2^attempt, repl_reconnect_max_ms)
+```
+
+**Stream Interruption Recovery:**
+
+| Scenario | Primary Behavior | Replica Behavior |
+|----------|------------------|------------------|
+| Network timeout | Close conn, free backlog slot | Reconnect with PSYNC |
+| Replica sends invalid seq | Log error, trigger FULLRESYNC | Accept FULLRESYNC |
+| WAL read error | Log, close conn, mark unhealthy | Reconnect, may need FULLRESYNC |
+| Replica OOM during stream | Receive SYNC_ABORTED | Pause, retry after backoff |
+
+### Replication Data Format
+
+WAL entries are streamed using RocksDB's native WriteBatch format with metadata header:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Replication Frame                                             │
+├──────────────────────────────────────────────────────────────┤
+│ magic: u32        │ 0x46524F47 ("FROG")                      │
+│ version: u8       │ Protocol version (1)                      │
+│ flags: u8         │ 0x01 = compressed, 0x02 = has_checksum   │
+│ sequence: u64     │ RocksDB sequence number                   │
+│ timestamp_ms: u64 │ Wall clock time of write                  │
+│ batch_len: u32    │ Length of WriteBatch data                 │
+│ batch_data: [u8]  │ Raw RocksDB WriteBatch bytes             │
+│ checksum: u32     │ CRC32 (if flags & 0x02)                  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Why include timestamp?**
+- Enables lag calculation in seconds (not just bytes)
+- Supports future PITR features
+- Debugging and observability
+
+**Compression:**
+When `flags & 0x01`, batch_data is LZ4-compressed. Compression enabled when batch_len > 1KB.
+
 ### Replication Backlog
 
 In-memory buffer of recent WAL entries for fast reconnection:
@@ -572,6 +726,223 @@ In-memory buffer of recent WAL entries for fast reconnection:
 |---------|---------|-------------|
 | `repl_backlog_size` | 1MB | Size of backlog buffer |
 | `repl_backlog_ttl` | 3600s | How long to keep backlog after last replica disconnects |
+
+### Backlog vs Disk WAL Retention
+
+FrogDB maintains TWO mechanisms for partial sync support:
+
+| Mechanism | Storage | Speed | Capacity |
+|-----------|---------|-------|----------|
+| **Replication backlog** | Memory | Fast | Small (1MB default) |
+| **WAL archive** | Disk | Slower | Large (100MB default) |
+
+**PSYNC Resolution Order:**
+```
+1. Check repl_backlog (memory)
+   └── If seq found: Stream from backlog (fastest)
+2. Check WAL archive (disk)
+   └── If seq found: Stream from disk WAL (slower, larger window)
+3. Neither has seq
+   └── Trigger FULLRESYNC (slowest, full dataset)
+```
+
+**Configuration Guidance:**
+
+| Workload | Backlog Size | WAL Retention | Rationale |
+|----------|--------------|---------------|-----------|
+| Low write rate | 1MB | 100MB | Backlog sufficient for brief disconnects |
+| High write rate | 16MB | 500MB | Larger buffers to absorb write bursts |
+| Unreliable network | 64MB | 1GB | Maximize partial sync window |
+
+### Backlog Overflow Behavior
+
+The replication backlog is a **ring buffer** (matching Redis behavior) - when full, oldest entries are overwritten:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Replication Backlog (ring buffer, 1MB default)     │
+├─────────────────────────────────────────────────────┤
+│  [seq:100] [seq:101] [seq:102] ... [seq:999]        │
+│     ↑                                    ↑          │
+│   oldest                              newest        │
+│   (overwritten                      (just added)    │
+│   on overflow)                                      │
+└─────────────────────────────────────────────────────┘
+```
+
+**On Overflow:**
+1. **Oldest entries overwritten:** Ring buffer wraps around
+2. **Writes never rejected:** Primary never blocks on backlog full
+3. **Replica impact:** If replica needs discarded sequence, falls back to disk WAL or FULLRESYNC
+
+**PSYNC After Overflow:**
+
+| Replica's Last Sequence | Resolution |
+|-------------------------|------------|
+| In backlog (recent) | Stream from memory (fastest) |
+| Not in backlog, in disk WAL | Stream from disk |
+| Not in disk WAL either | FULLRESYNC required |
+
+**Monitoring Backlog Health:**
+
+```
+frogdb_repl_backlog_size_bytes          # Current backlog usage
+frogdb_repl_backlog_oldest_seq          # Earliest sequence in backlog
+frogdb_repl_backlog_evictions_total     # Entries overwritten due to wrap
+```
+
+**Sizing Formula:**
+```
+backlog_size >= write_rate_bytes_per_second * expected_disconnect_seconds
+```
+
+> **Future Enhancement:** A `backlog_full_policy = "reject_writes"` mode could be added to reject writes when backlog is full (trading availability for guaranteed partial sync). Not currently planned.
+
+---
+
+## Synchronous Replication
+
+When `min_replicas_to_write >= 1`, writes wait for replica acknowledgment before responding to client.
+
+### Protocol Flow
+
+```
+Primary                              Replica
+   │                                    │
+   │◀──── Client: SET key value ───────│
+   │                                    │
+   │  1. Apply to local store           │
+   │  2. Append to WAL                  │
+   │                                    │
+   │───── REPLICATE <seq> <data> ──────▶│
+   │                                    │
+   │                                    │ 3. Apply to replica store
+   │                                    │ 4. Append to replica WAL
+   │                                    │
+   │◀──── ACK <seq> ───────────────────│
+   │                                    │
+   │  5. Ack count >= min_replicas      │
+   │                                    │
+   │───── +OK ─────────────────────────▶│ (to client)
+```
+
+### Timeout Behavior
+
+| Scenario | Behavior |
+|----------|----------|
+| Replica ACK within `sync_timeout_ms` | Write succeeds |
+| Timeout before enough ACKs | Return `-NOREPL Not enough replicas` |
+| Replica disconnects during wait | Attempt reconnect, timeout if exceeds |
+
+### Configuration
+
+```toml
+[cluster]
+min_replicas_to_write = 1        # Minimum ACKs needed (0 = async)
+sync_timeout_ms = 1000           # Max wait for replica ACKs
+sync_write_quorum = "any"        # "any" = any N replicas, "all" = specific replicas
+```
+
+### Client Handling
+
+- `-NOREPL` error: Retry on different node or accept potential data loss
+- Writes may still succeed on primary even if `-NOREPL` returned (partial durability)
+
+### Edge Cases
+
+| Edge Case | Behavior |
+|-----------|----------|
+| Primary has no replicas | Writes fail immediately with `-NOREPL` |
+| Replica ACK lost (network) | Primary retries, may timeout |
+| Replica crashes after ACK sent | Write durable on primary, may be lost on replica |
+
+### ACK Failure Handling
+
+Detailed behavior when synchronous replication ACKs fail:
+
+**ACK Lost in Network:**
+
+```
+Primary                              Replica
+   │                                    │
+   │───── REPLICATE seq=100 ───────────▶│
+   │                                    │ Applied to replica
+   │◀──── ACK seq=100 ─────────────────│ (ACK sent)
+   │         ✗ (ACK lost)               │
+   │                                    │
+   │  [ACK timeout, retry]              │
+   │───── REPLICATE seq=100 (retry) ───▶│
+   │                                    │ Already applied (idempotent)
+   │◀──── ACK seq=100 ─────────────────│
+   │                                    │
+   │  [ACK received, respond to client] │
+```
+
+**Retry Configuration:**
+```toml
+[replication]
+sync_ack_retry_count = 3         # Retries before giving up
+sync_ack_retry_delay_ms = 100    # Delay between retries
+```
+
+**Timeout With Partial ACKs:**
+
+When `min_replicas_to_write = 2` and only 1 replica ACKs:
+
+| Condition | Behavior |
+|-----------|----------|
+| 1 ACK within timeout | Return `-NOREPL` (needed 2) |
+| 0 ACKs within timeout | Return `-NOREPL` |
+| Write on primary | **Already applied** - cannot roll back |
+
+**Important:** When `-NOREPL` is returned, the write **is already on the primary**. The error indicates durability concern, not write failure.
+
+**Partial Durability State:**
+```
+Client receives:     -NOREPL Not enough replicas
+Primary state:       Write applied (seq=100 in WAL)
+Replica 1 state:     Write applied (ACK received)
+Replica 2 state:     Unknown (ACK not received)
+```
+
+**Client Recovery Options:**
+
+| Strategy | Behavior | Trade-off |
+|----------|----------|-----------|
+| **Retry** | Re-send write (should be idempotent) | Simple, may duplicate non-idempotent ops |
+| **Check** | Read key to verify write | Extra round-trip |
+| **Accept** | Log warning, continue | Fast, accepts potential loss |
+
+**Replica Recovery After ACK Failure:**
+
+If replica crashes after ACK sent but before fsync:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Timeline                                                         │
+├─────────────────────────────────────────────────────────────────┤
+│ T=0:  Primary sends REPLICATE seq=100                           │
+│ T=1:  Replica applies to memory                                  │
+│ T=2:  Replica sends ACK seq=100                                  │
+│ T=3:  Primary responds +OK to client                            │
+│ T=4:  Replica crashes (before fsync)                            │
+│ T=5:  Replica restarts, WAL at seq=99                           │
+│ T=6:  Replica PSYNCs from seq=99                                │
+│ T=7:  Replica receives seq=100 again (re-applied)              │
+└─────────────────────────────────────────────────────────────────┘
+
+Result: Write is durable on primary, eventually consistent on replica
+Client was told +OK, which is correct (primary has it)
+```
+
+**Metrics:**
+```
+frogdb_sync_ack_success_total           # Successful sync ACKs
+frogdb_sync_ack_timeout_total           # ACK timeouts
+frogdb_sync_ack_retry_total             # ACK retries
+frogdb_sync_norepl_errors_total         # -NOREPL errors returned
+frogdb_sync_partial_ack_total           # Some but not enough ACKs
+```
 
 ---
 
@@ -721,7 +1092,52 @@ Client connection state may be affected during slot migration:
 | **SSUBSCRIBE (sharded)** | Client receives `-MOVED` and must re-subscribe on new node |
 | **Blocking commands** | If key migrates during BLPOP/BRPOP wait, command times out (future feature) |
 
+### Blocking Commands and Failover (Design Notes)
+
+When blocking commands (BLPOP, BRPOP, BLMOVE) are implemented:
+
+| Failover Event | Blocking Client Behavior |
+|----------------|-------------------------|
+| Primary fails while client blocked | Client times out (no response from dead primary) |
+| Slot migrates while blocked | Return `-MOVED`, client must retry on new node |
+| Replica promoted while blocked | Blocked state lost, client times out |
+
+**Future: Blocking State Transfer**
+
+For improved UX, blocking state could be transferred during failover:
+1. Primary tracks blocked clients with their timeout remaining
+2. On graceful failover (CLUSTER FAILOVER): transfer blocked client list to new primary
+3. New primary accepts transferred blocked state
+4. Blocked clients receive response when key is pushed (seamless)
+
+**Note:** This is a future enhancement. Initial implementation will rely on client timeouts and retries.
+
 **Client responsibility:** Handle `-MOVED` and `-ASK` redirects, retry failed transactions.
+
+### Replica Behavior During Slot Migration
+
+Replicas follow their primary through slot migrations:
+
+| Migration Phase | Replica Behavior |
+|-----------------|------------------|
+| **MIGRATING on primary** | Replica continues serving READONLY for all keys |
+| **Key migrated** | Replica receives DELETE via replication stream |
+| **Slot ownership transferred** | Replica removes slot from local mapping |
+
+**READONLY Consistency During Migration:**
+- Replicas may briefly serve stale data for migrated keys
+- After DELETE replicates, key returns nil
+- No `-MOVED` from replicas - they serve from local data
+
+**Slot Ownership Tracking:**
+```rust
+// Replica receives slot ownership changes via replication
+enum ReplicationEvent {
+    KeyUpdate { key: Bytes, value: FrogValue },
+    KeyDelete { key: Bytes },
+    SlotOwnershipChange { slot: u16, new_owner: NodeId },  // Replica updates local mapping
+}
+```
 
 ### Atomic Migration (Future)
 
@@ -826,6 +1242,99 @@ When a primary is demoted (or recovers after partition):
 - Brief window where old primary may accept writes before receiving new topology
 - **Recommendation:** Use `min_replicas_to_write` to require replica acknowledgment
 
+### Fencing Failure Scenarios
+
+**Permanent Partition:**
+If old primary cannot reach orchestrator AND clients can still reach it:
+
+| Duration | Old Primary Behavior | Risk |
+|----------|---------------------|------|
+| < `self_fence_timeout_ms` | Continues serving | Data divergence |
+| >= `self_fence_timeout_ms` | Self-demotes to read-only | Limited divergence |
+
+**Self-Fencing Configuration:**
+```toml
+[cluster]
+# If orchestrator unreachable for this long, self-demote
+self_fence_timeout_ms = 30000
+
+# Behavior when self-fenced
+self_fence_mode = "readonly"  # "readonly" or "reject_all"
+```
+
+**Self-Fencing Flow:**
+1. Primary loses orchestrator connection
+2. Timer starts: `self_fence_timeout_ms`
+3. If timeout expires before reconnection:
+   - Log: "Self-fencing: orchestrator unreachable"
+   - Transition to `self_fence_mode`
+   - Continue serving reads (if readonly) or reject all (if reject_all)
+4. On orchestrator reconnection: receive topology, act accordingly
+
+**Self-Fencing Edge Cases:**
+
+| Scenario | Behavior |
+|----------|----------|
+| Orchestrator returns during self-fence | Receive topology, transition to appropriate role |
+| Orchestrator returns, no failover occurred | Resume as primary (epoch unchanged) |
+| Orchestrator returns, failover occurred | Become replica of new primary |
+| Self-fenced primary still connected to replicas | **Stops streaming** - replicas see disconnect, wait |
+| Replica sees primary self-fence | Replica remains connected, waits for orchestrator decision |
+
+**Replication During Self-Fence:**
+
+When a primary self-fences:
+1. **Stops accepting writes:** Returns `-READONLY` or closes connections
+2. **Stops streaming to replicas:** No new WAL entries sent
+3. **Keeps replica connections open:** Replicas remain connected but idle
+4. **Replicas detect stall:** No data for `repl_timeout_ms` → log warning, wait
+
+```
+Primary (self-fenced)              Replica
+   │                                  │
+   │  [self-fence triggered]          │
+   │  Stop accepting writes           │
+   │  Stop WAL streaming              │
+   │                                  │
+   │        (silence)                 │
+   │                                  │  Detect no data for repl_timeout_ms
+   │                                  │  Log: "Primary appears stalled"
+   │                                  │  Continue waiting (don't disconnect)
+   │                                  │
+   │  [orchestrator returns]          │
+   │  Receive topology                │
+   │                                  │
+```
+
+**Why replicas don't disconnect:** Self-fence is a temporary safety state. If replica disconnected, it might trigger unnecessary FULLRESYNC when primary resumes.
+
+**Transition Back to Normal:**
+
+| Topology Received | Primary's New Role | Actions |
+|-------------------|-------------------|---------|
+| Same epoch, still primary | Primary | Clear self-fence, resume writes and replication |
+| Higher epoch, still primary | Primary | Update epoch, resume (rare - orchestrator rebooted) |
+| Higher epoch, now replica | Replica | Connect to new primary, PSYNC |
+| Higher epoch, no longer in cluster | Shutdown | Node removed from cluster |
+
+**Metrics:**
+```
+frogdb_self_fence_active                  # 1 if currently self-fenced
+frogdb_self_fence_events_total            # Times self-fence triggered
+frogdb_self_fence_duration_seconds        # Time spent in self-fence state
+frogdb_self_fence_resumed_as_primary      # Resumed as primary after self-fence
+frogdb_self_fence_demoted_to_replica      # Became replica after self-fence
+```
+
+**Client-Side Epoch Validation (Defense in Depth):**
+Clients can validate responses include expected epoch:
+```
+CONFIG SET cluster_epoch_check ON
+SET key value
++OK epoch=42
+```
+Client rejects response if epoch < last_known_epoch.
+
 **Configuration:**
 ```toml
 [cluster]
@@ -869,6 +1378,173 @@ During the split-brain window:
 | Synchronous replication | `min_replicas_to_write = 1` | No data loss, higher latency |
 | Client-side validation | Check epoch on response | Application complexity |
 
+### Split-Brain Data Recovery
+
+When an old primary receives a demotion topology after accepting writes during split-brain:
+
+1. **Compare sequence numbers:** old_primary_seq vs new_primary_seq
+2. **If diverged:** Log all operations with seq > last_replicated_seq to `data/split_brain_discarded.log`
+3. **Discard divergent data:** Roll back to last_replicated_seq
+4. **Connect as replica:** Begin replicating from new primary
+
+**Split-Brain Log Format:**
+```
+timestamp=2024-01-15T10:30:45Z old_primary=node-abc seq_start=12345 seq_end=12400 ops_lost=55
+[MSET key1 value1 key2 value2]
+[INCR counter]
+...
+```
+
+**Manual Recovery:** Operators can replay `split_brain_discarded.log` if business logic permits.
+
+**Metrics:**
+- `frogdb_split_brain_events_total`: Counter of split-brain detections
+- `frogdb_split_brain_ops_discarded_total`: Counter of discarded operations
+
+### Partition Healing Sequence
+
+When a network partition heals, the cluster must reconcile state. The sequence depends on what happened during the partition:
+
+**Scenario A: No Failover Occurred (Orchestrator Didn't Promote)**
+
+```
+T=0:     Partition occurs
+T=?:     Orchestrator couldn't reach primary, but no failover (below threshold)
+T=heal:  Partition heals
+
+Sequence:
+1. Orchestrator resumes health checks → primary healthy
+2. No topology change needed
+3. Replicas reconnect to primary via PSYNC
+4. Normal operation resumes
+```
+
+**Scenario B: Failover Occurred, Old Primary Isolated**
+
+```
+T=0:     Partition occurs (old primary isolated)
+T=21s:   Failover - replica promoted to new primary
+T=heal:  Partition heals, old primary can reach orchestrator
+
+Sequence:
+1. Old primary receives topology update (higher epoch)
+2. Old primary detects divergent writes (if any)
+3. Divergent writes logged to split_brain_discarded.log
+4. Old primary rolls back to last_replicated_seq
+5. Old primary connects as replica to new primary
+6. PSYNC or FULLRESYNC based on WAL retention
+7. Old primary becomes healthy replica
+```
+
+**Scenario C: Orchestrator Was Partitioned From All Nodes**
+
+```
+T=0:     Orchestrator loses connectivity to all nodes
+T=?:     Nodes continue serving (existing topology)
+T=heal:  Orchestrator reconnects
+
+Sequence:
+1. Orchestrator pushes current topology to all nodes
+2. Nodes compare epochs - should match (no changes during partition)
+3. If node self-fenced during partition, clears self-fence
+4. Normal operation resumes
+```
+
+**Client Topology Invalidation:**
+
+Clients cache cluster topology. After partition healing:
+
+| Client Cache State | Behavior |
+|--------------------|----------|
+| Matches new topology | Normal operation |
+| Points to old primary | Receives `-MOVED`, updates cache |
+| Missing new nodes | Discovers on `-MOVED` or periodic refresh |
+
+**Recommended Client Behavior:**
+```
+on_connection_restored():
+    send CLUSTER SLOTS  # Refresh topology
+    clear_local_slot_cache()
+    rebuild_slot_cache_from_response()
+```
+
+**Metrics:**
+```
+frogdb_partition_heal_events_total        # Partition healing detected
+frogdb_partition_heal_no_failover         # Healed without failover
+frogdb_partition_heal_with_failover       # Healed after failover occurred
+frogdb_partition_heal_duration_seconds    # Time partition lasted
+```
+
+### Cascade Failure Handling
+
+Complex failure scenarios where multiple components fail simultaneously or in sequence:
+
+**Scenario 1: Multiple Replicas Fail Simultaneously**
+
+| Remaining Replicas | Behavior |
+|--------------------|----------|
+| >= `min_replicas_to_write` | Writes continue (sync mode meets quorum) |
+| < `min_replicas_to_write` | Writes fail with `-NOREPL` until replicas recover |
+| 0 replicas (async mode) | Primary continues serving (data loss risk on primary failure) |
+
+**Scenario 2: Primary Fails During Full Resync**
+
+When primary fails while a replica is in FULLRESYNC state:
+
+1. **Replica aborts FULLRESYNC:** Partial checkpoint discarded
+2. **Failover proceeds:** Another replica (if available) promoted
+3. **Aborted replica:** Must FULLRESYNC from new primary after failover
+4. **If no other replicas:** Cluster unavailable until primary recovers or manual intervention
+
+```
+Primary                    Replica A (syncing)         Replica B (caught up)
+   │                            │                           │
+   │── FULLRESYNC checkpoint ──▶│                           │
+   │         (in progress)      │                           │
+   │ ✕ PRIMARY FAILS            │                           │
+   │                            │                           │
+   │                            │ Abort, discard partial    │
+   │                            │ checkpoint                │
+   │                            │                           │
+Orchestrator promotes Replica B (has data)
+   │                            │                           │
+   │                            │◀── FULLRESYNC from B ─────│
+```
+
+**Scenario 3: Orchestrator Unreachable During Failover**
+
+If orchestrator becomes unreachable mid-failover:
+
+| Failover Stage | State | Recovery |
+|----------------|-------|----------|
+| Before replica selected | No promotion | Wait for orchestrator recovery |
+| After ROLE PRIMARY sent | New primary active, old topology persists | Orchestrator reconnects, reconciles |
+| After topology pushed | Normal operation | None needed |
+
+**Key Risk:** If orchestrator fails between promoting replica and pushing topology, some nodes may still route to old primary. Recovery requires orchestrator to come back and push updated topology.
+
+**Scenario 4: Old Primary Recovers But Can't Reach New Primary**
+
+When old primary recovers after partition but can't reach new primary:
+
+1. **Receives demotion topology:** Knows it's no longer primary
+2. **Attempts to connect to new primary:** For PSYNC
+3. **Connection fails:** Remains in `REPLICA_CONNECTING` state
+4. **Retries with backoff:** `repl_reconnect_base_ms * 2^attempt`
+5. **After max retries:** Alerts operator, remains disconnected
+
+```toml
+[replication]
+repl_reconnect_max_attempts = 10  # Max reconnection attempts before alerting
+repl_reconnect_alert_threshold = 5  # Alert after N failures (continues retrying)
+```
+
+**Metrics for Cascade Failures:**
+- `frogdb_failover_cascade_events_total`: Failures during active failover
+- `frogdb_replica_sync_aborted_total{reason="primary_failed"}`: Syncs interrupted by primary failure
+- `frogdb_orchestrator_unreachable_during_failover_total`: Orchestrator failures mid-failover
+
 ### In-Flight Commands During Failover
 
 When a primary fails, commands in various stages are affected:
@@ -900,6 +1576,39 @@ Client                    Primary                    (failover)
 **Monitoring:**
 - `frogdb_failover_commands_lost` - Estimated commands in flight during failover
 - `frogdb_client_retry_total` - Client-reported retries (if client library supports)
+
+### Client State and Failover
+
+When a client's connection to primary is severed during failover:
+
+| State | Outcome | Client Recovery |
+|-------|---------|-----------------|
+| **MULTI (queued commands)** | Lost - never executed | Re-send MULTI and commands |
+| **WATCH** | Lost - keys unwatched | Re-WATCH before transaction |
+| **SUBSCRIBE** | Lost - unsubscribed | Re-SUBSCRIBE on new connection |
+| **SSUBSCRIBE** | Lost + may need redirect | Re-SSUBSCRIBE, handle -MOVED |
+| **Blocking (BLPOP)** | Lost - timeout on client | Re-issue blocking command |
+| **CLIENT REPLY OFF** | Reset to ON | Re-configure if needed |
+
+**Client Recommendations:**
+
+1. **Transaction recovery:** Always wrap MULTI/EXEC in retry loop
+2. **Watch recovery:** Re-WATCH and re-read values after reconnect
+3. **Pub/Sub recovery:** Implement resubscription logic in client
+4. **Idempotency:** Design commands to be safely retriable
+
+**Example Transaction Retry Pattern:**
+```python
+def execute_with_retry(client, transaction_fn, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            return transaction_fn(client)
+        except (ConnectionError, MovedError) as e:
+            client.refresh_cluster_topology()
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(0.1 * (2 ** attempt))  # Exponential backoff
+```
 
 ---
 
@@ -1243,10 +1952,32 @@ With `lag_seconds = 5`, up to 5 seconds of writes may be lost.
 | Feature | Description |
 |---------|-------------|
 | **Gossip Protocol Option** | Self-managing cluster without external orchestrator |
-| **WAIT Command** | Synchronous replication with consistency guarantees |
 | **Cross-Datacenter** | Multi-region replication with latency-aware routing |
 | **Auto-Rebalancing** | Automatic slot redistribution on scale events |
 | **Read Replicas** | Non-failover replicas for read scaling |
+
+### WAIT Command (Planned)
+
+```
+WAIT numreplicas timeout
+```
+
+Block until write propagated to N replicas or timeout.
+
+| Behavior | Description |
+|----------|-------------|
+| Returns | Number of replicas that acknowledged |
+| Timeout 0 | Block forever |
+| numreplicas = 0 | Return immediately with current ack count |
+
+**Example:**
+```
+SET mykey myvalue
+WAIT 1 5000
+:1
+```
+
+**Note:** WAIT provides per-command sync semantics, complementing `min_replicas_to_write` which affects all writes. This enables applications to selectively wait for replication on critical writes while keeping general writes asynchronous for performance.
 
 ---
 

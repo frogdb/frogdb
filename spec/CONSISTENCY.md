@@ -7,12 +7,25 @@ This document defines FrogDB's consistency guarantees for single-node operation,
 These guarantees apply to all deployments:
 
 ### Read-Your-Writes
-A client always sees its own writes on the **same connection**. After a successful write,
-subsequent reads from the same connection return the written value.
 
-**Scope:** This guarantee is per-connection, not per-client. In cluster mode, if a client
-reconnects to a different node or the connection is reset, previously written values may
-not be immediately visible (due to replication lag or slot routing changes).
+A client sees its own writes on the **same connection to the same node**, subject to failover limitations.
+After a successful write, subsequent reads from the same connection return the written value.
+
+**Important:** This guarantee does NOT survive failover in async replication mode (the default).
+
+| Scenario | Read-Your-Writes |
+|----------|------------------|
+| Same connection, no failover | **Guaranteed** |
+| Reconnect to same node | **Guaranteed** (data persisted) |
+| Failover to replica (async) | **NOT guaranteed** - may lose unreplicated writes |
+| Failover to replica (sync) | **Guaranteed** if write was acknowledged |
+
+**Scope:** This guarantee is per-connection AND per-node:
+- Connection reset: guarantee resets (fresh connection state)
+- Failover occurs: treat new primary as fresh connection
+- Writes not yet replicated: may be invisible on new primary
+
+**Mitigation:** For critical writes that must survive failover, use `min_replicas_to_write = 1`.
 
 ### Monotonic Reads
 Once a client reads a value, it will never see an older value for that key on the same connection.
@@ -23,15 +36,28 @@ All operations on a single key are totally ordered. Concurrent writes from diffe
 ### Per-Shard Linearizability
 Within a single internal shard, operations are linearizable.
 
-### Cross-Shard Atomicity (VLL)
-Multi-shard operations (MGET, MSET, DEL with multiple keys) use VLL-style transaction ordering:
-- Operations are serialized via global transaction IDs
-- Execution order is deterministic across all shards
-- Client receives all-or-nothing response (fail-all semantics)
+### Cross-Slot Handling
 
-**Important:** This provides serializable ordering, NOT transactional rollback. If a multi-shard
-write partially succeeds before failure/timeout, committed portions persist. Use hash tags to
-guarantee true atomicity for related keys.
+Multi-key commands (MGET, MSET, DEL) that span multiple hash slots are rejected with a `CROSSSLOT` error:
+
+```
+> MSET key1 val1 key2 val2  # Different hash slots
+-CROSSSLOT Keys in request don't hash to the same slot
+```
+
+**Rationale:** This matches Redis Cluster behavior and provides clear semantics:
+- No partial commits - operation fails before execution
+- Simpler implementation - no cross-shard coordination
+- Predictable client experience - clients already handle this
+
+**Using Hash Tags:** Use hash tags `{tag}` to colocate keys on the same slot:
+
+```
+> MSET {user:123}name Alice {user:123}email alice@example.com
++OK  # Both keys hash to same slot based on "user:123"
+```
+
+Only the substring between `{` and `}` is hashed, allowing related keys to be colocated.
 
 ---
 
@@ -81,64 +107,86 @@ durability_mode = { periodic = { interval_ms = 100, write_count = 1000 } }
 - Typical lag: milliseconds (depends on network and write rate)
 
 ### Eventual Consistency
-Replicas converge with primary within bounded lag:
-- All acknowledged writes eventually appear on all replicas
+
+**Normal Operation:** Replicas converge with primary within bounded lag:
+- Acknowledged writes eventually appear on all replicas
+- Lag is typically milliseconds (monitor `frogdb_replication_lag_seconds`)
 - No guarantee of order across different keys on different nodes
-- Monitor `frogdb_replication_lag_seconds` for lag
+
+**Exception - Split-Brain Data Loss:** During failover, writes may be **permanently lost**, not just delayed:
+
+| Scenario | Data Fate |
+|----------|-----------|
+| Write replicated before failover | **Preserved** on new primary |
+| Write acknowledged but not replicated | **Lost** - bounded by replication lag |
+| Write to old primary during split-brain | **Discarded** - logged for manual recovery |
+
+This is NOT eventual consistency in the traditional sense - divergent writes do not converge.
+
+### Split-Brain Window
+
+During failover, there is a window (up to `fencing_timeout_ms`, default 10s) where both old and new
+primary may accept writes, creating **divergent histories**.
+
+**Timeline:**
+```
+T=0:     Primary loses orchestrator connection
+T=15s:   Orchestrator detects failure (node_timeout_ms)
+T=20s:   Replica promoted (new primary)
+T=30s:   Old primary receives demotion (fencing_timeout_ms)
+
+Split-brain window: T=20s to T=30s (up to 10 seconds)
+```
+
+**Split-Brain Data Fate:**
+- Old primary's divergent writes are **discarded** when it receives demotion topology
+- Discarded writes logged to `data/split_brain_discarded.log` for manual recovery
+- Clients that wrote to old primary during split-brain will see their writes disappear
+
+**Reducing Split-Brain Risk:**
+1. Lower `fencing_timeout_ms` (faster demotion, more false positives)
+2. Use `min_replicas_to_write = 1` (old primary blocks without replica ack)
+3. Client-side epoch validation (reject responses with stale epoch)
+
+See [CLUSTER.md](CLUSTER.md#split-brain-prevention) for configuration details.
 
 ### Guarantees NOT Provided
 - **Linearizability**: Cross-node operations are not linearizable
 - **Snapshot isolation**: No point-in-time consistency across keys
 - **Causal consistency**: Causally related operations may be seen out of order by different clients
 
-### Cross-Shard Operations
+### Cross-Slot Operations
 
-| Operation | Consistency |
-|-----------|-------------|
+| Operation | Behavior |
+|-----------|----------|
 | Single key | Linearizable within shard |
-| MGET/MSET (same hash tag) | Atomic, linearizable (same internal shard) |
-| MGET/MSET (different shards) | Serializable via VLL, fail-all response |
+| MGET/MSET (same hash slot) | Atomic, linearizable |
+| MGET/MSET (different hash slots) | `-CROSSSLOT` error - rejected |
 | KEYS, SCAN | Eventually consistent snapshot |
 
-**VLL Ordering:** Cross-shard operations execute in global transaction ID order on each shard.
-See [CONCURRENCY.md](CONCURRENCY.md#transaction-ordering-vll) for implementation details.
+**Hash Slot Calculation:** Keys are assigned to one of 16384 hash slots using CRC16.
+See [CLUSTER.md](CLUSTER.md#hash-slots) for slot assignment details.
 
-### Cross-Shard Read Semantics (MGET)
+### Same-Slot Multi-Key Operations
 
-When MGET reads keys from multiple shards:
+When MGET/MSET operates on keys within the same hash slot:
 
 ```
-MGET {a}key1 {b}key2 {c}key3  # Keys on shards A, B, C
+MGET {user:1}name {user:1}email {user:1}age  # All hash to same slot
 ```
 
-**What is guaranteed:**
-- Each key's value is read atomically from its shard
-- All shards are queried at the "same" logical time (same txid)
-- Response includes all values or fails completely (fail-all)
+**Guarantees:**
+- All keys read/written atomically within the shard
+- Linearizable with other operations on those keys
+- Point-in-time consistent snapshot
 
-**What is NOT guaranteed:**
-- Point-in-time snapshot across shards (no barrier)
-- Values may reflect different wall-clock times
-
-**Example - Non-Atomic Read:**
+**Recommendation:** Always use hash tags to colocate related keys:
 ```
-Time 0: key1=1, key2=2
-Time 1: Client A starts MGET key1 key2
-Time 2: Shard A returns key1=1
-Time 3: Client B: SET key2 3
-Time 4: Shard B returns key2=3  (new value!)
-Result: MGET returns [1, 3] - not a point-in-time snapshot
+# User data - all keys share {user:123} tag
+SET {user:123}name Alice
+SET {user:123}email alice@example.com
+MGET {user:123}name {user:123}email  # Atomic read
 ```
-
-**Why no read barrier?**
-- VLL orders writes but doesn't block reads
-- Reads execute immediately on each shard
-- Adding read barriers would significantly increase latency
-
-**Recommendation:** For consistent multi-key reads:
-1. Use hash tags to colocate keys on same shard
-2. Accept eventual consistency for cross-shard reads
-3. Use MULTI/EXEC (same-shard only) for true isolation
 
 ---
 
