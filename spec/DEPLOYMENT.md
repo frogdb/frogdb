@@ -586,7 +586,7 @@ redis-cli -p 6379 ping  # Verify
 
 ## References
 
-- [OPERATIONS.md](OPERATIONS.md) - Configuration reference
+- [CONFIGURATION.md](CONFIGURATION.md) - Configuration reference
 - [OBSERVABILITY.md](OBSERVABILITY.md) - Metrics and monitoring
 - [FAILURE_MODES.md](FAILURE_MODES.md) - Error handling
 - [LIFECYCLE.md](LIFECYCLE.md) - Startup and shutdown

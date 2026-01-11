@@ -531,4 +531,4 @@ id=123 addr=192.168.1.10:54321 fd=5 name=myapp age=100 idle=0 flags=N db=0 ...
 - [LIFECYCLE.md](LIFECYCLE.md) - Server startup and shutdown
 - [FAILURE_MODES.md](FAILURE_MODES.md) - Connection and network failures
 - [OBSERVABILITY.md](OBSERVABILITY.md) - Full metrics reference
-- [OPERATIONS.md](OPERATIONS.md) - Metrics endpoint configuration
+- [CONFIGURATION.md](CONFIGURATION.md) - Metrics endpoint configuration

@@ -946,5 +946,5 @@ WARN  "Slow command"             → Performance issue
 - [PERSISTENCE.md](PERSISTENCE.md) - Durability configuration
 - [LIFECYCLE.md](LIFECYCLE.md) - Startup/shutdown procedures
 - [OBSERVABILITY.md](OBSERVABILITY.md) - Metrics and logging
-- [OPERATIONS.md](OPERATIONS.md) - Operational configuration
+- [CONFIGURATION.md](CONFIGURATION.md) - Configuration system
 - [CLUSTER.md](CLUSTER.md) - Cluster architecture (future)

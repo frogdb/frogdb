@@ -179,7 +179,7 @@ max_memory_policy = "noeviction" # or eviction policy
 | `lfu-log-factor` | 10 | LFU counter growth rate |
 | `lfu-decay-time` | 1 | LFU decay period (minutes) |
 
-See [OPERATIONS.md](OPERATIONS.md) for configuration details.
+See [CONFIGURATION.md](CONFIGURATION.md) for configuration details.
 
 ---
 

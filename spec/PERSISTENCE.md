@@ -622,4 +622,4 @@ zfs snapshot tank/frogdb@backup-$(date +%Y%m%d)
 
 - [CLUSTER.md](CLUSTER.md) - Replication and cluster persistence
 - [FAILURE_MODES.md](FAILURE_MODES.md) - Recovery from failures
-- [OPERATIONS.md](OPERATIONS.md) - Server administration
+- [CONFIGURATION.md](CONFIGURATION.md) - Server configuration
