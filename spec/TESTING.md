@@ -2,6 +2,56 @@
 
 This document describes FrogDB's testing strategy, how to run tests, and testing best practices.
 
+---
+
+## Testing Philosophy
+
+### Start Simple, Build Incrementally
+
+**First test**: A simple end-to-end test that:
+1. Spawns a FrogDB server instance
+2. Connects a client
+3. Sets a string key (`SET foo bar`)
+4. Queries it back (`GET foo`)
+5. Asserts the value matches
+
+Everything else builds from this foundation.
+
+### Integration Tests First
+
+During initial development, **prioritize integration tests over unit tests**. Rationale:
+- Software design will evolve during early iterations
+- Unit tests coupled to implementation details become maintenance burden
+- Integration tests verify behavior, not implementation
+- Easier to refactor internals when tests verify external contracts
+
+Unit tests become valuable once:
+- Core APIs stabilize
+- Complex algorithms need edge-case coverage
+- Performance-critical code needs isolation testing
+
+### Testing Pyramid
+
+```
+                    ┌─────────────┐
+                    │   Jepsen    │  ← Future: Distributed correctness
+                    ├─────────────┤
+                    │     DST     │  ← Later: Deterministic simulation
+                    ├─────────────┤
+                    │   Shuttle   │  ← Randomized concurrency scenarios
+                    ├─────────────┤
+                    │    Loom     │  ← Exhaustive primitive testing
+                    ├─────────────┤
+                    │ Integration │  ← Client-server interactions ★ START HERE
+                    ├─────────────┤
+                    │    Unit     │  ← Add later once APIs stabilize
+                    └─────────────┘
+```
+
+**Initial focus**: Integration tests. Build up from there as design stabilizes.
+
+---
+
 ## Test Categories
 
 ### 1. Unit Tests
@@ -36,6 +86,13 @@ Location: `tests/` directory
 
 Purpose: Test command execution end-to-end via real TCP connections.
 
+#### Black-Box Testing
+
+Test FrogDB as a client would see it—no knowledge of internals:
+- Client connects via TCP, issues commands, observes responses
+- Tests the public contract (RESP protocol behavior)
+- Redis compatibility verification
+
 ```rust
 // tests/string_commands.rs
 use redis::Commands;
@@ -49,6 +106,29 @@ async fn test_set_get() {
     let _: () = con.set("mykey", "myvalue").unwrap();
     let val: String = con.get("mykey").unwrap();
     assert_eq!(val, "myvalue");
+}
+```
+
+#### White-Box Testing
+
+Access internal state to verify implementation correctness:
+- Inspect in-memory data structure state
+- Verify RocksDB WAL contents after writes
+- Check shard distribution of keys
+- Validate eviction policy behavior
+
+```rust
+#[tokio::test]
+async fn test_wal_persistence() {
+    let server = TestServer::start().await;
+    let mut con = server.connection();
+
+    let _: () = con.set("key", "value").unwrap();
+
+    // White-box: verify WAL contains the write
+    server.flush_wal().await;
+    let wal_entries = server.internal_state().read_wal_entries();
+    assert!(wal_entries.iter().any(|e| e.key == "key"));
 }
 ```
 
@@ -179,6 +259,101 @@ async fn test_concurrent_incr() {
     let count: i64 = con.get("counter").unwrap();
     assert_eq!(count, 100);
 }
+```
+
+### 8. Loom Tests (Exhaustive Concurrency)
+
+Purpose: Exhaustively test low-level synchronization primitives under all possible interleavings.
+
+[Loom](https://github.com/tokio-rs/loom) is a testing tool that runs a test many times, permuting all possible concurrent executions under the C11 memory model. It uses state reduction techniques to avoid combinatorial explosion.
+
+**When to use**:
+- Lock-free data structures
+- Custom synchronization primitives
+- Atomic operations with memory ordering concerns
+
+**Limitations**: Only feasible for small, isolated code units due to factorial growth of interleavings.
+
+```rust
+use loom::sync::atomic::{AtomicUsize, Ordering};
+use loom::sync::Arc;
+use loom::thread;
+
+#[test]
+fn test_concurrent_counter() {
+    loom::model(|| {
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let threads: Vec<_> = (0..2).map(|_| {
+            let c = counter.clone();
+            thread::spawn(move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            })
+        }).collect();
+
+        for t in threads { t.join().unwrap(); }
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+    });
+}
+```
+
+**Cargo setup**:
+```toml
+[dev-dependencies]
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+```
+
+### 9. Shuttle Tests (Randomized Concurrency)
+
+Purpose: Randomized exploration of concurrent executions. Scales to larger test cases than Loom.
+
+[Shuttle](https://github.com/awslabs/shuttle) (by AWS Labs) is inspired by Loom but uses randomized testing rather than exhaustive exploration. This trades soundness for scalability—Shuttle can test much more complex scenarios.
+
+**When to use**:
+- Multi-client scenarios
+- Cross-shard operations
+- Higher-level concurrency (not just primitives)
+- Integration-level concurrency testing
+
+**Production usage**: AWS S3 uses Shuttle to verify correctness of concurrent code.
+
+```rust
+use shuttle::sync::Arc;
+use shuttle::thread;
+
+#[test]
+fn test_concurrent_operations() {
+    shuttle::check_random(|| {
+        let server = TestServer::start_sync();
+        let url = server.url();
+
+        let threads: Vec<_> = (0..4).map(|i| {
+            let u = url.clone();
+            thread::spawn(move || {
+                let mut con = connect(&u);
+                con.set(format!("key{}", i), "value").unwrap();
+            })
+        }).collect();
+
+        for t in threads { t.join().unwrap(); }
+
+        // Verify all keys exist
+        let mut con = connect(&url);
+        for i in 0..4 {
+            let v: String = con.get(format!("key{}", i)).unwrap();
+            assert_eq!(v, "value");
+        }
+    }, 1000); // Run 1000 random schedules
+}
+```
+
+**Cargo setup**:
+```toml
+[dev-dependencies]
+shuttle = "0.7"
 ```
 
 ---
@@ -412,16 +587,134 @@ If a test is flaky:
 
 ---
 
+## Consistency Model Verification
+
+Understanding and verifying consistency models is critical for database correctness. FrogDB should clearly define which guarantees it provides and verify them rigorously.
+
+### Key Consistency Models
+
+#### Linearizability (Single-Object Operations)
+
+A correctness condition for **single operations on single objects**. Each operation appears to take effect atomically at some instant between its invocation and response. This is the gold standard for single-key operations.
+
+**Applies to**: GET, SET, INCR, ZADD, and other single-key commands
+
+**Verification approach**:
+- Record operation history with real-time timestamps (invocation and response)
+- Use a linearizability checker (e.g., [Porcupine](https://github.com/anishathalye/porcupine), [Knossos](https://github.com/jepsen-io/knossos), [Elle](https://github.com/jepsen-io/elle))
+- Verify history admits a linearization
+
+#### Serializability (Transactions)
+
+A correctness condition for **transactions** (groups of operations). Transactions appear to execute in some serial order, as if run one-at-a-time. Does NOT require real-time ordering.
+
+**Applies to**: MULTI/EXEC transactions, Lua scripts, multi-key operations
+
+#### Strict Serializability
+
+The combination of serializability and linearizability. Transactions appear to execute serially AND respect real-time ordering. The strongest common guarantee.
+
+**Applies to**: FrogDB's eventual transaction support should aim for this within a shard.
+
+### Redis Compatibility
+
+Beyond formal models, verify behavior matches Redis documentation:
+- Run identical tests against Redis and FrogDB
+- Compare responses (exact match where applicable)
+- Document intentional deviations explicitly
+
+### Further Reading
+
+- [Aphyr: Serializability, Linearizability, and Locality](https://aphyr.com/posts/333-serializability-linearizability-and-locality)
+- [Kleppmann: Please stop calling databases CP or AP](https://martin.kleppmann.com/2015/05/11/please-stop-calling-databases-cp-or-ap.html)
+
+---
+
+## Deterministic Simulation Testing (Future)
+
+Deterministic Simulation Testing (DST) is a technique pioneered by [FoundationDB](https://apple.github.io/foundationdb/testing.html) that enables exhaustive testing of distributed systems by controlling all sources of non-determinism.
+
+### Current Approach
+
+Start with **Shuttle** for randomized concurrency testing (see section 9). This provides meaningful concurrency coverage without the investment of full DST.
+
+### Evolution Path
+
+1. **Now**: Shuttle for concurrent scenario testing
+2. **Later**: Consider MadSim for full deterministic simulation
+3. **Future**: Potentially custom DST (like TigerBeetle's VOPR)
+
+### MadSim (Future Option)
+
+[MadSim](https://github.com/madsim-rs/madsim) is a Rust library from RisingWave that provides:
+- Deterministic simulation of network, time, and I/O
+- Reproducible failure injection
+- Single-threaded simulation for debugging
+
+```rust
+// Example MadSim test (future)
+#[madsim::test]
+async fn test_with_network_partition() {
+    let handle = madsim::runtime::Handle::current();
+    let server1 = spawn_server(1).await;
+    let server2 = spawn_server(2).await;
+
+    // Inject network partition
+    handle.net.partition(server1.addr(), server2.addr());
+
+    // Test behavior under partition
+    // ...
+
+    // Heal partition
+    handle.net.repair(server1.addr(), server2.addr());
+}
+```
+
+### Antithesis (Commercial Option)
+
+[Antithesis](https://antithesis.com/) is a commercial platform from FoundationDB founders that provides:
+- Deterministic hypervisor for Docker containers
+- Automated bug finding
+- No implementation work required (but has cost)
+
+Used by MongoDB, TigerBeetle, and others.
+
+### TigerBeetle's VOPR (Inspiration)
+
+[TigerBeetle](https://docs.tigerbeetle.com/concepts/safety/) built their own deterministic simulator called VOPR that achieves ~700x time acceleration. Their approach:
+- All I/O mocked (network, storage)
+- Aggressive fault injection (up to 8% storage corruption)
+- Runs 24/7 on 1000 cores
+
+---
+
 ## Future: Jepsen Testing
 
-For distributed correctness verification:
+[Jepsen](https://jepsen.io/) is a framework for distributed systems verification with fault injection. It's used by CockroachDB, YugabyteDB, TigerBeetle, and many others.
 
-1. Set up Jepsen test cluster
-2. Define workload (concurrent writes, network partitions)
-3. Verify linearizability of operations
-4. Test failover correctness
+### What Jepsen Provides
 
-See [Jepsen](https://jepsen.io/) for methodology.
+- Black-box distributed systems verification
+- Fault injection (network partitions, node failures, clock skew)
+- Linearizability and consistency checking via [Elle](https://github.com/jepsen-io/elle)
+- Real cluster testing (not simulation)
+
+### Prerequisites for FrogDB
+
+Before investing in Jepsen:
+- [ ] Clustering implementation complete
+- [ ] Multi-node deployment working
+- [ ] Basic fault tolerance implemented
+- [ ] Replication operational
+
+### Maelstrom (Learning Step)
+
+[Maelstrom](https://github.com/jepsen-io/maelstrom) is Jepsen's learning workbench for testing distributed systems. It's useful for:
+- Validating consensus algorithm implementations
+- Learning distributed systems concepts
+- Testing via simple JSON protocol (no cluster setup)
+
+Consider using Maelstrom to validate FrogDB's consensus algorithms before full Jepsen integration.
 
 ---
 
@@ -431,3 +724,21 @@ See [Jepsen](https://jepsen.io/) for methodology.
 - [Rust Book: Testing](https://doc.rust-lang.org/book/ch11-00-testing.html) - Rust testing basics
 - [proptest](https://proptest-rs.github.io/proptest/) - Property-based testing
 - [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) - Coverage tooling
+
+### Concurrency Testing
+
+- [Loom](https://github.com/tokio-rs/loom) - Concurrency permutation testing
+- [Shuttle](https://github.com/awslabs/shuttle) - Randomized concurrency testing (AWS)
+
+### Consistency & Correctness
+
+- [Jepsen](https://jepsen.io/) - Distributed systems verification
+- [Maelstrom](https://github.com/jepsen-io/maelstrom) - Jepsen learning workbench
+- [Elle](https://github.com/jepsen-io/elle) - Black-box transactional consistency checker
+
+### Deterministic Simulation
+
+- [MadSim](https://github.com/madsim-rs/madsim) - Deterministic simulation for Rust
+- [FoundationDB Simulation Testing](https://apple.github.io/foundationdb/testing.html)
+- [TigerBeetle Safety](https://docs.tigerbeetle.com/concepts/safety/)
+- [Antithesis](https://antithesis.com/) - Commercial DST platform
