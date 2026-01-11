@@ -14,3 +14,4 @@
 - You will frequently be reading large markdown files. Be careful not to read more context than you need. Use CLI tools such as `grep`, `less`, `head` (among others) to minimize extraneous context when reading specs.
 - Unless told to conduct a broad, sweeping analysis of the spec, keep your investigations and analysis focused on the specific ask, minimizing extraneous context.
 - Try to keep a single source of truth in documentation using links when sections overlap. If a concept belonging to its own file (eg. CONFIGURATION.md) is relevant in other documents. Describe how it relates and link to the relevant document without repeating too much. When linking provide context for how the current document relates to the linked one.
+- Create markdown links to specific sections if possible to help with searching through the spec.
