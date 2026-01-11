@@ -81,6 +81,30 @@ SET key value [EX seconds | PX milliseconds | EXAT unix-time-seconds | PXAT unix
 
 Returns: `OK` on success, nil if NX/XX condition not met.
 
+**Examples:**
+```
+> SET mykey "Hello"
+OK
+
+> SET mykey "World" XX
+OK
+
+> SET newkey "Value" NX
+OK
+
+> SET newkey "Other" NX
+(nil)
+
+> SET session "data" EX 3600
+OK
+
+> SET counter 100 GET
+(nil)
+
+> SET counter 200 GET
+"100"
+```
+
 ### SETNX
 
 Set if not exists. Equivalent to `SET key value NX`.
@@ -113,6 +137,18 @@ MGET key [key ...]
 Returns: Array of values (nil for non-existent keys).
 
 **Cross-shard:** Uses scatter-gather - keys may be on different shards.
+
+**Example:**
+```
+> SET key1 "Hello"
+OK
+> SET key2 "World"
+OK
+> MGET key1 key2 nonexistent
+1) "Hello"
+2) "World"
+3) (nil)
+```
 
 ### MSET
 
@@ -173,6 +209,22 @@ DECR key
 | Non-existent | Initialized to `0`, then incremented |
 | Not integer | Error: `ERR value is not an integer or out of range` |
 | Overflow | Error on 64-bit signed integer overflow |
+
+**Example:**
+```
+> SET counter 10
+OK
+> INCR counter
+(integer) 11
+> INCR counter
+(integer) 12
+> INCR newcounter
+(integer) 1
+> SET mykey "not-a-number"
+OK
+> INCR mykey
+(error) ERR value is not an integer or out of range
+```
 
 ### INCRBY / DECRBY
 

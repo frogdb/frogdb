@@ -6,7 +6,8 @@
       "Bash(grep:*)",
       "WebFetch(domain:www.dragonflydb.io)",
       "Bash(ls:*)",
-      "Bash(git -C /Users/nathan/workspace/nathanjordan/frogdb log --oneline)"
+      "Bash(git -C /Users/nathan/workspace/nathanjordan/frogdb log --oneline)",
+      "Bash(git mv:*)"
     ]
   }
 }

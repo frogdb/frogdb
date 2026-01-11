@@ -34,6 +34,43 @@ pub trait Store: Send {
 }
 ```
 
+## Value Types
+
+FrogDB stores values as variants of the `FrogValue` enum:
+
+```rust
+pub enum FrogValue {
+    String(FrogString),
+    SortedSet(FrogSortedSet),
+    Hash(FrogHash),
+    List(FrogList),
+    Set(FrogSet),
+    Stream(FrogStream),
+}
+```
+
+See individual type documentation in [types/](types/) for data structure implementations and commands.
+
+### Supported Data Types
+
+| Type | Implementation | Phase | Status |
+|------|---------------|-------|--------|
+| String | `Bytes` | 1 | Core |
+| Sorted Set | `HashMap` + `BTreeMap` | 1 | Core |
+| Hash | `HashMap<Bytes, Bytes>` | 2 | Planned |
+| List | `VecDeque<Bytes>` | 2 | Planned |
+| Set | `HashSet<Bytes>` | 2 | Planned |
+| Stream | Radix tree + listpack | Future | Planned |
+| Bitmap | Operations on String | Future | Planned |
+| Bitfield | Operations on String | Future | Planned |
+| Geospatial | Sorted Set + geohash | Future | Planned |
+| JSON | `serde_json::Value` | Future | Planned |
+| HyperLogLog | 12KB fixed structure | Future | Planned |
+| Bloom Filter | Bit array + hashes | Future | Planned |
+| Time Series | Sorted by timestamp | Future | Planned |
+
+---
+
 ## Default Implementation
 
 The default store uses a `HashMap` with per-key metadata:
@@ -258,7 +295,8 @@ See [PERSISTENCE.md](PERSISTENCE.md) for RocksDB integration, WAL, and snapshots
 
 ## References
 
-- [DESIGN.md - FrogValue](INDEX.md#data-structures)
-- [COMMANDS.md](COMMANDS.md) - Command reference and type implementations
+- [INDEX.md - Data Structures](INDEX.md#data-structures)
+- [COMMANDS.md](COMMANDS.md) - Command reference index
+- [types/](types/) - Data type implementations and commands
 - [EVICTION.md](EVICTION.md) - Memory eviction policies (planned)
 - [PERSISTENCE.md](PERSISTENCE.md) - RocksDB integration

@@ -99,7 +99,7 @@ Hash tags (e.g., `{user:1}:profile`) guarantee that related keys land on the **s
 
 FrogDB supports multiple Redis-compatible data types including Strings, Sorted Sets, and planned support for Hashes, Lists, Sets, and Streams. Each type has optimized internal representations.
 
-See [DATA_TYPES.md](DATA_TYPES.md) for type implementations and [command-groups/](command-groups/) for type-specific commands.
+See [STORAGE.md](STORAGE.md) for the FrogValue enum and [types/](types/) for data structure implementations and commands.
 
 ---
 
@@ -171,7 +171,7 @@ See [TRANSACTIONS.md](TRANSACTIONS.md) for implementation details.
 
 SCAN provides cursor-based iteration without blocking. The 64-bit cursor encodes shard ID (16 bits) and position (48 bits), making iteration stateless and resumable.
 
-See [COMMANDS.md](COMMANDS.md) for SCAN algorithm details.
+See [types/GENERIC.md](types/GENERIC.md) for SCAN algorithm details.
 
 ---
 
@@ -322,9 +322,9 @@ See [CONFIGURATION.md](CONFIGURATION.md) for full configuration system design, [
 | [PERSISTENCE.md](PERSISTENCE.md) | RocksDB, WAL, snapshots, backup/restore |
 | [PROTOCOL.md](PROTOCOL.md) | RESP2/RESP3, frame processing |
 | [CONNECTION.md](CONNECTION.md) | Connection lifecycle, rate limiting |
-| [COMMANDS.md](COMMANDS.md) | Command index, DUMP/RESTORE |
-| [EXECUTION.md](EXECUTION.md) | Command trait, arity, flags |
-| [DATA_TYPES.md](DATA_TYPES.md) | Value types and implementations |
+| [COMMANDS.md](COMMANDS.md) | Command index |
+| [EXECUTION.md](EXECUTION.md) | Command trait, arity, flags, type checking |
+| [types/](types/) | Data type implementations and commands |
 | [DEBUGGING.md](DEBUGGING.md) | Debugging tools, dtrace/eBPF, developer debugging |
 | [LIMITS.md](LIMITS.md) | Size limits and enforcement |
 | [TRANSACTIONS.md](TRANSACTIONS.md) | MULTI/EXEC, WATCH, pipelining |
