@@ -32,3 +32,7 @@ To manage FrogDB in cluster mode you can use a Kubernetes operator, TKTK.
   to diagnose problems and take action to resolve them as much as possible. Integrate with existing
   CNCF and other ecosystems to make integration easy. Online cluster resizing, recovery tools, and
   more.
+
+## Design Spec
+
+Root document located in `spec/INDEX.md`. Supplemental documents describing various parts of the system are located within the `spec/` directory.
