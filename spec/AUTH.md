@@ -169,6 +169,18 @@ pub struct User {
 }
 ```
 
+**Multiple Passwords:** Users can have multiple valid passwords simultaneously. This supports use cases like:
+- Password rotation without downtime (add new password, then remove old)
+- Different credentials for different services accessing the same user
+- Emergency backup passwords
+
+Add passwords with `>password` or `#hash`, remove with `<password` or `!hash`. Any stored password is valid for authentication.
+
+```rust
+// Example: User with two valid passwords
+// ACL SETUSER app on >password1 >password2 ~* +@all
+```
+
 ### UserPermissions (Immutable Snapshot)
 
 Created when a user authenticates, not modified during connection lifetime:
@@ -283,10 +295,13 @@ Each command declares its categories for ACL matching:
 |--------|---------|-------------|
 | `on` | `on` | Enable user |
 | `off` | `off` | Disable user |
-| `>password` | `>secret123` | Add password (SHA256 hashed) |
+| `>password` | `>secret123` | Add password (stored as SHA256 hash) |
 | `<password` | `<secret123` | Remove password |
+| `#hash` | `#a1b2c3...` | Add pre-hashed password (64-char hex SHA256) |
+| `!hash` | `!a1b2c3...` | Remove specific hashed password |
 | `nopass` | `nopass` | Allow passwordless auth |
 | `resetpass` | `resetpass` | Clear all passwords |
+| `reset` | `reset` | Reset user to default (off, no passwords, no perms) |
 | `~pattern` | `~user:*` | Allow key pattern (read+write) |
 | `%R~pattern` | `%R~cache:*` | Allow key pattern (read only, v7) |
 | `%W~pattern` | `%W~logs:*` | Allow key pattern (write only, v7) |
@@ -304,6 +319,7 @@ Each command declares its categories for ACL matching:
 | `allcommands` | `allcommands` | Allow all commands |
 | `nocommands` | `nocommands` | Deny all commands |
 | `(rules)` | `(~temp:* +@read)` | Add selector (v7) |
+| `clearselectors` | `clearselectors` | Clear all selectors (v7) |
 
 ---
 
@@ -362,6 +378,33 @@ Get a specific user's configuration:
 ACL GETUSER username
 ```
 
+**Response format (array of field-value pairs):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `flags` | Array | User flags: `on`/`off`, `nopass`, etc. |
+| `passwords` | Array | SHA256 password hashes (hex strings) |
+| `commands` | String | Command permissions in rule format |
+| `keys` | Array | Key patterns (e.g., `~app:*`) |
+| `channels` | Array | Channel patterns (e.g., `&notifications:*`) |
+| `selectors` | Array | Selector rules (Redis 7.0+, each as rule string) |
+
+**Example response:**
+```
+1) "flags"
+2) 1) "on"
+3) "passwords"
+4) 1) "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+5) "commands"
+6) "+@read +@write -@dangerous"
+7) "keys"
+8) 1) "~app:*"
+9) "channels"
+10) 1) "&*"
+11) "selectors"
+12) (empty array)
+```
+
 ### ACL WHOAMI
 
 Return current authenticated username:
@@ -387,6 +430,107 @@ Persist or reload ACL configuration:
 ACL SAVE                 # Save to aclfile
 ACL LOAD                 # Load from aclfile
 ```
+
+### ACL USERS
+
+List all configured usernames:
+
+```
+ACL USERS
+```
+
+Returns array of usernames. Simpler than `ACL LIST` when only names are needed.
+
+### ACL GENPASS
+
+Generate a secure random password:
+
+```
+ACL GENPASS              # Generate 256-bit (64 hex chars)
+ACL GENPASS bits         # Generate specified bits (1-1024, rounded to multiple of 4)
+```
+
+Use for creating strong passwords to prevent brute-force attacks. Passwords generated this way are cryptographically random.
+
+### ACL LOG
+
+View recent ACL security events:
+
+```
+ACL LOG [count]          # Show last N entries (default: 10)
+ACL LOG RESET            # Clear the log
+```
+
+Logs authentication failures and permission denials. Each entry includes:
+- Timestamp
+- Username (or attempted username)
+- Client address
+- Reason (auth failure, command denied, key denied, channel denied)
+- Context (command attempted, key accessed, etc.)
+
+Useful for security auditing and debugging permission issues.
+
+---
+
+## ACL File Format
+
+The ACL file uses Redis-compatible format, one user per line:
+
+```
+user default on nopass ~* &* +@all
+user alice on #e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ~app:* +@read +@write -@dangerous
+user readonly on >plainpass ~* +@read -@write
+```
+
+**Format:** `user <username> <rules...>`
+
+**Notes:**
+- Passwords should use hashed form (`#<sha256>`) in files for security
+- Plaintext passwords (`>password`) work but are discouraged in persistent files
+- File is loaded at startup via `--aclfile` option
+- Runtime changes via `ACL SAVE` overwrite the file
+- Comments start with `#` at the beginning of a line
+- Empty lines are ignored
+
+---
+
+## Configuration
+
+### Server Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--requirepass` | "" | Legacy password for default user |
+| `--aclfile` | "" | Path to ACL file for SAVE/LOAD |
+| `--acllog-max-len` | 128 | Maximum ACL LOG entries retained |
+
+### Config File Settings
+
+```toml
+[security]
+requirepass = ""           # Legacy password for default user
+aclfile = ""               # Path to ACL file
+
+[acl]
+log_max_len = 128          # Maximum ACL LOG entries
+redis7_features = false    # Enable Redis 7.0 ACL features
+```
+
+### Inline User Configuration
+
+Users can be defined directly in config file:
+
+```toml
+[[acl.users]]
+name = "app"
+rules = "on >password ~app:* +@read +@write"
+
+[[acl.users]]
+name = "admin"
+rules = "on >adminpass ~* +@all"
+```
+
+**Priority:** Inline users are loaded first, then `aclfile` is applied. Users defined in both are merged (aclfile rules take precedence).
 
 ---
 
@@ -633,6 +777,36 @@ Orchestrator stores ACL config and pushes to all nodes:
 to track which version each node has applied.
 
 See [CLUSTER.md](CLUSTER.md#acl-in-cluster-mode) for additional cluster ACL details.
+
+---
+
+## Compatibility Notes
+
+### Redis/Valkey Compatibility
+
+FrogDB targets full Redis 7.0 ACL compatibility. All standard ACL commands and rules are supported, including:
+- All ACL commands (SETUSER, GETUSER, DELUSER, LIST, USERS, WHOAMI, CAT, LOG, GENPASS, SAVE, LOAD)
+- Full rule syntax including Redis 7.0 features (selectors, subcommand ACLs, read/write key patterns)
+- SHA256 password hashing
+- Command categories and permission enforcement
+
+### DragonflyDB Differences
+
+FrogDB follows Redis behavior where it differs from DragonflyDB:
+
+| Behavior | FrogDB (Redis) | DragonflyDB |
+|----------|----------------|-------------|
+| Permission propagation | Snapshot at auth time | Immediate to active connections |
+| Subcommand ACLs | Supported (`+config\|get`) | Not supported |
+| Key patterns in ACL files | Supported | Not supported |
+| Channel patterns in ACL files | Supported | Not supported |
+
+**Permission Propagation:** When ACL rules change via `ACL SETUSER`, FrogDB (like Redis) does not update active connections. Users continue with their permission snapshot until they re-authenticate. This is intentional for:
+- **Consistency:** Commands in progress aren't affected mid-execution
+- **Performance:** No lock overhead on the hot path
+- **Predictability:** Clients know their permissions won't change unexpectedly
+
+To revoke a user's access immediately, use `CLIENT KILL USER <username>` to terminate their connections.
 
 ---
 
