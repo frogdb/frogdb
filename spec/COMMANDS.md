@@ -97,6 +97,75 @@ See [EVICTION.md](EVICTION.md#post-recovery-eviction-behavior) for how eviction 
 
 ---
 
+## Server Commands
+
+### CONFIG
+
+The CONFIG command manages server configuration at runtime.
+
+| Subcommand | Description |
+|------------|-------------|
+| `CONFIG GET pattern` | Get parameters matching glob pattern |
+| `CONFIG SET param value` | Set parameter at runtime (mutable only) |
+| `CONFIG RESETSTAT` | Reset server statistics (future) |
+| `CONFIG HELP` | Show CONFIG subcommands (future) |
+
+**Note:** `CONFIG REWRITE` is not supported. Runtime changes are transient and lost on restart.
+
+#### CONFIG GET
+
+```
+CONFIG GET *              # All parameters
+CONFIG GET max*           # Params starting with "max"
+CONFIG GET *memory*       # Params containing "memory"
+```
+
+Returns array of alternating parameter names and values. Both mutable and immutable parameters are returned.
+
+#### CONFIG SET
+
+```
+CONFIG SET maxmemory 8GB
+CONFIG SET maxmemory-policy allkeys-lru
+CONFIG SET loglevel debug
+```
+
+Only mutable parameters can be changed. Immutable parameters (bind, port, num_shards, etc.) return an error.
+
+**Errors:**
+- `ERR Unknown configuration parameter 'foo'`
+- `ERR CONFIG SET parameter 'bind' is immutable`
+- `ERR Invalid argument 'xyz' for CONFIG SET 'maxmemory'`
+
+See [CONFIGURATION.md](CONFIGURATION.md) for complete parameter list with mutability.
+
+### INFO
+
+Returns server statistics and information.
+
+```
+INFO [section]
+```
+
+**Sections:** server, clients, memory, persistence, stats, replication, cpu, cluster, keyspace, all (default)
+
+See [OPERATIONS.md](OPERATIONS.md#info-command) for output format.
+
+### DEBUG
+
+Administrative commands for debugging. Requires admin privileges.
+
+| Command | Description |
+|---------|-------------|
+| `DEBUG SLEEP <seconds>` | Sleep for duration |
+| `DEBUG OBJECT <key>` | Inspect key internals |
+| `DEBUG STRUCTSIZE` | Show struct sizes |
+| `DEBUG RELOAD` | Reload server |
+
+**Warning:** DEBUG commands are for development/debugging only.
+
+---
+
 ## Command Implementation Notes
 
 ### Command Registry
@@ -221,4 +290,5 @@ See [CLUSTER.md](CLUSTER.md) for full clustering architecture.
 - [DATA_TYPES.md](DATA_TYPES.md) - Supported data types
 - [LIMITS.md](LIMITS.md) - Size limits and enforcement
 - [TRANSACTIONS.md](TRANSACTIONS.md) - MULTI/EXEC and pipelining
+- [CONFIGURATION.md](CONFIGURATION.md) - CONFIG commands and runtime configuration
 - [command-groups/](command-groups/) - Type-specific commands

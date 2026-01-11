@@ -263,9 +263,19 @@ frogdb/
 
 ## Configuration
 
-FrogDB uses [Figment](https://docs.rs/figment) for hierarchical configuration: CLI > environment variables (prefix: `FROGDB_`) > config file (TOML) > defaults.
+FrogDB uses a layered configuration approach:
 
-See [OPERATIONS.md](OPERATIONS.md) for complete configuration guide and [DEPLOYMENT.md](DEPLOYMENT.md) for Docker/K8s deployment.
+1. **Startup configuration** via [Figment](https://docs.rs/figment): CLI > environment variables (`FROGDB_` prefix) > TOML file > defaults
+2. **Runtime configuration** via Redis-compatible `CONFIG SET/GET` commands
+3. **TLS certificate hot-reloading** via file watching (future feature)
+
+**Key design decisions:**
+- TOML format (modern, structured) rather than redis.conf
+- Native env var support (like DragonflyDB, unlike Redis/Valkey)
+- No `CONFIG REWRITE` - runtime changes are transient
+- Parameters classified as mutable or immutable
+
+See [CONFIGURATION.md](CONFIGURATION.md) for full configuration system design, [OPERATIONS.md](OPERATIONS.md) for operational guide, and [DEPLOYMENT.md](DEPLOYMENT.md) for Docker/K8s deployment.
 
 ---
 
@@ -326,7 +336,8 @@ See [OPERATIONS.md](OPERATIONS.md) for complete configuration guide and [DEPLOYM
 | [LIFECYCLE.md](LIFECYCLE.md) | Startup/shutdown |
 | [TESTING.md](TESTING.md) | Test strategy |
 | [OBSERVABILITY.md](OBSERVABILITY.md) | Metrics, logging, tracing |
-| [OPERATIONS.md](OPERATIONS.md) | Configuration, debugging |
+| [CONFIGURATION.md](CONFIGURATION.md) | Configuration system, CONFIG commands, TLS hot-reload |
+| [OPERATIONS.md](OPERATIONS.md) | Operational guide, debugging |
 | [FAILURE_MODES.md](FAILURE_MODES.md) | Error handling, recovery |
 | [CONSISTENCY.md](CONSISTENCY.md) | Consistency guarantees |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Docker, K8s deployment |
