@@ -94,6 +94,27 @@ ZADD key [NX | XX] [GT | LT] [CH] [INCR] score member [score member ...]
 - `+inf` / `-inf` for infinity
 - Scores are compared as floating point numbers
 
+**Examples:**
+```
+> ZADD leaderboard 100 "alice" 200 "bob" 150 "charlie"
+(integer) 3
+
+> ZADD leaderboard XX 250 "bob"
+(integer) 0
+
+> ZADD leaderboard NX 300 "bob" 50 "dave"
+(integer) 1
+
+> ZADD leaderboard GT 180 "charlie"
+(integer) 0
+
+> ZADD leaderboard CH 180 "charlie"
+(integer) 1
+
+> ZADD leaderboard INCR 10 "alice"
+"110"
+```
+
 ### ZREM
 
 Remove members from sorted set.
@@ -159,6 +180,43 @@ ZRANGE key start stop [BYSCORE | BYLEX] [REV] [LIMIT offset count] [WITHSCORES]
 | REV | Reverse order (high to low) |
 | LIMIT | Offset and count for pagination |
 | WITHSCORES | Include scores in response |
+
+**Examples:**
+```
+> ZADD myset 1 "one" 2 "two" 3 "three"
+(integer) 3
+
+> ZRANGE myset 0 -1
+1) "one"
+2) "two"
+3) "three"
+
+> ZRANGE myset 0 -1 WITHSCORES
+1) "one"
+2) "1"
+3) "two"
+4) "2"
+5) "three"
+6) "3"
+
+> ZRANGE myset 0 -1 REV
+1) "three"
+2) "two"
+3) "one"
+
+> ZRANGE myset 1 100 BYSCORE
+1) "one"
+2) "two"
+3) "three"
+
+> ZRANGE myset (1 3 BYSCORE
+1) "two"
+2) "three"
+
+> ZRANGE myset 0 -1 REV LIMIT 0 2
+1) "three"
+2) "two"
+```
 
 ### ZRANGEBYSCORE / ZREVRANGEBYSCORE
 

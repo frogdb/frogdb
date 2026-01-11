@@ -177,3 +177,38 @@ fn dispatch(cmd: &ParsedCommand) -> Result<Response, Error> {
     handler.execute(cmd)
 }
 ```
+
+---
+
+## Type Conversion and Errors
+
+FrogDB is strictly typed. Attempting wrong-type operations returns:
+
+```
+-WRONGTYPE Operation against a key holding the wrong kind of value
+```
+
+**Type checking behavior:**
+
+| Scenario | Result |
+|----------|--------|
+| GET on string | Value returned |
+| GET on sorted set | WRONGTYPE error |
+| ZADD on string | WRONGTYPE error |
+| SET on existing sorted set | Overwrites (type changes to string) |
+| DEL | Works on any type |
+| TYPE | Returns type name |
+| EXISTS | Works on any type |
+
+**Implementation:**
+
+```rust
+fn check_type<T: ExpectedType>(value: &FrogValue) -> Result<&T, CommandError> {
+    match value.as_type::<T>() {
+        Some(v) => Ok(v),
+        None => Err(CommandError::WrongType),
+    }
+}
+```
+
+Commands that work on any type (DEL, EXISTS, TYPE, EXPIRE, TTL, RENAME, etc.) skip type checking and operate on the key directly.

@@ -28,6 +28,8 @@ N/A - Generic commands operate on keys of any type.
 | SCAN | O(1)/call | Cursor-based key iteration |
 | TOUCH | O(N) | Update access time |
 | UNLINK | O(1) | Async delete |
+| DUMP | O(1) to O(N) | Serialize key value |
+| RESTORE | O(1) to O(N) | Deserialize and store key |
 
 ---
 
@@ -192,6 +194,67 @@ UNLINK key [key ...]
 ```
 
 Returns: Integer count of keys removed. Unlike DEL, actual memory reclamation happens in background.
+
+### DUMP
+
+Serialize the value stored at key.
+
+```
+DUMP key
+```
+
+| Aspect | Behavior |
+|--------|----------|
+| Returns | Bulk string: serialized representation |
+| Non-existent | nil |
+| Includes | Type, value, TTL, LFU counter |
+
+The serialized format is opaque and intended only for use with RESTORE.
+
+**Example:**
+```
+> SET mykey "Hello"
+OK
+> DUMP mykey
+"\x00\x05Hello\t\x00\xf8r?\xc5\xfb\xfb_("
+```
+
+### RESTORE
+
+Deserialize a value (from DUMP) and store it at key.
+
+```
+RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency]
+```
+
+| Argument | Description |
+|----------|-------------|
+| `key` | Destination key |
+| `ttl` | Time-to-live in milliseconds (0 = no expiry) |
+| `serialized-value` | Output from DUMP command |
+| `REPLACE` | Overwrite if key exists (default: error if exists) |
+| `ABSTTL` | Interpret `ttl` as absolute Unix timestamp (ms) |
+| `IDLETIME seconds` | Set initial idle time for LRU eviction |
+| `FREQ frequency` | Set initial LFU counter (0-255) |
+
+**LRU/LFU Modifiers:**
+
+Since LRU timestamps are not persisted, migration tools can use `IDLETIME` and `FREQ` to preserve eviction metadata:
+
+```
+# Restore with 60 seconds idle time (for LRU)
+RESTORE mykey 0 "\x00..." REPLACE IDLETIME 60
+
+# Restore with LFU frequency counter
+RESTORE mykey 0 "\x00..." REPLACE FREQ 100
+```
+
+**Use Cases:**
+- Cluster slot migration (keys retain eviction metadata)
+- Backup/restore tools that preserve eviction behavior
+- Manual data migration between instances
+
+See [EVICTION.md](../EVICTION.md#post-recovery-eviction-behavior) for how eviction metadata behaves after recovery.
 
 ---
 
