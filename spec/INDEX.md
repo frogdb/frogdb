@@ -325,6 +325,7 @@ See [CONFIGURATION.md](CONFIGURATION.md) for full configuration system design, [
 | [COMMANDS.md](COMMANDS.md) | Command index, DUMP/RESTORE |
 | [EXECUTION.md](EXECUTION.md) | Command trait, arity, flags |
 | [DATA_TYPES.md](DATA_TYPES.md) | Value types and implementations |
+| [DEBUGGING.md](DEBUGGING.md) | Debugging tools, dtrace/eBPF, developer debugging |
 | [LIMITS.md](LIMITS.md) | Size limits and enforcement |
 | [TRANSACTIONS.md](TRANSACTIONS.md) | MULTI/EXEC, WATCH, pipelining |
 | [BLOCKING.md](BLOCKING.md) | Blocking commands design |
@@ -335,6 +336,7 @@ See [CONFIGURATION.md](CONFIGURATION.md) for full configuration system design, [
 | [EVICTION.md](EVICTION.md) | Memory eviction policies |
 | [LIFECYCLE.md](LIFECYCLE.md) | Startup/shutdown |
 | [TESTING.md](TESTING.md) | Test strategy |
+| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Symptom-driven diagnosis runbooks |
 | [OBSERVABILITY.md](OBSERVABILITY.md) | Metrics, logging, tracing |
 | [CONFIGURATION.md](CONFIGURATION.md) | Configuration system, CONFIG commands, TLS hot-reload |
 | [OPERATIONS.md](OPERATIONS.md) | Operational guide, debugging |
