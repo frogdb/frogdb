@@ -15,3 +15,5 @@
 - Unless told to conduct a broad, sweeping analysis of the spec, keep your investigations and analysis focused on the specific ask, minimizing extraneous context.
 - Try to keep a single source of truth in documentation using links when sections overlap. If a concept belonging to its own file (eg. CONFIGURATION.md) is relevant in other documents. Describe how it relates and link to the relevant document without repeating too much. When linking provide context for how the current document relates to the linked one.
 - Create markdown links to specific sections if possible to help with searching through the spec.
+- When non-trivial functionality is required, evaluate if a Rust Crate is available which can help solve the issue.
+- When a library is of use that has a copyleft license like GPL, AGPL, prompt before including it.
