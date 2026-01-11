@@ -22,7 +22,7 @@ FrogDB uses a **pinned connection model** where each client connection is assign
 │                                                                  │
 │  3. Command Loop                                                 │
 │     └── Read from socket → Parse RESP → Route → Execute         │
-│     └── Connection fiber acts as coordinator                    │
+│     └── Connection task acts as coordinator                     │
 │     └── Can message any shard for key operations                │
 │                                                                  │
 │  4. Close                                                        │
@@ -32,6 +32,24 @@ FrogDB uses a **pinned connection model** where each client connection is assign
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Connection Establishment
+
+### Accept Flow
+
+1. **TCP Accept**: Acceptor receives connection from OS
+2. **maxclients Check**: If at limit, close immediately (before TLS)
+3. **TLS Handshake** (if enabled): Negotiate encryption
+4. **Thread Assignment**: ConnectionAssigner selects target thread
+5. **Initialize**: Create ConnectionState, assign ID
+
+**Note:** maxclients is checked before TLS handshake to avoid CPU-expensive handshakes under resource exhaustion. Clients at the limit receive a TCP RST or TLS error, not the Redis error message.
+
+### Admin Port Exception
+
+Connections to the admin port (default 6380) are **not** subject to `maxclients`. This ensures operators can always connect for debugging even when the main port is at capacity.
 
 ---
 
@@ -51,6 +69,9 @@ pub struct ConnectionState {
 
     /// Authentication
     pub auth: AuthState,
+
+    /// Protocol version (RESP2 or RESP3, negotiated via HELLO)
+    pub protocol_version: ProtocolVersion,
 
     /// Transaction state (MULTI/EXEC)
     pub tx_queue: Option<Vec<ParsedCommand>>,
@@ -130,6 +151,8 @@ Entered via `MULTI`. Commands are queued, not executed.
 | DISCARD | Abort, return to normal |
 | WATCH | Set key watches (before MULTI) |
 
+> **Note:** QUIT is never queued. Issuing QUIT during MULTI immediately closes the connection and discards all queued commands. WATCHed keys are automatically unwatched.
+
 See [TRANSACTIONS.md](TRANSACTIONS.md) for full transaction documentation.
 
 ### Pub/Sub Mode
@@ -144,6 +167,8 @@ Entered via `SUBSCRIBE`, `PSUBSCRIBE`, `SSUBSCRIBE`.
 - QUIT
 
 All other commands return error.
+
+See [PUBSUB.md](PUBSUB.md) for complete pub/sub architecture.
 
 ### Blocked Mode (Future)
 
@@ -208,18 +233,19 @@ maxclients = 10000  # Maximum simultaneous connections (0 = OS limit)
 **Behavior when limit reached:**
 - New connections rejected immediately
 - Error: `max number of clients reached`
-- `connection_rejected_total` metric increments
+- `frogdb_connections_rejected_total` metric increments
 
-### Reserved Connections
+### Admin Port
 
-FrogDB reserves a small number of connections for admin operations:
+The admin port (`admin_port`, default 6380) is exempt from `maxclients` limits. This ensures operators and the orchestrator can always connect for cluster management, debugging, and emergency operations.
 
 ```toml
 [server]
-reserved_connections = 32  # Always allow admin commands
+maxclients = 10000      # Limit on main port only
+admin_port = 6380       # Not subject to maxclients
 ```
 
-Reserved connections ensure operators can always connect for debugging even when `maxclients` is reached.
+**Security:** The admin port should be bound to localhost or protected by network policies. See [CLUSTER.md](CLUSTER.md#orchestrator-security) for admin API security options.
 
 ### TCP Keepalive
 
@@ -275,6 +301,19 @@ client_output_buffer_limit_replica = "256mb 64mb 60"
 | **Hard limit** | Disconnect immediately when exceeded |
 | **Soft limit** | Disconnect if exceeded for `soft_seconds` continuously |
 | **No limit (0 0 0)** | Unlimited buffer growth |
+
+### Soft Limit Timer Behavior
+
+The soft limit timer **resets** when the buffer drops below the soft limit:
+
+```
+t=0:   Buffer exceeds 8MB soft limit, timer starts
+t=30:  Buffer drops to 5MB, timer RESETS
+t=35:  Buffer exceeds soft limit again, timer RESTARTS
+t=95:  (60s continuous) if still above, disconnect
+```
+
+This matches Redis behavior - clients that temporarily spike but recover are not penalized.
 
 ### Client Types
 
@@ -391,10 +430,64 @@ bytes_per_second = 10485760  # 10MB/s
 | CLIENT ID | Get current connection ID |
 | CLIENT SETNAME name | Set client name |
 | CLIENT GETNAME | Get client name |
-| CLIENT KILL ID id | Kill connection by ID |
-| CLIENT PAUSE ms | Pause all clients |
-| CLIENT UNPAUSE | Resume clients |
+| CLIENT KILL [filter...] | Kill connections matching filters |
+| CLIENT PAUSE timeout [WRITE\|ALL] | Pause clients for controlled operations |
+| CLIENT UNPAUSE | Resume paused clients |
 | CLIENT INFO | Get current client info |
+
+### CLIENT PAUSE
+
+Suspends client command processing for controlled operations like failover.
+
+```
+CLIENT PAUSE timeout [WRITE|ALL]
+```
+
+| Mode | Behavior |
+|------|----------|
+| `ALL` (default) | Block all client commands |
+| `WRITE` | Block write commands only (recommended for failover) |
+
+**WRITE mode specifics:**
+- Read commands continue executing
+- EVAL/EVALSHA blocked (may contain writes)
+- PUBLISH blocked
+- Replication to replicas continues
+- Keys are not evicted/expired during pause
+
+**Usage:** Before failover, pause writes to ensure replicas catch up:
+```
+CLIENT PAUSE 60000 WRITE
+# Wait for replica to catch up
+# Promote replica
+CLIENT UNPAUSE
+```
+
+See [CLUSTER.md](CLUSTER.md#manual-failover) for failover procedures.
+
+### CLIENT KILL Filters
+
+Multiple filters can be combined (logical AND):
+
+| Filter | Description |
+|--------|-------------|
+| `ID client-id` | Kill by connection ID |
+| `ADDR ip:port` | Kill by remote address |
+| `LADDR ip:port` | Kill by local (bind) address |
+| `TYPE normal\|master\|replica\|pubsub` | Kill by client type |
+| `USER username` | Kill all connections for ACL user |
+
+**Examples:**
+```
+CLIENT KILL ID 123                    # Specific connection
+CLIENT KILL TYPE pubsub               # All pub/sub clients
+CLIENT KILL USER compromised_account  # Security: revoke user
+CLIENT KILL ADDR 10.0.0.5:54321 TYPE normal  # Combined filters
+```
+
+**Return value:** Number of clients killed (may be 0).
+
+**Note:** Admin port connections cannot be killed from the main port.
 
 ### CLIENT LIST Output
 
@@ -420,9 +513,10 @@ id=123 addr=192.168.1.10:54321 fd=5 name=myapp age=100 idle=0 flags=N db=0 ...
 |--------|------|-------------|
 | `frogdb_connections_total` | Counter | Total connections accepted |
 | `frogdb_connections_current` | Gauge | Current active connections |
-| `frogdb_connections_rejected` | Counter | Rejected (maxclients) |
+| `frogdb_connections_rejected_total` | Counter | Rejected (maxclients) |
 | `frogdb_blocked_clients` | Gauge | Clients in blocked state |
 | `frogdb_pubsub_clients` | Gauge | Clients in pub/sub mode |
+| `frogdb_client_output_buffer_bytes` | Gauge | Current output buffer usage (by `type` label: normal, pubsub, replica) |
 | `frogdb_client_output_buffer_limit_disconnections_total` | Counter | Buffer limit disconnects |
 | `frogdb_client_timeout_disconnections_total` | Counter | Timeout disconnects |
 
@@ -432,7 +526,9 @@ id=123 addr=192.168.1.10:54321 fd=5 name=myapp age=100 idle=0 flags=N db=0 ...
 
 - [TRANSACTIONS.md](TRANSACTIONS.md) - Transaction state and MULTI/EXEC
 - [BLOCKING.md](BLOCKING.md) - Blocking command design
+- [PUBSUB.md](PUBSUB.md) - Pub/sub architecture
 - [CONCURRENCY.md](CONCURRENCY.md) - Channel backpressure details
+- [LIFECYCLE.md](LIFECYCLE.md) - Server startup and shutdown
 - [FAILURE_MODES.md](FAILURE_MODES.md) - Connection and network failures
 - [OBSERVABILITY.md](OBSERVABILITY.md) - Full metrics reference
 - [OPERATIONS.md](OPERATIONS.md) - Metrics endpoint configuration
