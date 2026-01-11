@@ -4,154 +4,44 @@ This document covers configuration, observability, security, and debugging for F
 
 ## Configuration
 
-### Overview
+FrogDB uses a layered configuration approach:
 
-FrogDB uses [Figment](https://docs.rs/figment) for hierarchical configuration with the following priority (highest to lowest):
+1. **Startup configuration** via Figment (CLI > env vars > TOML file > defaults)
+2. **Runtime configuration** via `CONFIG SET/GET` commands (Redis-compatible)
+3. **TLS certificate hot-reloading** via file watching and signals (future)
 
-1. Command-line arguments
-2. Environment variables (prefix: `FROGDB_`)
-3. Configuration file (TOML)
-4. Built-in defaults
+For complete configuration documentation, see [CONFIGURATION.md](CONFIGURATION.md).
 
-### Configuration File
+### Quick Reference
 
-Default location: `./frogdb.toml` or specified via `--config path/to/config.toml`
+| Method | Priority | Example |
+|--------|----------|---------|
+| CLI args | Highest | `--port 6379` |
+| Env vars | High | `FROGDB_SERVER__PORT=6379` |
+| TOML file | Medium | `port = 6379` in frogdb.toml |
+| Defaults | Lowest | Built-in values |
 
-**Example configuration:**
+### Runtime Configuration (CONFIG Commands)
 
-```toml
-# frogdb.toml
+FrogDB supports Redis-compatible CONFIG commands:
 
-[server]
-bind = "0.0.0.0"
-port = 6379
-num_shards = 0  # 0 = auto-detect CPU cores
-
-[memory]
-max_memory = 0  # 0 = unlimited (bytes)
-# max_memory = "4GB"  # Human-readable also supported
-
-[persistence]
-enabled = true
-data_dir = "./data"
-durability_mode = "periodic"  # async, periodic, sync
-
-[persistence.periodic]
-sync_ms = 100
-sync_writes = 1000
-
-[persistence.snapshot]
-enabled = true
-interval_s = 3600  # 1 hour
-
-[expiry]
-active_hz = 10
-cycle_ms = 1
-
-[timeouts]
-scatter_gather_ms = 1000
-client_idle_s = 0  # 0 = no timeout
-
-[logging]
-level = "info"  # trace, debug, info, warn, error
-format = "pretty"  # pretty, json
-file = ""  # Empty = stdout only
-
-[metrics]
-enabled = true
-bind = "0.0.0.0"
-port = 9090
-
-[tracing]
-enabled = false
-otlp_endpoint = "http://localhost:4317"
-service_name = "frogdb"
+```
+CONFIG GET *              # Get all parameters
+CONFIG GET max*           # Get params matching pattern
+CONFIG SET maxmemory 4GB  # Set runtime parameter
 ```
 
-### Environment Variables
+**Key points:**
+- `CONFIG GET` returns both mutable and immutable parameters
+- `CONFIG SET` only works for mutable parameters (returns error for immutable ones)
+- `CONFIG REWRITE` is not supported - runtime changes are transient
+- Changes take effect immediately
 
-All settings can be overridden via environment variables:
-
-```bash
-# Server
-FROGDB_SERVER__BIND=0.0.0.0
-FROGDB_SERVER__PORT=6379
-FROGDB_SERVER__NUM_SHARDS=8
-
-# Memory
-FROGDB_MEMORY__MAX_MEMORY=4294967296
-
-# Persistence
-FROGDB_PERSISTENCE__ENABLED=true
-FROGDB_PERSISTENCE__DATA_DIR=/var/lib/frogdb
-FROGDB_PERSISTENCE__DURABILITY_MODE=sync
-
-# Logging
-FROGDB_LOGGING__LEVEL=debug
-FROGDB_LOGGING__FORMAT=json
-```
-
-### Command-Line Arguments
-
-```bash
-frogdb-server [OPTIONS]
-
-Options:
-  -c, --config <FILE>    Configuration file path
-  -b, --bind <ADDR>      Bind address [default: 127.0.0.1]
-  -p, --port <PORT>      Listen port [default: 6379]
-  -s, --shards <N>       Number of shards [default: num_cpus]
-  -m, --max-memory <N>   Memory limit in bytes
-  -d, --data-dir <PATH>  Data directory
-  -l, --log-level <LVL>  Log level (trace/debug/info/warn/error)
-  -h, --help             Print help
-  -V, --version          Print version
-```
-
-### Configuration Struct
-
-```rust
-use figment::{Figment, providers::{Format, Toml, Env, Serialized}};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Config {
-    pub server: ServerConfig,
-    pub memory: MemoryConfig,
-    pub persistence: PersistenceConfig,
-    pub expiry: ExpiryConfig,
-    pub timeouts: TimeoutConfig,
-    pub logging: LoggingConfig,
-    pub metrics: MetricsConfig,
-    pub tracing: TracingConfig,
-}
-
-impl Config {
-    pub fn load() -> Result<Self, figment::Error> {
-        Figment::new()
-            .merge(Serialized::defaults(Config::default()))
-            .merge(Toml::file("frogdb.toml"))
-            .merge(Env::prefixed("FROGDB_").split("__"))
-            .extract()
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig {
-                bind: "127.0.0.1".into(),
-                port: 6379,
-                num_shards: 0,
-            },
-            memory: MemoryConfig {
-                max_memory: 0,
-            },
-            // ... other defaults
-        }
-    }
-}
-```
+See [CONFIGURATION.md](CONFIGURATION.md) for:
+- Full parameter list with mutability
+- TOML configuration reference
+- Environment variable mapping
+- Architecture details
 
 ---
 
