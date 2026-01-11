@@ -305,6 +305,31 @@ Nodes do NOT gossip with each other. They only connect directly for:
 
 All topology knowledge comes from the orchestrator.
 
+### Replication Authentication
+
+Replicas authenticate with primaries using dedicated credentials:
+
+| Config | Description |
+|--------|-------------|
+| `primary_auth` | Password for replica→primary authentication |
+| `primary_user` | ACL username for replication (if using ACLs) |
+
+**Configuration:**
+```toml
+[replication]
+primary_auth = "replication-secret"
+primary_user = "replicator"  # Optional, for ACL-based auth
+max_replicas = 0             # Optional: 0 = unlimited (default), >0 = limit
+```
+
+**Behavior:**
+- Replica sends AUTH before PSYNC handshake
+- If `primary_user` set: `AUTH <user> <password>`
+- If only `primary_auth` set: `AUTH <password>`
+- Primary rejects PSYNC if authentication fails
+
+**Best Practice:** Set `primary_auth` on all nodes (including primaries) since any node may become a replica after failover.
+
 ### Admin API
 
 Each node exposes an admin API on a separate port:
@@ -525,6 +550,17 @@ Primary                              Replica
    │───── [WAL stream] ───────────────▶│  Continue streaming
 ```
 
+**Concurrent FULLRESYNC Requests:**
+
+If multiple replicas request FULLRESYNC simultaneously, FrogDB creates a **single RocksDB checkpoint** and streams it to all requesting replicas. This amortizes the cost of checkpoint creation across multiple sync operations.
+
+| Scenario | Behavior |
+|----------|----------|
+| First FULLRESYNC request | Create checkpoint, begin streaming |
+| Additional request during checkpoint creation | Wait for checkpoint, join streaming |
+| Additional request during checkpoint transfer | Reuse existing checkpoint |
+| All streams complete | Checkpoint eligible for cleanup |
+
 ### Replica Memory Constraints
 
 **Problem:** Primary dataset may exceed replica memory during full sync.
@@ -618,7 +654,7 @@ Primary                              Replica
 | `-ERR sequence too old` | seq outside WAL retention | Retry PSYNC ? -1 (full sync) |
 | `-ERR primary shutting down` | Primary in shutdown | Wait, reconnect to new primary |
 | `-ERR not primary` | Node is not a primary | Query orchestrator for primary |
-| `-ERR too many replicas` | `max_replicas` exceeded | Alert operator, retry later |
+| `-ERR too many replicas` | `max_replicas` exceeded (optional limit) | Alert operator, retry later |
 
 **Example Error Handling:**
 ```
@@ -797,6 +833,41 @@ backlog_size >= write_rate_bytes_per_second * expected_disconnect_seconds
 ```
 
 > **Future Enhancement:** A `backlog_full_policy = "reject_writes"` mode could be added to reject writes when backlog is full (trading availability for guaranteed partial sync). Not currently planned.
+
+### Replica Flow Control
+
+FrogDB streams WAL directly to replica sockets without intermediate buffering (DragonflyDB model):
+
+- **No output buffer limit** for replicas
+- WAL entries written directly to TCP socket
+- If replica socket blocks, streaming pauses (TCP backpressure)
+- Replica disconnected only on network failure or timeout
+
+**Advantages:**
+- Stable under high write loads
+- No memory spikes from buffering
+- No "full sync loop" problem (unlike Redis)
+
+**Replica Disconnect Conditions:**
+
+| Condition | Action |
+|-----------|--------|
+| Network timeout (`repl_timeout_ms`) | Disconnect, replica reconnects |
+| Socket write error | Disconnect, replica reconnects |
+| Replica explicitly disconnects | Clean up connection state |
+
+**Note:** Unlike Redis, FrogDB does NOT disconnect replicas for being "slow" - TCP backpressure handles flow control naturally. This avoids the pathological "full sync loop" where slow replicas repeatedly disconnect and trigger expensive FULLRESYNC operations.
+
+### Cascading Replication
+
+FrogDB does **not** support cascading replication (replica-of-replica). Replicas must connect directly to primaries.
+
+**Rationale:**
+- Simpler implementation and fewer edge cases
+- Avoids propagation delay compounding
+- Cluster mode already provides horizontal scaling
+
+**If geo-distribution is needed:** Deploy multiple clusters with application-level data routing, or use an external replication tool.
 
 ---
 
@@ -1163,15 +1234,25 @@ Orchestrator-driven failover process:
 **Step 2: Select Best Replica**
 
 Selection criteria (in priority order):
-1. **Replication lag**: Prefer replica with highest `sequence_number` (least data loss)
-2. **Connection stability**: Prefer replica with longest continuous connection to primary
-3. **Node priority**: Configurable `replica_priority` (0 = never promote, higher = prefer)
+1. **Node priority**: Configurable `replica_priority` (default: 100, lower = more preferred, 0 = never promote)
+2. **Replication lag**: Prefer replica with highest `sequence_number` (least data loss)
+3. **Connection stability**: Prefer replica with longest continuous connection to primary
 4. **Deterministic tiebreaker**: Lexicographic NodeId comparison
 
 ```
-replica_score = (max_seq - replica_seq) * 1000 + (now - connected_since).seconds()
+replica_score =
+    (replica_priority == 0 ? INFINITY : replica_priority * 100000) +
+    (max_seq - replica_seq) * 1000 +
+    (now - connected_since).seconds()
 # Lower score = better candidate
-# replica_priority = 0 excludes from selection
+# Priority 0 = never promote (excluded from selection)
+# Priority 1-99 = high priority, 100 = default, 101+ = low priority
+```
+
+**Configuration:**
+```toml
+[cluster]
+replica_priority = 100  # Default. Set to 0 to never promote this replica.
 ```
 
 **Step 3: Promote Replica**
@@ -1890,17 +1971,19 @@ ACL updates are **eventually consistent** across the cluster:
 
 ### Replication Lag Measurement
 
-**Calculation:**
+**Calculation (matching Redis):**
 
-```
-lag_bytes = primary_offset - replica_offset
-lag_seconds = lag_bytes / throughput_bytes_per_second
-```
+| Metric | Calculation | Description |
+|--------|-------------|-------------|
+| `lag_seconds` | `now - last_ack_time` | Seconds since last REPLCONF ACK from replica |
+| `lag_bytes` | `primary_offset - replica_offset` | Bytes behind primary |
 
-Where:
-- `primary_offset`: Current WAL sequence number on primary
-- `replica_offset`: Last acknowledged sequence number from replica
-- `throughput`: Smoothed moving average of replication throughput
+Replicas send `REPLCONF ACK <offset>` every `repl_ping_interval_ms` (default: 1000ms).
+
+**Why seconds-since-ACK?**
+- Simple and reliable (no throughput estimation needed)
+- Matches Redis behavior exactly
+- Works correctly even when write throughput is zero
 
 **Lag Visibility:**
 
@@ -1977,7 +2060,33 @@ WAIT 1 5000
 :1
 ```
 
-**Note:** WAIT provides per-command sync semantics, complementing `min_replicas_to_write` which affects all writes. This enables applications to selectively wait for replication on critical writes while keeping general writes asynchronous for performance.
+### WAIT vs min_replicas_to_write
+
+These mechanisms are **complementary, not overlapping**:
+
+| Mechanism | When Applied | Purpose |
+|-----------|--------------|---------|
+| `min_replicas_to_write` | **Before** write | Gate: reject writes if insufficient replicas connected |
+| `WAIT` | **After** write | Confirm: block until write replicated to N replicas |
+
+**Interaction:**
+- `min_replicas_to_write` checks replica *connectivity* (based on ping lag, pre-write check)
+- `WAIT` checks *replication progress* (specific offset acknowledged, post-write)
+- Both can be used together for defense-in-depth
+- `WAIT` can request more replicas than `min_replicas_to_write` requires
+
+**Example - Combined Usage:**
+```toml
+[cluster]
+min_replicas_to_write = 1  # Ensure at least 1 replica is connected
+```
+```
+SET user:1 data
+WAIT 2 5000  # Wait for 2 replicas to acknowledge this specific write
+:2
+```
+
+This enables applications to selectively wait for stronger replication on critical writes while keeping general writes performant.
 
 ---
 

@@ -178,7 +178,7 @@ In cluster mode with asynchronous replication (default):
 
 | Replication Mode | Transaction Durability on Failover |
 |------------------|-----------------------------------|
-| Async (default)  | May lose up to `replication_lag_seconds` of transactions |
+| Async (default)  | May lose up to `frogdb_replication_lag_seconds` of transactions |
 | Sync (`min_replicas_to_write >= 1`) | Acknowledged transactions survive failover |
 
 See [CLUSTER.md - Failover Consistency](CLUSTER.md#failover) for details.

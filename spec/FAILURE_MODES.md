@@ -301,6 +301,33 @@ max_connections = 10000  # 0 = unlimited (OS limit)
 - Implement connection limits per client
 - Consider using UNIX sockets for local connections
 
+### Replica Streaming Stall
+
+**Trigger:** TCP socket to replica blocks for extended period (slow replica, network congestion).
+
+**Behavior:**
+- Primary WAL streaming pauses for that replica (TCP backpressure)
+- Other replicas unaffected (independent sockets)
+- If stall exceeds `repl_timeout_ms`: connection closed, replica reconnects
+
+**Detection:**
+- `frogdb_replica_streaming_stall_total` metric increments
+- Log entry: `"Replica streaming stalled for {duration}ms"`
+- Lag metrics increase: `frogdb_replication_lag_seconds`
+
+**Recovery:**
+1. Replica automatically reconnects after timeout
+2. PSYNC attempted (resume from last offset)
+3. Falls back to FULLRESYNC if offset no longer available
+
+**Note:** Unlike Redis, FrogDB does NOT proactively disconnect "slow" replicas. TCP backpressure naturally handles flow control, avoiding the pathological "full sync loop" where slow replicas repeatedly trigger expensive FULLRESYNC operations.
+
+**Configuration:**
+```toml
+[replication]
+repl_timeout_ms = 60000  # Disconnect after 60s of no progress
+```
+
 ---
 
 ## Shard Worker Failures
