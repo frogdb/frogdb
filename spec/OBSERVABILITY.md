@@ -702,7 +702,7 @@ Key panels for a FrogDB dashboard:
 
 ## References
 
-- [OPERATIONS.md](OPERATIONS.md) - Configuration and deployment
+- [CONFIGURATION.md](CONFIGURATION.md) - Configuration system
 - [DESIGN.md](INDEX.md) - Architecture overview
 - [EVICTION.md](EVICTION.md) - Eviction policies and memory management
 - [OpenTelemetry Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/database/)

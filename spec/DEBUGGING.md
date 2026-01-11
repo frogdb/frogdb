@@ -1055,7 +1055,7 @@ This approach finds rare bugs that would require months of production operation 
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Symptom-driven diagnosis runbooks
 - [FAILURE_MODES.md](FAILURE_MODES.md) - Error handling and recovery procedures
 - [TESTING.md](TESTING.md) - Test strategy and running tests
-- [OPERATIONS.md](OPERATIONS.md) - Operational configuration
+- [CONFIGURATION.md](CONFIGURATION.md) - Configuration system
 - [CONCURRENCY.md](CONCURRENCY.md) - Thread architecture and VLL
 
 ### External Tools

@@ -812,7 +812,7 @@ To revoke a user's access immediately, use `CLIENT KILL USER <username>` to term
 
 ## Transport Security (TLS)
 
-For encrypted connections, see [OPERATIONS.md TLS configuration](OPERATIONS.md#tls-future).
+For encrypted connections, see [CONFIGURATION.md TLS section](CONFIGURATION.md#tls-certificate-hot-reloading-future).
 
 TLS provides:
 - Encrypted client-server communication

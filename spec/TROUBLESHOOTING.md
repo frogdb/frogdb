@@ -615,4 +615,4 @@ frogdb-admin diagnostic-bundle --output /tmp/frogdb-diag.tar.gz
 - [DEBUGGING.md](DEBUGGING.md) - Tools and techniques
 - [FAILURE_MODES.md](FAILURE_MODES.md) - Recovery procedures
 - [OBSERVABILITY.md](OBSERVABILITY.md) - Metrics reference
-- [OPERATIONS.md](OPERATIONS.md) - Configuration guide
+- [CONFIGURATION.md](CONFIGURATION.md) - Configuration guide

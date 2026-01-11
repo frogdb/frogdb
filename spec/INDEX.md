@@ -211,7 +211,7 @@ See [TESTING.md](TESTING.md) for test categories and CI configuration.
 
 FrogDB provides Prometheus-compatible metrics (connections, memory, commands, keyspace), OpenTelemetry tracing (span per command), and structured logging. Debug commands include SLOWLOG, DEBUG OBJECT, and INFO.
 
-See [OBSERVABILITY.md](OBSERVABILITY.md) for metrics reference and [OPERATIONS.md](OPERATIONS.md) for configuration.
+See [OBSERVABILITY.md](OBSERVABILITY.md) for metrics reference and [CONFIGURATION.md](CONFIGURATION.md) for configuration.
 
 ---
 
@@ -275,7 +275,7 @@ FrogDB uses a layered configuration approach:
 - No `CONFIG REWRITE` - runtime changes are transient
 - Parameters classified as mutable or immutable
 
-See [CONFIGURATION.md](CONFIGURATION.md) for full configuration system design, [OPERATIONS.md](OPERATIONS.md) for operational guide, and [DEPLOYMENT.md](DEPLOYMENT.md) for Docker/K8s deployment.
+See [CONFIGURATION.md](CONFIGURATION.md) for full configuration system design and [DEPLOYMENT.md](DEPLOYMENT.md) for Docker/K8s deployment.
 
 ---
 
@@ -339,7 +339,6 @@ See [CONFIGURATION.md](CONFIGURATION.md) for full configuration system design, [
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Symptom-driven diagnosis runbooks |
 | [OBSERVABILITY.md](OBSERVABILITY.md) | Metrics, logging, tracing |
 | [CONFIGURATION.md](CONFIGURATION.md) | Configuration system, CONFIG commands, TLS hot-reload |
-| [OPERATIONS.md](OPERATIONS.md) | Operational guide, debugging |
 | [FAILURE_MODES.md](FAILURE_MODES.md) | Error handling, recovery |
 | [CONSISTENCY.md](CONSISTENCY.md) | Consistency guarantees |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Docker, K8s deployment |

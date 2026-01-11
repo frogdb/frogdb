@@ -294,4 +294,4 @@ data_dir = "./data"
 # ... see PERSISTENCE.md for full options
 ```
 
-See [OPERATIONS.md](OPERATIONS.md) for complete configuration guide.
+See [CONFIGURATION.md](CONFIGURATION.md) for complete configuration guide.

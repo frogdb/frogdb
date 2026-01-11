@@ -129,7 +129,7 @@ uptime_in_days:0
 | cluster | Cluster enabled, known nodes |
 | keyspace | Per-database key counts and expirations |
 
-See [OPERATIONS.md](../OPERATIONS.md#info-command) for detailed output format.
+See [OBSERVABILITY.md](../OBSERVABILITY.md#info) for detailed output format.
 
 ---
 

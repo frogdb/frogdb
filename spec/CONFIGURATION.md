@@ -548,5 +548,5 @@ impl ConfigManager {
 - [Valkey Configuration](https://valkey.io/topics/valkey.conf/)
 - [DragonflyDB Flags](https://www.dragonflydb.io/docs/managing-dragonfly/flags)
 - [Figment Crate](https://docs.rs/figment)
-- [OPERATIONS.md](OPERATIONS.md) - Operational configuration details
+- [OBSERVABILITY.md](OBSERVABILITY.md) - Metrics, logging, tracing
 - [LIFECYCLE.md](LIFECYCLE.md) - Startup/shutdown procedures
