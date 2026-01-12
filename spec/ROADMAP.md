@@ -32,8 +32,11 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
   - [ ] `tokio` (rt-multi-thread, net, sync, macros)
   - [ ] `bytes`
   - [ ] `redis-protocol` v5 with `bytes` and `codec` features
-  - [ ] `tracing` + `tracing-subscriber`
+  - [ ] `tracing` + `tracing-subscriber` (with `json` feature)
   - [ ] `griddle` (HashMap without resize spikes)
+  - [ ] `figment` with `toml` and `env` features (layered configuration)
+  - [ ] `serde` + `serde_derive` (config deserialization)
+  - [ ] `clap` with `derive` feature (CLI argument parsing)
 
 ### 1.2 Protocol Layer
 
@@ -112,7 +115,38 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
   - [ ] Route and execute
   - [ ] Encode and send response
 
-### 1.6 Server & Acceptor
+### 1.6 Configuration
+
+Full layered configuration from Phase 1 (see [CONFIGURATION.md](CONFIGURATION.md) for details):
+
+- [ ] `Config` struct with serde derive:
+  ```rust
+  #[derive(Debug, Deserialize)]
+  pub struct Config {
+      pub server: ServerConfig,
+      pub logging: LoggingConfig,
+      // Other sections as placeholders with defaults
+  }
+  ```
+- [ ] Configuration loading via Figment (priority: CLI > env > TOML > defaults):
+  ```rust
+  Figment::new()
+      .merge(Serialized::defaults(Config::default()))
+      .merge(Toml::file("frogdb.toml").nested())
+      .merge(Env::prefixed("FROGDB_").split("__"))
+      .merge(Serialized::globals(cli_overrides))
+  ```
+- [ ] CLI arguments via clap:
+  - [ ] `--config <FILE>` - Path to TOML config file
+  - [ ] `--bind <ADDR>` - Override bind address
+  - [ ] `--port <PORT>` - Override listen port
+  - [ ] `--shards <N>` - Override number of shards
+  - [ ] `--log-level <LEVEL>` - Override log level
+  - [ ] `--log-format <FORMAT>` - Override log format (pretty/json)
+- [ ] Default `frogdb.toml` generation on first run (optional, with `--generate-config`)
+- [ ] Config validation at startup (fail fast on invalid values)
+
+### 1.7 Server & Acceptor
 
 - [ ] Acceptor task:
   - [ ] TCP listener
@@ -120,14 +154,14 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
   - [ ] Round-robin shard assignment
   - [ ] Send NewConnection to shard
 - [ ] Server startup:
-  - [ ] Parse configuration (bind, port)
-  - [ ] Initialize logging
-  - [ ] Spawn shard workers (configurable, default 1)
+  - [ ] Load configuration via Figment (TOML + env + CLI)
+  - [ ] Initialize logging with configured format and level
+  - [ ] Spawn shard workers (configurable, default: num_cpus)
   - [ ] Start acceptor
-  - [ ] Log ready message
+  - [ ] Log ready message with bound address
 - [ ] Graceful shutdown (SIGTERM/SIGINT)
 
-### 1.7 Routing
+### 1.8 Routing
 
 - [ ] `route_and_execute` function:
   - [ ] Extract keys via `command.keys(args)`
@@ -137,7 +171,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 - [ ] `execute_local` function
 - [ ] `execute_remote` function (send via channel, await oneshot response)
 
-### 1.8 Initial Commands
+### 1.9 Initial Commands
 
 - [ ] `PING` (keyless, returns PONG or echoes argument)
 - [ ] `ECHO` (keyless)
@@ -148,7 +182,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 - [ ] `DEL` (single key)
 - [ ] `EXISTS` (single key)
 
-### 1.9 Noop Abstractions (Critical for Future)
+### 1.10 Noop Abstractions (Critical for Future)
 
 These must exist as traits/stubs to avoid refactoring:
 
@@ -173,10 +207,16 @@ These must exist as traits/stubs to avoid refactoring:
   - `start_span(name) -> Span`
   - `Span::set_attribute(key, value)`
   - `Span::end()`
-- [ ] Structured logging setup with `tracing` crate (this IS implemented, not noop)
-- [ ] Log levels and filtering from config
+- [ ] Structured logging setup with `tracing` crate (this IS implemented, not noop):
+  - [ ] Configurable format via `logging.format` config:
+    - `pretty` - Human-readable, colored output for development
+    - `json` - Machine-parseable JSON lines for production
+  - [ ] Configurable level via `logging.level` config (trace/debug/info/warn/error)
+  - [ ] Log subscriber initialization based on config
 
-### 1.10 Testing
+### 1.11 Testing
+
+**Integration Tests** (tests/ directory):
 
 - [ ] `TestServer` helper:
   ```rust
@@ -198,7 +238,27 @@ These must exist as traits/stubs to avoid refactoring:
 - [ ] Test: GET nonexistent returns nil
 - [ ] Test: wrong arity returns error
 
-### 1.11 Documentation
+**Unit Tests** (inline #[cfg(test)] modules):
+
+- [ ] Store trait implementation tests:
+  - [ ] HashMapStore get/set/delete operations
+  - [ ] Memory accounting accuracy
+  - [ ] Key existence checks
+- [ ] Command trait tests:
+  - [ ] Arity validation (Fixed, AtLeast, Range)
+  - [ ] CommandFlags bitflag operations
+- [ ] Routing tests:
+  - [ ] `shard_for_key()` hash distribution
+  - [ ] Hash tag extraction `{...}` handling
+- [ ] Configuration tests:
+  - [ ] Config default values
+  - [ ] Figment layering priority (CLI > env > TOML > defaults)
+  - [ ] Invalid config rejection
+- [ ] Protocol tests:
+  - [ ] ParsedCommand construction
+  - [ ] Response encoding for each variant
+
+### 1.12 Documentation
 
 - [ ] Update INDEX.md roadmap section to link here
 - [ ] Add inline documentation to public types
@@ -845,6 +905,8 @@ These must exist from Phase 1 to avoid refactoring:
 | Shard channels | 1 shard | N shards (Phase 4) |
 | `ExpiryIndex` | Empty | Functional (Phase 2) |
 | `ProtocolVersion` | Resp2 only | Resp2 + Resp3 (Phase 12) |
+| `Config` + Figment | Full (CLI + TOML + env) | CONFIG GET/SET (Phase 10) |
+| Logging format | pretty + json | Same |
 
 ---
 
@@ -856,4 +918,5 @@ These must exist from Phase 1 to avoid refactoring:
 - [CONCURRENCY.md](CONCURRENCY.md) - Threading model
 - [PROTOCOL.md](PROTOCOL.md) - RESP handling
 - [PERSISTENCE.md](PERSISTENCE.md) - RocksDB integration
+- [CONFIGURATION.md](CONFIGURATION.md) - Configuration system
 - [TESTING.md](TESTING.md) - Test strategy
