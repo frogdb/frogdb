@@ -9,9 +9,15 @@ This document specifies the repository layout, Cargo workspace configuration, cr
 ```
 frogdb/
 ├── Cargo.toml              # Workspace manifest
-├── Makefile                # Local dev commands (fmt, lint, test)
+├── Cargo.lock              # Committed (binary project)
+├── Justfile                # Local dev commands (fmt, lint, test)
+├── rust-toolchain.toml     # Pinned Rust version
 ├── rustfmt.toml            # Code formatting rules
 ├── clippy.toml             # Lint configuration (if needed)
+├── deny.toml               # Dependency auditing (cargo-deny)
+├── .cargo/
+│   └── config.toml         # Cargo settings, faster linker
+├── .gitignore              # Git ignores
 ├── crates/
 │   ├── server/             # Binary: networking, runtime, main()
 │   │   ├── Cargo.toml      # name = "frogdb-server"
@@ -67,6 +73,12 @@ members = [
     "crates/protocol",
 ]
 
+# Shared package metadata
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false  # Prevent accidental publishes to crates.io
+
 # Shared dependency versions
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -91,6 +103,18 @@ module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+
+# Release profile optimizations
+[profile.release]
+lto = "thin"           # Link-time optimization (faster builds than "fat")
+codegen-units = 1      # Better optimization, slower compile
+strip = true           # Strip symbols from binary
+
+# Release with debug info (for profiling)
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+strip = false
 ```
 
 ### Crate Cargo.toml Examples
@@ -99,8 +123,9 @@ missing_panics_doc = "allow"
 ```toml
 [package]
 name = "frogdb-server"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
 
 [[bin]]
 name = "frogdb-server"
@@ -127,8 +152,9 @@ workspace = true
 ```toml
 [package]
 name = "frogdb-core"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
 
 [dependencies]
 bytes = { workspace = true }
@@ -146,8 +172,9 @@ workspace = true
 ```toml
 [package]
 name = "frogdb-protocol"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
 
 [dependencies]
 bytes = { workspace = true }
@@ -293,6 +320,125 @@ imports_granularity = "Module"
 group_imports = "StdExternalCrate"
 ```
 
+### rust-toolchain.toml
+
+Pin the Rust version for reproducible builds across all developers and CI:
+
+```toml
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+```
+
+**Note:** Update periodically to latest stable. When updating, run `just check` to ensure compatibility.
+
+### .gitignore
+
+```gitignore
+# Build artifacts
+/target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Debug
+*.log
+core
+
+# Cargo.lock is COMMITTED (binary project)
+# See: https://doc.rust-lang.org/cargo/faq.html#why-have-cargolock-in-version-control
+```
+
+### .cargo/config.toml
+
+Cargo configuration for faster builds and convenient aliases:
+
+```toml
+[alias]
+# Shortcuts
+b = "build"
+t = "test"
+r = "run"
+c = "check"
+
+# Use mold linker on Linux for faster linking (optional)
+# Uncomment if mold is installed: https://github.com/rui314/mold
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# Use lld on macOS for faster linking (optional)
+# Uncomment if lld is installed via: brew install llvm
+# [target.aarch64-apple-darwin]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[build]
+# Incremental compilation (default, but explicit)
+incremental = true
+
+[net]
+# Use sparse registry protocol (faster downloads)
+git-fetch-with-cli = true
+```
+
+### deny.toml
+
+[cargo-deny](https://github.com/EmbarkStudios/cargo-deny) configuration for dependency auditing:
+
+```toml
+[advisories]
+db-path = "~/.cargo/advisory-db"
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "warn"
+notice = "warn"
+
+[licenses]
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unicode-DFS-2016",
+]
+copyleft = "warn"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+# Skip specific duplicate version checks if needed:
+# skip = [
+#     { name = "windows-sys" },  # Common transitive duplicate
+# ]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+```
+
+**Installation:**
+```bash
+cargo install cargo-deny
+```
+
 ### Linting
 
 Strict linting with clippy pedantic, enforced locally before commits:
@@ -414,35 +560,96 @@ cargo run --release -p frogdb-server
 cargo run -p frogdb-server -- --port 6380 --bind 0.0.0.0
 ```
 
-### Makefile (Optional)
+### Justfile
 
-For convenience, a Makefile can wrap common commands:
+[Just](https://github.com/casey/just) is used for development commands. It's a modern command runner with cleaner syntax than Make.
 
-```makefile
-.PHONY: build test fmt lint check run
+**Installation:**
+```bash
+# macOS
+brew install just
 
+# cargo
+cargo install just
+
+# Other platforms: https://github.com/casey/just#installation
+```
+
+**Justfile:**
+```just
+# Default recipe - show available commands
+default:
+    @just --list
+
+# Build debug
 build:
-	cargo build
+    cargo build
 
-test:
-	cargo test --all
-
-fmt:
-	cargo fmt --all
-
-fmt-check:
-	cargo fmt --all -- --check
-
-lint:
-	cargo clippy --all-targets --all-features -- -D warnings
-
-check: fmt-check lint test
-
-run:
-	cargo run -p frogdb-server
-
+# Build release
 release:
-	cargo build --release
+    cargo build --release
+
+# Run all tests
+test:
+    cargo test --all
+
+# Run tests for a specific crate
+test-crate crate:
+    cargo test -p {{crate}}
+
+# Run a specific test
+test-one name:
+    cargo test {{name}} -- --nocapture
+
+# Format code
+fmt:
+    cargo fmt --all
+
+# Check formatting (CI)
+fmt-check:
+    cargo fmt --all -- --check
+
+# Run clippy lints
+lint:
+    cargo clippy --all-targets --all-features -- -D warnings
+
+# Run cargo-deny (license/security audit)
+deny:
+    cargo deny check
+
+# Run all checks (CI)
+check: fmt-check lint deny test
+
+# Run the server (debug)
+run *args:
+    cargo run -p frogdb-server -- {{args}}
+
+# Run the server (release)
+run-release *args:
+    cargo run --release -p frogdb-server -- {{args}}
+
+# Clean build artifacts
+clean:
+    cargo clean
+
+# Watch for changes and run tests (requires cargo-watch)
+watch:
+    cargo watch -x 'test --all'
+
+# Generate documentation
+doc:
+    cargo doc --all --no-deps --open
+```
+
+**Usage:**
+```bash
+just              # Show available commands
+just build        # Build debug
+just test         # Run all tests
+just test-crate frogdb-core  # Test specific crate
+just check        # Run all CI checks
+just run          # Run server
+just run --port 6380  # Run with args
 ```
 
 ---
@@ -466,7 +673,7 @@ CI is run locally during development. No GitHub Actions initially.
 
 Before committing:
 ```bash
-make check  # or: cargo fmt --check && cargo clippy ... && cargo test
+just check  # runs: fmt-check, lint, test
 ```
 
 ### Future GitHub Actions
@@ -483,8 +690,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo deny check
       - run: cargo test --all
 ```
 
