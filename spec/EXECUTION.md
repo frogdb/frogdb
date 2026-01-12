@@ -180,27 +180,66 @@ fn dispatch(cmd: &ParsedCommand) -> Result<Response, Error> {
 
 ---
 
-## Type Conversion and Errors
+## Type Handling Rules
 
-FrogDB is strictly typed. Attempting wrong-type operations returns:
+FrogDB values are typed (string, list, set, sorted set, hash, stream). Commands interact with types in three distinct ways:
+
+### Type-Checking Commands (Return WRONGTYPE)
+
+Most commands expect a specific type and return an error if the key holds a different type:
 
 ```
 -WRONGTYPE Operation against a key holding the wrong kind of value
 ```
 
-**Type checking behavior:**
+| Command Category | Expected Type | Example |
+|-----------------|---------------|---------|
+| String commands | String | `GET`, `APPEND`, `INCR`, `GETRANGE` |
+| List commands | List | `LPUSH`, `RPOP`, `LRANGE`, `LLEN` |
+| Set commands | Set | `SADD`, `SMEMBERS`, `SISMEMBER` |
+| Sorted set commands | Sorted Set | `ZADD`, `ZRANGE`, `ZSCORE` |
+| Hash commands | Hash | `HSET`, `HGET`, `HGETALL` |
 
-| Scenario | Result |
-|----------|--------|
-| GET on string | Value returned |
-| GET on sorted set | WRONGTYPE error |
-| ZADD on string | WRONGTYPE error |
-| SET on existing sorted set | Overwrites (type changes to string) |
-| DEL | Works on any type |
-| TYPE | Returns type name |
-| EXISTS | Works on any type |
+### Type-Overwriting Commands (Replace Regardless of Type)
 
-**Implementation:**
+These commands unconditionally overwrite the key, changing its type if necessary:
+
+| Command | Behavior |
+|---------|----------|
+| `SET` | Overwrites any existing value with a string |
+| `GETSET` | Returns old value (any type), replaces with string |
+| `SETEX`, `SETNX`, `PSETEX` | Same as SET (type overwrite) |
+
+> **Warning:** `SET` on a non-string key will silently replace it. This is Redis-compatible
+> behavior but can lead to data loss if used carelessly.
+
+**Example:**
+```
+ZADD myzset 1 "member"
+(integer) 1
+TYPE myzset
+zset
+SET myzset "now a string"  # Overwrites the sorted set!
+OK
+TYPE myzset
+string
+```
+
+### Type-Agnostic Commands (Work on Any Type)
+
+These commands operate on keys regardless of their type:
+
+| Command | Behavior |
+|---------|----------|
+| `DEL` | Delete key of any type |
+| `EXISTS` | Check existence of any type |
+| `TYPE` | Return type name |
+| `EXPIRE`, `TTL`, `PERSIST` | Manage expiration of any type |
+| `RENAME`, `RENAMENX` | Rename key of any type |
+| `OBJECT` | Inspect any type |
+| `DUMP`, `RESTORE` | Serialize/deserialize any type |
+
+### Implementation
 
 ```rust
 fn check_type<T: ExpectedType>(value: &FrogValue) -> Result<&T, CommandError> {
@@ -211,7 +250,7 @@ fn check_type<T: ExpectedType>(value: &FrogValue) -> Result<&T, CommandError> {
 }
 ```
 
-Commands that work on any type (DEL, EXISTS, TYPE, EXPIRE, TTL, RENAME, etc.) skip type checking and operate on the key directly.
+Type-overwriting commands skip this check entirely. Type-agnostic commands don't call it.
 
 ---
 

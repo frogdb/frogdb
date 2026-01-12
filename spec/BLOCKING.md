@@ -4,6 +4,47 @@ This document details the design for blocking commands (BLPOP, BRPOP, BLMOVE, et
 
 > **Status:** Non-goal for initial implementation. This document outlines future design considerations.
 
+## Industry Comparison
+
+| Aspect | Redis/Valkey | DragonflyDB | FrogDB |
+|--------|--------------|-------------|--------|
+| Architecture | Single-threaded | Multi-threaded, shared-nothing | Multi-threaded, shared-nothing |
+| Blocking mechanism | `beforeSleep()` phase rechecks | Per-thread wait queues | Per-shard wait queues |
+| Multi-key ordering | First non-empty key in BLPOP order | Non-deterministic (parallel exec) | First non-empty key in order |
+| Cross-shard blocking | N/A (single thread) | Keys must be on same thread | Keys must be on same shard |
+| Fairness | FIFO by blocking time | FIFO by blocking time | FIFO by blocking time |
+
+### Redis Implementation Details
+
+Redis handles blocking in the event loop's `beforeSleep()` phase:
+
+1. When `LPUSH` adds data, Redis marks clients blocked on that key as "ready"
+2. Before going idle, Redis rechecks all ready clients
+3. Clients are served in FIFO order (longest-waiting first)
+4. If multiple keys listed in BLPOP, the **order in the command** determines priority
+
+> *"After the writes occur, Redis reprocesses the blocking command for the client and pops from the first non-empty key in the key list."* - [Redis BLPOP Docs](https://redis.io/docs/latest/commands/blpop/)
+
+### DragonflyDB Differences
+
+DragonflyDB's multi-threaded architecture introduces non-determinism:
+
+> *"Dragonfly can potentially parallelize the execution of a single MULTI/EXEC transaction or script, which makes it impossible to determine what key will receive a new element first."*
+
+- With `multi_exec_squash=true` (default): Key ordering in BLPOP may not match data arrival order
+- With `multi_exec_squash=false`: Redis-compatible ordering restored
+
+### FrogDB Approach
+
+FrogDB follows the **Redis model** for semantics but with **DragonflyDB-style architecture**:
+
+- Per-shard wait queues (similar to DragonflyDB's per-thread model)
+- Cross-shard blocking rejected with `CROSSSHARD` error (use hash tags)
+- FIFO fairness within each shard
+- Key ordering in BLPOP command respected (no parallel execution of blocking checks)
+
+---
+
 ## Overview
 
 Blocking commands allow clients to wait for data to become available:
