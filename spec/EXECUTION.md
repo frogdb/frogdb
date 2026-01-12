@@ -66,6 +66,100 @@ pub trait Command: Send + Sync {
 
 ---
 
+## CommandError
+
+Error type returned by command execution. Maps to RESP error responses.
+
+```rust
+/// Core error variants for command execution.
+/// This enum will expand as more commands are implemented.
+#[derive(Debug, Clone)]
+pub enum CommandError {
+    // === Syntax/Argument Errors ===
+
+    /// Wrong number of arguments for command
+    /// Response: "ERR wrong number of arguments for '{command}' command"
+    WrongArity { command: &'static str },
+
+    /// Invalid argument value or format
+    /// Response: "ERR {message}"
+    InvalidArgument { message: String },
+
+    /// General syntax error
+    /// Response: "ERR syntax error"
+    SyntaxError,
+
+    // === Type Errors ===
+
+    /// Operation against wrong value type
+    /// Response: "WRONGTYPE Operation against a key holding the wrong kind of value"
+    WrongType,
+
+    /// Value is not an integer or out of range
+    /// Response: "ERR value is not an integer or out of range"
+    NotInteger,
+
+    /// Value is not a valid float
+    /// Response: "ERR value is not a valid float"
+    NotFloat,
+
+    // === System Errors ===
+
+    /// Out of memory (when maxmemory reached and no eviction possible)
+    /// Response: "OOM command not allowed when used memory > 'maxmemory'"
+    OutOfMemory,
+
+    /// Internal server error
+    /// Response: "ERR {message}"
+    Internal { message: String },
+}
+
+impl CommandError {
+    /// Convert to RESP error response
+    pub fn to_response(&self) -> Response {
+        Response::Error(self.to_bytes())
+    }
+
+    fn to_bytes(&self) -> Bytes {
+        match self {
+            Self::WrongArity { command } => {
+                Bytes::from(format!("ERR wrong number of arguments for '{}' command", command))
+            }
+            Self::InvalidArgument { message } => {
+                Bytes::from(format!("ERR {}", message))
+            }
+            Self::SyntaxError => {
+                Bytes::from_static(b"ERR syntax error")
+            }
+            Self::WrongType => {
+                Bytes::from_static(b"WRONGTYPE Operation against a key holding the wrong kind of value")
+            }
+            Self::NotInteger => {
+                Bytes::from_static(b"ERR value is not an integer or out of range")
+            }
+            Self::NotFloat => {
+                Bytes::from_static(b"ERR value is not a valid float")
+            }
+            Self::OutOfMemory => {
+                Bytes::from_static(b"OOM command not allowed when used memory > 'maxmemory'")
+            }
+            Self::Internal { message } => {
+                Bytes::from(format!("ERR {}", message))
+            }
+        }
+    }
+}
+```
+
+**Note:** This enum will expand during implementation as new error cases are discovered.
+Additional variants to add as needed:
+- `CrossSlot` - For multi-key operations across hash slots
+- `NoAuth` / `NoPerm` - For authentication/authorization
+- `ReadOnly` - For write commands on replicas
+- `Busy` - For blocking operations
+
+---
+
 ## Arity
 
 Specifies the expected number of arguments for a command:

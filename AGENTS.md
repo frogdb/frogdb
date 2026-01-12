@@ -8,6 +8,7 @@
 - The development process will start with a small subset of Redis functionality and expand from there.
 - Despite the initial small subset of functionality, we do _not_ want to make design decisions that will result in significant rewrites later.
 - When we know a feature will be needed later we should plan on integrating it as a noop at first. This way we don't have to make large, complicated and costly changes later. Create good abstractions where these more advanced features will be used and leave them as noop integrations that follow the simple path. We will implement the abstractions later.
+- Follow idiomatic Rust patterns and use best practices
 
 ## Specs/Docs
 
@@ -16,8 +17,7 @@
 - Always read the `README.md` file before starting any task to get context on the project. Then read `spec/INDEX.md` to get context on the state of the design itself.
 - You will frequently be reading large markdown files. Be careful not to read more context than you need. Use CLI tools such as `grep`, `less`, `head` (among others) to minimize extraneous context when reading specs.
 - Unless told to conduct a broad, sweeping analysis of the spec, keep your investigations and analysis focused on the specific ask, minimizing extraneous context.
-- Try to keep a single source of truth in documentation using links when sections overlap. If a concept belonging to its own file (eg. CONFIGURATION.md) is relevant in other documents. Describe how it relates and link to the relevant document without repeating too much. When linking provide context for how the current document relates to the linked one.
-- Create markdown links to specific sections if possible to help with searching through the spec.
-- When changing a markdown section, fix any links that point to the affected section.
+- Try to keep a single source of truth in documentation (DRY) using Markdown links when referencing a topic covered in another section.
+- When renaming markdown files/moving content, fix any links that point to the affected file/section.
 - When non-trivial functionality is required, evaluate if a Rust Crate is available which can help solve the issue.
 - When a library is of use that has a copyleft license like GPL, AGPL, prompt before including it.

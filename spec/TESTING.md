@@ -405,28 +405,112 @@ cargo test --release
 
 ### TestServer
 
-Helper for starting FrogDB in tests:
+Helper for starting FrogDB in tests. Uses **in-process testing** (not subprocess) for:
+- Faster test execution (no process spawn overhead)
+- Easier debugging (single process, shared stack traces)
+- White-box testing capability (access to internal state)
 
 ```rust
-struct TestServer {
-    process: Child,
-    port: u16,
-    data_dir: TempDir,
+pub struct TestServer {
+    /// Shutdown signal sender
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Server task handle
+    server_handle: JoinHandle<()>,
+    /// Bound address (with OS-assigned port)
+    addr: SocketAddr,
+    /// Temporary data directory (cleaned up on drop)
+    _temp_dir: TempDir,
 }
 
 impl TestServer {
-    async fn start() -> Self;
-    async fn with_config(config: Config) -> Self;
-    fn url(&self) -> String;
-    fn connection(&self) -> redis::Connection;
+    /// Start server with default configuration
+    pub async fn start() -> Self {
+        Self::with_config(TestConfig::default()).await
+    }
+
+    /// Start server with custom configuration
+    pub async fn with_config(config: TestConfig) -> Self {
+        // 1. Create temp directory for data
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+
+        // 2. Bind to port 0 for OS-assigned available port
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind");
+        let addr = listener.local_addr().expect("failed to get local addr");
+
+        // 3. Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        // 4. Spawn server as Tokio task (runs in same runtime as test)
+        let server_handle = tokio::spawn(async move {
+            run_server_with_listener(listener, config, shutdown_rx).await
+        });
+
+        // Server is ready immediately after bind (no polling needed)
+        Self {
+            shutdown_tx: Some(shutdown_tx),
+            server_handle,
+            addr,
+            _temp_dir: temp_dir,
+        }
+    }
+
+    /// Get the server's bound address
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// Get connection URL for redis client
+    pub fn url(&self) -> String {
+        format!("redis://{}", self.addr)
+    }
+
+    /// Create a new async connection to the server
+    pub async fn connection(&self) -> redis::aio::MultiplexedConnection {
+        let client = redis::Client::open(self.url()).expect("failed to create client");
+        client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("failed to connect")
+    }
+
+    /// Create a new sync connection (for non-async test contexts)
+    pub fn sync_connection(&self) -> redis::Connection {
+        let client = redis::Client::open(self.url()).expect("failed to create client");
+        client.get_connection().expect("failed to connect")
+    }
+
+    /// Graceful shutdown - waits for server to stop
+    pub async fn shutdown(mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+        let _ = self.server_handle.await;
+    }
 }
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        self.process.kill().unwrap();
+        // Send shutdown signal (ignore if already sent or receiver dropped)
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+        // Note: JoinHandle is not awaited in Drop (would require async)
+        // Tests should call shutdown().await for clean shutdown
+        // Tokio will cancel the task when runtime shuts down
     }
 }
 ```
+
+**Port Allocation:** Using `TcpListener::bind("127.0.0.1:0")` lets the OS assign an available port, ensuring parallel tests don't conflict.
+
+**Test Isolation:** Each test gets:
+- Unique port (OS-assigned)
+- Unique temp directory (cleaned up on drop)
+- Independent server instance
+
+**Parallel Test Safety:** Tests can run with `cargo test` default parallelism without port conflicts.
 
 ### Test Fixtures
 
