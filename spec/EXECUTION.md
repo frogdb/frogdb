@@ -705,6 +705,202 @@ pub struct CommandContext<'a> {
 
 ---
 
+## Replication Integration
+
+This section documents how replication hooks into the command execution flow. For full replication protocol details, see [CLUSTER.md](CLUSTER.md).
+
+### Replication in Command Flow
+
+```
+Client Request
+      │
+      ▼
+┌─────────────────┐
+│  Parse Command  │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Execute Command │──────────▶ Modify in-memory store
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  WAL Append     │──────────▶ Sequence number assigned here
+└────────┬────────┘
+         │
+         ├─── Async mode ───▶ Response sent immediately to client
+         │
+         └─── Sync mode ────▶ Block until min_replicas_to_write ACK
+                              │
+                              ├─── ACK received ───▶ Response sent (+OK)
+                              │
+                              └─── Timeout ────────▶ Response sent (-NOREPL)
+```
+
+### Sequence Number Assignment
+
+Sequence numbers are assigned at WAL append time, not at command execution time. This ensures:
+- Monotonically increasing sequences for replication ordering
+- Gaps are possible if batched writes fail partially
+- Replicas can request resumption from any sequence number
+
+```rust
+impl WalWriter {
+    /// Append operation to WAL, returning assigned sequence number
+    fn append(&mut self, operation: &Operation) -> u64 {
+        // RocksDB assigns sequence number during WriteBatch commit
+        let batch = WriteBatch::new();
+        batch.put(/* key, value encoding */);
+
+        // Sequence assigned atomically by RocksDB
+        let seq = self.db.write(batch)?;
+
+        // Notify replication subsystem of new entry
+        self.replication_notify.send(ReplicationEntry {
+            sequence: seq,
+            operation: operation.clone(),
+        });
+
+        seq
+    }
+}
+```
+
+### Synchronous Replication Blocking
+
+When `min_replicas_to_write > 0`, write commands block after WAL append until sufficient replicas acknowledge:
+
+```rust
+async fn execute_with_sync_replication(
+    cmd: &ParsedCommand,
+    handler: &dyn Command,
+    ctx: &mut CommandContext<'_>,
+) -> Response {
+    // 1. Execute command (modifies in-memory store)
+    let result = handler.execute(ctx, &cmd.args);
+
+    // 2. Append to WAL (assigns sequence number)
+    let seq = ctx.wal.append(&result.operation)?;
+
+    // 3. Check if sync replication required
+    if ctx.config.min_replicas_to_write == 0 {
+        return result.response; // Async mode - return immediately
+    }
+
+    // 4. Wait for replica acknowledgments
+    let ack_future = ctx.replication_tracker.wait_for_acks(
+        seq,
+        ctx.config.min_replicas_to_write,
+    );
+
+    match tokio::time::timeout(
+        ctx.config.replica_ack_timeout,
+        ack_future,
+    ).await {
+        Ok(Ok(ack_count)) => {
+            // Sufficient replicas acknowledged
+            result.response
+        }
+        Ok(Err(_)) | Err(_) => {
+            // Timeout or not enough replicas
+            // Note: Write is ALREADY committed on primary
+            Response::Error(Bytes::from_static(b"NOREPL Not enough replicas"))
+        }
+    }
+}
+```
+
+**Important:** When `-NOREPL` is returned, the write has already succeeded on the primary and is in the WAL. The error indicates replication durability was not confirmed, not that the write failed. Clients must handle this appropriately (retry may cause duplicates unless using idempotent operations).
+
+### Extended CommandContext for Replication
+
+When replication is enabled, CommandContext includes additional state:
+
+```rust
+pub struct CommandContext<'a> {
+    // ... existing fields ...
+
+    /// WAL writer for persistence
+    pub wal: &'a mut WalWriter,
+
+    /// Replication configuration (None if standalone)
+    pub replication: Option<&'a ReplicationConfig>,
+
+    /// Tracker for synchronous replication acknowledgments
+    pub replication_tracker: Option<&'a ReplicationTracker>,
+}
+
+pub struct ReplicationConfig {
+    /// Minimum replicas that must ACK before responding (0 = async)
+    pub min_replicas_to_write: u32,
+
+    /// Timeout waiting for replica ACKs
+    pub replica_ack_timeout: Duration,
+
+    /// This node's role
+    pub role: NodeRole,
+}
+
+pub enum NodeRole {
+    Primary,
+    Replica { primary_addr: SocketAddr },
+    Standalone,
+}
+```
+
+### Replica Command Handling
+
+Replicas handle client commands differently based on type:
+
+| Command Type | Replica Behavior |
+|--------------|------------------|
+| Read (`READONLY` flag) | Execute locally, may return stale data |
+| Write (`WRITE` flag) | Return `-READONLY` error |
+| Replication commands | Execute (PSYNC, REPLCONF, etc.) |
+| Admin commands | Depends on command (INFO allowed, SHUTDOWN not) |
+
+```rust
+fn check_replica_permission(
+    handler: &dyn Command,
+    role: NodeRole,
+) -> Result<(), CommandError> {
+    match role {
+        NodeRole::Primary | NodeRole::Standalone => Ok(()),
+        NodeRole::Replica { .. } => {
+            if handler.flags().contains(CommandFlags::WRITE) {
+                Err(CommandError::ReadOnly)
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+```
+
+### Replication Metrics
+
+Commands update replication-related metrics:
+
+```rust
+/// Metrics updated during command execution
+pub struct ReplicationMetrics {
+    /// Sequence number of last write
+    pub last_write_seq: AtomicU64,
+
+    /// Number of writes waiting for replica ACK
+    pub pending_sync_writes: AtomicU64,
+
+    /// Writes that failed due to replica timeout
+    pub norepl_errors: Counter,
+
+    /// Time spent waiting for replica ACKs
+    pub replica_ack_wait_time: Histogram,
+}
+```
+
+---
+
 ## References
 
 - [CONNECTION.md](CONNECTION.md) - Connection state machine and client limits

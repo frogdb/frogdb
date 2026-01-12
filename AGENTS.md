@@ -21,5 +21,3 @@
 - When changing a markdown section, fix any links that point to the affected section.
 - When non-trivial functionality is required, evaluate if a Rust Crate is available which can help solve the issue.
 - When a library is of use that has a copyleft license like GPL, AGPL, prompt before including it.
-- Use markdown tags (#my-tag) to associate related content across different files. Use CLI commands to locate hash
-  tags related to the topic you need context for.
