@@ -136,7 +136,7 @@ MGET key [key ...]
 
 Returns: Array of values (nil for non-existent keys).
 
-**Cross-shard:** Uses scatter-gather - keys may be on different shards.
+**Cross-shard:** Same hash slot required by default. See [Cross-Shard Behavior](#cross-shard-behavior) for config options.
 
 **Example:**
 ```
@@ -160,7 +160,7 @@ MSET key value [key value ...]
 
 Returns: Always `OK` (never fails for existing keys).
 
-**Cross-shard:** Uses scatter-gather. Not atomic across shards.
+**Cross-shard:** Same hash slot required by default (atomic). See [Cross-Shard Behavior](#cross-shard-behavior) for config options.
 
 ### MSETNX
 
@@ -172,7 +172,7 @@ MSETNX key value [key value ...]
 
 Returns: `1` if all keys were set, `0` if any key already existed.
 
-**Cross-shard:** Requires all keys on same shard (use hash tags).
+**Cross-shard:** Always requires same hash slot (atomic semantics cannot be guaranteed across shards).
 
 ### APPEND
 
@@ -316,16 +316,41 @@ All single-key string commands (GET, SET, INCR, APPEND, etc.) are routed directl
 
 ### Multi-Key Commands
 
-| Command | Behavior |
-|---------|----------|
-| MGET | Scatter-gather: fetch from each shard, combine results preserving order |
-| MSET | Scatter-gather: set on each shard (not atomic across shards) |
-| MSETNX | **Requires same shard** - use hash tags for atomicity |
+By default, FrogDB enforces CROSSSLOT validation for Redis Cluster compatibility:
 
-### Scatter-Gather for MGET/MSET
+| Command | Default Behavior | With `allow_cross_slot_standalone` |
+|---------|------------------|-----------------------------------|
+| MGET | Same hash slot required | Scatter-gather across shards |
+| MSET | Same hash slot required (atomic) | Scatter-gather (NOT atomic) |
+| MSETNX | Same hash slot required | Same hash slot required (always) |
+
+**Note**: MSETNX always requires same-slot because its atomic semantics (set all or none) cannot be guaranteed across shards.
+
+### CROSSSLOT Validation
+
+When keys hash to different slots, FrogDB returns:
 
 ```
-Client: MGET key1 key2 key3
+-CROSSSLOT Keys in request don't hash to the same slot
+```
+
+This matches Redis Cluster behavior and ensures applications work unchanged when migrating to a clustered deployment.
+
+### Hash Tags for Multi-Key Operations
+
+Use hash tags `{tag}` to ensure keys hash to the same slot:
+
+```
+MSET {user:123}:name "Alice" {user:123}:email "alice@example.com"
+MGET {user:123}:name {user:123}:email
+```
+
+### Optional Cross-Slot Mode
+
+For single-node convenience, set `allow_cross_slot_standalone = true` in config. This enables scatter-gather for MGET/MSET across shards:
+
+```
+Client: MGET key1 key2 key3  (different slots)
          │
          ▼
     Coordinator (receiving thread)
@@ -347,13 +372,7 @@ Client: MGET key1 key2 key3
          Response: [val1, val2, val3]
 ```
 
-### Hash Tags for Atomicity
-
-For atomic multi-key operations, ensure all keys hash to the same shard:
-
-```
-MSETNX {user:123}:name "Alice" {user:123}:email "alice@example.com"
-```
+**Warning**: With this option enabled, MSET is NOT atomic across shards. Partial failures are possible. Use hash tags for atomic multi-key writes.
 
 ---
 
