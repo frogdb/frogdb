@@ -281,17 +281,26 @@ See [CONFIGURATION.md](CONFIGURATION.md) for full configuration system design an
 
 ## Roadmap
 
+See [ROADMAP.md](ROADMAP.md) for the detailed implementation roadmap with progress tracking.
+
+**Current Phase**: 0 (Design)
+
+**Phase Summary**:
 | Phase | Focus |
 |-------|-------|
-| 0 | Design documents (current) |
-| 1 | Foundation: RESP2, single-threaded, Strings |
-| 2 | Multi-threading: shards, message passing, scatter-gather |
+| 1 | Foundation: RESP2, GET/SET, shard architecture |
+| 2 | String Commands & TTL |
 | 3 | Sorted Sets |
-| 4 | Persistence: RocksDB, WAL, snapshots |
-| 5 | Lua Scripting |
-| 6 | Production: metrics, tracing, config |
-| 7 | Advanced: eviction, ACL, more types, transactions |
-| Future | RESP3, clustering, Jepsen tests |
+| 4 | Multi-Shard Operations |
+| 5 | Persistence: RocksDB, WAL, snapshots |
+| 6 | Hash, List, Set Types |
+| 7 | Transactions & Pub/Sub |
+| 8 | Lua Scripting |
+| 9 | Key Iteration & Server Commands |
+| 10 | Production: metrics, ACL, config |
+| 11 | Blocking Commands |
+| 12 | RESP3 Protocol |
+| Future | Streams, Clustering, Jepsen tests |
 
 ---
 
