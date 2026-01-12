@@ -45,7 +45,7 @@ FrogDB supports MULTI/EXEC transactions with optimistic locking via WATCH. See [
 ## References
 
 - [EXECUTION.md](EXECUTION.md) - Command trait, arity, flags, type checking
-- [STORAGE.md](STORAGE.md) - FrogValue enum and supported data types
+- [STORAGE.md](STORAGE.md) - Value enum and supported data types
 - [LIMITS.md](LIMITS.md) - Size limits and enforcement
 - [TRANSACTIONS.md](TRANSACTIONS.md) - MULTI/EXEC and pipelining
 - [CONFIGURATION.md](CONFIGURATION.md) - CONFIG commands and runtime configuration

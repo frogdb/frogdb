@@ -4,10 +4,10 @@ Geospatial indexes for location-based queries. GEO commands are not a distinct d
 
 ## Data Structure
 
-No new `FrogValue` variant required. GEO operations use `FrogSortedSet`:
+No new `Value` variant required. GEO operations use `SortedSetValue`:
 
 ```rust
-// GEO uses existing FrogSortedSet
+// GEO uses existing SortedSetValue
 // Score = 52-bit geohash encoded as f64
 // Member = location identifier (e.g., "restaurant:123")
 

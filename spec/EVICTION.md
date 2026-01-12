@@ -241,6 +241,11 @@ appropriately high `lfu_counter` values after recovery.
 
 **Note:** LFU decay is applied lazily on access, so counters may be stale until keys are first accessed after recovery.
 
+**RESTORE Command LFU Handling:**
+- `RESTORE key ... FREQ count` sets explicit LFU counter
+- `RESTORE key ...` (without FREQ) uses default counter = 5 (same as newly created keys)
+- `RESTORE key ... IDLETIME seconds` affects LRU timestamp, not LFU counter
+
 ### Recommendation
 
 For production deployments with eviction enabled:

@@ -1828,7 +1828,7 @@ Replicas follow their primary through slot migrations:
 ```rust
 // Replica receives slot ownership changes via replication
 enum ReplicationEvent {
-    KeyUpdate { key: Bytes, value: FrogValue },
+    KeyUpdate { key: Bytes, value: Value },
     KeyDelete { key: Bytes },
     SlotOwnershipChange { slot: u16, new_owner: NodeId },  // Replica updates local mapping
 }

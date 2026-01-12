@@ -1,17 +1,17 @@
 # FrogDB Bitmap Commands
 
-Bit-level operations on strings. Bitmaps are not a distinct data type - they operate on `FrogString` values, treating them as bit arrays. This enables memory-efficient storage of binary flags, presence indicators, and compact integer arrays.
+Bit-level operations on strings. Bitmaps are not a distinct data type - they operate on `StringValue` values, treating them as bit arrays. This enables memory-efficient storage of binary flags, presence indicators, and compact integer arrays.
 
 ## Data Structure
 
-No new `FrogValue` variant required. Bitmap operations work directly on `FrogString`:
+No new `Value` variant required. Bitmap operations work directly on `StringValue`:
 
 ```rust
-// Bitmaps use existing FrogString
+// Bitmaps use existing StringValue
 // Internally: Vec<u8> treated as bit array
 // Bit 0 is MSB of byte 0, bit 7 is LSB of byte 0, bit 8 is MSB of byte 1, etc.
 
-impl FrogString {
+impl StringValue {
     /// Get bit at offset (0-indexed from MSB of first byte)
     pub fn get_bit(&self, offset: u64) -> u8;
 

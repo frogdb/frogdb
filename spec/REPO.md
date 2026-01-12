@@ -38,13 +38,27 @@ frogdb/
 │   │           ├── mod.rs
 │   │           ├── string.rs
 │   │           └── generic.rs
-│   └── protocol/           # Library: RESP2 parsing, frame codec
-│       ├── Cargo.toml      # name = "frogdb-protocol"
+│   ├── protocol/           # Library: RESP2 parsing, frame codec
+│   │   ├── Cargo.toml      # name = "frogdb-protocol"
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── resp2.rs
+│   │       ├── frame.rs
+│   │       └── codec.rs
+│   ├── lua/                # Library: Lua scripting support
+│   │   ├── Cargo.toml      # name = "frogdb-lua"
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── vm.rs       # Lua VM management
+│   │       ├── bindings.rs # redis.call() bindings
+│   │       └── sandbox.rs  # Script sandboxing
+│   └── persistence/        # Library: RocksDB persistence layer
+│       ├── Cargo.toml      # name = "frogdb-persistence"
 │       └── src/
 │           ├── lib.rs
-│           ├── resp2.rs
-│           ├── frame.rs
-│           └── codec.rs
+│           ├── wal.rs      # Write-ahead log
+│           ├── snapshot.rs # Snapshot management
+│           └── recovery.rs # Crash recovery
 ├── tests/                  # Integration tests
 │   ├── common/
 │   │   └── mod.rs          # TestServer and shared utilities
@@ -71,6 +85,8 @@ members = [
     "crates/server",
     "crates/core",
     "crates/protocol",
+    "crates/lua",
+    "crates/persistence",
 ]
 
 # Shared package metadata
@@ -185,6 +201,43 @@ tokio-util = { version = "0.7", features = ["codec"] }
 workspace = true
 ```
 
+**crates/lua/Cargo.toml:**
+```toml
+[package]
+name = "frogdb-lua"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+frogdb-core = { path = "../core" }
+mlua = { version = "0.9", features = ["lua54", "vendored"] }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+```
+
+**crates/persistence/Cargo.toml:**
+```toml
+[package]
+name = "frogdb-persistence"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+frogdb-core = { path = "../core" }
+rocksdb = "0.21"
+bytes = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
+```
+
 ---
 
 ## Crate Responsibilities
@@ -217,7 +270,7 @@ pub use error::ProtocolError;
 
 **Contains:**
 - `Store` trait and `HashMapStore` implementation
-- `FrogValue` enum and type implementations
+- `Value` enum and type implementations (StringValue, ListValue, etc.)
 - `Command` trait and command implementations
 - `CommandError` enum
 - Key metadata, expiry index
@@ -234,7 +287,7 @@ pub use store::Store;
 pub use command::{Command, Arity, CommandFlags};
 
 // Types
-pub use value::{FrogValue, FrogString};
+pub use value::{Value, StringValue};
 pub use error::CommandError;
 pub use metadata::KeyMetadata;
 
@@ -259,6 +312,51 @@ pub mod commands;
 
 **Does NOT export:** This is a binary crate, not a library.
 
+### frogdb-lua
+
+**Purpose:** Lua scripting engine. Isolated from server networking.
+
+**Contains:**
+- Lua VM pool management (one per shard)
+- `redis.call()` / `redis.pcall()` bindings
+- Script sandbox and resource limits
+- Determinism enforcement (forbidden functions)
+
+**Does NOT contain:**
+- RESP protocol handling
+- Storage implementation
+
+**Public API:**
+```rust
+pub use vm::LuaVmPool;
+pub use script::{Script, ScriptResult};
+pub use error::ScriptError;
+```
+
+### frogdb-persistence
+
+**Purpose:** RocksDB persistence layer. Isolated from server networking.
+
+**Contains:**
+- RocksDB column family management
+- WAL (Write-Ahead Log) writing
+- Snapshot creation and management
+- Crash recovery logic
+- Key serialization/deserialization
+
+**Does NOT contain:**
+- RESP protocol handling
+- Command execution logic
+
+**Public API:**
+```rust
+pub use engine::PersistenceEngine;
+pub use wal::WalWriter;
+pub use snapshot::SnapshotManager;
+pub use recovery::Recovery;
+pub use error::PersistenceError;
+```
+
 ---
 
 ## Module Organization
@@ -279,7 +377,7 @@ pub mod commands;
 
 // Re-export commonly used types
 pub use store::{Store, HashMapStore};
-pub use value::FrogValue;
+pub use value::Value;
 pub use command::{Command, Arity, CommandFlags};
 pub use error::CommandError;
 ```

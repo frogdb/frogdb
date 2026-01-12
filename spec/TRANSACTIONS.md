@@ -81,7 +81,8 @@ struct ConnectionState {
 
 ## Cross-Slot Transactions
 
-FrogDB requires all keys in a transaction to be in the same hash slot:
+FrogDB requires all keys in a transaction to hash to the same **internal shard** (thread partition).
+This is enforced via hash slot validation - keys with the same hash slot will always be on the same internal shard.
 
 ```rust
 fn validate_transaction(cmds: &[ParsedCommand]) -> Result<(), Error> {

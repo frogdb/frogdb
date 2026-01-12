@@ -28,6 +28,19 @@ Keys are assigned to slots via: `slot = CRC16(key) % 16384`
 
 See: [STORAGE.md](STORAGE.md#hash-tags-and-slot-validation), [CLUSTER.md](CLUSTER.md)
 
+### Slot vs Shard: Quick Reference
+
+| Term | Scope | Algorithm | Range | Purpose |
+|------|-------|-----------|-------|---------|
+| **Hash Slot** | Cluster (multi-node) | CRC16 | 0-16383 | Which node owns a key |
+| **Internal Shard** | Node (multi-thread) | xxhash64 | 0 to num_cpus | Which thread processes a key |
+
+**Key distinctions:**
+- Transactions require same **internal shard** (all keys on same thread)
+- Multi-key commands (MGET/MSET) check **hash slots** by default
+- `allow_cross_slot_standalone` relaxes slot checks, but not shard requirements for transactions
+- `-CROSSSLOT` error uses "slot" terminology for Redis compatibility
+
 ### Hash Tag
 A `{tag}` syntax in key names that controls hash slot assignment. Only the content between the first `{` and `}` is hashed.
 
@@ -111,6 +124,21 @@ An error returned when a multi-key operation references keys in different hash s
 **Solution:** Use hash tags to colocate related keys.
 
 See: [STORAGE.md](STORAGE.md#crossslot-validation)
+
+### Error Code Reference
+
+| Error | Context | Meaning |
+|-------|---------|---------|
+| `-CROSSSLOT` | Multi-key ops, transactions, Lua | Keys don't hash to same slot |
+| `-MOVED slot host:port` | Cluster mode | Key's slot is on different node |
+| `-ASK slot host:port` | Cluster migration | Key is being migrated |
+| `-WRONGTYPE` | Type mismatch | Operation against wrong data type |
+| `-OOM` | Memory limit | Out of memory, writes rejected |
+| `-TIMEOUT` | VLL queue | Operation timed out waiting for locks |
+| `-NOSCRIPT` | Lua scripting | Script not found in cache |
+| `-BUSY` | Lua scripting | Script exceeded time limit |
+
+**Note:** FrogDB uses `-CROSSSLOT` (not `-CROSSSHARD`) for Redis compatibility, even when the underlying check is at the internal shard level.
 
 ---
 

@@ -10,7 +10,7 @@ Hash keys will store field-value mappings, ideal for representing objects with m
 
 ```rust
 // Planned implementation
-pub struct FrogHash {
+pub struct HashValue {
     data: HashMap<Bytes, Bytes>,
 }
 ```

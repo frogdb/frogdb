@@ -5,7 +5,7 @@ Members ordered by score with O(log N) operations. Sorted sets combine the uniqu
 ## Data Structure
 
 ```rust
-pub struct FrogSortedSet {
+pub struct SortedSetValue {
     /// Member -> Score for O(1) score lookup
     members: HashMap<Bytes, f64>,
     /// (Score, Member) for range queries - ordered by score, then lexicographically
