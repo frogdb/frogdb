@@ -330,6 +330,31 @@ max_replicas = 0             # Optional: 0 = unlimited (default), >0 = limit
 
 **Best Practice:** Set `primary_auth` on all nodes (including primaries) since any node may become a replica after failover.
 
+**PSYNC Handshake Sequence:**
+
+The replica must authenticate before initiating replication:
+
+```
+Replica                              Primary
+   │                                    │
+   │───── AUTH [user] <password> ──────▶│  (if primary_auth configured)
+   │◀──── +OK ──────────────────────────│
+   │                                    │
+   │───── REPLCONF listening-port 6379 ▶│  (optional, for INFO output)
+   │◀──── +OK ──────────────────────────│
+   │                                    │
+   │───── REPLCONF capa eof psync2 ────▶│  (announce capabilities)
+   │◀──── +OK ──────────────────────────│
+   │                                    │
+   │───── PSYNC <repl_id> <seq> ───────▶│  (initiate sync)
+   │◀──── +FULLRESYNC or +CONTINUE ─────│
+```
+
+**Auth Failure Handling:**
+- If AUTH fails: Primary returns `-ERR invalid password` and closes connection
+- If AUTH required but not sent: Primary returns `-NOAUTH Authentication required` on PSYNC
+- Replica retries with exponential backoff on auth failure
+
 ### Admin API
 
 Each node exposes an admin API on a separate port:
@@ -497,6 +522,163 @@ Content-Type: application/json
 
 ---
 
+## Node Lifecycle Operations
+
+This section documents node-side behavior during cluster membership changes. The orchestrator implementation is out of scope; this documents how nodes respond to orchestrator commands.
+
+### Node Addition
+
+When the orchestrator adds a new node to the cluster:
+
+**Step 1: Node Startup (Standalone)**
+```
+New Node                          Orchestrator
+    │                                  │
+    │──── Startup (no cluster) ───────▶│  (node registers or is discovered)
+    │                                  │
+    │◀─── POST /admin/cluster ─────────│  (initial topology with epoch=N)
+    │                                  │
+    │     Validate topology            │
+    │     Store epoch = N              │
+    │     Initialize slot map          │
+    │                                  │
+    │──── 200 OK ─────────────────────▶│
+```
+
+**Step 2: Slot Assignment**
+
+The new node may be assigned slots immediately (if taking over empty slots) or enter IMPORTING state for migration:
+
+| Assignment Type | Node Behavior |
+|-----------------|---------------|
+| **Empty slots** | Immediately own slots, accept writes |
+| **Migrating from another node** | Enter IMPORTING state for assigned slots |
+| **Replica role** | No slot ownership, begin PSYNC to primary |
+
+**Node State After Addition:**
+```rust
+enum NodeJoinState {
+    /// Node has topology but no slot ownership yet
+    Joined { epoch: u64 },
+
+    /// Node is importing slots from other nodes
+    Importing {
+        epoch: u64,
+        importing_slots: HashMap<SlotId, NodeId>,  // slot -> source node
+    },
+
+    /// Node owns slots and is fully operational
+    Active {
+        epoch: u64,
+        owned_slots: Vec<SlotRange>,
+    },
+
+    /// Node is a replica
+    Replica {
+        epoch: u64,
+        primary: NodeId,
+    },
+}
+```
+
+**Validation on Topology Receipt:**
+- Epoch must be >= current epoch (reject stale topology)
+- Node's own ID must be present in topology
+- If slots assigned, validate slot ranges are contiguous
+- If replica, validate primary exists in topology
+
+### Node Removal
+
+When the orchestrator removes a node from the cluster:
+
+**Graceful Removal (Planned)**
+```
+Orchestrator               Node (being removed)         Other Nodes
+     │                            │                          │
+     │  1. Update topology        │                          │
+     │  (remove node's slots)     │                          │
+     │───────────────────────────▶│                          │
+     │────────────────────────────────────────────────────▶  │
+     │                            │                          │
+     │                            │  Enter MIGRATING         │
+     │                            │  for all owned slots     │
+     │                            │                          │
+     │  2. Migration completes    │                          │
+     │                            │── MIGRATE keys ─────────▶│
+     │                            │◀─ OK ───────────────────│
+     │                            │                          │
+     │  3. Final topology         │                          │
+     │  (node removed)            │                          │
+     │───────────────────────────▶│                          │
+     │                            │                          │
+     │                            │  Shutdown or             │
+     │                            │  become standalone       │
+```
+
+**Node Behavior on Removal:**
+
+| Removal Phase | Node Actions |
+|---------------|--------------|
+| **Slots reassigned** | Enter MIGRATING state, begin key transfer |
+| **Migration in progress** | Continue serving MIGRATING slots, redirect missing keys |
+| **All slots migrated** | Accept final topology, stop serving cluster traffic |
+| **Removed from topology** | Option 1: Shutdown. Option 2: Continue as standalone (requires restart to rejoin) |
+
+**Ungraceful Removal (Node Failure)**
+
+When a node fails unexpectedly:
+1. Orchestrator detects via health check failure
+2. Orchestrator updates topology (node removed, slots reassigned to replicas or empty)
+3. Other nodes receive topology, stop routing to failed node
+4. If failed node recovers, it receives new topology and acts accordingly
+
+**Demotion (Primary → Replica)**
+```rust
+fn handle_demotion(old_role: Role, new_topology: &Topology) {
+    match old_role {
+        Role::Primary => {
+            // Stop accepting writes
+            self.read_only = true;
+
+            // Flush pending WAL
+            self.wal.flush_sync()?;
+
+            // Begin PSYNC to new primary
+            let new_primary = new_topology.find_primary_for(self.old_slots)?;
+            self.start_replication(new_primary);
+        }
+        Role::Replica => {
+            // May need to switch primary
+            let assigned_primary = new_topology.find_my_primary(self.id)?;
+            if assigned_primary != self.current_primary {
+                self.stop_replication();
+                self.start_replication(assigned_primary);
+            }
+        }
+    }
+}
+```
+
+### Node Readiness
+
+Before a node accepts client traffic after joining or topology change:
+
+**Readiness Criteria:**
+1. Topology received and validated
+2. If primary: Owns at least one slot (or explicitly empty)
+3. If replica: Connected to primary and initial sync complete (or allowed to serve stale)
+4. If importing: At least one IMPORTING slot ready to accept ASKING commands
+
+**Readiness Endpoint:**
+```
+GET /admin/ready
+
+200 OK  {"ready": true, "role": "primary", "slots_owned": 5461}
+503     {"ready": false, "reason": "initial_sync_incomplete"}
+```
+
+---
+
 ## Replication Protocol
 
 ### Overview
@@ -527,6 +709,40 @@ Primary B (repl_id: def456..., secondary_id: abc123...)
 ```
 
 This allows replicas of A to connect to B and continue incrementally.
+
+**Replication ID Generation:**
+
+```rust
+fn generate_replication_id() -> String {
+    // 20 random bytes → 40 hex characters
+    let mut bytes = [0u8; 20];
+    getrandom::getrandom(&mut bytes).expect("random bytes");
+    hex::encode(bytes)
+}
+```
+
+**When a new ReplicationId is generated:**
+- Fresh primary startup (no existing data)
+- Replica promoted to primary (failover)
+- Manual `DEBUG RESET-REPLICATION-ID` command
+
+**Collision prevention:** 20 random bytes = 160 bits of entropy. Collision probability is negligible (< 2^-80 for millions of IDs).
+
+**Secondary ID Usage:**
+
+When a replica is promoted:
+```rust
+fn on_promotion(&mut self) {
+    // Preserve old primary's ID for PSYNC continuity
+    self.secondary_repl_id = Some(self.repl_id.clone());
+    self.secondary_repl_offset = self.repl_offset;
+
+    // Generate new ID for this primary's history
+    self.repl_id = generate_replication_id();
+}
+```
+
+Other replicas can PSYNC using either the new primary's ID (if they connected after promotion) or the secondary ID (if they were replicating from the old primary).
 
 ### Full Synchronization
 
@@ -754,6 +970,154 @@ WAL entries are streamed using RocksDB's native WriteBatch format with metadata 
 **Compression:**
 When `flags & 0x01`, batch_data is LZ4-compressed. Compression enabled when batch_len > 1KB.
 
+### WAL Entry Stream Framing
+
+Multiple replication frames are sent back-to-back on the TCP stream. Each frame is **self-delimiting** via the `batch_len` field:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                    Replication Stream Layout                            │
+├────────────────────────────────────────────────────────────────────────┤
+│ [Frame 1 Header][Frame 1 Data][Frame 2 Header][Frame 2 Data][...]      │
+│                                                                         │
+│ Each frame:                                                            │
+│   - magic (4 bytes) + version (1) + flags (1) + seq (8) + ts (8)       │
+│   - batch_len (4 bytes) tells exact size of batch_data                 │
+│   - batch_data (batch_len bytes)                                        │
+│   - checksum (4 bytes, if flags & 0x02)                                │
+│                                                                         │
+│ Parsing: Read 26-byte header, extract batch_len, read batch_len bytes  │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**Replica Parsing Algorithm:**
+```rust
+loop {
+    // 1. Read fixed header (26 bytes)
+    let header = read_exact(stream, 26)?;
+    let magic = u32::from_le_bytes(&header[0..4]);
+    if magic != 0x46524F47 {
+        return Err(InvalidMagic);
+    }
+
+    let flags = header[5];
+    let seq = u64::from_le_bytes(&header[6..14]);
+    let timestamp = u64::from_le_bytes(&header[14..22]);
+    let batch_len = u32::from_le_bytes(&header[22..26]);
+
+    // 2. Read batch data
+    let batch_data = read_exact(stream, batch_len as usize)?;
+
+    // 3. Read checksum if present
+    let checksum = if flags & 0x02 != 0 {
+        Some(u32::from_le_bytes(read_exact(stream, 4)?))
+    } else {
+        None
+    };
+
+    // 4. Validate checksum
+    if let Some(expected) = checksum {
+        let actual = crc32(&batch_data);
+        if actual != expected {
+            return Err(ChecksumMismatch { seq, expected, actual });
+        }
+    }
+
+    // 5. Decompress if needed
+    let batch = if flags & 0x01 != 0 {
+        lz4_decompress(&batch_data)?
+    } else {
+        batch_data
+    };
+
+    // 6. Apply WriteBatch
+    apply_write_batch(&batch, seq)?;
+}
+```
+
+### Checkpoint Streaming Protocol
+
+During FULLRESYNC, the primary sends a RocksDB checkpoint to the replica. The checkpoint consists of multiple files.
+
+**Checkpoint Transfer Format:**
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                    FULLRESYNC Checkpoint Transfer                       │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Primary sends:                                                        │
+│                                                                         │
+│  1. FULLRESYNC response:                                               │
+│     +FULLRESYNC <repl_id> <sequence>\r\n                               │
+│                                                                         │
+│  2. Checkpoint header:                                                 │
+│     $<total_size>\r\n     (total bytes in checkpoint, for progress)   │
+│                                                                         │
+│  3. File entries (repeated for each file):                             │
+│     *3\r\n                                                             │
+│     $<name_len>\r\n<filename>\r\n                                      │
+│     :<file_size>\r\n                                                   │
+│     $<file_size>\r\n<file_data>\r\n                                   │
+│                                                                         │
+│  4. End marker:                                                        │
+│     *1\r\n                                                             │
+│     $3\r\nEOF\r\n                                                      │
+│                                                                         │
+│  5. Checksum footer:                                                   │
+│     $40\r\n<sha256_hex_of_all_files>\r\n                              │
+│                                                                         │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**Example Transfer:**
+```
++FULLRESYNC abc123def456... 50000
+$1234567890
+*3
+$8
+MANIFEST
+:1024
+$1024
+<manifest file bytes>
+*3
+$12
+000005.sst
+:4096000
+$4096000
+<sst file bytes>
+...
+*1
+$3
+EOF
+$40
+a1b2c3d4e5f6...  (SHA256 of concatenated file contents)
+```
+
+**Checkpoint Integrity:**
+- Primary computes SHA256 of all file contents concatenated in transfer order
+- Replica verifies SHA256 after receiving all files
+- Mismatch → abort, delete partial checkpoint, retry with PSYNC ? -1
+
+**Interrupted Transfer Recovery:**
+```
+| Interruption Point | Recovery |
+|--------------------|----------|
+| Before $<total_size> | Replica retries PSYNC ? -1 |
+| Mid-file | Delete partial file, retry PSYNC ? -1 |
+| Before EOF marker | Delete all files, retry PSYNC ? -1 |
+| Before checksum | Delete all files, retry PSYNC ? -1 |
+| Checksum mismatch | Delete all files, retry PSYNC ? -1 |
+```
+
+**Checkpoint Transfer Timeout:**
+```toml
+[replication]
+checkpoint_transfer_timeout_ms = 300000  # 5 minutes default
+checkpoint_file_timeout_ms = 60000       # Per-file timeout
+```
+
+If timeout expires, replica aborts and retries with exponential backoff.
+
 ### Replication Backlog
 
 In-memory buffer of recent WAL entries for fast reconnection:
@@ -897,6 +1261,85 @@ Primary                              Replica
    │───── +OK ─────────────────────────▶│ (to client)
 ```
 
+### ACK Message Format
+
+ACKs are sent via `REPLCONF ACK` command to distinguish from PONG heartbeat responses:
+
+```
+Replica → Primary: REPLCONF ACK <sequence_number>
+```
+
+**Wire Format:**
+```
+*3\r\n
+$8\r\nREPLCONF\r\n
+$3\r\nACK\r\n
+$<len>\r\n<sequence_number>\r\n
+```
+
+**Example:**
+```
+*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$5\r\n50000\r\n
+```
+
+**Distinguishing ACK from PONG:**
+
+| Message | Purpose | Format | When Sent |
+|---------|---------|--------|-----------|
+| `REPLCONF ACK <seq>` | Acknowledge writes (sync mode) | RESP array command | After applying WAL entry |
+| `PONG <seq>` | Heartbeat response | Simple string | In response to PING |
+
+**Primary's ACK Processing:**
+```rust
+fn on_replconf_ack(&mut self, replica_id: &str, seq: u64) {
+    // Update replica's known offset
+    self.replica_offsets.insert(replica_id.to_string(), seq);
+
+    // Check pending synchronous writes
+    for pending in self.sync_pending.drain_filter(|p| p.required_seq <= seq) {
+        pending.notify_ack(replica_id);
+    }
+}
+```
+
+### Sequence Number Scope
+
+FrogDB uses RocksDB's **global sequence number** across all internal shards:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                    Single RocksDB Instance                              │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Column Family 0     Column Family 1     Column Family N               │
+│  (Internal Shard 0)  (Internal Shard 1)  (Internal Shard N)            │
+│       │                   │                   │                        │
+│       └───────────────────┴───────────────────┘                        │
+│                           │                                            │
+│                    Single WAL                                          │
+│                    Global Sequence Numbers                             │
+│                                                                         │
+│  seq=100: Write to CF0 (key "user:1")                                  │
+│  seq=101: Write to CF1 (key "user:2")                                  │
+│  seq=102: Write to CF0 (key "user:3")                                  │
+│  seq=103: Write to CF1 (key "user:4")                                  │
+│                                                                         │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Points:**
+- One RocksDB instance per node, with one column family per internal shard
+- All shards share a single WAL with monotonically increasing global sequence numbers
+- Replication streams the global WAL - replica receives writes from ALL internal shards
+- No per-shard sequence mapping needed
+- `GetUpdatesSince(seq)` returns WriteBatches from all column families
+
+**Why Global Sequence Works:**
+- Simplifies replication - one sequence to track
+- RocksDB guarantees atomic cross-CF writes within a WriteBatch
+- Replica applies WriteBatch atomically to same column families
+- No reordering or merging required
+
 ### Timeout Behavior
 
 | Scenario | Behavior |
@@ -1018,6 +1461,187 @@ frogdb_sync_partial_ack_total           # Some but not enough ACKs
 ---
 
 ## Client Protocol
+
+### Slot Ownership Validation
+
+Before executing a command, the node must determine whether it owns the relevant slot(s). This validation happens early in the command pipeline, after key extraction but before execution.
+
+**Validation Algorithm:**
+
+```rust
+fn validate_slot_ownership(
+    keys: &[&[u8]],
+    topology: &ClusterTopology,
+    migration_state: &MigrationState,
+) -> SlotValidationResult {
+    if keys.is_empty() {
+        return SlotValidationResult::NoKeys;  // Keyless command, execute locally
+    }
+
+    // 1. Calculate slots for all keys
+    let slots: HashSet<SlotId> = keys.iter()
+        .map(|k| crc16(extract_hash_tag(k)) % 16384)
+        .collect();
+
+    // 2. Check for cross-slot violation (multi-key commands)
+    if slots.len() > 1 {
+        return SlotValidationResult::CrossSlot;
+    }
+
+    let slot = *slots.iter().next().unwrap();
+
+    // 3. Check local epoch vs topology epoch
+    if topology.epoch > self.local_epoch {
+        // Stale topology - should refresh, but continue with local knowledge
+        metrics.stale_topology_commands.inc();
+    }
+
+    // 4. Check if we own this slot
+    let owner = topology.slot_owner(slot);
+
+    if owner == self.node_id {
+        // We own this slot - check migration state
+        match migration_state.get(slot) {
+            Some(MigrationSlotState::Migrating { target }) => {
+                SlotValidationResult::Migrating { slot, target }
+            }
+            None => SlotValidationResult::Owned,
+        }
+    } else {
+        // We don't own this slot
+        match migration_state.get(slot) {
+            Some(MigrationSlotState::Importing { source }) => {
+                SlotValidationResult::Importing { slot, source }
+            }
+            None => SlotValidationResult::Redirect {
+                slot,
+                owner,
+                owner_addr: topology.node_address(owner),
+            }
+        }
+    }
+}
+
+enum SlotValidationResult {
+    NoKeys,                                          // Keyless command
+    Owned,                                           // Execute locally
+    CrossSlot,                                       // Multi-slot error
+    Redirect { slot: SlotId, owner: NodeId, owner_addr: SocketAddr },
+    Migrating { slot: SlotId, target: NodeId },     // We're source
+    Importing { slot: SlotId, source: NodeId },     // We're target
+}
+```
+
+**Handling Validation Results:**
+
+| Result | Command Action |
+|--------|----------------|
+| `NoKeys` | Execute locally |
+| `Owned` | Execute locally |
+| `CrossSlot` | Return `-CROSSSLOT Keys in request don't hash to the same slot` |
+| `Redirect` | Return `-MOVED <slot> <host>:<port>` |
+| `Migrating` | Execute if key exists locally, else `-ASK <slot> <target>` |
+| `Importing` | Execute only if `ASKING` flag set, else `-MOVED <slot> <source>` |
+
+### CROSSSLOT Validation
+
+Multi-key commands must operate on keys that hash to the same slot. CROSSSLOT validation occurs **after key extraction, before routing**.
+
+**Validation Timing in Pipeline:**
+
+```
+1. Parse command → ParsedCommand
+2. Lookup handler → Command trait
+3. Validate arity → Check arg count
+4. Extract keys → handler.keys(&args)
+5. ★ CROSSSLOT check ★ → All keys same slot?
+6. Slot ownership check → MOVED/ASK/execute
+7. Execute command
+```
+
+**CROSSSLOT Rules (Redis/Valkey Compatible):**
+
+| Scenario | Behavior |
+|----------|----------|
+| Single-key command | No CROSSSLOT check needed |
+| Multi-key, same slot | Execute normally |
+| Multi-key, different slots | Return `-CROSSSLOT` error |
+| Hash tags ensure same slot | Execute normally |
+
+**Example:**
+```
+MGET key1 key2 key3
+  → slot(key1) = 1234, slot(key2) = 5678, slot(key3) = 1234
+  → Slots differ → -CROSSSLOT Keys in request don't hash to the same slot
+
+MGET {user:1}:a {user:1}:b {user:1}:c
+  → All hash to slot(user:1) = 4567
+  → Execute normally
+```
+
+**CROSSSLOT in Transactions (Redis/Valkey Compatible):**
+
+FrogDB follows Redis and Valkey behavior: cross-slot commands within `MULTI/EXEC` cause the entire transaction to abort.
+
+```
+MULTI
++OK
+SET key1 val1      # slot 1234
++QUEUED
+SET key2 val2      # slot 5678 (different slot!)
+-CROSSSLOT Keys in request don't hash to the same slot
+EXEC
+-EXECABORT Transaction discarded because of previous errors.
+```
+
+**Key Points:**
+- CROSSSLOT error is returned immediately when the command is queued (not at EXEC time)
+- Once any command returns an error during queuing, EXEC returns EXECABORT
+- The entire transaction is discarded; no commands are executed
+- Use hash tags (e.g., `{user:1}:profile`, `{user:1}:settings`) to ensure multi-key operations target the same slot
+
+**Slot Migration During Transaction:**
+
+If slot ownership changes during a transaction (between MULTI and EXEC):
+- At EXEC time, the server checks if a failover or slot migration has occurred since queuing
+- If the slot moved, EXEC returns `-MOVED` or `-ASK` without executing any commands
+- Client must retry the entire transaction on the correct node
+
+### Cross-Node Authentication
+
+When a client receives a `-MOVED` or `-ASK` redirect, it must establish a new connection to the target node. Authentication handling:
+
+**Client Responsibility:**
+- After redirect, client opens new connection to target node
+- If the cluster requires authentication, client must `AUTH` on new connection
+- Connection pooling clients should maintain authenticated connections to all known nodes
+
+**Server Behavior:**
+- Target node has no knowledge of client's auth state on source node
+- Target node requires fresh `AUTH` if authentication is enabled
+- `ASKING` command does NOT require special authentication
+
+**Redirect Flow with Auth:**
+```
+Client                    Node A                    Node B
+   │                         │                         │
+   │── AUTH user pass ──────▶│                         │
+   │◀─ +OK ─────────────────│                         │
+   │                         │                         │
+   │── GET key ─────────────▶│                         │
+   │◀─ -MOVED 1234 B:6379 ──│                         │
+   │                         │                         │
+   │── [new connection] ─────────────────────────────▶│
+   │── AUTH user pass ───────────────────────────────▶│  (required!)
+   │◀─ +OK ──────────────────────────────────────────│
+   │── GET key ──────────────────────────────────────▶│
+   │◀─ $5\r\nvalue ──────────────────────────────────│
+```
+
+**Cluster-Wide Auth Consistency:**
+- All nodes should share the same ACL configuration (see ACL Distribution section)
+- Orchestrator pushes ACL updates to all nodes to ensure consistency
+- Client credentials valid on one node should be valid on all nodes
 
 ### MOVED Redirection
 
@@ -1219,6 +1843,152 @@ Valkey 9.0-style server-side migration:
 - Rollback on failure
 - Lower end-to-end latency
 
+### Migration Timeout
+
+Slot migrations have configurable timeouts to prevent indefinite stalls.
+
+**Configuration:**
+```toml
+[cluster.migration]
+# Maximum time for entire slot migration (all keys)
+slot_migration_timeout_ms = 3600000    # 1 hour default
+
+# Maximum time for single MIGRATE command batch
+migrate_command_timeout_ms = 60000     # 60 seconds default
+
+# Time between migration progress checks
+progress_check_interval_ms = 10000     # 10 seconds default
+
+# Minimum keys migrated per progress interval to consider "making progress"
+min_progress_keys = 100
+```
+
+**Timeout Behavior:**
+
+| Timeout Type | Trigger | Node Behavior |
+|--------------|---------|---------------|
+| `migrate_command_timeout` | Single MIGRATE batch takes too long | Retry batch with smaller key count |
+| `slot_migration_timeout` | Entire slot migration exceeds limit | Abort migration, cleanup orphaned state |
+| No progress | No keys migrated in `progress_check_interval` | Log warning, continue (may indicate large keys) |
+
+**Source Node on Timeout:**
+```rust
+fn handle_migration_timeout(slot: SlotId) {
+    // 1. Abort migration - remain slot owner
+    self.migration_state.remove(slot);
+
+    // 2. Any keys that were ALREADY migrated remain on target
+    // (no automatic rollback - would require distributed coordination)
+
+    // 3. Log for operator intervention
+    warn!(slot, "migration timeout - slot remains on source, manual cleanup may be required");
+
+    // 4. Notify orchestrator
+    self.notify_orchestrator(MigrationAborted { slot, reason: "timeout" });
+}
+```
+
+**Target Node on Timeout:**
+```rust
+fn handle_migration_timeout(slot: SlotId) {
+    // 1. Exit IMPORTING state
+    self.migration_state.remove(slot);
+
+    // 2. Keep any keys already received (orphaned keys)
+    // These will be cleaned up when slot is officially assigned elsewhere
+
+    // 3. Log for operator intervention
+    warn!(slot, "migration timeout - received partial keys, awaiting topology update");
+}
+```
+
+### Migration Failure Recovery
+
+When migration fails (timeout, crash, network partition), recovery procedures vary by failure mode.
+
+**Failure: Source Node Crashes Mid-Migration**
+
+```
+State Before Crash:
+  - Source: MIGRATING slot 1234, some keys moved to target
+  - Target: IMPORTING slot 1234, has partial keys
+
+Recovery:
+  1. Orchestrator detects source failure (health check)
+  2. If source had replica: promote replica (has all keys including not-yet-migrated)
+  3. Orchestrator updates topology: new primary owns slot 1234
+  4. Target exits IMPORTING state on topology update
+  5. Target's partial keys become orphaned (will be cleaned on next full sync or manual SCAN + DEL)
+```
+
+**Failure: Target Node Crashes Mid-Migration**
+
+```
+State Before Crash:
+  - Source: MIGRATING slot 1234
+  - Target: IMPORTING slot 1234, has partial keys (lost on crash)
+
+Recovery:
+  1. Orchestrator detects target failure
+  2. Source exits MIGRATING state (timeout or orchestrator notification)
+  3. Source remains slot owner with all keys
+  4. Migration must be restarted to different target or recovered target
+```
+
+**Failure: Network Partition Between Source and Target**
+
+```
+State During Partition:
+  - Source: MIGRATING, MIGRATE commands timing out
+  - Target: IMPORTING, no new keys arriving
+
+Recovery:
+  1. Source hits migrate_command_timeout, retries
+  2. After slot_migration_timeout: source aborts, exits MIGRATING
+  3. Source notifies orchestrator of abort
+  4. Orchestrator can retry migration after partition heals
+  5. Target exits IMPORTING on orchestrator topology update
+```
+
+**Orphaned Key Cleanup:**
+
+When migration fails, target may have partial keys that don't belong to it:
+
+```rust
+fn cleanup_orphaned_keys(slot: SlotId) {
+    // Only run after topology confirms we don't own this slot
+    if self.owns_slot(slot) {
+        return;  // Not orphaned, we actually own it now
+    }
+
+    // Scan and delete keys belonging to orphaned slot
+    let keys = self.scan_keys_in_slot(slot);
+    for key in keys {
+        self.delete_key(key);
+    }
+
+    metrics.orphaned_keys_cleaned.inc_by(keys.len());
+}
+```
+
+**Manual Intervention Commands:**
+
+| Command | Purpose |
+|---------|---------|
+| `CLUSTER SETSLOT <slot> STABLE` | Clear MIGRATING/IMPORTING state |
+| `CLUSTER SETSLOT <slot> NODE <node-id>` | Force slot ownership |
+| `CLUSTER COUNTKEYSINSLOT <slot>` | Check for orphaned keys |
+| `CLUSTER GETKEYSINSLOT <slot> <count>` | List keys for manual cleanup |
+
+**Metrics:**
+
+```
+frogdb_migration_timeout_total       # Migrations that hit timeout
+frogdb_migration_abort_total         # Migrations aborted (any reason)
+frogdb_migration_orphaned_keys       # Keys orphaned by failed migration
+frogdb_migration_recovery_total      # Successful migration recoveries
+```
+
 ---
 
 ## Failover
@@ -1285,6 +2055,83 @@ Orchestrator                 Primary (A)              Replica (B)
      │─────────────────────────────────────────────────▶  │
      │                           │                        │
      │  (A recovers, receives topology, becomes replica)  │
+```
+
+### Replica Promotion Timeline
+
+Detailed state transitions when a replica is promoted to primary:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                    Replica Promotion State Machine                      │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  REPLICA_CONNECTED ────[ROLE PRIMARY cmd]────▶ PROMOTING               │
+│       │                                            │                    │
+│       │                                            │                    │
+│       │                                    1. Stop replication stream   │
+│       │                                    2. Flush pending WAL         │
+│       │                                    3. Wait for WAL sync         │
+│       │                                            │                    │
+│       │                                            ▼                    │
+│       │                                       BECOMING_PRIMARY          │
+│       │                                            │                    │
+│       │                                    4. Generate new ReplicationId│
+│       │                                    5. Store secondary_id        │
+│       │                                    6. Set role = PRIMARY        │
+│       │                                            │                    │
+│       │                                            ▼                    │
+│       │                                       PRIMARY_READY             │
+│       │                                            │                    │
+│       │                                    7. Accept writes             │
+│       │                                    8. Begin accepting replicas  │
+│       │                                            │                    │
+│       ▼                                            ▼                    │
+│  [Error/Timeout] ──────────────────────▶ REPLICA_CONNECTING            │
+│                                         (retry connection to old primary)│
+│                                                                         │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**Promotion Steps in Detail:**
+
+| Step | Action | Duration | Failure Handling |
+|------|--------|----------|------------------|
+| 1 | Stop receiving WAL from old primary | Immediate | N/A |
+| 2 | Flush in-memory WAL batch to RocksDB | ~1-10ms | Retry until success |
+| 3 | Wait for WAL sync to disk | ~1-50ms | Timeout → abort promotion |
+| 4 | Generate new ReplicationId | < 1ms | N/A |
+| 5 | Store old primary's ID as secondary_id | < 1ms | N/A |
+| 6 | Update role to PRIMARY | < 1ms | N/A |
+| 7 | Accept write commands | Immediate | N/A |
+| 8 | Listen for replica PSYNC | Immediate | N/A |
+
+**Configuration:**
+```toml
+[failover]
+promotion_wal_sync_timeout_ms = 5000  # Max wait for WAL flush
+promotion_total_timeout_ms = 10000    # Max total promotion time
+```
+
+**In-Flight PSYNC During Promotion:**
+
+When the new primary was serving as a replica, it may have had other replicas connecting to it (cascading, which FrogDB doesn't support). Since cascading is not supported, this is N/A.
+
+However, if the old primary had in-flight FULLRESYNC to this replica when failover occurred:
+
+| State | Handling |
+|-------|----------|
+| FULLRESYNC in progress | Abort, checkpoint discarded |
+| Partial sync in progress | Promotion waits for pending WAL entries |
+| Stream idle (caught up) | Promotion proceeds immediately |
+
+**Metrics:**
+```
+frogdb_promotion_duration_seconds       # Time spent in PROMOTING state
+frogdb_promotion_wal_flush_duration_ms  # Time to flush pending WAL
+frogdb_promotion_success_total          # Successful promotions
+frogdb_promotion_timeout_total          # Promotions that timed out
+frogdb_promotion_aborted_total          # Promotions aborted (e.g., orchestrator cancelled)
 ```
 
 ### Manual Failover

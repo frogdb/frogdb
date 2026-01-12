@@ -195,6 +195,82 @@ pub enum DurabilityMode {
 | `Periodic(100ms, 1000)` | Bounded loss (100ms or 1000 writes) | ~1-10 μs |
 | `Sync` | Guaranteed (fsync per write) | ~100-500 μs |
 
+### Periodic Mode Timer Semantics
+
+The `Periodic` durability mode uses both a timer and a write counter. Understanding the exact behavior is important for durability guarantees.
+
+**Timer Behavior:**
+- Timer is **wall-clock based**, not write-event based
+- Timer **does NOT reset** after fsync - it triggers on a fixed schedule
+- Write counter **resets to zero** after each fsync
+
+**Fsync Trigger Conditions:**
+```rust
+struct PeriodicFsync {
+    interval_ms: u64,        // e.g., 100ms
+    write_threshold: usize,  // e.g., 1000 writes
+    last_fsync: Instant,
+    writes_since_fsync: AtomicUsize,
+}
+
+impl PeriodicFsync {
+    fn should_fsync(&self) -> bool {
+        // Trigger fsync if EITHER condition is met:
+        let time_trigger = self.last_fsync.elapsed().as_millis() >= self.interval_ms as u128;
+        let write_trigger = self.writes_since_fsync.load(Ordering::Relaxed) >= self.write_threshold;
+
+        time_trigger || write_trigger
+    }
+
+    fn on_fsync_complete(&mut self) {
+        self.last_fsync = Instant::now();
+        self.writes_since_fsync.store(0, Ordering::Relaxed);
+    }
+}
+```
+
+**Example Timeline (Periodic 100ms, 1000 writes):**
+```
+T=0ms:     Server starts, timer begins
+T=10ms:    500 writes (no fsync - neither threshold met)
+T=50ms:    500 more writes → 1000 total → FSYNC triggered (write threshold)
+T=50ms:    Counter reset to 0, timer continues
+T=100ms:   200 writes (no fsync yet)
+T=150ms:   Timer fires → FSYNC triggered (time threshold)
+T=150ms:   Counter reset to 0, timer reset
+```
+
+**What This Means for Durability:**
+- In low-traffic scenarios: fsync every `interval_ms` (timer-driven)
+- In high-traffic scenarios: fsync every `write_threshold` writes (write-driven)
+- Worst-case data loss: min(interval_ms worth of writes, write_threshold writes)
+
+### Write Visibility and Durability
+
+**Important:** In `Async` and `Periodic` modes, writes are visible to other clients BEFORE they are durably persisted.
+
+```
+Client A: SET key value
+  → In-memory: key = value (immediate)
+  → WAL: Queued for batch write
+  → Client A receives: +OK
+
+Client B: GET key
+  → Returns: value (from in-memory)
+
+[Crash occurs before fsync]
+
+After restart:
+  → key may not exist (WAL entry was not fsynced)
+```
+
+**This matches Redis behavior.** The in-memory store is the source of truth during operation; WAL provides crash recovery, not read isolation.
+
+**Implications:**
+- A successful `GET` does NOT guarantee the value will survive a crash
+- For guaranteed durability, use `Sync` mode or issue an explicit `PERSIST` (future command)
+- Monitor `frogdb_wal_pending_bytes` to understand durability lag
+
 ---
 
 ## Forkless Snapshot Algorithm
@@ -314,6 +390,181 @@ fn on_write_during_snapshot(key: &Bytes, old_value: &FrogValue, new_value: &Frog
 |--------|---------|-------------|
 | `snapshot_interval_s` | `3600` | Seconds between snapshots (0 = disabled) |
 | `data_dir` | `./data` | Directory for RocksDB and snapshots |
+
+### Snapshot Epoch vs RocksDB Sequence Number
+
+Two different sequence concepts exist in FrogDB:
+
+| Concept | Definition | Scope | Incremented When |
+|---------|------------|-------|------------------|
+| **Snapshot Epoch** | FrogDB-managed monotonic counter | Per-node | Each snapshot starts |
+| **RocksDB Sequence Number (LSN)** | RocksDB-managed write sequence | Global (shared WAL) | Each WriteBatch committed |
+
+**How They Relate:**
+
+```rust
+struct SnapshotMetadata {
+    /// FrogDB epoch - incremented for each snapshot attempt
+    epoch: u64,
+
+    /// RocksDB sequence at snapshot start - used for WAL replay
+    sequence_number: u64,
+
+    /// Timestamp when snapshot started
+    started_at: u64,
+
+    /// Timestamp when snapshot completed (0 if in-progress)
+    completed_at: u64,
+}
+```
+
+**Why Both Exist:**
+- **Epoch** identifies snapshot versions for FrogDB logic (which snapshot is newer, replication ID changes)
+- **Sequence number** identifies the exact WAL position for recovery (replay WAL from this point)
+
+**Example:**
+```
+Epoch 5 started at sequence 10000
+  → Snapshot captures all data as of seq 10000
+  → Writes during snapshot get seq 10001, 10002, ...
+  → Snapshot completes
+Epoch 6 started at sequence 15000
+  → New snapshot captures all data as of seq 15000
+```
+
+**Recovery uses sequence number:**
+1. Load snapshot (epoch 5, seq 10000)
+2. Replay WAL from seq 10001 to current
+3. Final state is consistent
+
+### Snapshot Metadata Storage
+
+Each snapshot has an associated metadata file that tracks its state and integrity.
+
+**Metadata File Location:**
+```
+data/
+├── rocksdb/
+│   └── ...
+└── snapshots/
+    ├── snapshot_00005/           # Snapshot epoch 5
+    │   ├── metadata.json         # Snapshot metadata
+    │   ├── shard_0.sst           # Shard 0 data
+    │   ├── shard_1.sst           # Shard 1 data
+    │   └── ...
+    ├── snapshot_00006/           # Snapshot epoch 6
+    │   └── ...
+    └── latest -> snapshot_00006  # Symlink to latest complete snapshot
+```
+
+**Metadata Format:**
+```json
+{
+  "version": 1,
+  "epoch": 6,
+  "sequence_number": 15000,
+  "started_at_ms": 1704825600000,
+  "completed_at_ms": 1704825612000,
+  "num_shards": 8,
+  "num_keys": 1234567,
+  "size_bytes": 536870912,
+  "checksums": {
+    "shard_0": "sha256:abc123...",
+    "shard_1": "sha256:def456...",
+    ...
+  },
+  "completion_marker": "FROGDB_SNAPSHOT_COMPLETE_v1"
+}
+```
+
+**Metadata Fields:**
+
+| Field | Purpose |
+|-------|---------|
+| `version` | Metadata format version (for future compatibility) |
+| `epoch` | FrogDB snapshot epoch |
+| `sequence_number` | RocksDB sequence at snapshot start |
+| `started_at_ms` | Unix timestamp when snapshot began |
+| `completed_at_ms` | Unix timestamp when snapshot finished (0 if incomplete) |
+| `num_shards` | Number of shard files expected |
+| `num_keys` | Total keys in snapshot |
+| `size_bytes` | Total size of all shard files |
+| `checksums` | SHA256 checksums of each shard file |
+| `completion_marker` | Magic string indicating successful completion |
+
+### Snapshot Completion Marker
+
+The completion marker ensures partial or corrupted snapshots are not used.
+
+**Completion Sequence:**
+```rust
+fn complete_snapshot(epoch: u64, metadata: &mut SnapshotMetadata) -> Result<()> {
+    // 1. All shard files already written
+
+    // 2. Calculate checksums for all files
+    for shard_id in 0..num_shards {
+        let checksum = sha256_file(&shard_file_path(epoch, shard_id))?;
+        metadata.checksums.insert(format!("shard_{}", shard_id), checksum);
+    }
+
+    // 3. Set completion timestamp
+    metadata.completed_at_ms = current_timestamp_ms();
+
+    // 4. Add completion marker
+    metadata.completion_marker = "FROGDB_SNAPSHOT_COMPLETE_v1".to_string();
+
+    // 5. Write metadata file atomically (write to temp, rename)
+    let temp_path = metadata_path(epoch).with_extension("tmp");
+    write_json(&temp_path, metadata)?;
+    std::fs::rename(&temp_path, &metadata_path(epoch))?;
+
+    // 6. Update "latest" symlink atomically
+    let latest_tmp = data_dir.join("latest.tmp");
+    std::os::unix::fs::symlink(&snapshot_dir(epoch), &latest_tmp)?;
+    std::fs::rename(&latest_tmp, data_dir.join("latest"))?;
+
+    Ok(())
+}
+```
+
+**Validation on Recovery:**
+```rust
+fn validate_snapshot(epoch: u64) -> Result<SnapshotMetadata> {
+    let metadata = read_metadata(epoch)?;
+
+    // 1. Check completion marker
+    if metadata.completion_marker != "FROGDB_SNAPSHOT_COMPLETE_v1" {
+        return Err(SnapshotError::Incomplete);
+    }
+
+    // 2. Check completed_at_ms is set
+    if metadata.completed_at_ms == 0 {
+        return Err(SnapshotError::Incomplete);
+    }
+
+    // 3. Verify all shard files exist with correct checksums
+    for shard_id in 0..metadata.num_shards {
+        let expected = metadata.checksums.get(&format!("shard_{}", shard_id))
+            .ok_or(SnapshotError::MissingChecksum)?;
+        let actual = sha256_file(&shard_file_path(epoch, shard_id))?;
+        if expected != &actual {
+            return Err(SnapshotError::ChecksumMismatch { shard_id });
+        }
+    }
+
+    Ok(metadata)
+}
+```
+
+**Failure Handling:**
+
+| Failure Scenario | Detection | Recovery |
+|------------------|-----------|----------|
+| Crash during shard file write | Missing checksum entry or file | Use previous snapshot |
+| Crash during metadata write | Missing or truncated metadata.json | Use previous snapshot |
+| Crash during symlink update | "latest" points to previous snapshot | Use previous snapshot |
+| Checksum mismatch | Validation fails | Use previous snapshot, log corruption |
+| Metadata version mismatch | Unknown version | Use previous snapshot or fail |
 
 ---
 
@@ -521,6 +772,68 @@ If server crashes during snapshot:
 - Previous complete snapshot is used instead
 - WAL contains all operations since that older snapshot
 
+### Expired Key Handling on Recovery
+
+When loading a snapshot or replaying WAL, many keys may have `expires_at` timestamps in the past.
+
+**Recovery Behavior (Lazy Expiry):**
+
+```rust
+fn recover_key(key: &[u8], value: &ValueHeader) -> KeyRecoveryAction {
+    // Load ALL keys, including expired ones
+    // Expiry is handled lazily after recovery completes
+
+    KeyRecoveryAction::Load
+}
+
+fn post_recovery_cleanup(shard: &mut Shard) {
+    // After recovery complete, schedule lazy cleanup
+
+    // Option 1: Background expiry scan (recommended)
+    spawn_expiry_scanner(shard);
+
+    // Option 2: Expire on first access (always happens)
+    // Keys are checked on read and deleted if expired
+}
+```
+
+**Why Not Expire During Recovery?**
+1. **Speed:** Recovery should be as fast as possible
+2. **Simplicity:** Expiry logic is complex (active + passive), recovery is simpler without it
+3. **Consistency:** Easier to reason about recovery state
+
+**Memory Impact:**
+
+Large numbers of expired keys may temporarily consume memory after recovery. Mitigation strategies:
+
+| Strategy | Implementation | Trade-off |
+|----------|----------------|-----------|
+| **Lazy cleanup (default)** | Expire on access + background scan | Memory spike until first scan completes |
+| **Immediate cleanup** | Scan all keys after recovery | Slower startup time |
+| **Incremental recovery** | Expire during WAL replay | Complex, may miss snapshot keys |
+
+**Configuration:**
+```toml
+[recovery]
+# Strategy for expired keys
+expired_key_strategy = "lazy"  # "lazy" (default), "immediate"
+
+# Background scan interval after recovery (lazy mode)
+expired_scan_delay_ms = 5000   # Start scan 5s after recovery
+
+# Scan batch size to limit CPU impact
+expired_scan_batch_size = 1000
+```
+
+**Metrics After Recovery:**
+```
+frogdb_recovery_keys_loaded        # Total keys loaded
+frogdb_recovery_keys_expired       # Keys expired after recovery scan
+frogdb_recovery_expired_bytes      # Memory reclaimed from expired keys
+```
+
+**Important:** Monitor memory usage after recovery. If expired keys consume significant memory, consider using `immediate` strategy or reducing `expired_scan_delay_ms`.
+
 ---
 
 ## Restore Procedure
@@ -616,6 +929,126 @@ Client experiences latency
 | `persistence_queue_size` | 64 | Max pending WriteBatches |
 | `persistence_batch_max_size` | 4MB | Max size per WriteBatch |
 | `persistence_batch_timeout_ms` | 10 | Max time to accumulate batch |
+
+### WriteBatch Batching Timing
+
+Individual writes are accumulated into WriteBatches before being sent to RocksDB. Understanding when batches are triggered is important for durability and performance.
+
+**Batch Trigger Conditions:**
+
+A WriteBatch is flushed to RocksDB when ANY of these conditions is met:
+
+```rust
+struct WriteBatchAccumulator {
+    batch: WriteBatch,
+    batch_start: Instant,
+    batch_size: usize,
+
+    // Configuration
+    max_size: usize,      // persistence_batch_max_size (4MB default)
+    timeout_ms: u64,      // persistence_batch_timeout_ms (10ms default)
+}
+
+impl WriteBatchAccumulator {
+    fn add_write(&mut self, key: &[u8], value: &[u8]) -> Option<WriteBatch> {
+        self.batch.put(key, value);
+        self.batch_size += key.len() + value.len();
+
+        // Trigger 1: Size threshold reached
+        if self.batch_size >= self.max_size {
+            return Some(self.take_batch());
+        }
+
+        // Trigger 2: Timeout (checked in background)
+        // See timeout_check() below
+
+        None
+    }
+
+    fn add_delete(&mut self, key: &[u8]) -> Option<WriteBatch> {
+        self.batch.delete(key);
+        self.batch_size += key.len();
+
+        if self.batch_size >= self.max_size {
+            return Some(self.take_batch());
+        }
+
+        None
+    }
+
+    /// Called periodically by background task
+    fn timeout_check(&mut self) -> Option<WriteBatch> {
+        if self.batch_size > 0 && self.batch_start.elapsed().as_millis() >= self.timeout_ms as u128 {
+            return Some(self.take_batch());
+        }
+        None
+    }
+
+    /// Called on explicit flush request (e.g., BGSAVE, shutdown)
+    fn explicit_flush(&mut self) -> Option<WriteBatch> {
+        if self.batch_size > 0 {
+            return Some(self.take_batch());
+        }
+        None
+    }
+
+    fn take_batch(&mut self) -> WriteBatch {
+        let batch = std::mem::take(&mut self.batch);
+        self.batch_size = 0;
+        self.batch_start = Instant::now();
+        batch
+    }
+}
+```
+
+**Batch Triggers Summary:**
+
+| Trigger | Condition | Behavior |
+|---------|-----------|----------|
+| **Size** | `batch_size >= persistence_batch_max_size` | Immediate flush to RocksDB |
+| **Timeout** | `elapsed >= persistence_batch_timeout_ms` AND `batch_size > 0` | Background task flushes |
+| **Explicit** | `BGSAVE`, shutdown, or `SYNC` command | Immediate flush |
+
+**Timing Diagram:**
+```
+T=0ms:    Write A (100 bytes) → batch_start = now, batch_size = 100
+T=5ms:    Write B (200 bytes) → batch_size = 300
+T=10ms:   Timeout fires → batch_size > 0 → FLUSH to RocksDB
+T=10ms:   batch_start = now, batch_size = 0
+T=15ms:   Write C (4MB) → batch_size >= max → FLUSH immediately
+T=15ms:   batch_start = now, batch_size = 0
+```
+
+**Interaction with Durability Mode:**
+
+| Durability Mode | Batch Behavior | Fsync Timing |
+|-----------------|----------------|--------------|
+| `Async` | Batch as configured | No fsync |
+| `Periodic` | Batch as configured | Fsync on periodic timer or write count |
+| `Sync` | Immediate flush (batch size = 1) | Fsync after each write |
+
+**Note:** In `Sync` mode, `persistence_batch_max_size` and `persistence_batch_timeout_ms` are ignored. Each write is flushed and fsynced immediately.
+
+**When Is a Write "In WAL"?**
+
+A write enters the WAL when its batch is flushed to RocksDB:
+- Before flush: Write is in-memory batch only
+- After flush: Write is in RocksDB WAL (but may not be fsynced)
+- After fsync: Write is durably on disk
+
+**Client Acknowledgment vs WAL State:**
+
+In `Async` and `Periodic` modes, the client receives `+OK` BEFORE the write is in WAL:
+
+```
+T=0:    Client: SET key value
+T=0:    Server: Apply to in-memory store
+T=0:    Server: Add to batch (batch_size = 100)
+T=0:    Server: Return +OK to client  ← CLIENT SEES SUCCESS
+T=10ms: Server: Batch timeout → flush to WAL
+T=10ms: Server: Write is now in WAL (not fsynced)
+T=100ms: Server: Periodic fsync → write is durable
+```
 
 ---
 

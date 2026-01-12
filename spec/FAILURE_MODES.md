@@ -595,6 +595,355 @@ frogdb_repl_corruption_reconnects_total # Reconnections due to corruption
 frogdb_repl_corruption_fullresyncs_total # FULLRESYNCs due to corruption
 ```
 
+### Primary OOM During Checkpoint
+
+**Trigger:** Primary runs out of memory while creating a checkpoint for FULLRESYNC.
+
+**Behavior:**
+
+```
+Primary (90% memory)                   Replica
+      │                                   │
+      │◀── PSYNC <repl_id> -1 ───────────│  (Request FULLRESYNC)
+      │                                   │
+      │  Creating checkpoint...           │
+      │  Memory grows (snapshot buffers)  │
+      │  OOM triggered!                   │
+      │                                   │
+      │── -ERR FULLRESYNC failed: OOM ──▶│
+      │                                   │
+      │                                   │  Replica logs error
+      │                                   │  Retry with backoff
+      │                                   │
+      │◀── [Retry after 10s] ────────────│
+```
+
+**Recovery Behavior:**
+
+| Primary State | Replica Action |
+|---------------|----------------|
+| Checkpoint fails (OOM) | Receives error, retries with exponential backoff |
+| Memory freed (keys evicted/deleted) | Retry may succeed |
+| Sustained OOM | Replica stays disconnected, serves stale reads |
+
+**Configuration:**
+```toml
+[replication]
+# Max memory for checkpoint creation (relative to max_memory)
+checkpoint_memory_limit_percent = 10
+
+# Retry timing
+fullresync_retry_base_ms = 1000
+fullresync_retry_max_ms = 60000
+fullresync_retry_multiplier = 2.0
+```
+
+**Mitigation:**
+- Ensure sufficient memory headroom for checkpoints (recommend 10-20%)
+- Monitor `frogdb_fullresync_oom_total` metric
+- Consider `checkpoint_memory_limit_percent` to abort early
+
+### Graceful Shutdown During Replication
+
+**Trigger:** Primary receives SHUTDOWN while replicas are connected.
+
+**Behavior:**
+
+```
+Admin                 Primary                          Replica
+  │                      │                                │
+  │── SHUTDOWN ─────────▶│                                │
+  │                      │                                │
+  │                      │  1. Stop accepting new writes  │
+  │                      │  2. Flush pending WAL          │
+  │                      │  3. Notify replicas            │
+  │                      │                                │
+  │                      │── -ERR SHUTDOWN in progress ──▶│
+  │                      │   (on next PSYNC heartbeat)    │
+  │                      │                                │
+  │                      │  4. Close connections          │
+  │                      │  5. Persist final state        │
+  │                      │  6. Exit                       │
+  │                      │                                │
+  │                      X                                │
+  │                                                       │
+  │                                   Replica detects disconnect
+  │                                   Attempts reconnect (fails)
+  │                                   Waits for orchestrator
+```
+
+**Replica Behavior on Graceful Shutdown:**
+1. Receives `-ERR SHUTDOWN in progress` or connection close
+2. Logs: `"Primary shutting down, disconnecting"`
+3. Does NOT immediately seek new primary (waits for orchestrator)
+4. Continues serving READONLY requests with stale data
+5. If orchestrator promotes it: becomes primary
+
+**In-Flight Checkpoint Handling:**
+
+| Shutdown Phase | Checkpoint State | Action |
+|----------------|------------------|--------|
+| Before checkpoint | Not started | No cleanup needed |
+| During checkpoint creation | Partial files | Abort checkpoint, delete temp files |
+| Checkpoint streaming to replica | Partial transfer | Replica receives error, discards partial |
+| After checkpoint complete | Streaming WAL | Clean disconnect, replica has valid base |
+
+**Shutdown Timeout:**
+```toml
+[server]
+# Max time to wait for graceful shutdown
+shutdown_timeout_ms = 30000
+
+# Force kill if graceful shutdown hangs
+shutdown_force_kill = true
+```
+
+### Checkpoint I/O Errors
+
+**Trigger:** I/O error during checkpoint creation (disk full, permission denied, hardware failure).
+
+**Behavior:**
+
+```
+Primary                                Replica
+   │                                      │
+   │◀── PSYNC <repl_id> -1 ──────────────│
+   │                                      │
+   │  Creating checkpoint...              │
+   │  write(shard_0.sst) → ENOSPC!        │
+   │                                      │
+   │── -ERR FULLRESYNC failed: ──────────▶│
+   │      disk full                       │
+   │                                      │
+   │  Cleanup partial checkpoint          │
+   │  Log error                           │
+   │  Continue serving clients            │
+```
+
+**Primary Actions on I/O Error:**
+1. Abort checkpoint immediately
+2. Delete any partial checkpoint files
+3. Return error to requesting replica
+4. Increment `frogdb_checkpoint_io_error_total`
+5. Continue normal operation (no data loss on primary)
+
+**Replica Actions:**
+1. Log error with details
+2. Enter retry loop with exponential backoff
+3. Report status via `INFO replication`
+4. Serve stale READONLY requests if allowed
+
+**I/O Error Types:**
+
+| Error | Recovery |
+|-------|----------|
+| `ENOSPC` (disk full) | Clear space, retry |
+| `EACCES` (permission) | Fix permissions, restart |
+| `EIO` (hardware) | Replace disk, restore from other replica |
+| `EROFS` (read-only FS) | Remount RW, retry |
+
+### CPU Exhaustion Effects on Replication
+
+**Trigger:** Primary CPU is saturated (100% utilization).
+
+**Effects:**
+
+| Component | Behavior |
+|-----------|----------|
+| WAL streaming | May fall behind (lower priority than client requests) |
+| Heartbeats | May be delayed (PING/PONG) |
+| Checkpoint creation | Slowed significantly |
+| Connection handling | New replica connections may timeout |
+
+**Replication Stream Starvation:**
+
+```
+Primary (CPU 100%)                    Replica
+      │                                   │
+      │  Processing client requests...    │
+      │  Replication thread starved       │
+      │                                   │
+      │   [No WAL frames sent]            │
+      │                                   │
+      │                                   │  Lag increases
+      │                                   │  Heartbeat timeout approaching
+      │                                   │
+      │◀── REPLCONF ACK seq ─────────────│  (Replica reports position)
+      │                                   │
+      │  [Still no bandwidth for          │
+      │   replication]                    │
+      │                                   │
+      │                                   │  T=60s: Heartbeat timeout
+      │                                   │  Replica disconnects
+      │                                   │  Reconnects, PSYNC
+```
+
+**TCP Backpressure Behavior:**
+
+When primary is CPU-bound:
+1. Replication write() calls may block (TCP buffer full)
+2. This is normal - TCP backpressure provides flow control
+3. Replica lag increases but data is not lost
+4. If lag exceeds WAL retention, FULLRESYNC required
+
+**Configuration for High-CPU Scenarios:**
+```toml
+[replication]
+# Increase timeout for high-CPU primaries
+repl_timeout_ms = 120000  # 2 minutes
+
+# Ensure sufficient WAL retention for lag
+wal_retention_size = 500MB  # Larger than normal
+```
+
+**Metrics:**
+```
+frogdb_replication_lag_seconds        # Current lag (high = CPU issue)
+frogdb_replication_stream_blocked_ms  # Time write() blocked on TCP
+frogdb_cpu_utilization                # Overall CPU usage
+```
+
+### Asymmetric Network Failure
+
+**Trigger:** Network failure where one direction works but the other doesn't.
+
+**Scenario 1: Primary → Replica works, Replica → Primary broken**
+
+```
+Primary                              Replica
+   │                                    │
+   │── WAL frames ─────────────────────▶│  (Works)
+   │                                    │
+   │◀──────────────────── ACK ──────── X│  (Blocked)
+   │                                    │
+   │  No ACKs received                  │
+   │  Sync-mode writes timeout          │
+   │  Returns -NOREPL                   │
+   │                                    │
+   │  T=60s: Assume replica dead        │
+   │  Close connection                  │
+```
+
+**Scenario 2: Replica → Primary works, Primary → Replica broken**
+
+```
+Primary                              Replica
+   │                                    │
+   │── WAL frames ─────────X            │  (Blocked)
+   │                                    │
+   │◀──────────────────── PING ────────│  (Works - heartbeat)
+   │                                    │
+   │  Heartbeats received               │
+   │  But WAL not flowing               │
+   │                                    │
+   │                                    │  Replica sees no data
+   │                                    │  But primary not timing out
+   │                                    │  Lag grows indefinitely
+```
+
+**Detection and Recovery:**
+
+| Failure Type | Detection | Recovery |
+|--------------|-----------|----------|
+| Primary → Replica broken | Replica heartbeat timeout | Replica reconnects |
+| Replica → Primary broken | Primary ACK timeout | Primary closes, replica reconnects |
+| Both directions broken | Both timeout | Both sides cleanup, reconnect when healed |
+
+**Replica-Initiated Reconnect:**
+
+The replica is responsible for reconnection:
+```rust
+fn replication_health_check(&self) {
+    let last_data = self.last_received_timestamp;
+    let last_heartbeat_sent = self.last_ping_sent;
+
+    // No data received but heartbeats sent successfully
+    // Indicates asymmetric failure (primary → replica broken)
+    if last_data.elapsed() > self.config.data_timeout
+        && last_heartbeat_sent.elapsed() < self.config.heartbeat_interval
+    {
+        warn!("Asymmetric network failure detected - no data but heartbeats OK");
+        self.reconnect();
+    }
+}
+```
+
+**Configuration:**
+```toml
+[replication]
+# Time without data before reconnect attempt
+repl_data_timeout_ms = 30000
+
+# Heartbeat interval (should be < data_timeout)
+repl_heartbeat_interval_ms = 10000
+```
+
+### Cascading Failure Matrix
+
+When multiple components fail simultaneously, recovery becomes complex. This matrix documents behavior for common multi-component failures.
+
+**Two-Component Failures:**
+
+| Component A | Component B | Behavior | Recovery |
+|-------------|-------------|----------|----------|
+| Primary OOM | Replica OOM | Both refuse FULLRESYNC | Add memory to one, restart |
+| Primary disk | Replica disk | No persistence anywhere | Restore from backup |
+| Network (Pri↔Rep) | Network (Rep↔Orch) | Replica isolated | Wait for network heal |
+| Primary crash | Orchestrator down | No automatic failover | Manual promotion |
+| Replica crash | WAL retention exceeded | FULLRESYNC required on recover | Increase retention |
+
+**Three-Component Failures:**
+
+| Failure Scenario | Behavior | Recovery Path |
+|------------------|----------|---------------|
+| Primary + all replicas crash | **Data loss possible** if WAL not synced | Restore from backup |
+| Primary + Orchestrator + Network | Replicas orphaned, stale data | Restore orchestrator first |
+| Primary disk + Replica OOM + Network | No valid data source | Wait for network, clear replica memory |
+| CPU exhaustion + Disk full + Memory pressure | Complete service degradation | Shed load: reject connections, clear temp files |
+
+**Recovery Priority Order:**
+
+When multiple failures exist, recover in this order:
+
+1. **Network** - Restore connectivity first (enables coordination)
+2. **Orchestrator** - Required for topology decisions
+3. **Primary storage** - Data durability
+4. **Primary memory** - Write capability
+5. **Replica storage** - Redundancy
+6. **Replica memory** - Read scaling
+
+**Cascading Failure Prevention:**
+
+| Configuration | Purpose |
+|---------------|---------|
+| `max_memory` with headroom | Prevent OOM cascade |
+| `disk_usage_warning_percent = 80` | Alert before disk full |
+| `orchestrator_replicas = 3` | Orchestrator redundancy |
+| `min_replicas_to_write = 1` | Ensure at least one replica confirms |
+| `wal_retention_size = 200MB` | Buffer for replica recovery |
+
+**Metrics for Cascade Detection:**
+
+```
+frogdb_component_failures_total{component="disk"}
+frogdb_component_failures_total{component="memory"}
+frogdb_component_failures_total{component="network"}
+frogdb_simultaneous_failures_total  # Multiple components failing together
+```
+
+**Alert Rules:**
+
+```yaml
+# Alert on multiple simultaneous failures
+- alert: CascadingFailure
+  expr: sum(frogdb_component_failures_total) > 1
+  for: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Multiple component failures detected"
+```
+
 ---
 
 ## Graceful Degradation
