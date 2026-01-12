@@ -26,8 +26,8 @@ Each shard owns a `Store` implementation for key-value storage:
 
 ```rust
 pub trait Store: Send {
-    /// Get a value by key
-    fn get(&self, key: &[u8]) -> Option<&FrogValue>;
+    /// Get a value by key (returns owned/cloned value)
+    fn get(&self, key: &[u8]) -> Option<FrogValue>;
 
     /// Set a value, returns previous value if any
     fn set(&mut self, key: Bytes, value: FrogValue) -> Option<FrogValue>;
@@ -51,6 +51,21 @@ pub trait Store: Send {
     fn scan(&self, cursor: u64, count: usize, pattern: Option<&[u8]>) -> (u64, Vec<Bytes>);
 }
 ```
+
+### Ownership Semantics
+
+**`Store::get()` returns `Option<FrogValue>` (owned), not `Option<&FrogValue>` (borrowed).**
+
+Rationale:
+- **Async compatibility**: Returning references would require complex lifetime annotations
+  with async command execution. Owned values are simpler to work with across `.await` points.
+- **Simplicity over optimization**: The slight overhead of cloning values is acceptable
+  for Phase 1. Optimization can be added later if profiling shows it's a bottleneck.
+- **Command execution pattern**: Most commands need to inspect values, compute responses,
+  and potentially modify them. Owned values fit this pattern naturally.
+
+Future optimization path: Add a `get_ref()` method returning `Option<&FrogValue>` for
+read-only operations where the caller can guarantee no `.await` across the borrow.
 
 ## Value Types
 
