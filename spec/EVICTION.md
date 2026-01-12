@@ -30,6 +30,22 @@ When `max_memory` is exceeded, FrogDB must decide how to handle new writes:
 
 ## LRU Implementation
 
+### Industry Comparison
+
+| System | Algorithm | Per-Key Overhead | Approach |
+|--------|-----------|------------------|----------|
+| **Redis/Valkey** | Sampling LRU | ~24 bits (timestamp) | Sample N keys, evict oldest |
+| **DragonflyDB** | 2Q LFRU | Zero | Probationary→Protected buffers, integrated with Dashtable |
+| **FrogDB** | Sampling LRU | ~24 bits (timestamp) | Redis-compatible approach |
+
+**Why FrogDB uses Redis-style sampling:**
+- Proven algorithm with well-understood accuracy characteristics
+- Simple implementation without custom data structures
+- ~95% accuracy with 5 samples, ~98% with 10 samples
+- If FrogDB implements Dashtable in the future, DragonflyDB's 2Q approach becomes viable
+
+### Algorithm Details
+
 Redis-style approximate LRU using sampling:
 
 ```rust
@@ -85,17 +101,34 @@ fn lfu_decay(counter: u8, minutes_since_access: u64) -> u8 {
 
 ---
 
-## DragonflyDB LFRU (Future)
+## DragonflyDB 2Q LFRU (Future Consideration)
 
-Hybrid LFU + LRU with zero per-key overhead:
+DragonflyDB uses a different approach based on the "2Q" algorithm (1994 paper):
 
 ```
-LFRU Score = α * LFU_Score + (1-α) * LRU_Score
+┌─────────────────────────────────────────────────────────────┐
+│                     2Q Algorithm Flow                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│   New Item ──▶ [Probationary Buffer] ──access──▶ [Protected]│
+│                    (~10% of cache)                (~90%)    │
+│                         │                            │       │
+│                    evict if                     demote LRU   │
+│                    not accessed                  back to     │
+│                         │                      probationary  │
+│                         ▼                                    │
+│                    (removed)                                 │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-- Tracks both recency and frequency
-- Adapts to traffic pattern changes
-- No additional metadata per key
+**Key advantages:**
+- Zero per-key memory overhead (integrated with Dashtable segments)
+- Eviction happens at segment boundaries in O(1) time
+- Naturally filters out "scan pollution" (one-time accesses don't evict hot data)
+- Claims higher hit rates than pure LRU or LFU
+
+**FrogDB consideration:** If FrogDB implements a custom Dashtable (see [STORAGE.md](STORAGE.md#hashmap-implementation-choice)),
+the 2Q algorithm becomes a natural fit. Until then, Redis-style sampling provides proven, compatible behavior.
 
 ---
 

@@ -324,6 +324,7 @@ See [CONFIGURATION.md](CONFIGURATION.md) for full configuration system design an
 | [CONNECTION.md](CONNECTION.md) | Connection lifecycle, rate limiting |
 | [COMMANDS.md](COMMANDS.md) | Command index |
 | [EXECUTION.md](EXECUTION.md) | Command trait, arity, flags, type checking |
+| [GLOSSARY.md](GLOSSARY.md) | Term definitions and abbreviations |
 | [types/](types/) | Data type implementations and commands |
 | [DEBUGGING.md](DEBUGGING.md) | Debugging tools, dtrace/eBPF, developer debugging |
 | [LIMITS.md](LIMITS.md) | Size limits and enforcement |

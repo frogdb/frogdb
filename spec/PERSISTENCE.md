@@ -118,6 +118,26 @@ WAL writes can fail due to disk full, I/O errors, or RocksDB internal errors. Fr
 | After WAL, before fsync (Async) | Write visible | OK returned | May be lost on crash |
 | After fsync (Sync) | Write visible | OK returned | Guaranteed durable |
 
+> **Design Note: Why "Write Visible + Error Returned"?**
+>
+> This behavior matches Redis AOF semantics and is standard for in-memory databases:
+> - **In-memory is the source of truth** during operation (for low latency)
+> - **WAL provides durability**, not correctness during normal operation
+> - **Error signals durability risk**, allowing the client to take action (retry, alert, etc.)
+>
+> The alternative (rollback on WAL failure) would require:
+> - Maintaining undo logs for every write
+> - Complex rollback logic for transactions
+> - Significant performance overhead
+>
+> **Client Recommendations:**
+> - For critical data: Use `sync_mode=sync` to guarantee durability before acknowledgment
+> - Handle WAL errors by logging and alerting, potentially retrying the operation
+> - Consider the write "at risk" until the next successful write confirms WAL health
+>
+> **Future Enhancement:** A configurable `wal_failure_policy: rollback` mode may be added
+> to provide stricter consistency at the cost of performance.
+
 **Critical Behavior:** In `Async` and `Periodic` modes, the in-memory write is applied **before** WAL durability is guaranteed. This matches Redis AOF behavior where:
 - Writes are immediately visible to other clients
 - Durability depends on fsync timing
@@ -227,10 +247,21 @@ This is an acceptable trade-off vs. fork's 2x memory spike. DragonflyDB uses the
 
 **Recovery Consistency Guarantees:**
 
+> **Clarification: "Logical" vs "Physical" Point-in-Time**
+>
+> FrogDB's epoch-based snapshots provide **logical point-in-time** consistency:
+> - All committed data at epoch start is captured
+> - Keys deleted during snapshot are excluded (deletion goes to WAL)
+> - Keys created during snapshot are excluded (creation goes to WAL)
+>
+> This differs from **physical point-in-time** (fork-based) where memory is frozen.
+> The practical difference: a key deleted between epoch start and iterator visit
+> will be absent from snapshot. WAL replay ensures correct final state.
+
 | Scenario | Recovery State | Notes |
 |----------|---------------|-------|
-| Clean snapshot, clean shutdown | Exact point-in-time | All data preserved |
-| Snapshot + WAL replay | Consistent | WAL fills gaps from snapshot |
+| Clean snapshot, clean shutdown | Logically consistent | All committed data at epoch start preserved |
+| Snapshot + WAL replay | Fully consistent | WAL fills gaps from snapshot |
 | Key deleted during snapshot | Key absent | Correct: delete captured in WAL |
 | Key created during snapshot | Key present | Correct: create captured in WAL |
 | Crash during snapshot | Previous snapshot | In-progress snapshot discarded |

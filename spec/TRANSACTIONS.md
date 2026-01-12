@@ -31,18 +31,34 @@ Client                     Server (Shard)
        :1
 ```
 
-### Key Semantics
+### Transaction Guarantees Summary
 
-| Property | Guarantee |
-|----------|-----------|
-| **Execution Atomic** | All commands execute without interleaving from other clients |
-| **NOT Durable Atomic** | Acknowledged transactions may be lost on failover (async replication) |
-| **NOT Rollback** | If one command fails, others still execute |
-| **Single-Slot** | All keys must hash to same slot (use hash tags) |
+FrogDB transactions provide guarantees across three orthogonal dimensions:
 
-**Important Distinction:**
-- **Execution Atomicity:** Commands in a transaction are not interleaved with other clients' commands
-- **Durability Atomicity:** Whether the transaction survives failures - depends on replication mode
+| Dimension | FrogDB Guarantee | Notes |
+|-----------|------------------|-------|
+| **Execution Atomicity** | Yes | All commands execute without interleaving from other clients |
+| **Isolation** | Yes | WATCH-based optimistic locking detects conflicts |
+| **Durability** | Configurable | Depends on persistence mode (see below) |
+| **Rollback on Error** | No | If one command fails, others still execute (Redis-compatible) |
+| **Single-Slot Requirement** | Yes | All keys must hash to same slot (use hash tags) |
+
+> **Key Insight: Acknowledgment ≠ Durability**
+>
+> When EXEC returns successfully, the transaction has been *executed* but not necessarily *persisted*.
+> - In `async` mode: Transaction is in memory and WAL queue, may be lost on crash
+> - In `periodic` mode: Transaction persists within fsync interval (default 1s)
+> - In `sync` mode: Transaction is fsync'd before acknowledgment - fully durable
+>
+> This matches Redis AOF behavior and is standard for in-memory databases.
+
+**Durability by Configuration:**
+
+| `sync_mode` | Acknowledgment Means | Max Data Loss on Crash |
+|-------------|---------------------|------------------------|
+| `async` | In memory + WAL queued | Unbounded (until next fsync) |
+| `periodic` | In memory + WAL queued | Up to `fsync_interval_ms` (default 1000ms) |
+| `sync` | Persisted to disk | None (assuming disk doesn't lie) |
 
 See [Transaction Durability](#transaction-durability) for failure scenarios.
 

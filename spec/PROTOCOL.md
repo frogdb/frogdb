@@ -103,9 +103,30 @@ impl From<Response> for BytesFrame {
 }
 ```
 
-### RESP3 (Future)
+### RESP3 Implementation Status
 
-RESP3 adds type-rich responses negotiated via the `HELLO` command:
+#### Industry Comparison
+
+| Feature | Redis 6+ | DragonflyDB | FrogDB |
+|---------|----------|-------------|--------|
+| RESP3 basic types | Full | Full | **Planned** |
+| HELLO command | Yes | Yes | **Planned** |
+| Client tracking | Yes | Yes | **Deferred** |
+| Push notifications | Yes | Yes | **Planned** (pub/sub) |
+| Streaming types | Experimental | No | **Deferred** |
+
+#### FrogDB RESP3 Roadmap
+
+| Priority | Feature | Status | Notes |
+|----------|---------|--------|-------|
+| **Phase 1** | Basic types (Null, Double, Boolean, Map, Set) | Planned | Required for modern client libraries |
+| **Phase 1** | HELLO command | Planned | Protocol negotiation |
+| **Phase 2** | Push type for pub/sub | Planned | Cleaner than RESP2 inline messages |
+| **Phase 3** | Client tracking / invalidation | Deferred | Complex, requires per-key tracking |
+| **Deferred** | Streaming strings/aggregates | Not planned | Limited use cases |
+| **Deferred** | Attributes | Not planned | Metadata extensions |
+
+#### RESP3 Type Reference
 
 | Type | Wire Format | Use Case |
 |------|-------------|----------|
@@ -119,13 +140,49 @@ RESP3 adds type-rich responses negotiated via the `HELLO` command:
 | VerbatimString | `=<n>\r\n<fmt>:...` | Formatted text (markdown, etc.) |
 | Attribute | `\|<n>\r\n...` | Metadata without breaking clients |
 
-**Benefits:**
-- Type-rich responses (maps, sets, booleans) reduce client parsing ambiguity
-- Out-of-band push messages for cleaner pub/sub
-- Attributes enable metadata extensions
+#### Benefits of RESP3
 
-**Negotiation:** Clients send `HELLO 3` to upgrade; server responds with connection info in RESP3 format.
+- **Type-rich responses**: Maps, sets, booleans reduce client parsing ambiguity
+- **Out-of-band push**: Cleaner pub/sub without inline message interleaving
+- **Explicit nulls**: `_\r\n` vs RESP2's overloaded `$-1\r\n`
+- **Native doubles**: No string conversion needed for ZSCORE, etc.
+
+#### HELLO Command (Planned)
+
+```
+HELLO [protover [AUTH username password] [SETNAME clientname]]
+```
+
+**Response (RESP3 map):**
+```
+%7
+$6 server
+$6 frogdb
+$7 version
+$5 0.1.0
+$5 proto
+:3
+$2 id
+:42
+$4 mode
+$10 standalone
+$4 role
+$6 master
+$7 modules
+*0
+```
+
+**Negotiation:** Clients send `HELLO 3` to upgrade; server responds with connection info.
 The `ProtocolVersion` is stored per-connection and determines encoding behavior.
+
+#### Client Tracking (Deferred)
+
+Client-side caching via invalidation messages is a powerful RESP3 feature but requires:
+- Per-key tracking of which clients have cached which keys
+- Invalidation broadcast on key modification
+- Significant memory overhead
+
+This is deferred until core functionality is stable. See [Redis CLIENT TRACKING docs](https://redis.io/docs/latest/commands/client-tracking/) for the full feature specification.
 
 ## Tokio Codec
 

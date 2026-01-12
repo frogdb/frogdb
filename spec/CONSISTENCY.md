@@ -2,6 +2,9 @@
 
 This document defines FrogDB's consistency guarantees for single-node operation, clustered deployments, and transactions.
 
+> **Terminology:** This document uses "internal shard" (thread-local partition within a node)
+> and "hash slot" (cluster distribution unit, 0-16383). See [GLOSSARY.md](GLOSSARY.md) for definitions.
+
 ## Single-Node Guarantees
 
 These guarantees apply to all deployments:
