@@ -28,7 +28,7 @@ Main Thread
     │
     └── Spawns Shard Workers (N = num_cpus)
             └── Each owns:
-                ├── Exclusive data store (HashMap<Key, FrogValue>)
+                ├── Exclusive data store (HashMap<Key, Value>)
                 ├── Lua VM instance
                 ├── mpsc::Receiver for incoming messages
                 └── Connection handlers for assigned clients
@@ -147,9 +147,9 @@ Comprehensive hash tag parsing behavior:
 | `{foo}bar` | `foo` | `foo` | Standard usage |
 | `bar{foo}baz` | `foo` | `foo` | Tag in middle |
 | `{foo}` | `foo` | `foo` | Tag is entire key |
-| `{}` | (empty) | `` | Empty tag, hash empty string |
-| `foo{}bar` | (empty) | `` | Empty tag in middle |
-| `{}{foo}` | (empty) | `` | First tag is empty, wins |
+| `{}` | (none) | `{}` | Empty braces - hash entire key |
+| `foo{}bar` | (none) | `foo{}bar` | Empty braces - hash entire key |
+| `{}{foo}` | (none) | `{}{foo}` | Empty braces - hash entire key |
 | `foo{bar}baz{qux}` | `bar` | `bar` | First tag wins |
 | `foo{bar` | (none) | `foo{bar` | No closing brace |
 | `foo}bar` | (none) | `foo}bar` | No opening brace |
@@ -174,7 +174,7 @@ fn extract_hash_tag(key: &[u8]) -> Option<&[u8]> {
     let close = key[open + 1..].iter().position(|&b| b == b'}')?;
     let tag = &key[open + 1..open + 1 + close];
     if tag.is_empty() {
-        Some(b"")  // Empty tag hashes empty string
+        None  // Empty braces `{}` - hash entire key (Redis behavior)
     } else {
         Some(tag)
     }
@@ -368,60 +368,72 @@ MSET key1 val1 key2 val2 (keys on different shards)
          ├── 4. Await all responses
          │
          └── 5. All complete → return OK
-              Any fail → return error (writes may have committed)
+              Any fail → rollback and return error (atomic)
 ```
 
 ### Atomicity Semantics
 
-VLL provides **serializable execution order**, not transactional rollback. Understanding the precise guarantees:
+VLL provides **atomic execution** through ordered multi-shard locking:
+
+1. **Lock Phase:** Acquire write locks on all target shards (sorted order prevents deadlock)
+2. **Execute Phase:** Execute writes on each shard sequentially while holding all locks
+3. **Release Phase:** Release all locks atomically
 
 | Scenario | Behavior | Data State |
 |----------|----------|------------|
-| **Single-shard operation** | True atomicity (all-or-nothing) | Consistent, same as Redis |
-| **Multi-shard success** | All shards commit | Consistent, globally ordered |
-| **Multi-shard timeout** | Client receives `-TIMEOUT` | **Partial commits may exist** |
-| **Coordinator crash mid-op** | Client disconnected | **Partial commits may exist** |
-| **Single shard fails** | Client receives error | **Other shards may have committed** |
+| **Single-shard operation** | True atomicity (all-or-nothing) | Consistent |
+| **Multi-shard success** | All shards commit atomically | Consistent, globally ordered |
+| **Lock acquisition timeout** | Client receives `-TIMEOUT` | **No changes** (no locks acquired) |
+| **Failure during execution** | Rollback prior writes | **No partial commits** |
+| **Coordinator crash mid-op** | Locks timeout and release | **No partial commits** |
 
-**Critical Distinction:**
-- **Client response**: Fail-all semantics (no partial results returned to client)
-- **Server state**: Partial commits persist (no rollback mechanism)
+**Key Insight:** Because all locks are acquired **before** any writes execute, partial commits
+cannot occur. If a write fails after locks are acquired, prior writes in the batch are rolled
+back before locks are released.
 
-**Example - Partial Commit Scenario:**
+**Example - Atomic Execution:**
 ```
 MSET {a}key1 val1 {b}key2 val2  # Keys on different shards
          │
-         ├── Shard A: commits SET {a}key1 val1 ✓
-         ├── Shard B: times out or fails ✗
+         ├── 1. Acquire lock on Shard A
+         ├── 2. Acquire lock on Shard B (sorted order)
+         ├── 3. Execute SET {a}key1 val1 (while holding both locks)
+         ├── 4. Execute SET {b}key2 val2 (while holding both locks)
+         ├── 5. Release both locks
          │
-         └── Client receives: -TIMEOUT
-             But {a}key1 = val1 persists on Shard A
+         └── Client receives: +OK (both committed atomically)
+
+If step 4 fails:
+         ├── Rollback step 3 (delete {a}key1)
+         ├── Release both locks
+         └── Client receives: -ERR (no changes persisted)
 ```
 
-**Recommendation:** For operations requiring strict all-or-nothing guarantees, use **hash tags** to ensure
-all keys land on the same shard: `MSET {user:1}:name Alice {user:1}:email alice@example.com`
+**Note:** Hash tags are still recommended for performance, as same-shard operations avoid
+the lock coordination overhead: `MSET {user:1}:name Alice {user:1}:email alice@example.com`
 
 ### VLL Properties
 
 | Property | Guarantee |
 |----------|-----------|
+| **Atomicity** | All-or-nothing for multi-shard operations (via ordered locking) |
 | **Serializable Order** | Operations with lower txid execute before higher ones globally |
-| **No deadlocks** | Total ordering prevents circular waits |
+| **No deadlocks** | Lock acquisition in sorted shard order prevents circular waits |
 | **No starvation** | BTreeMap ensures FIFO within txid ordering |
-| **Durability** | Individual shard writes are durable per durability mode |
+| **Durability** | Writes are durable per configured durability mode |
 
-### Why VLL vs Locks
+### Why VLL vs Traditional Approaches
 
-Traditional approaches:
-- **Mutexes**: Contention at scale, not suitable for shared-nothing
-- **2PC**: Expensive coordinator overhead, blocking
-- **Optimistic CC**: Aborts under contention
+Traditional approaches and their drawbacks:
+- **Global Mutexes**: Contention at scale, not suitable for shared-nothing
+- **2PC with separate coordinator**: Expensive overhead, blocking protocol
+- **Optimistic CC**: High abort rate under contention
 
 VLL advantages:
-- No mutex contention (each shard is single-threaded)
-- No coordinator blocking (async execution)
-- Deterministic ordering (txid counter)
-- No rollback complexity
+- Ordered locking with deadlock prevention (no 2PC overhead)
+- Minimal lock contention (each shard is single-threaded internally)
+- Atomic rollback on failure (no partial commits)
+- Deterministic ordering via txid counter
 
 ### VLL Queue Configuration
 
@@ -441,15 +453,30 @@ When an operation waits longer than `vll_queue_timeout_ms`:
 - Operation is removed from queue
 - Client receives `-TIMEOUT operation timed out waiting in VLL queue`
 - If operation was part of multi-shard scatter-gather, entire operation fails
+- **No partial commits occur** (locks were either never acquired or rollback happens)
 
-### Client Recovery for Partial Commits
+### Timeout Interactions
 
-When a multi-shard operation fails, clients cannot determine which shards committed. FrogDB does not provide automatic rollback. Clients must implement their own recovery strategies:
+| Setting | Scope | Effect |
+|---------|-------|--------|
+| `scatter_gather_timeout_ms` | Total operation time | Bounds entire multi-shard operation from start to finish |
+| `vll_queue_timeout_ms` | Per-shard wait time | Bounds time waiting for locks on a single shard |
+| `client_timeout_ms` | Client idle time | Bounds time between client commands |
 
-**Detection:**
-- Error response (`-TIMEOUT`, `-ERR`) indicates potential partial commit
-- Success response (`+OK`) guarantees all shards committed
-- No API to query which shards committed after failure
+A request can timeout at any of these layers. `scatter_gather_timeout_ms` encompasses the VLL queue
+time across all shards. If VLL queue wait exceeds `vll_queue_timeout_ms`, the operation fails before
+`scatter_gather_timeout_ms` would trigger.
+
+### Hash Tag Memory Accounting
+
+Hash tag extraction is stack-allocated and does not contribute to memory metrics:
+- `extract_hash_tag()` returns a slice into the original key (no allocation)
+- Not counted in per-key, per-shard, or global memory accounting
+- Transient: exists only for the duration of the hash calculation
+
+### Client Error Handling
+
+With VLL atomicity, client error handling is straightforward:
 
 **Recovery Strategies:**
 
@@ -473,13 +500,14 @@ LPUSH list1 value                 // Would add duplicate
 ZADD set1 1.0 member              // Safe if NX/XX options used appropriately
 ```
 
-**Design Recommendation:** For cross-shard operations requiring atomicity:
-1. **Prefer hash tags** to guarantee same-shard execution
-2. **Design for idempotency** when hash tags aren't feasible
-3. **Accept eventual consistency** with application-level reconciliation
-4. **Avoid cross-shard writes** for critical transactional data
+**Design Recommendation:** For optimal performance:
+1. **Prefer hash tags** to avoid cross-shard coordination overhead
+2. **Design for idempotency** for safe retries on network errors
+3. **Use transactions (MULTI/EXEC)** for multi-key atomic updates
 
-This matches Redis Cluster behavior where multi-key commands across slots provide no atomicity guarantees on failure.
+**Note:** FrogDB provides stronger guarantees than Redis Cluster for cross-shard operations.
+With VLL, multi-shard MSET/MGET are atomic (all-or-nothing), while Redis Cluster has no
+atomicity guarantees across slots.
 
 ---
 

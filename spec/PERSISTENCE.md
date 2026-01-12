@@ -76,6 +76,10 @@ Each column family (shard) stores keys with this format:
 - Rebuilt during recovery from `expires_at` field in each value
 - Active expiry index is in-memory only
 
+**Recovery Conversion:** Unix timestamps (persisted as `i64` milliseconds) are converted to
+`std::time::Instant` (monotonic clock) during recovery. See [STORAGE.md](STORAGE.md#key-metadata)
+for the in-memory `KeyMetadata` structure and time handling details.
+
 **LRU/LFU Metadata (Matches Redis Behavior):**
 - `lfu_counter` persisted with value
 - `last_access` (LRU) **NOT persisted** - reset to recovery time on startup
@@ -374,7 +378,7 @@ struct SnapshotIterator {
     current_position: usize,   // Iterator position in shard's HashMap
 }
 
-fn on_write_during_snapshot(key: &Bytes, old_value: &FrogValue, new_value: &FrogValue) {
+fn on_write_during_snapshot(key: &Bytes, old_value: &Value, new_value: &Value) {
     if !self.visited.contains(key) {
         // COW: Serialize old value before overwriting
         self.batch_tx.send((key.clone(), old_value.clone())).await;

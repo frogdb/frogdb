@@ -126,6 +126,20 @@ FROGDB_LOGGING__LEVEL=debug
 
 **Note:** Use double underscores (`__`) to separate nested keys.
 
+### Naming Conventions
+
+| Context | Convention | Example |
+|---------|------------|---------|
+| TOML files | `snake_case` | `max_memory`, `sync_interval_ms` |
+| CONFIG GET/SET | Redis-compatible names | `maxmemory`, `slowlog-log-slower-than` |
+| Environment vars | `SCREAMING_SNAKE_CASE` | `FROGDB_MAX_MEMORY` |
+| CLI args | `kebab-case` | `--max-memory`, `--log-level` |
+
+**Rationale:**
+- CONFIG commands use Redis-compatible names for drop-in compatibility
+- TOML uses idiomatic Rust/TOML `snake_case`
+- Environment variables follow standard shell conventions
+
 ### Command-Line Arguments
 
 ```bash

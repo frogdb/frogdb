@@ -27,10 +27,10 @@ Each shard owns a `Store` implementation for key-value storage:
 ```rust
 pub trait Store: Send {
     /// Get a value by key (returns owned/cloned value)
-    fn get(&self, key: &[u8]) -> Option<FrogValue>;
+    fn get(&self, key: &[u8]) -> Option<Value>;
 
     /// Set a value, returns previous value if any
-    fn set(&mut self, key: Bytes, value: FrogValue) -> Option<FrogValue>;
+    fn set(&mut self, key: Bytes, value: Value) -> Option<Value>;
 
     /// Delete a key, returns true if existed
     fn delete(&mut self, key: &[u8]) -> bool;
@@ -54,7 +54,7 @@ pub trait Store: Send {
 
 ### Ownership Semantics
 
-**`Store::get()` returns `Option<FrogValue>` (owned), not `Option<&FrogValue>` (borrowed).**
+**`Store::get()` returns `Option<Value>` (owned), not `Option<&Value>` (borrowed).**
 
 Rationale:
 - **Async compatibility**: Returning references would require complex lifetime annotations
@@ -64,21 +64,21 @@ Rationale:
 - **Command execution pattern**: Most commands need to inspect values, compute responses,
   and potentially modify them. Owned values fit this pattern naturally.
 
-Future optimization path: Add a `get_ref()` method returning `Option<&FrogValue>` for
+Future optimization path: Add a `get_ref()` method returning `Option<&Value>` for
 read-only operations where the caller can guarantee no `.await` across the borrow.
 
 ## Value Types
 
-FrogDB stores values as variants of the `FrogValue` enum:
+FrogDB stores values as variants of the `Value` enum:
 
 ```rust
-pub enum FrogValue {
-    String(FrogString),
-    SortedSet(FrogSortedSet),
-    Hash(FrogHash),
-    List(FrogList),
-    Set(FrogSet),
-    Stream(FrogStream),
+pub enum Value {
+    String(StringValue),
+    SortedSet(SortedSetValue),
+    Hash(HashValue),
+    List(ListValue),
+    Set(SetValue),
+    Stream(StreamValue),
 }
 ```
 
@@ -89,10 +89,10 @@ See individual type documentation in [types/](types/) for data structure impleme
 | Type | Implementation | Phase | Status |
 |------|---------------|-------|--------|
 | String | `Bytes` | 1 | Core |
-| Sorted Set | `HashMap` + `BTreeMap` | 1 | Core |
-| Hash | `HashMap<Bytes, Bytes>` | 2 | Planned |
-| List | `VecDeque<Bytes>` | 2 | Planned |
-| Set | `HashSet<Bytes>` | 2 | Planned |
+| Sorted Set | `HashMap` + `BTreeMap` | 3 | Core |
+| Hash | `HashMap<Bytes, Bytes>` | 6 | Planned |
+| List | `VecDeque<Bytes>` | 6 | Planned |
+| Set | `HashSet<Bytes>` | 6 | Planned |
 | Stream | Radix tree + listpack | Future | Planned |
 | Bitmap | Operations on String | Future | Planned |
 | Bitfield | Operations on String | Future | Planned |
@@ -101,6 +101,8 @@ See individual type documentation in [types/](types/) for data structure impleme
 | HyperLogLog | 12KB fixed structure | Future | Planned |
 | Bloom Filter | Bit array + hashes | Future | Planned |
 | Time Series | Sorted by timestamp | Future | Planned |
+
+> **Note:** See [ROADMAP.md](ROADMAP.md) for authoritative phase definitions and implementation order.
 
 ---
 
@@ -115,7 +117,7 @@ pub struct HashMapStore {
 }
 
 struct Entry {
-    value: FrogValue,
+    value: Value,
     metadata: KeyMetadata,
 }
 ```
@@ -232,7 +234,7 @@ Memory is tracked per-key and aggregated per-shard:
 
 ```rust
 impl HashMapStore {
-    fn update_memory(&mut self, key: &Bytes, value: &FrogValue) -> usize {
+    fn update_memory(&mut self, key: &Bytes, value: &Value) -> usize {
         let size = key.len()
             + value.memory_size()
             + std::mem::size_of::<KeyMetadata>()
@@ -277,7 +279,7 @@ The trade-off is slightly slower reads during active resizing (must check both o
 // Usage is identical to std::HashMap
 use griddle::HashMap;
 
-let mut store: HashMap<Bytes, FrogValue> = HashMap::new();
+let mut store: HashMap<Bytes, Value> = HashMap::new();
 store.insert(key, value);
 ```
 
@@ -292,19 +294,19 @@ store.insert(key, value);
 > A custom Dashtable implementation for FrogDB could be considered if memory efficiency
 > becomes critical. No existing Rust crate implements this algorithm.
 
-### FrogValue Memory
+### Value Memory
 
 Each value type calculates its memory footprint:
 
 ```rust
-impl FrogValue {
+impl Value {
     pub fn memory_size(&self) -> usize {
         match self {
-            FrogValue::String(s) => s.data.len(),
-            FrogValue::List(l) => l.iter().map(|b| b.len()).sum(),
-            FrogValue::Set(s) => s.iter().map(|b| b.len()).sum(),
-            FrogValue::Hash(h) => h.iter().map(|(k, v)| k.len() + v.len()).sum(),
-            FrogValue::SortedSet(z) => {
+            Value::String(s) => s.data.len(),
+            Value::List(l) => l.iter().map(|b| b.len()).sum(),
+            Value::Set(s) => s.iter().map(|b| b.len()).sum(),
+            Value::Hash(h) => h.iter().map(|(k, v)| k.len() + v.len()).sum(),
+            Value::SortedSet(z) => {
                 // HashMap + BTreeMap entries
                 z.scores.iter().map(|(k, _)| k.len() + 8).sum::<usize>()
                     + z.by_score.len() * 16  // BTreeMap overhead
@@ -370,6 +372,32 @@ See [DESIGN.md Key Expiry](INDEX.md#key-expiry-ttl) for configuration options.
 | Validation timing | Before execution | Before execution | Before execution |
 
 All three systems follow the same Redis Cluster specification for hash slots.
+
+### Hash Algorithms
+
+FrogDB uses two different hash algorithms for different purposes:
+
+| Purpose | Algorithm | Range | Description |
+|---------|-----------|-------|-------------|
+| **Cluster slot** | CRC16 | 0-16383 | Redis-compatible, determines which node owns a key |
+| **Internal shard** | xxhash64 | 0 to num_shards | Determines which thread within a node processes a key |
+
+```rust
+// Cluster slot routing (Redis Cluster compatible)
+fn hash_slot(key: &[u8]) -> u16 {
+    let hash_key = extract_hash_tag(key).unwrap_or(key);
+    crc16(hash_key) % 16384
+}
+
+// Internal shard routing (within a single node)
+fn internal_shard(key: &[u8], num_shards: usize) -> usize {
+    let hash_key = extract_hash_tag(key).unwrap_or(key);
+    xxhash64(hash_key) as usize % num_shards
+}
+```
+
+**Important:** Both algorithms use the same `extract_hash_tag` function. Keys with the same hash tag
+will be colocated on both the same cluster slot AND the same internal shard.
 
 ### Hash Slot Calculation
 
@@ -499,7 +527,7 @@ The store provides hooks for persistence via RocksDB:
 ```rust
 pub trait PersistentStore: Store {
     /// Called after write operations
-    fn persist(&mut self, key: &[u8], value: Option<&FrogValue>) -> Result<(), StorageError>;
+    fn persist(&mut self, key: &[u8], value: Option<&Value>) -> Result<(), StorageError>;
 
     /// Load from persistence on startup
     fn load(&mut self) -> Result<(), StorageError>;

@@ -30,7 +30,7 @@ This document details the command execution pipeline, command trait interface, a
 
 7. Execute command
    └── SetCommand.execute(ctx, args)
-   └── ctx.store.set("mykey", FrogString::new("myvalue"))
+   └── ctx.store.set("mykey", StringValue::new("myvalue"))
 
 8. Persistence (async)
    └── Append to WAL batch
@@ -336,7 +336,7 @@ These commands operate on keys regardless of their type:
 ### Implementation
 
 ```rust
-fn check_type<T: ExpectedType>(value: &FrogValue) -> Result<&T, CommandError> {
+fn check_type<T: ExpectedType>(value: &Value) -> Result<&T, CommandError> {
     match value.as_type::<T>() {
         Some(v) => Ok(v),
         None => Err(CommandError::WrongType),

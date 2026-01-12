@@ -39,7 +39,7 @@ DragonflyDB's multi-threaded architecture introduces non-determinism:
 FrogDB follows the **Redis model** for semantics but with **DragonflyDB-style architecture**:
 
 - Per-shard wait queues (similar to DragonflyDB's per-thread model)
-- Cross-shard blocking rejected with `CROSSSHARD` error (use hash tags)
+- Cross-shard blocking rejected with `-CROSSSLOT` error (use hash tags for colocation)
 - FIFO fairness within each shard
 - Key ordering in BLPOP command respected (no parallel execution of blocking checks)
 
@@ -160,7 +160,7 @@ Client sends: LPUSH mylist "value"
 BLPOP key1 key2 0  # Fails if key1 and key2 on different shards
 ```
 
-**Error:** `-CROSSSHARD Blocking commands require all keys on same shard`
+**Error:** `-CROSSSLOT Keys in request don't hash to the same slot`
 
 **Solution:** Use hash tags for multi-key blocking:
 

@@ -10,7 +10,7 @@ List keys will store ordered sequences of string elements, supporting operations
 
 ```rust
 // Planned implementation
-pub struct FrogList {
+pub struct ListValue {
     data: VecDeque<Bytes>,
 }
 ```

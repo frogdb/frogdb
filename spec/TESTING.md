@@ -61,14 +61,14 @@ Location: Inline with source code (`#[cfg(test)]` modules)
 Purpose: Test individual functions, data structures, and algorithms in isolation.
 
 ```rust
-// Example: Testing FrogSortedSet operations
+// Example: Testing SortedSetValue operations
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_zadd_new_member() {
-        let mut zset = FrogSortedSet::new();
+        let mut zset = SortedSetValue::new();
         assert_eq!(zset.add("member1", 1.0, AddOptions::default()), 1);
         assert_eq!(zset.score("member1"), Some(1.0));
     }

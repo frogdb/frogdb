@@ -10,7 +10,7 @@ Set keys will store unordered collections of unique string elements, supporting 
 
 ```rust
 // Planned implementation
-pub struct FrogSet {
+pub struct SetValue {
     data: HashSet<Bytes>,
 }
 ```

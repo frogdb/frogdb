@@ -11,6 +11,11 @@ FrogDB supports two pub/sub modes with a unified architecture:
 | **Broadcast** | SUBSCRIBE, PUBLISH, PSUBSCRIBE | All shards | General pub/sub, patterns |
 | **Sharded** | SSUBSCRIBE, SPUBLISH | Hash to owner shard | High-throughput, Redis 7.0+ |
 
+**Message Ordering Guarantee:**
+- Per-subscriber FIFO: Messages are delivered in order to each individual subscriber
+- Cross-subscriber: NO ordering guarantee across different subscribers on different shards
+- Two subscribers to the same channel may see messages in different order during fan-out
+
 ---
 
 ## Architecture

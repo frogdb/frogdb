@@ -7,15 +7,15 @@ Based on RedisJSON module semantics.
 ## Data Structure
 
 ```rust
-pub struct FrogJson {
+pub struct JsonValue {
     /// Root JSON value
     root: serde_json::Value,
 }
 
-// FrogValue enum addition:
-pub enum FrogValue {
+// Value enum addition:
+pub enum Value {
     // ... existing variants ...
-    Json(FrogJson),
+    Json(JsonValue),
 }
 ```
 

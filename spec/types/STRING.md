@@ -5,7 +5,7 @@ Binary-safe string operations. Strings are the most fundamental Redis data type 
 ## Data Structure
 
 ```rust
-pub struct FrogString {
+pub struct StringValue {
     data: Bytes,
 }
 ```

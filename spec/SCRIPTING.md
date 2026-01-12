@@ -383,6 +383,23 @@ return sum
 - Cached scripts (bytecode) remain valid
 - Shard resumes normal operation
 
+### Script Timeout vs Client Timeout Interaction
+
+Script timeout (`lua_time_limit_ms`) and client idle timeout (`client_timeout_ms`) are independent:
+
+| Timeout | What it bounds | Effect on other |
+|---------|----------------|-----------------|
+| `lua_time_limit_ms` | Script execution time | Does NOT reset client idle timer |
+| `client_timeout_ms` | Time between client commands | Does NOT affect running scripts |
+
+**Example:** If `lua_time_limit_ms = 5000` and `client_timeout_ms = 3000`:
+- A script running for 4 seconds will be terminated (script timeout)
+- A client waiting for a 4-second script result may be disconnected (client timeout)
+- These timeouts can trigger independently
+
+**Recommendation:** Set `client_timeout_ms >= lua_time_limit_ms + grace period` to avoid client
+disconnection during legitimate long-running scripts.
+
 ### Cross-Script State Isolation
 
 Lua global variables are **reset between script executions** (Redis-compatible).
@@ -486,10 +503,14 @@ The `EVALSHA` command executes a cached script without re-transmitting the sourc
 
 | Property | Behavior |
 |----------|----------|
-| Scope | Per-node (not shared across cluster) |
+| Scope | Per-node (each node has independent cache) |
 | Persistence | Volatile (lost on restart) |
-| Replication | NOT replicated to replicas |
-| Propagation | NOT propagated to other cluster nodes |
+| Auto-sync | None (scripts don't auto-propagate between nodes) |
+| Replica caches | Independent (replicas build their own cache via direct client EVAL/SCRIPT LOAD calls) |
+
+**Clarification:** "Not replicated" means scripts are not automatically synchronized between nodes.
+Replicas CAN and DO cache scripts when clients execute `EVAL` or `SCRIPT LOAD` on them directly.
+The primary's script cache is NOT copied to replicas via replication.
 
 ### NOSCRIPT Error
 

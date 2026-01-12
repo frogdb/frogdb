@@ -15,12 +15,16 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 5. **Extensibility** - Clean abstractions for adding data types, storage backends, and protocols
 6. **Correctness** - Eventually pass Jepsen distributed systems tests
 
-### Non-Goals (Initial)
+### Non-Goals (Initial Implementation)
+
+The following are planned but not implemented in Phases 1-3:
 
 - Full Redis API compatibility from day one (gradual adoption)
-- Clustering (single-node first, see [CLUSTER.md](CLUSTER.md) for design)
-- RESP3 (RESP2 first with abstraction layer)
-- Blocking commands (BLPOP, BRPOP, BLMOVE) in initial phases
+- Clustering (single-node first, see [CLUSTER.md](CLUSTER.md) for Phase 8+ design)
+- RESP3 protocol (RESP2 first; RESP3 planned for Phase 12, see [ROADMAP.md](ROADMAP.md))
+- Blocking commands (BLPOP, BRPOP, BLMOVE) - design documented in [BLOCKING.md](BLOCKING.md)
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for a complete list of Redis incompatibilities and migration guidance.
 
 ---
 
@@ -99,7 +103,7 @@ Hash tags (e.g., `{user:1}:profile`) guarantee that related keys land on the **s
 
 FrogDB supports multiple Redis-compatible data types including Strings, Sorted Sets, and planned support for Hashes, Lists, Sets, and Streams. Each type has optimized internal representations.
 
-See [STORAGE.md](STORAGE.md) for the FrogValue enum and [types/](types/) for data structure implementations and commands.
+See [STORAGE.md](STORAGE.md) for the Value enum and [types/](types/) for data structure implementations and commands.
 
 ---
 
@@ -251,13 +255,18 @@ See [CONSISTENCY.md](CONSISTENCY.md) for detailed guarantees.
 
 ```
 frogdb/
-├── frogdb-server/        # Main server binary
-├── frogdb-core/          # Core data structures & logic
-├── frogdb-protocol/      # RESP protocol handling
-├── frogdb-lua/           # Lua scripting support
-├── frogdb-persistence/   # Persistence layer
+├── crates/
+│   ├── server/           # Main server binary (frogdb-server)
+│   ├── core/             # Core data structures & logic (frogdb-core)
+│   ├── protocol/         # RESP protocol handling (frogdb-protocol)
+│   ├── lua/              # Lua scripting support (frogdb-lua)
+│   └── persistence/      # Persistence layer (frogdb-persistence)
 └── tests/                # Integration tests
 ```
+
+**Note:** Directory names are short (`server/`, `core/`, etc.) but package names are
+prefixed (`frogdb-server`, `frogdb-core`, etc.) for publishing compatibility.
+See [REPO.md](REPO.md) for full repository layout.
 
 ---
 
@@ -352,3 +361,4 @@ See [ROADMAP.md](ROADMAP.md) for the detailed implementation roadmap with progre
 | [FAILURE_MODES.md](FAILURE_MODES.md) | Error handling, recovery |
 | [CONSISTENCY.md](CONSISTENCY.md) | Consistency guarantees |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Docker, K8s deployment |
+| [COMPATIBILITY.md](COMPATIBILITY.md) | Redis incompatibilities and migration guide |
