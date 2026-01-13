@@ -288,6 +288,10 @@ Client: MGET key1 key2 key3
 FrogDB uses a VLL-inspired (Very Lightweight Locking) approach for multi-shard atomicity,
 similar to DragonflyDB. This provides atomic execution without mutex contention.
 
+> **Availability:** Multi-shard VLL operations require `allow_cross_slot_standalone = true` in
+> standalone mode. By default, cross-shard operations return `-CROSSSLOT` errors (matching Redis Cluster).
+> See [CONSISTENCY.md](CONSISTENCY.md#cross-slot-standalone-mode) for configuration details.
+
 ### Global Transaction IDs
 
 A single atomic counter generates monotonically increasing transaction IDs:
@@ -457,15 +461,49 @@ When an operation waits longer than `vll_queue_timeout_ms`:
 
 ### Timeout Interactions
 
-| Setting | Scope | Effect |
-|---------|-------|--------|
-| `scatter_gather_timeout_ms` | Total operation time | Bounds entire multi-shard operation from start to finish |
-| `vll_queue_timeout_ms` | Per-shard wait time | Bounds time waiting for locks on a single shard |
-| `client_timeout_ms` | Client idle time | Bounds time between client commands |
+FrogDB has multiple timeout layers that interact in a hierarchy:
 
-A request can timeout at any of these layers. `scatter_gather_timeout_ms` encompasses the VLL queue
-time across all shards. If VLL queue wait exceeds `vll_queue_timeout_ms`, the operation fails before
-`scatter_gather_timeout_ms` would trigger.
+| Setting | Default | Scope | Effect |
+|---------|---------|-------|--------|
+| `scatter_gather_timeout_ms` | 5000 | Total operation time | Bounds entire multi-shard operation from start to finish |
+| `vll_queue_timeout_ms` | 5000 | Per-shard wait time | Bounds time waiting for locks on a single shard |
+| `client_timeout_ms` | 0 (disabled) | Client idle time | Bounds time between client commands |
+
+**Timeout Hierarchy:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 scatter_gather_timeout_ms (5000ms)               │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │            Operation starts                              │    │
+│  │                    │                                     │    │
+│  │     ┌──────────────┴──────────────┐                     │    │
+│  │     ▼                             ▼                     │    │
+│  │  ┌──────────────────┐   ┌──────────────────┐           │    │
+│  │  │ Shard A VLL wait │   │ Shard B VLL wait │           │    │
+│  │  │ (≤ vll_queue_    │   │ (≤ vll_queue_    │           │    │
+│  │  │  timeout_ms)     │   │  timeout_ms)     │           │    │
+│  │  └──────────────────┘   └──────────────────┘           │    │
+│  │           │                       │                     │    │
+│  │           └───────────┬───────────┘                     │    │
+│  │                       ▼                                 │    │
+│  │               Aggregate results                         │    │
+│  └─────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Which Timeout Triggers First:**
+
+1. If any shard's VLL queue wait exceeds `vll_queue_timeout_ms`, that shard fails immediately
+2. If the per-shard failure occurs, `scatter_gather_timeout_ms` may not have been reached yet
+3. If all shards are slow but individually under `vll_queue_timeout_ms`, `scatter_gather_timeout_ms` bounds total time
+4. `client_timeout_ms` is independent - only applies to idle time between commands
+
+**Recommended Configuration:**
+
+Set `vll_queue_timeout_ms <= scatter_gather_timeout_ms` to ensure per-shard timeouts trigger before the overall operation timeout. The defaults (both 5000ms) work well for most deployments.
+
+**DragonflyDB Comparison:** DragonflyDB does not expose VLL-specific timeout configuration. Their architecture relies on implicit timeouts via connection-level settings. FrogDB provides explicit control for fine-tuning behavior under high contention.
 
 ### Hash Tag Memory Accounting
 

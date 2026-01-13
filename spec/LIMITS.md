@@ -103,7 +103,7 @@ When configured memory limit (`max_memory`) is reached:
 
 | Operation | Behavior |
 |-----------|----------|
-| Write (SET, ZADD, etc.) | Return `-OOM out of memory` error |
+| Write (SET, ZADD, etc.) | Return `-OOM command not allowed when used memory > 'maxmemory'` error |
 | Read (GET, ZRANGE, etc.) | Continue normally |
 | Delete (DEL, EXPIRE) | Continue normally |
 | Expiry background task | Continues to reclaim memory |

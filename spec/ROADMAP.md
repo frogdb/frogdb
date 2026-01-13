@@ -430,38 +430,48 @@ These must exist as traits/stubs to avoid refactoring:
 ### 4.3 CROSSSLOT Validation
 
 - [ ] `allow_cross_slot_standalone` config option (default: `false`)
-- [ ] When disabled (default): validate multi-key commands, return `-CROSSSLOT` error
-- [ ] When enabled: allow cross-shard scatter-gather for MGET/MSET (NOT atomic for MSET)
+- [ ] When disabled (default): validate multi-key commands, return `-CROSSSLOT` error (matches Redis Cluster)
+- [ ] When enabled: allow cross-shard operations via VLL (atomic for all operations including MSET)
 - [ ] Commands requiring same-slot by default: MGET, MSET, MSETNX, DEL (multi), EXISTS (multi)
 - [ ] Note: MSETNX always requires same-slot (atomic semantics require it)
+- [ ] Note: `allow_cross_slot_standalone` is only available in standalone mode, not cluster mode
 
 ### 4.4 Multi-Key Commands
 
 - [ ] `MGET`:
   - Default: same-slot required
-  - With `allow_cross_slot_standalone`: scatter-gather across shards
+  - With `allow_cross_slot_standalone`: scatter-gather across shards (atomic read via VLL)
 - [ ] `MSET`:
   - Default: same-slot required (atomic)
-  - With `allow_cross_slot_standalone`: scatter-gather (NOT atomic, document clearly)
+  - With `allow_cross_slot_standalone`: atomic via VLL (all-or-nothing semantics)
 - [ ] `MSETNX` (always same-slot required - atomic semantics)
 - [ ] `DEL` multi-key:
   - Default: same-slot required
-  - With config: scatter-gather
+  - With config: atomic via VLL
 - [ ] `EXISTS` multi-key: same behavior as DEL
 - [ ] `TOUCH` multi-key: same behavior as DEL
 - [ ] `UNLINK` multi-key: same behavior as DEL
 
-### 4.5 Scatter-Gather (All-Shard Operations Only)
+### 4.5 Scatter-Gather
 
-Scatter-gather is for operations that inherently touch ALL shards:
+Scatter-gather supports two modes:
+
+**All-Shard Operations** (always scatter to all shards):
+- SCAN, KEYS, DBSIZE, FLUSHDB, INFO
+
+**Key-Targeted Operations** (scatter only to shards owning the keys):
+- MGET, MSET, DEL (multi-key) - when `allow_cross_slot_standalone` is enabled
+
+Implementation:
 
 - [ ] `ScatterRequest` message type
 - [ ] `execute_scatter_gather` function:
-  - [ ] Send request to all N shards
+  - [ ] All-shard mode: Send request to all N shards
+  - [ ] Key-targeted mode: Hash keys, send only to owning shards
   - [ ] Await all responses
   - [ ] Aggregate results (sum, merge, etc.)
-- [ ] Timeout handling
-- [ ] Used by: SCAN, KEYS, DBSIZE, FLUSHDB, INFO (in later phases)
+- [ ] Timeout handling (`scatter_gather_timeout_ms`)
+- [ ] VLL integration for key-targeted write operations (atomic semantics)
 
 ### 4.6 VLL Transaction Ordering (Foundation)
 

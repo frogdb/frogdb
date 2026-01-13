@@ -62,6 +62,30 @@ Multi-key commands (MGET, MSET, DEL) that span multiple hash slots are rejected 
 
 Only the substring between `{` and `}` is hashed, allowing related keys to be colocated.
 
+### Cross-Slot Standalone Mode
+
+In **standalone mode only** (single-node, no cluster), FrogDB optionally supports atomic cross-shard operations via VLL (Very Lightweight Locking):
+
+```toml
+[server]
+allow_cross_slot_standalone = true  # Default: false
+```
+
+When enabled:
+- Cross-shard MGET/MSET/DEL operations execute atomically via VLL transaction ordering
+- All-or-nothing semantics: either all keys are modified or none are
+- Operations are serializable via global transaction ID ordering
+
+| Mode | Cross-Shard Behavior | Atomicity |
+|------|---------------------|-----------|
+| `allow_cross_slot_standalone = false` (default) | `-CROSSSLOT` error | N/A |
+| `allow_cross_slot_standalone = true` | VLL coordination | Atomic |
+| Cluster mode (any setting) | `-CROSSSLOT` error | N/A |
+
+**Performance Note:** Cross-shard operations with VLL have higher latency than same-shard operations due to lock coordination. Use hash tags for performance-critical multi-key operations.
+
+**Cluster Mode:** This option is **not available in cluster mode**. Cross-node VLL would require distributed locking, which conflicts with FrogDB's design goals. In cluster mode, always use hash tags for multi-key operations.
+
 ---
 
 ## Durability Guarantees
@@ -85,11 +109,11 @@ Consistency is tied to the configured durability mode:
 **Periodic Mode:**
 ```toml
 [persistence]
-durability_mode = { periodic = { interval_ms = 100, write_count = 1000 } }
+durability_mode = { periodic = { interval_ms = 1000, write_count = 1000 } }
 ```
-- Balanced performance and safety
+- Balanced performance and safety (matches Redis `appendfsync everysec` default)
 - fsync every N ms OR M writes (whichever comes first)
-- Risk: Up to interval_ms of data loss
+- Risk: Up to interval_ms of data loss (typically ~1 second)
 - Use case: Most production workloads
 
 **Sync Mode:**
@@ -350,9 +374,9 @@ durability_mode = "async"
 ### For Balanced Production
 ```toml
 [persistence]
-durability_mode = { periodic = { interval_ms = 100, write_count = 1000 } }
+durability_mode = { periodic = { interval_ms = 1000, write_count = 1000 } }
 ```
-- Bounded data loss (100ms max)
+- Bounded data loss (~1 second max, matches Redis `appendfsync everysec`)
 - Good throughput
 - Monitor replication lag
 
