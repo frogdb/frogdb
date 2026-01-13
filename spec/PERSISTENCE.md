@@ -196,7 +196,7 @@ pub enum DurabilityMode {
 | Mode | Durability | Latency |
 |------|------------|---------|
 | `Async` | Best-effort (may lose data) | ~1-10 μs |
-| `Periodic(100ms, 1000)` | Bounded loss (100ms or 1000 writes) | ~1-10 μs |
+| `Periodic(1000ms, 1000)` | Bounded loss (~1s or 1000 writes, matches Redis) | ~1-10 μs |
 | `Sync` | Guaranteed (fsync per write) | ~100-500 μs |
 
 ### Periodic Mode Timer Semantics
@@ -233,21 +233,22 @@ impl PeriodicFsync {
 }
 ```
 
-**Example Timeline (Periodic 100ms, 1000 writes):**
+**Example Timeline (Periodic 1000ms, 1000 writes):**
 ```
 T=0ms:     Server starts, timer begins
-T=10ms:    500 writes (no fsync - neither threshold met)
-T=50ms:    500 more writes → 1000 total → FSYNC triggered (write threshold)
-T=50ms:    Counter reset to 0, timer continues
-T=100ms:   200 writes (no fsync yet)
-T=150ms:   Timer fires → FSYNC triggered (time threshold)
-T=150ms:   Counter reset to 0, timer reset
+T=100ms:   500 writes (no fsync - neither threshold met)
+T=500ms:   500 more writes → 1000 total → FSYNC triggered (write threshold)
+T=500ms:   Counter reset to 0, timer continues
+T=1000ms:  200 writes (no fsync yet)
+T=1500ms:  Timer fires → FSYNC triggered (time threshold)
+T=1500ms:  Counter reset to 0, timer reset
 ```
 
 **What This Means for Durability:**
 - In low-traffic scenarios: fsync every `interval_ms` (timer-driven)
 - In high-traffic scenarios: fsync every `write_threshold` writes (write-driven)
 - Worst-case data loss: min(interval_ms worth of writes, write_threshold writes)
+- Default (1000ms, 1000) matches Redis `appendfsync everysec` behavior
 
 ### Write Visibility and Durability
 

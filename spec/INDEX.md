@@ -125,7 +125,7 @@ See [STORAGE.md](STORAGE.md) for expiry index implementation.
 
 ## Memory Management
 
-When configured memory limit (`max_memory`) is reached, write operations return `-OOM` errors while reads continue normally. Planned eviction policies include LRU, LFU, and volatile variants.
+When configured memory limit (`max_memory`) is reached, write operations return `-OOM command not allowed when used memory > 'maxmemory'` errors while reads continue normally. Planned eviction policies include LRU, LFU, and volatile variants.
 
 See [EVICTION.md](EVICTION.md) for eviction policy implementation.
 
@@ -245,7 +245,9 @@ See [LIFECYCLE.md](LIFECYCLE.md) for startup/shutdown procedures and health chec
 
 ## Consistency Model
 
-FrogDB provides **eventual consistency** within a single node: read-your-writes, monotonic reads, and total order per key. Cross-key atomicity requires same-shard colocation. Durability depends on the configured mode.
+FrogDB provides **per-shard linearizability**: within a single internal shard, operations are linearizable with read-your-writes, monotonic reads, and total order per key. Cross-shard operations (when enabled via `allow_cross_slot_standalone`) are serializable via VLL transaction ordering. With replicas, the default async replication provides eventual consistency; synchronous replication (`min_replicas_to_write = 1`) provides linearizable reads.
+
+Cross-key atomicity requires same-shard colocation (use hash tags), unless `allow_cross_slot_standalone` is enabled in standalone mode.
 
 See [CONSISTENCY.md](CONSISTENCY.md) for detailed guarantees.
 

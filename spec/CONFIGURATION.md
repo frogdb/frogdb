@@ -55,6 +55,7 @@ Default location: `./frogdb.toml` or specified via `--config path/to/config.toml
 bind = "0.0.0.0"
 port = 6379
 num_shards = 0  # 0 = auto-detect CPU cores
+allow_cross_slot_standalone = false  # Enable atomic cross-shard operations via VLL
 
 [memory]
 max_memory = 0  # 0 = unlimited (bytes)
@@ -68,8 +69,8 @@ dbfilename = "dump.rdb"
 durability_mode = "periodic"  # async, periodic, sync
 
 [persistence.periodic]
-sync_ms = 100
-sync_writes = 1000
+interval_ms = 1000  # fsync every N ms (default: 1000, matches Redis appendfsync everysec)
+write_count = 1000  # or fsync every N writes, whichever comes first
 
 [persistence.snapshot]
 enabled = true
@@ -78,7 +79,8 @@ interval_s = 3600  # 1 hour
 [timeouts]
 client_idle_s = 0       # 0 = no timeout
 tcp_keepalive_s = 300
-scatter_gather_ms = 1000
+scatter_gather_timeout_ms = 5000  # Total timeout for multi-shard operations
+vll_queue_timeout_ms = 5000       # Per-shard lock acquisition timeout
 
 [logging]
 level = "info"  # trace, debug, info, warn, error
@@ -229,6 +231,7 @@ These parameters are fixed at startup and cannot be changed via CONFIG SET:
 | `port` | Network listen port |
 | `unixsocket` | Unix socket path |
 | `num_shards` | Number of internal shards |
+| `allow_cross_slot_standalone` | Enable atomic cross-shard operations via VLL |
 | `dir` | Data directory path |
 | `dbfilename` | RDB dump filename |
 | `tls-cert-file` | TLS certificate file path |

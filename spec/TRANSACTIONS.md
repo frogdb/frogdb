@@ -54,10 +54,10 @@ FrogDB transactions provide guarantees across three orthogonal dimensions:
 
 **Durability by Configuration:**
 
-| `sync_mode` | Acknowledgment Means | Max Data Loss on Crash |
-|-------------|---------------------|------------------------|
+| `durability_mode` | Acknowledgment Means | Max Data Loss on Crash |
+|-------------------|---------------------|------------------------|
 | `async` | In memory + WAL queued | Unbounded (until next fsync) |
-| `periodic` | In memory + WAL queued | Up to `fsync_interval_ms` (default 1000ms) |
+| `periodic` | In memory + WAL queued | Up to `interval_ms` (default 1000ms) |
 | `sync` | Persisted to disk | None (assuming disk doesn't lie) |
 
 See [Transaction Durability](#transaction-durability) for failure scenarios.
