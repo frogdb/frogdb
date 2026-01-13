@@ -106,8 +106,8 @@ user:1:profile         user:1:profile  hash(full key)
 {user:1}:profile       user:1          hash("user:1")
 {user:1}:settings      user:1          hash("user:1") → same shard!
 foo{bar}baz            bar             hash("bar")
-{}{user:1}             {               hash("{") - empty tag = first {
-foo{}bar               (empty)         hash("") - empty tag
+{}{user:1}             (none)          hash("{}{user:1}") - empty first braces
+foo{}bar               (none)          hash("foo{}bar") - empty braces
 ```
 
 ### Rules (matching Redis)
@@ -443,7 +443,7 @@ VLL advantages:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `vll_queue_timeout_ms` | 5000 | Max time an operation waits in queue before timeout |
+| `scatter_gather_timeout_ms` | 5000 | Timeout for entire multi-shard operation (VLL + scatter-gather) |
 | `vll_max_queue_depth` | 10000 | Max pending operations per shard before rejecting new ones |
 
 **Queue Overflow Behavior:**
@@ -453,57 +453,47 @@ When `vll_max_queue_depth` is reached:
 - Metric `frogdb_vll_queue_rejections_total` incremented
 
 **Timeout Behavior:**
-When an operation waits longer than `vll_queue_timeout_ms`:
-- Operation is removed from queue
-- Client receives `-TIMEOUT operation timed out waiting in VLL queue`
-- If operation was part of multi-shard scatter-gather, entire operation fails
-- **No partial commits occur** (locks were either never acquired or rollback happens)
+A single timeout (`scatter_gather_timeout_ms`) bounds the entire multi-shard operation:
+- Includes VLL lock acquisition time on all participating shards
+- Includes execution time across shards
+- Includes result aggregation time
+- On timeout: `-TIMEOUT operation timed out`
+- **No partial commits occur** (VLL is deadlock-free; timeout indicates slow shard)
 
-### Timeout Interactions
+> **Why a Single Timeout?** VLL is guaranteed deadlock-free by design (ordered transaction IDs).
+> A separate "VLL queue timeout" would add complexity without benefit. A slow shard is a node
+> health issue, not a locking issue. This matches DragonflyDB's approach.
 
-FrogDB has multiple timeout layers that interact in a hierarchy:
+### Timeout Configuration
 
-| Setting | Default | Scope | Effect |
-|---------|---------|-------|--------|
-| `scatter_gather_timeout_ms` | 5000 | Total operation time | Bounds entire multi-shard operation from start to finish |
-| `vll_queue_timeout_ms` | 5000 | Per-shard wait time | Bounds time waiting for locks on a single shard |
-| `client_timeout_ms` | 0 (disabled) | Client idle time | Bounds time between client commands |
+FrogDB has two independent timeout types:
 
-**Timeout Hierarchy:**
+| Setting | Default | Scope |
+|---------|---------|-------|
+| `scatter_gather_timeout_ms` | 5000 | Total multi-shard operation time |
+| `client_timeout_ms` | 0 (disabled) | Idle time between client commands |
+
+**Operation Timeout:**
 
 ```
+Multi-shard operation bounded by scatter_gather_timeout_ms:
 ┌─────────────────────────────────────────────────────────────────┐
 │                 scatter_gather_timeout_ms (5000ms)               │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │            Operation starts                              │    │
-│  │                    │                                     │    │
-│  │     ┌──────────────┴──────────────┐                     │    │
-│  │     ▼                             ▼                     │    │
-│  │  ┌──────────────────┐   ┌──────────────────┐           │    │
-│  │  │ Shard A VLL wait │   │ Shard B VLL wait │           │    │
-│  │  │ (≤ vll_queue_    │   │ (≤ vll_queue_    │           │    │
-│  │  │  timeout_ms)     │   │  timeout_ms)     │           │    │
-│  │  └──────────────────┘   └──────────────────┘           │    │
-│  │           │                       │                     │    │
-│  │           └───────────┬───────────┘                     │    │
-│  │                       ▼                                 │    │
-│  │               Aggregate results                         │    │
+│  │  VLL Lock Acquisition (ordered by txid)                  │    │
+│  │     Shard A ──┬── Shard B ──┬── Shard C                 │    │
+│  │               │             │                           │    │
+│  │  Execute Commands                                        │    │
+│  │     Shard A ──┬── Shard B ──┬── Shard C                 │    │
+│  │               │             │                           │    │
+│  │  Aggregate Results ─────────┴───────────────────────────│    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Which Timeout Triggers First:**
-
-1. If any shard's VLL queue wait exceeds `vll_queue_timeout_ms`, that shard fails immediately
-2. If the per-shard failure occurs, `scatter_gather_timeout_ms` may not have been reached yet
-3. If all shards are slow but individually under `vll_queue_timeout_ms`, `scatter_gather_timeout_ms` bounds total time
-4. `client_timeout_ms` is independent - only applies to idle time between commands
-
-**Recommended Configuration:**
-
-Set `vll_queue_timeout_ms <= scatter_gather_timeout_ms` to ensure per-shard timeouts trigger before the overall operation timeout. The defaults (both 5000ms) work well for most deployments.
-
-**DragonflyDB Comparison:** DragonflyDB does not expose VLL-specific timeout configuration. Their architecture relies on implicit timeouts via connection-level settings. FrogDB provides explicit control for fine-tuning behavior under high contention.
+**Timeout Independence:**
+- `scatter_gather_timeout_ms` bounds operation latency (VLL + execution + aggregation)
+- `client_timeout_ms` bounds idle connections (unrelated to operations)
 
 ### Hash Tag Memory Accounting
 

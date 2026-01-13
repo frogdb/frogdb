@@ -59,11 +59,15 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for a complete list of Redis incompatib
 
 | Component | Responsibility |
 |-----------|----------------|
-| **Acceptor** | Accept TCP connections, assign to threads via round-robin |
+| **Acceptor** | Accept TCP connections, assign to shard workers via round-robin |
 | **Shard Worker** | Own a partition of data, execute commands, manage connections |
 | **Data Store** | In-memory key-value storage. See [STORAGE.md](STORAGE.md) |
 | **Lua VM** | Execute Lua scripts atomically within shard |
 | **Persistence Layer** | WAL writes, snapshot management, recovery |
+
+> **Terminology:** A "shard worker" is a Tokio task (not an OS thread) that owns a single shard
+> and processes all operations for keys assigned to that shard. FrogDB achieves thread-per-core
+> characteristics through Tokio's multi-threaded runtime. See [CONCURRENCY.md](CONCURRENCY.md).
 
 ---
 
@@ -89,9 +93,9 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for a complete list of Redis incompatib
 
 ## Concurrency Model
 
-FrogDB uses a shared-nothing, thread-per-core architecture inspired by DragonflyDB. Connections are pinned to threads for their lifetime but can coordinate with any shard via message-passing. Keys are hashed to determine shard ownership, with hash tags supporting key colocation.
+FrogDB uses a shared-nothing, thread-per-core architecture inspired by DragonflyDB. Connections are pinned to shard workers for their lifetime but can coordinate with any shard via message-passing. Keys are hashed to determine shard ownership, with hash tags supporting key colocation.
 
-See [CONCURRENCY.md](CONCURRENCY.md) for thread architecture, VLL transaction ordering, and scatter-gather implementation.
+See [CONCURRENCY.md](CONCURRENCY.md) for shard worker architecture, VLL transaction ordering, and scatter-gather implementation.
 
 ### Hash Tag Colocation
 
@@ -149,7 +153,7 @@ See [PROTOCOL.md](PROTOCOL.md) for frame processing and Response type details.
 
 ## Connection Management
 
-Each connection maintains state for transactions, pub/sub, authentication, and blocking operations. Connections are pinned to threads with configurable limits, timeouts, and output buffer controls.
+Each connection maintains state for transactions, pub/sub, authentication, and blocking operations. Connections are pinned to shard workers with configurable limits, timeouts, and output buffer controls.
 
 See [CONNECTION.md](CONNECTION.md) for lifecycle, state machine, and rate limiting.
 
@@ -337,7 +341,7 @@ See [ROADMAP.md](ROADMAP.md) for the detailed implementation roadmap with progre
 
 | Document | Description |
 |----------|-------------|
-| [CONCURRENCY.md](CONCURRENCY.md) | Thread architecture, VLL, scatter-gather |
+| [CONCURRENCY.md](CONCURRENCY.md) | Shard worker architecture, VLL, scatter-gather |
 | [STORAGE.md](STORAGE.md) | Store trait, key metadata, expiry |
 | [PERSISTENCE.md](PERSISTENCE.md) | RocksDB, WAL, snapshots, backup/restore |
 | [PROTOCOL.md](PROTOCOL.md) | RESP2/RESP3, frame processing |

@@ -56,6 +56,8 @@ bind = "0.0.0.0"
 port = 6379
 num_shards = 0  # 0 = auto-detect CPU cores
 allow_cross_slot_standalone = false  # Enable atomic cross-shard operations via VLL
+# Note: This option only applies in standalone mode.
+# In cluster mode, cross-slot operations always return -CROSSSLOT.
 
 [memory]
 max_memory = 0  # 0 = unlimited (bytes)
@@ -64,13 +66,12 @@ maxmemory_policy = "noeviction"
 
 [persistence]
 enabled = true
-data_dir = "./data"
-dbfilename = "dump.rdb"
+data_dir = "./data"           # Directory for RocksDB data (WAL, SST files)
+snapshot_dir = "./snapshots"  # Directory for point-in-time snapshots
 durability_mode = "periodic"  # async, periodic, sync
 
 [persistence.periodic]
-interval_ms = 1000  # fsync every N ms (default: 1000, matches Redis appendfsync everysec)
-write_count = 1000  # or fsync every N writes, whichever comes first
+fsync_interval_ms = 1000  # Fsync on fixed wall-clock schedule (matches Redis appendfsync everysec)
 
 [persistence.snapshot]
 enabled = true
@@ -79,8 +80,7 @@ interval_s = 3600  # 1 hour
 [timeouts]
 client_idle_s = 0       # 0 = no timeout
 tcp_keepalive_s = 300
-scatter_gather_timeout_ms = 5000  # Total timeout for multi-shard operations
-vll_queue_timeout_ms = 5000       # Per-shard lock acquisition timeout
+scatter_gather_timeout_ms = 5000  # Timeout for all multi-shard operations (VLL + scatter-gather)
 
 [logging]
 level = "info"  # trace, debug, info, warn, error
@@ -134,7 +134,7 @@ FROGDB_LOGGING__LEVEL=debug
 |---------|------------|---------|
 | TOML files | `snake_case` | `max_memory`, `sync_interval_ms` |
 | CONFIG GET/SET | Redis-compatible names | `maxmemory`, `slowlog-log-slower-than` |
-| Environment vars | `SCREAMING_SNAKE_CASE` | `FROGDB_MAX_MEMORY` |
+| Environment vars | `SCREAMING_SNAKE_CASE` | `FROGDB_MEMORY__MAX_MEMORY` |
 | CLI args | `kebab-case` | `--max-memory`, `--log-level` |
 
 **Rationale:**
