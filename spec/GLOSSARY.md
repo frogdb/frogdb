@@ -61,10 +61,10 @@ FrogDB uses an orchestrated model (like DragonflyDB) rather than gossip protocol
 
 See: [CLUSTER.md](CLUSTER.md)
 
-### VLL (Virtual Lock Line)
+### VLL (Very Lightweight Locking)
 A synchronization mechanism for coordinating multi-shard operations without traditional locks. Ensures atomicity across shards while maintaining the shared-nothing architecture.
 
-See: [CONCURRENCY.md](CONCURRENCY.md)
+See: [VLL.md](VLL.md)
 
 ---
 

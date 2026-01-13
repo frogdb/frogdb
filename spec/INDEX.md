@@ -80,7 +80,7 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for a complete list of Redis incompatib
 | Pinned connections (Dragonfly-style) | Simple lifecycle, no migration complexity |
 | Single RocksDB with column families | Simpler backup/restore, shared WAL |
 | Forkless snapshots | Avoids fork() memory spike (2x worst case) |
-| VLL-style transaction ordering | Atomic multi-shard operations via global txid counter |
+| [VLL](VLL.md)-style transaction ordering | Atomic multi-shard operations via global txid counter |
 | Strict Lua key validation | DragonflyDB-style; optional compatibility flag |
 
 ### Key Tradeoffs
@@ -95,7 +95,7 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for a complete list of Redis incompatib
 
 FrogDB uses a shared-nothing, thread-per-core architecture inspired by DragonflyDB. Connections are pinned to shard workers for their lifetime but can coordinate with any shard via message-passing. Keys are hashed to determine shard ownership, with hash tags supporting key colocation.
 
-See [CONCURRENCY.md](CONCURRENCY.md) for shard worker architecture, VLL transaction ordering, and scatter-gather implementation.
+See [CONCURRENCY.md](CONCURRENCY.md) for shard worker architecture, [VLL](VLL.md) transaction ordering, and scatter-gather implementation.
 
 ### Hash Tag Colocation
 
@@ -249,7 +249,7 @@ See [LIFECYCLE.md](LIFECYCLE.md) for startup/shutdown procedures and health chec
 
 ## Consistency Model
 
-FrogDB provides **per-shard linearizability**: within a single internal shard, operations are linearizable with read-your-writes, monotonic reads, and total order per key. Cross-shard operations (when enabled via `allow_cross_slot_standalone`) are serializable via VLL transaction ordering. With replicas, the default async replication provides eventual consistency; synchronous replication (`min_replicas_to_write = 1`) provides linearizable reads.
+FrogDB provides **per-shard linearizability**: within a single internal shard, operations are linearizable with read-your-writes, monotonic reads, and total order per key. Cross-shard operations (when enabled via `allow_cross_slot_standalone`) are serializable via [VLL](VLL.md) transaction ordering. With replicas, the default async replication provides eventual consistency; synchronous replication (`min_replicas_to_write = 1`) provides linearizable reads.
 
 Cross-key atomicity requires same-shard colocation (use hash tags), unless `allow_cross_slot_standalone` is enabled in standalone mode.
 
@@ -341,7 +341,8 @@ See [ROADMAP.md](ROADMAP.md) for the detailed implementation roadmap with progre
 
 | Document | Description |
 |----------|-------------|
-| [CONCURRENCY.md](CONCURRENCY.md) | Shard worker architecture, VLL, scatter-gather |
+| [VLL.md](VLL.md) | Very Lightweight Locking transaction coordination |
+| [CONCURRENCY.md](CONCURRENCY.md) | Shard worker architecture, scatter-gather |
 | [STORAGE.md](STORAGE.md) | Store trait, key metadata, expiry |
 | [PERSISTENCE.md](PERSISTENCE.md) | RocksDB, WAL, snapshots, backup/restore |
 | [PROTOCOL.md](PROTOCOL.md) | RESP2/RESP3, frame processing |

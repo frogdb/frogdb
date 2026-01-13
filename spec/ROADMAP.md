@@ -473,7 +473,7 @@ Implementation:
 - [ ] Timeout handling (`scatter_gather_timeout_ms`)
 - [ ] VLL integration for key-targeted write operations (atomic semantics)
 
-### 4.6 VLL Transaction Ordering (Foundation)
+### 4.6 [VLL](VLL.md) Transaction Ordering (Foundation)
 
 - [ ] Global `AtomicU64` transaction ID counter
 - [ ] Include txid in Execute messages

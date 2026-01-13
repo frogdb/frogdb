@@ -987,7 +987,7 @@ Under extreme load, FrogDB sheds load progressively:
 - Natural slowdown, no errors
 
 **Level 2 - Queue rejection:**
-- VLL queue exceeds `vll_max_queue_depth`
+- [VLL](VLL.md) queue exceeds `vll_max_queue_depth`
 - New operations rejected: `-ERR shard queue full, try again later`
 
 **Level 3 - Connection rejection:**
