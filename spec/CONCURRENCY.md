@@ -285,8 +285,10 @@ Client: MGET key1 key2 key3
 
 ## Transaction Ordering (VLL)
 
-FrogDB uses a VLL-inspired (Very Lightweight Locking) approach for multi-shard atomicity,
+FrogDB uses a [VLL](VLL.md)-inspired (Very Lightweight Locking) approach for multi-shard atomicity,
 similar to DragonflyDB. This provides atomic execution without mutex contention.
+
+See [VLL.md](VLL.md) for the complete VLL specification including design goals, key concepts, and implementation details.
 
 > **Availability:** Multi-shard VLL operations require `allow_cross_slot_standalone = true` in
 > standalone mode. By default, cross-shard operations return `-CROSSSLOT` errors (matching Redis Cluster).

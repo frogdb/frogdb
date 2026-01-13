@@ -64,7 +64,7 @@ Only the substring between `{` and `}` is hashed, allowing related keys to be co
 
 ### Cross-Slot Standalone Mode
 
-In **standalone mode only** (single-node, no cluster), FrogDB optionally supports atomic cross-shard operations via VLL (Very Lightweight Locking):
+In **standalone mode only** (single-node, no cluster), FrogDB optionally supports atomic cross-shard operations via [VLL (Very Lightweight Locking)](VLL.md):
 
 ```toml
 [server]
@@ -109,10 +109,10 @@ Consistency is tied to the configured durability mode:
 **Periodic Mode:**
 ```toml
 [persistence]
-durability_mode = { periodic = { interval_ms = 1000, write_count = 1000 } }
+durability_mode = { periodic = { interval_ms = 1000 } }
 ```
 - Balanced performance and safety (matches Redis `appendfsync everysec` default)
-- fsync every N ms OR M writes (whichever comes first)
+- fsync every N ms
 - Risk: Up to interval_ms of data loss (typically ~1 second)
 - Use case: Most production workloads
 
@@ -374,7 +374,7 @@ durability_mode = "async"
 ### For Balanced Production
 ```toml
 [persistence]
-durability_mode = { periodic = { interval_ms = 1000, write_count = 1000 } }
+durability_mode = { periodic = { interval_ms = 1000 } }
 ```
 - Bounded data loss (~1 second max, matches Redis `appendfsync everysec`)
 - Good throughput

@@ -55,7 +55,7 @@ Default location: `./frogdb.toml` or specified via `--config path/to/config.toml
 bind = "0.0.0.0"
 port = 6379
 num_shards = 0  # 0 = auto-detect CPU cores
-allow_cross_slot_standalone = false  # Enable atomic cross-shard operations via VLL
+allow_cross_slot_standalone = false  # Enable atomic cross-shard operations via VLL (see VLL.md)
 # Note: This option only applies in standalone mode.
 # In cluster mode, cross-slot operations always return -CROSSSLOT.
 

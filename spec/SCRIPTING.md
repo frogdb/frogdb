@@ -44,7 +44,7 @@ EVAL "..." 2 user:1:name user:2:email
 **Why no cross-shard scripts?**
 - Lua scripts execute atomically within a single shard's event loop
 - Cross-shard access would require distributed locking (defeats multi-threading)
-- VLL transaction ordering only guarantees atomicity within scatter-gather, not Lua execution
+- [VLL](VLL.md) transaction ordering only guarantees atomicity within scatter-gather, not Lua execution
 
 **Solution:** Use hash tags `{tag}` to colocate related keys on the same shard.
 See [CONCURRENCY.md](CONCURRENCY.md#hash-tags-redis-compatible) for hash tag semantics.

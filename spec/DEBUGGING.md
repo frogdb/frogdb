@@ -93,7 +93,7 @@ This command is essential for understanding key distribution and diagnosing shar
 
 #### DEBUG DUMP-VLL-QUEUE `[FrogDB]`
 
-Inspect the VLL (Very Lightweight Locking) transaction queue for a shard:
+Inspect the [VLL (Very Lightweight Locking)](VLL.md) transaction queue for a shard:
 
 ```
 DEBUG DUMP-VLL-QUEUE 0

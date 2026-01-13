@@ -186,7 +186,7 @@ For operations like MSET that touch multiple shards:
 | One shard at limit | Entire operation fails with OOM |
 | Partial failure (pre-VLL) | Not possible - VLL ensures atomic check |
 
-**VLL Guarantee:** With VLL transaction ordering, multi-key writes pre-check memory on all target shards before execution. Either all keys are written, or the entire operation returns `-OOM`.
+**[VLL](VLL.md) Guarantee:** With VLL transaction ordering, multi-key writes pre-check memory on all target shards before execution. Either all keys are written, or the entire operation returns `-OOM`.
 
 ### Configuration
 

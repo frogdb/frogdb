@@ -261,7 +261,7 @@ curl http://localhost:9090/health
 # 3. Check logs for panics
 grep -i panic /var/log/frogdb/frogdb.log | tail -20
 
-# 4. Check VLL queue state
+# 4. Check VLL queue state (see VLL.md)
 DEBUG DUMP-VLL-QUEUE <shard_id>
 ```
 
