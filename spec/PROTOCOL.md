@@ -96,8 +96,8 @@ impl From<Response> for BytesFrame {
             Response::Array(items) => BytesFrame::Array(
                 items.into_iter().map(Into::into).collect()
             ),
-            // RESP3 types - placeholder until implemented
-            _ => unimplemented!("RESP3 encoding not yet implemented"),
+            // RESP3 types - implement in Phase 12
+            _ => todo!("RESP3 encoding - implement in Phase 12"),
         }
     }
 }

@@ -183,8 +183,8 @@ pub enum DurabilityMode {
     /// Fastest: WAL write, no fsync (data loss on crash possible)
     Async,
 
-    /// Balanced: fsync every N ms or M writes
-    Periodic { interval_ms: u64, write_count: usize },
+    /// Balanced: fsync on fixed wall-clock schedule (matches Redis appendfsync everysec)
+    Periodic { fsync_interval_ms: u64 },
 
     /// Safest: fsync every write (slowest)
     Sync,
@@ -196,59 +196,59 @@ pub enum DurabilityMode {
 | Mode | Durability | Latency |
 |------|------------|---------|
 | `Async` | Best-effort (may lose data) | ~1-10 μs |
-| `Periodic(1000ms, 1000)` | Bounded loss (~1s or 1000 writes, matches Redis) | ~1-10 μs |
+| `Periodic(1000ms)` | Bounded loss (~1s, matches Redis `appendfsync everysec`) | ~1-10 μs |
 | `Sync` | Guaranteed (fsync per write) | ~100-500 μs |
 
 ### Periodic Mode Timer Semantics
 
-The `Periodic` durability mode uses both a timer and a write counter. Understanding the exact behavior is important for durability guarantees.
+The `Periodic` durability mode uses a **wall-clock timer** that fires on a fixed schedule, matching Redis's `appendfsync everysec` behavior.
 
 **Timer Behavior:**
-- Timer is **wall-clock based**, not write-event based
-- Timer **does NOT reset** after fsync - it triggers on a fixed schedule
-- Write counter **resets to zero** after each fsync
+- Fixed-schedule fsync: Timer fires every `fsync_interval_ms` on a wall-clock cadence
+- Timer does **NOT reset** after fsync - it runs continuously on a fixed interval
+- If previous fsync is still in progress when timer fires, skip this interval (log warning)
 
-**Fsync Trigger Conditions:**
+**Implementation:**
 ```rust
-struct PeriodicFsync {
-    interval_ms: u64,        // e.g., 100ms
-    write_threshold: usize,  // e.g., 1000 writes
-    last_fsync: Instant,
-    writes_since_fsync: AtomicUsize,
-}
+// Timer fires every fsync_interval_ms regardless of when last fsync completed
+// This matches Redis appendfsync everysec behavior
+async fn periodic_fsync_task(interval_ms: u64) {
+    let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
+    let mut fsync_in_progress = false;
 
-impl PeriodicFsync {
-    fn should_fsync(&self) -> bool {
-        // Trigger fsync if EITHER condition is met:
-        let time_trigger = self.last_fsync.elapsed().as_millis() >= self.interval_ms as u128;
-        let write_trigger = self.writes_since_fsync.load(Ordering::Relaxed) >= self.write_threshold;
+    loop {
+        interval.tick().await;  // Fixed schedule - doesn't reset
 
-        time_trigger || write_trigger
-    }
+        if fsync_in_progress {
+            warn!("Previous fsync still in progress, skipping this interval");
+            continue;
+        }
 
-    fn on_fsync_complete(&mut self) {
-        self.last_fsync = Instant::now();
-        self.writes_since_fsync.store(0, Ordering::Relaxed);
+        fsync_in_progress = true;
+        trigger_fsync().await;
+        fsync_in_progress = false;
     }
 }
 ```
 
-**Example Timeline (Periodic 1000ms, 1000 writes):**
+**Example Timeline (Periodic 1000ms):**
 ```
 T=0ms:     Server starts, timer begins
-T=100ms:   500 writes (no fsync - neither threshold met)
-T=500ms:   500 more writes → 1000 total → FSYNC triggered (write threshold)
-T=500ms:   Counter reset to 0, timer continues
-T=1000ms:  200 writes (no fsync yet)
-T=1500ms:  Timer fires → FSYNC triggered (time threshold)
-T=1500ms:  Counter reset to 0, timer reset
+T=1000ms:  Timer fires → FSYNC (takes 50ms)
+T=1050ms:  Fsync complete
+T=2000ms:  Timer fires → FSYNC (takes 50ms)
+T=2050ms:  Fsync complete
+T=3000ms:  Timer fires → FSYNC (disk slow, takes 1200ms)
+T=4000ms:  Timer fires, but previous fsync in progress → SKIP (log warning)
+T=4200ms:  Previous fsync complete
+T=5000ms:  Timer fires → FSYNC (normal)
 ```
 
 **What This Means for Durability:**
-- In low-traffic scenarios: fsync every `interval_ms` (timer-driven)
-- In high-traffic scenarios: fsync every `write_threshold` writes (write-driven)
-- Worst-case data loss: min(interval_ms worth of writes, write_threshold writes)
-- Default (1000ms, 1000) matches Redis `appendfsync everysec` behavior
+- Fsync occurs on a predictable fixed schedule
+- Data loss window is bounded by `fsync_interval_ms` (default 1s)
+- Under disk I/O pressure, intervals may be skipped but timer cadence is maintained
+- Matches Redis `appendfsync everysec` behavior for operational predictability
 
 ### Write Visibility and Durability
 
@@ -446,21 +446,35 @@ Epoch 6 started at sequence 15000
 
 Each snapshot has an associated metadata file that tracks its state and integrity.
 
-**Metadata File Location:**
+**Directory Structure:**
+
+FrogDB uses two separate directories for different persistence concerns:
+
 ```
-data/
-├── rocksdb/
+data_dir (./data/)              # RocksDB data (config: persistence.data_dir)
+├── CURRENT
+├── MANIFEST-000001
+├── OPTIONS-000005
+├── *.log                       # WAL files
+├── *.sst                       # SST files
+└── ...
+
+snapshot_dir (./snapshots/)     # Point-in-time snapshots (config: persistence.snapshot_dir)
+├── snapshot_00005/             # Snapshot epoch 5
+│   ├── metadata.json           # Snapshot metadata
+│   ├── shard_0.sst             # Shard 0 data
+│   ├── shard_1.sst             # Shard 1 data
 │   └── ...
-└── snapshots/
-    ├── snapshot_00005/           # Snapshot epoch 5
-    │   ├── metadata.json         # Snapshot metadata
-    │   ├── shard_0.sst           # Shard 0 data
-    │   ├── shard_1.sst           # Shard 1 data
-    │   └── ...
-    ├── snapshot_00006/           # Snapshot epoch 6
-    │   └── ...
-    └── latest -> snapshot_00006  # Symlink to latest complete snapshot
+├── snapshot_00006/             # Snapshot epoch 6
+│   └── ...
+└── latest -> snapshot_00006    # Symlink to latest complete snapshot
 ```
+
+**Why Separate Directories:**
+- `data_dir`: Active database - continuously written, compacted by RocksDB
+- `snapshot_dir`: Immutable snapshots - used for backup, restore, and replication bootstrap
+- Different retention policies (snapshots can be aged out independently)
+- Easier operational management (backup snapshot_dir without stopping writes)
 
 **Metadata Format:**
 ```json
