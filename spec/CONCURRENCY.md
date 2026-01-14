@@ -208,8 +208,40 @@ pub enum ShardMessage {
 
     /// Shutdown signal
     Shutdown,
+
+    // === VLL Messages (see VLL.md for full specification) ===
+
+    /// Request shard to acquire locks for a VLL transaction
+    VllLockRequest {
+        txid: u64,
+        keys: Vec<Bytes>,
+        modes: Vec<LockMode>,
+        ready_tx: oneshot::Sender<ShardReadyResult>,
+        execute_rx: oneshot::Receiver<ExecuteSignal>,
+    },
+
+    /// Execute operation after locks acquired
+    VllExecute {
+        txid: u64,
+        command: VllCommand,
+        result_tx: oneshot::Sender<VllShardResult>,
+    },
+
+    /// Abort transaction and rollback
+    VllAbort {
+        txid: u64,
+    },
+
+    /// Request continuation (full shard) lock for Lua/MULTI
+    VllContinuationLock {
+        txid: u64,
+        ready_tx: oneshot::Sender<ShardReadyResult>,
+        execute_rx: oneshot::Receiver<ExecuteSignal>,
+    },
 }
 ```
+
+See [VLL.md](VLL.md) for full VLL type definitions (`LockMode`, `VllCommand`, `ShardReadyResult`, etc.).
 
 ---
 

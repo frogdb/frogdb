@@ -41,29 +41,47 @@ EVAL "..." 2 {user:1}:name {user:1}:email
 EVAL "..." 2 user:1:name user:2:email
 ```
 
-**Why no cross-shard scripts?**
+**Default Behavior (cross-shard scripts rejected):**
 - Lua scripts execute atomically within a single shard's event loop
-- Cross-shard access would require distributed locking (defeats multi-threading)
-- [VLL](VLL.md) transaction ordering only guarantees atomicity within scatter-gather, not Lua execution
+- By default, cross-shard keys return `-CROSSSLOT` error
 
-**Solution:** Use hash tags `{tag}` to colocate related keys on the same shard.
+**Cross-Shard Scripts (Standalone Mode with VLL):**
+
+When `allow_cross_slot_standalone = true` is configured in standalone mode, FrogDB supports cross-shard Lua scripts via [VLL continuation locks](VLL.md#continuation-locks):
+
+- Continuation locks block entire shards during script execution
+- All participating shards acquire exclusive access before script runs
+- Script executes atomically across shards with full isolation
+- Rollback on failure ensures no partial state changes
+
+```lua
+-- With allow_cross_slot_standalone = true:
+-- Keys on different shards are supported
+EVAL "return redis.call('MGET', KEYS[1], KEYS[2])" 2 user:1:name user:2:email
+```
+
+**Recommendation:** Use hash tags `{tag}` to colocate related keys on the same shard for best performance.
 See [CONCURRENCY.md](CONCURRENCY.md#hash-tags-redis-compatible) for hash tag semantics.
 
 ### Validation
 
-Before script execution, FrogDB validates that all keys hash to the same shard:
+Before script execution, FrogDB validates key shards:
 
 ```rust
-fn validate_script_keys(keys: &[Bytes]) -> Result<ShardId, Error> {
+fn validate_script_keys(keys: &[Bytes], config: &Config) -> Result<ScriptRoute, Error> {
     let shards: HashSet<_> = keys.iter()
         .map(|k| shard_for_key(k))
         .collect();
 
-    if shards.len() > 1 {
-        return Err(Error::CrossShardScript);
+    match shards.len() {
+        0 => Ok(ScriptRoute::Local(0)),  // No keys, execute on shard 0
+        1 => Ok(ScriptRoute::Local(shards.into_iter().next().unwrap())),
+        _ if config.allow_cross_slot_standalone => {
+            // Cross-shard script via VLL continuation locks
+            Ok(ScriptRoute::CrossShard(shards.into_iter().collect()))
+        }
+        _ => Err(Error::CrossShardScript),
     }
-
-    Ok(shards.into_iter().next().unwrap_or(0))
 }
 ```
 
