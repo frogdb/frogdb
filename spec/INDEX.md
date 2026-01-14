@@ -28,6 +28,14 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for a complete list of Redis incompatib
 
 ---
 
+## Specification vs Implementation Status
+
+This specification describes the **desired end-state** of FrogDB. Not all features are implemented yet. See [ROADMAP.md](ROADMAP.md) for current implementation status and phasing.
+
+The absence of implementation does not affect the specification's validity - specs define *what* the system should do, not *when* it will be built.
+
+---
+
 ## Architecture
 
 ```

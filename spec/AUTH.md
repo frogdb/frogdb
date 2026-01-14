@@ -640,11 +640,11 @@ For initial implementation (ACL disabled):
 
 The abstraction supports Redis 7.0 features with minimal changes:
 
-| Feature | Implementation | Status |
-|---------|----------------|--------|
-| Selectors | `selectors: Vec<PermissionSet>` in UserPermissions | Planned |
-| Subcommand control | `SubcommandRule` in CommandPermissions | Planned |
-| Read/Write key patterns | `KeyAccessType` enum | Ready |
+| Feature | Implementation |
+|---------|----------------|
+| Selectors | `selectors: Vec<PermissionSet>` in UserPermissions |
+| Subcommand control | `SubcommandRule` in CommandPermissions |
+| Read/Write key patterns | `KeyAccessType` enum |
 
 **Enabling v7 features:**
 ```toml

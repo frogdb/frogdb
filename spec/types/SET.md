@@ -1,7 +1,5 @@
 # FrogDB Set Commands
 
-> **Status: PLANNED** - Set support is planned for Phase 3+.
-
 ## Overview
 
 Set keys will store unordered collections of unique string elements, supporting set operations like union, intersection, and difference.
