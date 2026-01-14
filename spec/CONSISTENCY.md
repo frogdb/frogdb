@@ -129,6 +129,9 @@ durability_mode = { periodic = { interval_ms = 1000 } }
 > **Note:** Clustering is a future capability. This section describes the planned consistency model.
 
 ### Replication Model
+
+See [REPLICATION.md](REPLICATION.md) for complete replication protocol specification.
+
 - **Asynchronous replication** by default
 - Replicas receive WAL stream from primary
 - Typical lag: milliseconds (depends on network and write rate)
@@ -385,6 +388,7 @@ durability_mode = { periodic = { interval_ms = 1000 } }
 ## References
 
 - [PERSISTENCE.md](PERSISTENCE.md) - Durability modes and WAL configuration
-- [CLUSTER.md](CLUSTER.md) - Cluster architecture and replication
+- [REPLICATION.md](REPLICATION.md) - Replication protocol, PSYNC, synchronous replication
+- [CLUSTER.md](CLUSTER.md) - Cluster architecture and failover
 - [COMMANDS.md](COMMANDS.md) - Transaction commands (MULTI/EXEC/WATCH)
 - [FAILURE_MODES.md](FAILURE_MODES.md) - Failure handling and recovery
