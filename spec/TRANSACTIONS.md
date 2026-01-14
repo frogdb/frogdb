@@ -206,7 +206,7 @@ In cluster mode with asynchronous replication (default):
 | Async (default)  | May lose up to `frogdb_replication_lag_seconds` of transactions |
 | Sync (`min_replicas_to_write >= 1`) | Acknowledged transactions survive failover |
 
-See [CLUSTER.md - Failover Consistency](CLUSTER.md#failover) for details.
+See [REPLICATION.md - Synchronous Replication](REPLICATION.md#synchronous-replication) for protocol details and [CLUSTER.md - Failover](CLUSTER.md#failover) for cluster failover behavior.
 
 ### Partial Failure
 

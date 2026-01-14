@@ -215,6 +215,20 @@ See [BLOCKING.md](BLOCKING.md) for design considerations.
 
 ---
 
+## Replication
+
+FrogDB supports primary-replica replication for high availability and read scaling. The architecture uses RocksDB WAL streaming with PSYNC for efficient partial synchronization.
+
+**Key features:**
+- Full and partial synchronization (FULLRESYNC, PSYNC)
+- TCP backpressure for flow control (no buffer limits)
+- Synchronous replication for stronger durability guarantees
+- Replication ID tracking for failover continuity
+
+See [REPLICATION.md](REPLICATION.md) for the complete replication specification.
+
+---
+
 ## Testing Strategy
 
 Testing follows an integration-first approach using real Redis clients against a test server. Categories include protocol tests, command tests, concurrency tests, persistence tests, and stress tests.
@@ -243,7 +257,7 @@ See [AUTH.md](AUTH.md) for ACL architecture and commands.
 
 FrogDB is designed for single-node operation initially, with abstractions for future clustering. The design uses an orchestrated control plane (no gossip), 16384 hash slots (Redis Cluster compatible), and RocksDB WAL streaming for replication.
 
-See [CLUSTER.md](CLUSTER.md) for full clustering architecture.
+See [CLUSTER.md](CLUSTER.md) for cluster architecture, slot migration, and failover. See [REPLICATION.md](REPLICATION.md) for replication protocol details.
 
 ---
 
@@ -366,6 +380,7 @@ See [ROADMAP.md](ROADMAP.md) for the detailed implementation roadmap with progre
 | [SCRIPTING.md](SCRIPTING.md) | Lua execution model |
 | [PUBSUB.md](PUBSUB.md) | Pub/sub architecture |
 | [CLUSTER.md](CLUSTER.md) | Clustering design |
+| [REPLICATION.md](REPLICATION.md) | Replication protocol, PSYNC, WAL streaming |
 | [AUTH.md](AUTH.md) | ACL system |
 | [EVICTION.md](EVICTION.md) | Memory eviction policies |
 | [LIFECYCLE.md](LIFECYCLE.md) | Startup/shutdown |
