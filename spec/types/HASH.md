@@ -1,7 +1,5 @@
 # FrogDB Hash Commands
 
-> **Status: PLANNED** - Hash support is planned for Phase 3+.
-
 ## Overview
 
 Hash keys will store field-value mappings, ideal for representing objects with multiple attributes.

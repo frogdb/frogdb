@@ -115,16 +115,16 @@ impl From<Response> for BytesFrame {
 | Push notifications | Yes | Yes | **Planned** (pub/sub) |
 | Streaming types | Experimental | No | **Deferred** |
 
-#### FrogDB RESP3 Roadmap
+#### FrogDB RESP3 Features
 
-| Priority | Feature | Status | Notes |
-|----------|---------|--------|-------|
-| **Phase 1** | Basic types (Null, Double, Boolean, Map, Set) | Planned | Required for modern client libraries |
-| **Phase 1** | HELLO command | Planned | Protocol negotiation |
-| **Phase 2** | Push type for pub/sub | Planned | Cleaner than RESP2 inline messages |
-| **Phase 3** | Client tracking / invalidation | Deferred | Complex, requires per-key tracking |
-| **Deferred** | Streaming strings/aggregates | Not planned | Limited use cases |
-| **Deferred** | Attributes | Not planned | Metadata extensions |
+| Priority | Feature | Notes |
+|----------|---------|-------|
+| **Phase 1** | Basic types (Null, Double, Boolean, Map, Set) | Required for modern client libraries |
+| **Phase 1** | HELLO command | Protocol negotiation |
+| **Phase 2** | Push type for pub/sub | Cleaner than RESP2 inline messages |
+| **Phase 3** | Client tracking / invalidation | Complex, requires per-key tracking |
+
+See [ROADMAP.md](ROADMAP.md) for implementation status.
 
 #### RESP3 Type Reference
 

@@ -461,9 +461,7 @@ impl ConfigError {
 
 ---
 
-## TLS Certificate Hot-Reloading (Future)
-
-**Status:** Planned feature. Not in initial implementation.
+## TLS Certificate Hot-Reloading
 
 ### Motivation
 

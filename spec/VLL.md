@@ -762,6 +762,81 @@ async fn handle_continuation_lock(
 - VLL operations from same txid proceed
 - Released after Lua script or MULTI/EXEC completes
 
+### Continuation Lock Cleanup
+
+When a client disconnects while holding a continuation lock:
+
+1. **Detection**: TCP connection close detected by shard's connection handler
+2. **Immediate release**: Continuation lock released synchronously on disconnect detection
+3. **Transaction abort**: Any in-progress MULTI transaction is discarded (no EXEC)
+4. **Blocked operations**: WATCH state cleared, blocked commands (future) unblocked
+
+**Guarantees:**
+- Lock held for at most `connection_timeout_ms` after network failure
+- Other operations on the shard resume immediately after lock release
+- No orphaned locks - cleanup is synchronous with connection teardown
+
+**Metrics:**
+- `frogdb_continuation_lock_disconnects_total` - Locks released due to disconnect
+
+---
+
+### VLL-Coordinated Commands
+
+When `allow_cross_slot_standalone = true`, these commands use VLL for atomicity:
+
+| Command | Atomicity | Rollback on Failure |
+|---------|-----------|---------------------|
+| MSET | All-or-nothing | Yes - no keys modified |
+| MGET | Atomic snapshot | N/A (read-only) |
+| DEL | All-or-nothing | Yes - no keys deleted |
+
+**Behavior:**
+- Coordinator acquires intents on all shards
+- All shards execute atomically via VLL ordering
+- On any shard failure: coordinator sends rollback to successful shards
+- Return count reflects actual deletions (DEL) or success (MSET)
+
+---
+
+### Transaction Conflict Resolution
+
+VLL uses **queuing**, not cancellation, for conflicting transactions:
+
+**Scenario: Two MULTI/EXEC transactions on overlapping keys**
+
+```
+Client A: MULTI → SET foo 1 → SET bar 2 → EXEC (txid=100)
+Client B: MULTI → SET foo 3 → SET baz 4 → EXEC (txid=101)
+```
+
+**Behavior:**
+1. Transaction with lower txid (A, txid=100) acquires locks first
+2. Transaction B queued on `foo` - waits for A to complete
+3. A executes, releases locks
+4. B acquires locks, executes
+5. Both transactions complete successfully (no rollback)
+
+**Key points:**
+- No transaction is cancelled due to conflicts
+- txid ordering is deterministic - earlier transaction always wins
+- Deadlocks impossible - ordered lock acquisition
+- WATCH provides opt-in abort semantics if keys modified
+
+### WATCH Behavior (Optimistic Locking)
+
+WATCH provides transaction abort (not queue) semantics:
+
+```
+Client A: WATCH foo → MULTI → SET foo 1 → EXEC
+Client B: SET foo 99  (between WATCH and EXEC)
+```
+
+**Result:** Client A's EXEC returns `nil` (transaction aborted, not queued).
+
+WATCH is checked at EXEC time - if any watched key modified since WATCH,
+transaction is discarded without executing.
+
 ---
 
 ### Error Types

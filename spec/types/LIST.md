@@ -1,7 +1,5 @@
 # FrogDB List Commands
 
-> **Status: PLANNED** - List support is planned for Phase 3+.
-
 ## Overview
 
 List keys will store ordered sequences of string elements, supporting operations from both ends (head and tail).

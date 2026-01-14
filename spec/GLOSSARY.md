@@ -50,6 +50,26 @@ A `{tag}` syntax in key names that controls hash slot assignment. Only the conte
 
 See: [STORAGE.md](STORAGE.md#hash-tag-examples)
 
+### Terminology Note: Cross-Shard vs Cross-Slot
+
+FrogDB uses two levels of key distribution:
+
+| Term | Level | Context |
+|------|-------|---------|
+| **Hash slot** | Cluster | 16,384 slots for cluster routing |
+| **Internal shard** | Node | Thread-local partitions within a node |
+
+**In documentation:**
+- "Cross-slot" refers to keys in different cluster hash slots
+- "Cross-shard" refers to keys on different internal shards (same node)
+
+**Error codes:**
+- `-CROSSSLOT` is always used (Redis compatibility), even for internal shard violations
+
+**Example:**
+- Cluster mode: `{user:1}:name` and `{user:2}:name` are cross-slot
+- Standalone mode: `key1` and `key2` may be cross-shard (different internal shards)
+
 ### Orchestrator
 An external control plane that manages FrogDB cluster topology. Responsibilities include:
 - Node health monitoring

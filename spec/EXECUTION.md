@@ -686,7 +686,33 @@ async fn execute_remote(
 }
 ```
 
-#### Shard Worker Message Loop
+#### Scatter-Gather Coordination
+
+**Coordinator**: The shard that receives the client command coordinates scatter-gather.
+
+**Result Assembly:**
+1. Coordinator sends sub-requests to relevant shards
+2. Coordinator waits for all responses (with timeout)
+3. Results reassembled in original key order
+4. Single response returned to client
+
+**Partial Results - NOT Allowed:**
+
+Scatter-gather operations are all-or-nothing:
+
+| Scenario | Behavior |
+|----------|----------|
+| All shards succeed | Return aggregated result |
+| Any shard fails | Return error, no partial data |
+| Timeout | Return `-ERR timeout`, no partial data |
+
+**Rationale:** Partial results create confusing semantics (which keys succeeded?).
+Clients can retry the full operation on failure.
+
+**Exception:** MGET returns `nil` for non-existent keys (not an error).
+This is per-key behavior, not partial failure.
+
+### Shard Worker Message Loop
 
 Each shard worker processes messages from connections:
 

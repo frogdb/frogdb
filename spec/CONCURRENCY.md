@@ -270,6 +270,34 @@ This creates natural backpressure from overloaded shards to clients.
 
 ---
 
+## Coordinator Assignment
+
+For multi-shard operations, the **receiving shard** (where connection is pinned) acts as coordinator:
+
+```
+Client → Connection (pinned to Shard 0) → MGET key1 key2 key3
+                                              ↓
+                        Shard 0 coordinates scatter-gather:
+                        ├─ key1 → Shard 2 (request)
+                        ├─ key2 → Shard 0 (local)
+                        └─ key3 → Shard 1 (request)
+                                              ↓
+                        Shard 0 assembles results, responds to client
+```
+
+**Responsibilities of coordinator:**
+- Parse command, determine key→shard mapping
+- Send sub-requests to remote shards
+- Wait for responses (with timeout)
+- Handle failures (abort, return error)
+- Assemble and return final response
+
+**Cleanup on coordinator failure:**
+- If coordinator shard crashes mid-operation, remote shards release pending locks on timeout
+- No orphaned state - VLL intents expire after `scatter_gather_timeout_ms`
+
+---
+
 ## Scatter-Gather Flow
 
 For multi-key operations like MGET:

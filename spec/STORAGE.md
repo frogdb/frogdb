@@ -86,23 +86,21 @@ See individual type documentation in [types/](types/) for data structure impleme
 
 ### Supported Data Types
 
-| Type | Implementation | Phase | Status |
-|------|---------------|-------|--------|
-| String | `Bytes` | 1 | Core |
-| Sorted Set | `HashMap` + `BTreeMap` | 3 | Core |
-| Hash | `HashMap<Bytes, Bytes>` | 6 | Planned |
-| List | `VecDeque<Bytes>` | 6 | Planned |
-| Set | `HashSet<Bytes>` | 6 | Planned |
-| Stream | Radix tree + listpack | Future | Planned |
-| Bitmap | Operations on String | Future | Planned |
-| Bitfield | Operations on String | Future | Planned |
-| Geospatial | Sorted Set + geohash | Future | Planned |
-| JSON | `serde_json::Value` | Future | Planned |
-| HyperLogLog | 12KB fixed structure | Future | Planned |
-| Bloom Filter | Bit array + hashes | Future | Planned |
-| Time Series | Sorted by timestamp | Future | Planned |
-
-> **Note:** See [ROADMAP.md](ROADMAP.md) for authoritative phase definitions and implementation order.
+| Type | Implementation |
+|------|---------------|
+| String | `Bytes` |
+| Sorted Set | `HashMap` + `BTreeMap` |
+| Hash | `HashMap<Bytes, Bytes>` |
+| List | `VecDeque<Bytes>` |
+| Set | `HashSet<Bytes>` |
+| Stream | Radix tree + listpack |
+| Bitmap | Operations on String |
+| Bitfield | Operations on String |
+| Geospatial | Sorted Set + geohash |
+| JSON | `serde_json::Value` |
+| HyperLogLog | 12KB fixed structure |
+| Bloom Filter | Bit array + hashes |
+| Time Series | Sorted by timestamp |
 
 ---
 
@@ -357,6 +355,24 @@ FrogDB uses hybrid expiry (lazy + active):
 2. **Active expiry**: Background task samples keys periodically
 
 See [DESIGN.md Key Expiry](INDEX.md#key-expiry-ttl) for configuration options.
+
+### Expiry Atomicity
+
+Key expiration is checked **at command entry**, before execution begins:
+
+1. Command receives request for key K
+2. Check if K exists and is expired → if expired, delete K, proceed as if K doesn't exist
+3. Execute command atomically (no expiry checks during execution)
+4. Return result
+
+**Guarantees:**
+- Once command execution begins, the key will not be expired mid-operation
+- Background scanner skips keys with active operations (shard-level coordination)
+- GETEX with PERSIST is atomic - key cannot expire between read and persist
+
+**Edge cases:**
+- If lazy check finds key expired, it's deleted before command proceeds
+- Background scanner and lazy deletion are mutually exclusive per key
 
 ---
 

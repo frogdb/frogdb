@@ -2,7 +2,6 @@
 
 This document details the design for blocking commands (BLPOP, BRPOP, BLMOVE, etc.) in FrogDB's shared-nothing architecture.
 
-> **Status:** Non-goal for initial implementation. This document outlines future design considerations.
 
 ## Industry Comparison
 

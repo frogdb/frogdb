@@ -321,7 +321,7 @@ By default, FrogDB enforces CROSSSLOT validation for Redis Cluster compatibility
 | Command | Default Behavior | With `allow_cross_slot_standalone` |
 |---------|------------------|-----------------------------------|
 | MGET | Same hash slot required | Scatter-gather across shards |
-| MSET | Same hash slot required (atomic) | Scatter-gather (NOT atomic) |
+| MSET | Same hash slot required (atomic) | VLL-coordinated (atomic) |
 | MSETNX | Same hash slot required | Same hash slot required (always) |
 
 **Note**: MSETNX always requires same-slot because its atomic semantics (set all or none) cannot be guaranteed across shards.
@@ -372,7 +372,7 @@ Client: MGET key1 key2 key3  (different slots)
          Response: [val1, val2, val3]
 ```
 
-**Warning**: With this option enabled, MSET is NOT atomic across shards. Partial failures are possible. Use hash tags for atomic multi-key writes.
+**Note**: With `allow_cross_slot_standalone`, MSET uses VLL coordination for atomic execution across shards. MGET uses scatter-gather for efficient reads. MSETNX always requires same-slot because its "set all or none" semantics require atomicity.
 
 ---
 
