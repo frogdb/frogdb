@@ -100,7 +100,15 @@ fn validate_transaction(cmds: &[ParsedCommand]) -> Result<(), Error> {
 
 **Cross-slot detection:** When a command is queued that references a key in a different hash slot than previously queued keys, FrogDB returns `-CROSSSLOT` error immediately (not at EXEC time). This provides early feedback rather than wasting round trips.
 
-**Recommendation:** Use hash tags to colocate transaction keys:
+**Cross-Shard Transactions (Standalone Mode):**
+
+When `allow_cross_slot_standalone = true` is configured in standalone mode, FrogDB supports atomic cross-shard MULTI/EXEC transactions via [VLL coordination](VLL.md):
+
+- Transaction commands are coordinated across multiple shards using continuation locks
+- Atomicity is guaranteed: all commands execute or all are rolled back
+- See [VLL.md - Continuation Locks](VLL.md#continuation-locks) for implementation details
+
+**Recommendation:** Use hash tags to colocate transaction keys for best performance:
 
 ```
 MULTI
