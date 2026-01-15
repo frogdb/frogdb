@@ -1015,6 +1015,240 @@ Orchestrator              Source (A)              Target (B)
      │                        │                       │ Slot 1234 owned
 ```
 
+### Migration Protocol Details
+
+This section specifies the slot migration protocol at a conceptual level.
+
+#### Migration Commands
+
+**DFLYMIGRATE INIT**
+
+Source node initiates migration to target:
+
+```
+DFLYMIGRATE INIT <migration_id> <source_node_id> <num_shards> <slot_ranges>
+```
+
+| Field | Description |
+|-------|-------------|
+| migration_id | UUID identifying this migration |
+| source_node_id | NodeId of source node |
+| num_shards | Source node's internal shard count (for flow setup) |
+| slot_ranges | Slot ranges being migrated (e.g., "1234-1234" or "0-1000") |
+
+**Response:**
+
+| Response | Meaning |
+|----------|---------|
+| `+OK` | Target enters IMPORTING state, ready to receive |
+| `-BUSY migration already in progress` | Target busy with another migration |
+| `-SLOTS already owned` | Target already owns some slots in range |
+
+**DFLYMIGRATE FLOW**
+
+Source establishes per-shard data flow:
+
+```
+DFLYMIGRATE FLOW <migration_id> <shard_id>
+```
+
+One FLOW connection per source internal shard. Target spawns receiver coroutine for each.
+
+**DFLYMIGRATE DATA**
+
+Batch of keys sent over FLOW connection:
+
+```
+DFLYMIGRATE DATA <migration_id> <shard_id> <batch_seq> <num_keys>
+<key1_len> <key1> <dump1_len> <dump1>
+<key2_len> <key2> <dump2_len> <dump2>
+...
+```
+
+| Field | Description |
+|-------|-------------|
+| batch_seq | Monotonic batch sequence number (for ordering) |
+| num_keys | Number of keys in this batch |
+| dump | DUMP-format serialized value (includes TTL) |
+
+**Response per batch:**
+
+| Response | Meaning |
+|----------|---------|
+| `+OK <batch_seq>` | Batch received and persisted |
+| `-OOM out of memory` | Target cannot accept more keys |
+
+**DFLYMIGRATE ACK**
+
+Source confirms all data sent for a shard:
+
+```
+DFLYMIGRATE ACK <migration_id> <shard_id> <total_keys> <total_bytes>
+```
+
+Target verifies counts match received data.
+
+**DFLYMIGRATE FINALIZE**
+
+Orchestrator signals migration complete:
+
+```
+DFLYMIGRATE FINALIZE <migration_id>
+```
+
+Sent to both source and target. Source clears MIGRATING state, target clears IMPORTING and takes ownership.
+
+#### Key Transfer Batching
+
+Keys are transferred in batches to balance throughput and memory:
+
+```toml
+[cluster.migration]
+# Maximum keys per batch
+batch_size_keys = 100
+
+# Maximum batch size in bytes
+batch_size_bytes = 1048576    # 1MB
+
+# Maximum concurrent batches in flight per flow
+max_inflight_batches = 4
+```
+
+**Batching Algorithm:**
+
+```rust
+fn create_batch(keys: &mut KeyIterator, config: &MigrationConfig) -> Batch {
+    let mut batch = Batch::new();
+
+    while let Some(key) = keys.peek() {
+        let dump = serialize_key(key);
+
+        // Stop if batch would exceed limits
+        if batch.num_keys >= config.batch_size_keys
+           || batch.size_bytes + dump.len() > config.batch_size_bytes {
+            break;
+        }
+
+        batch.add(keys.next().unwrap(), dump);
+    }
+
+    batch
+}
+```
+
+**Flow Control:**
+
+- Source tracks in-flight batches per flow
+- Waits for ACK before sending more when at `max_inflight_batches`
+- TCP backpressure applies if target is slow
+
+#### Migration Progress Reporting
+
+Source reports progress to orchestrator periodically:
+
+```
+POST /admin/migration/progress
+{
+    "migration_id": "uuid",
+    "slot_range": "1234-1234",
+    "source_node": "node-abc",
+    "target_node": "node-def",
+    "status": "in_progress",
+    "keys_total": 50000,
+    "keys_migrated": 25000,
+    "bytes_migrated": 104857600,
+    "shards_complete": 4,
+    "shards_total": 8,
+    "started_at": "2024-01-15T10:00:00Z",
+    "estimated_remaining_ms": 30000
+}
+```
+
+**Progress Check Flow:**
+
+```
+Source                      Orchestrator
+   │                            │
+   │── POST /migration/progress ▶│
+   │   (every progress_check_interval_ms)
+   │                            │
+   │                            │ Check:
+   │                            │  - Is progress > min_progress_keys?
+   │                            │  - Is migration within timeout?
+   │                            │
+   │◀── 200 OK (continue) ──────│
+   │   or                       │
+   │◀── 409 ABORT ──────────────│  (timeout or orchestrator decision)
+```
+
+**Metrics:**
+
+```
+frogdb_migration_keys_sent{migration_id}       # Keys sent (source)
+frogdb_migration_keys_received{migration_id}   # Keys received (target)
+frogdb_migration_bytes_sent{migration_id}      # Bytes sent
+frogdb_migration_batch_latency_ms              # Time per batch
+frogdb_migration_flow_active                   # Active flow connections
+```
+
+#### Migration Finalization Sequence
+
+Complete handoff sequence:
+
+```
+Source (A)                 Orchestrator               Target (B)
+   │                            │                         │
+   │  [All shards ACK'd]        │                         │
+   │── POST /migration/complete ▶│                         │
+   │                            │                         │
+   │                            │  Verify both nodes ready│
+   │                            │                         │
+   │◀── DFLYMIGRATE FINALIZE ───│                         │
+   │                            │── DFLYMIGRATE FINALIZE ─▶│
+   │                            │                         │
+   │  Clear MIGRATING           │                         │  Clear IMPORTING
+   │  Remove keys locally       │                         │  Accept writes
+   │                            │                         │
+   │                            │── FROGDB.TOPOLOGY ──────▶│
+   │◀── FROGDB.TOPOLOGY ────────│                         │
+   │                            │                         │
+   │  Update slot map           │                         │  Own slot officially
+```
+
+**Finalization Steps (Source):**
+
+1. Receive DFLYMIGRATE FINALIZE
+2. Clear MIGRATING state for slot
+3. Delete migrated keys locally (async, low priority)
+4. Return +OK
+
+**Finalization Steps (Target):**
+
+1. Receive DFLYMIGRATE FINALIZE
+2. Clear IMPORTING state for slot
+3. Begin accepting direct writes (not just ASKING)
+4. Return +OK
+
+**Atomic Guarantee:**
+
+The FINALIZE command is idempotent. If either node crashes:
+- On restart, node receives topology update
+- Topology is authoritative for slot ownership
+- MIGRATING/IMPORTING states are transient (not persisted)
+
+**Rollback on Finalization Failure:**
+
+If orchestrator cannot reach both nodes for FINALIZE:
+
+| Scenario | Recovery |
+|----------|----------|
+| Source unreachable | Wait for source recovery, retry FINALIZE |
+| Target unreachable | Wait for target recovery, retry FINALIZE |
+| Both unreachable | Wait for recovery, retry FINALIZE |
+| Orchestrator crash | New orchestrator discovers migration state, completes |
+
+Migration state is persisted by orchestrator. Keys already on target are safe. Worst case: some keys exist on both nodes until FINALIZE completes.
+
 ### Migration Data Preservation
 
 **TTL Handling:**
@@ -1392,7 +1626,7 @@ However, if the old primary had in-flight FULLRESYNC to this replica when failov
 
 **Metrics:**
 ```
-frogdb_promotion_duration_seconds       # Time spent in PROMOTING state
+frogdb_promotion_duration_ms       # Time spent in PROMOTING state
 frogdb_promotion_wal_flush_duration_ms  # Time to flush pending WAL
 frogdb_promotion_success_total          # Successful promotions
 frogdb_promotion_timeout_total          # Promotions that timed out
@@ -1407,6 +1641,116 @@ Using CLUSTER FAILOVER command:
 |------|----------|
 | Default (graceful) | Wait for replica to catch up, then switch |
 | FORCE | Immediate promotion, may lose data |
+
+### Failover Protocol Details
+
+This section specifies the message flow at a conceptual level.
+
+#### Orchestrator→Node Commands
+
+**FROGDB.PROMOTE**
+
+Sent by orchestrator to selected replica to initiate promotion:
+
+```
+FROGDB.PROMOTE <epoch> <new_replication_id> <slot_ranges>
+```
+
+| Field | Description |
+|-------|-------------|
+| epoch | New topology epoch number |
+| new_replication_id | Pre-generated ReplicationId for new primary |
+| slot_ranges | Slots this node is now primary for |
+
+**Response:**
+
+| Response | Meaning |
+|----------|---------|
+| `+OK` | Promotion initiated |
+| `-EPOCH stale epoch` | Node has higher epoch (abort failover) |
+| `-REPLICATING still receiving WAL` | Retry after WAL flush |
+
+**FROGDB.DEMOTE**
+
+Sent to old primary (if reachable) to demote it:
+
+```
+FROGDB.DEMOTE <epoch> <new_primary_node_id>
+```
+
+| Response | Meaning |
+|----------|---------|
+| `+OK` | Demotion accepted |
+| `-EPOCH stale epoch` | Old primary already has higher epoch |
+
+**FROGDB.TOPOLOGY**
+
+Broadcast to all nodes with new cluster topology:
+
+```
+FROGDB.TOPOLOGY <epoch> <json_topology>
+```
+
+All nodes update their slot mappings when receiving higher epoch.
+
+#### Multi-Orchestrator Coordination
+
+When multiple orchestrator instances are deployed for HA:
+
+| Aspect | Specification |
+|--------|---------------|
+| Leader election | External (e.g., etcd, ZooKeeper) |
+| Failover decision | Only leader initiates failover |
+| State synchronization | Shared state in coordination service |
+| Split-orchestrator | Follower orchestrators reject writes |
+
+**Note:** Multi-orchestrator coordination is delegated to the deployment infrastructure. FrogDB nodes accept commands from any orchestrator but validate epoch numbers to prevent conflicting decisions.
+
+#### Replica State During Failover
+
+When a primary fails, other replicas of that primary:
+
+| Step | Replica Behavior |
+|------|------------------|
+| 1 | Detect primary connection loss |
+| 2 | Enter `REPLICA_CONNECTING` state |
+| 3 | Retry connection with exponential backoff |
+| 4 | Receive FROGDB.TOPOLOGY with new primary |
+| 5 | Connect to new primary with PSYNC |
+| 6 | Resume replication from new primary |
+
+**Message to replicas:**
+
+```
+FROGDB.PRIMARY_CHANGED <new_primary_host> <new_primary_port> <epoch>
+```
+
+#### Client Redirect After Failover
+
+Clients learn about new primary through:
+
+| Method | Description |
+|--------|-------------|
+| `-MOVED` response | First command to old primary returns redirect |
+| Topology refresh | Client requests CLUSTER SLOTS periodically |
+| Connection failure | Client reconnects and discovers new primary |
+
+**Recommended client behavior:**
+
+```
+1. Send command to cached primary
+2. If -MOVED: update cache, retry on new node
+3. If connection error: request CLUSTER SLOTS, update cache
+4. Implement exponential backoff for reconnection
+```
+
+**In-Flight Commands During Failover:**
+
+| Command State | Behavior |
+|---------------|----------|
+| Sent to old primary, no response | Client retries (may go to new primary) |
+| Response received before failover | Command succeeded on old primary |
+| Old primary returns -READONLY | Client retries on new primary |
 
 ### Split-Brain Prevention
 
@@ -1514,7 +1858,7 @@ Primary (self-fenced)              Replica
 ```
 frogdb_self_fence_active                  # 1 if currently self-fenced
 frogdb_self_fence_events_total            # Times self-fence triggered
-frogdb_self_fence_duration_seconds        # Time spent in self-fence state
+frogdb_self_fence_duration_ms        # Time spent in self-fence state
 frogdb_self_fence_resumed_as_primary      # Resumed as primary after self-fence
 frogdb_self_fence_demoted_to_replica      # Became replica after self-fence
 ```
@@ -1666,7 +2010,7 @@ on_connection_restored():
 frogdb_partition_heal_events_total        # Partition healing detected
 frogdb_partition_heal_no_failover         # Healed without failover
 frogdb_partition_heal_with_failover       # Healed after failover occurred
-frogdb_partition_heal_duration_seconds    # Time partition lasted
+frogdb_partition_heal_duration_ms    # Time partition lasted
 ```
 
 ### Cascade Failure Handling
@@ -2074,7 +2418,7 @@ ACL updates are **eventually consistent** across the cluster:
 | Metric | Type | Description |
 |--------|------|-------------|
 | `frogdb_replication_offset` | Gauge | Current replication offset (seq number) |
-| `frogdb_replication_lag_seconds` | Gauge | Lag behind primary |
+| `frogdb_replication_lag_ms` | Gauge | Lag behind primary |
 | `frogdb_replication_lag_bytes` | Gauge | Lag in bytes behind primary |
 | `frogdb_connected_replicas` | Gauge | Number of connected replicas (primary only) |
 | `frogdb_sync_full_count` | Counter | Full syncs performed |
@@ -2087,14 +2431,14 @@ ACL updates are **eventually consistent** across the cluster:
 
 | Metric | Calculation | Description |
 |--------|-------------|-------------|
-| `lag_seconds` | `now - last_ack_time` | Seconds since last REPLCONF ACK from replica |
+| `lag_ms` | `now - last_ack_time` | Milliseconds since last REPLCONF ACK from replica |
 | `lag_bytes` | `primary_offset - replica_offset` | Bytes behind primary |
 
 Replicas send `REPLCONF ACK <offset>` every `repl_ping_interval_ms` (default: 1000ms).
 
-**Why seconds-since-ACK?**
+**Why time-since-ACK?**
 - Simple and reliable (no throughput estimation needed)
-- Matches Redis behavior exactly
+- Matches Redis behavior (though exposed as milliseconds for consistency)
 - Works correctly even when write throughput is zero
 
 **Lag Visibility:**
@@ -2132,7 +2476,7 @@ master_repl_offset:12345700
 **Data Loss Bound:**
 
 On failover, maximum data loss = replication lag at time of failure.
-With `lag_seconds = 5`, up to 5 seconds of writes may be lost.
+With `lag_ms = 5000`, up to 5 seconds of writes may be lost.
 
 **Reducing Lag:**
 - Ensure sufficient network bandwidth

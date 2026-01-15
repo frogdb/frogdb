@@ -413,7 +413,7 @@ groups:
 - name: frogdb
   rules:
   - alert: FrogDBHighMemory
-    expr: frogdb_used_memory / frogdb_max_memory > 0.9
+    expr: frogdb_memory_used_bytes / frogdb_memory_max_bytes > 0.9
     for: 5m
     labels:
       severity: warning
@@ -428,7 +428,7 @@ groups:
       summary: FrogDB persistence errors detected
 
   - alert: FrogDBConnectionsExhausted
-    expr: frogdb_connected_clients / frogdb_max_connections > 0.9
+    expr: frogdb_connections_current / frogdb_connections_max > 0.9
     for: 5m
     labels:
       severity: warning

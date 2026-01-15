@@ -235,6 +235,7 @@ otlp_enabled = false
 | `frogdb_cpu_usage_percent` | Gauge | Process CPU usage |
 | `frogdb_memory_rss_bytes` | Gauge | Resident set size |
 | `frogdb_memory_used_bytes` | Gauge | Memory used by data |
+| `frogdb_memory_max_bytes` | Gauge | Configured max memory (0 if unlimited) |
 | `frogdb_memory_peak_bytes` | Gauge | Peak memory usage |
 | `frogdb_memory_fragmentation_ratio` | Gauge | Memory fragmentation |
 
@@ -244,6 +245,7 @@ otlp_enabled = false
 |--------|------|--------|-------------|
 | `frogdb_connections_total` | Counter | | Total connections accepted |
 | `frogdb_connections_current` | Gauge | | Current open connections |
+| `frogdb_connections_max` | Gauge | | Configured max connections |
 | `frogdb_connections_rejected_total` | Counter | `reason` | Rejected connections |
 
 Rejection reasons: `max_clients`, `auth_required`, `acl_denied`
@@ -253,7 +255,7 @@ Rejection reasons: `max_clients`, `auth_required`, `acl_denied`
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
 | `frogdb_commands_total` | Counter | `command` | Commands processed |
-| `frogdb_commands_duration_seconds` | Histogram | `command` | Command latency |
+| `frogdb_commands_duration_ms` | Histogram | `command` | Command latency |
 | `frogdb_commands_errors_total` | Counter | `command`, `error` | Command errors |
 
 Error types: `wrong_type`, `syntax`, `auth`, `timeout`, `internal`
@@ -278,7 +280,7 @@ Eviction policies: `noeviction`, `allkeys-lru`, `volatile-lru`, `allkeys-lfu`, `
 | `frogdb_shard_memory_bytes` | Gauge | `shard` | Per-shard memory usage |
 | `frogdb_shard_keys` | Gauge | `shard` | Per-shard key count |
 | `frogdb_shard_queue_depth` | Gauge | `shard` | Message queue depth |
-| `frogdb_shard_queue_latency_seconds` | Histogram | `shard` | Queue wait time |
+| `frogdb_shard_queue_latency_ms` | Histogram | `shard` | Queue wait time |
 
 ### Persistence Metrics
 
@@ -286,10 +288,10 @@ Eviction policies: `noeviction`, `allkeys-lru`, `volatile-lru`, `allkeys-lfu`, `
 |--------|------|--------|-------------|
 | `frogdb_persistence_writes_total` | Counter | `shard` | WAL writes |
 | `frogdb_persistence_write_bytes_total` | Counter | `shard` | WAL bytes written |
-| `frogdb_persistence_write_duration_seconds` | Histogram | | Write latency |
+| `frogdb_persistence_write_duration_ms` | Histogram | | Write latency |
 | `frogdb_persistence_errors_total` | Counter | `type` | Persistence errors |
 | `frogdb_snapshot_in_progress` | Gauge | `shard` | 1 if snapshot running |
-| `frogdb_snapshot_duration_seconds` | Histogram | | Snapshot duration |
+| `frogdb_snapshot_duration_ms` | Histogram | | Snapshot duration |
 | `frogdb_snapshot_size_bytes` | Gauge | `shard` | Last snapshot size |
 
 ### Pub/Sub Metrics
@@ -642,13 +644,13 @@ groups:
           description: "Memory usage is {{ $value | humanizePercentage }}"
 
       - alert: FrogDBHighLatency
-        expr: histogram_quantile(0.99, rate(frogdb_commands_duration_seconds_bucket[5m])) > 0.1
+        expr: histogram_quantile(0.99, rate(frogdb_commands_duration_ms_bucket[5m])) > 100
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "FrogDB p99 latency high"
-          description: "p99 latency is {{ $value | humanizeDuration }}"
+          description: "p99 latency is {{ $value }}ms"
 
       - alert: FrogDBPersistenceError
         expr: increase(frogdb_persistence_errors_total[5m]) > 0
