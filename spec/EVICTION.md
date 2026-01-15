@@ -69,8 +69,290 @@ fn evict_lru(shard: &mut Shard, samples: usize) -> Option<Bytes> {
 }
 ```
 
-**Configuration:**
-- `maxmemory-samples`: Keys to sample (default: 5, more = more accurate)
+### Eviction Pool Parameters
+
+The eviction pool improves sampling efficiency by maintaining candidates across eviction rounds:
+
+**Pool Size:**
+
+```rust
+/// Fixed-size pool of eviction candidates
+/// Size 16 provides good accuracy without significant memory overhead
+const EVICTION_POOL_SIZE: usize = 16;
+
+struct EvictionPool {
+    /// Candidates sorted by idle time (worst first)
+    candidates: [Option<EvictionCandidate>; EVICTION_POOL_SIZE],
+
+    /// Number of valid candidates currently in pool
+    count: usize,
+}
+```
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Pool size | 16 | Matches Redis; larger pools have diminishing returns |
+| Pool scope | Per-shard | No cross-shard coordination for eviction |
+| Candidate lifetime | Until evicted or key deleted | Pool persists across eviction rounds |
+
+**Sample Selection Strategy:**
+
+```rust
+impl Shard {
+    /// Select a random key for eviction sampling
+    fn random_key(&self) -> Option<Bytes> {
+        // Strategy: Random bucket, then random entry in bucket
+        //
+        // 1. Select random bucket from hash table
+        let bucket_idx = self.rng.gen_range(0..self.table.bucket_count());
+        let bucket = &self.table.buckets[bucket_idx];
+
+        // 2. If bucket empty, try next few buckets (avoid full rescan)
+        // Linear probe up to 5 adjacent buckets
+        for offset in 0..5 {
+            let try_idx = (bucket_idx + offset) % self.table.bucket_count();
+            if let Some(entry) = self.table.buckets[try_idx].random_entry(&mut self.rng) {
+                return Some(entry.key.clone());
+            }
+        }
+
+        // 3. If still empty, fall back to iterator (rare, mostly empty shard)
+        self.table.iter().next().map(|(k, _)| k.clone())
+    }
+}
+```
+
+**Why random bucket selection:**
+- O(1) average case (no iteration needed)
+- Uniform distribution across keyspace
+- Handles sparse tables gracefully with linear probe
+
+**Pool Insertion and Eviction:**
+
+```rust
+impl EvictionPool {
+    /// Insert candidate if it qualifies for eviction
+    fn maybe_insert(&mut self, key: Bytes, idle_time: u64) {
+        // Find insertion position (sorted by idle_time descending)
+        // Pool keeps worst candidates (highest idle time)
+
+        // Don't insert if better than all current candidates and pool is full
+        if self.count == EVICTION_POOL_SIZE {
+            if let Some(best) = self.candidates[self.count - 1].as_ref() {
+                if idle_time <= best.idle_time {
+                    return; // This key is not worse than current worst
+                }
+            }
+        }
+
+        // Check for duplicates (same key already in pool)
+        for candidate in self.candidates.iter().flatten() {
+            if candidate.key == key {
+                return; // Key already tracked
+            }
+        }
+
+        // Binary search for insertion position
+        let pos = self.candidates[..self.count]
+            .binary_search_by(|c| {
+                c.as_ref()
+                    .map(|c| idle_time.cmp(&c.idle_time))
+                    .unwrap_or(std::cmp::Ordering::Less)
+            })
+            .unwrap_or_else(|e| e);
+
+        // Shift elements to make room
+        if self.count < EVICTION_POOL_SIZE {
+            self.count += 1;
+        }
+        for i in (pos + 1..self.count).rev() {
+            self.candidates[i] = self.candidates[i - 1].take();
+        }
+
+        // Insert new candidate
+        self.candidates[pos] = Some(EvictionCandidate { key, idle_time });
+    }
+
+    /// Remove and return the worst candidate (highest idle time)
+    fn pop_worst(&mut self) -> Option<Bytes> {
+        if self.count == 0 {
+            return None;
+        }
+
+        let candidate = self.candidates[0].take()?;
+
+        // Shift remaining candidates
+        for i in 0..self.count - 1 {
+            self.candidates[i] = self.candidates[i + 1].take();
+        }
+        self.count -= 1;
+
+        Some(candidate.key)
+    }
+
+    /// Remove key from pool if present (called when key is deleted externally)
+    fn remove(&mut self, key: &Bytes) {
+        if let Some(pos) = self.candidates.iter().position(|c| {
+            c.as_ref().map_or(false, |c| &c.key == key)
+        }) {
+            for i in pos..self.count - 1 {
+                self.candidates[i] = self.candidates[i + 1].take();
+            }
+            self.count -= 1;
+        }
+    }
+}
+```
+
+**Pool Refresh Behavior:**
+
+| Event | Pool Behavior |
+|-------|---------------|
+| Key deleted (DEL, UNLINK) | Remove from pool if present |
+| Key expired (TTL) | Remove from pool if present |
+| Key accessed (GET, SET) | Pool NOT updated (lazy) |
+| Eviction triggered | Sample more keys, add to pool, evict worst |
+| Server restart | Pool reset (empty) |
+
+### maxmemory-samples Effects
+
+The `maxmemory-samples` setting controls eviction accuracy vs. CPU cost:
+
+| Setting | Accuracy | CPU Cost | Use Case |
+|---------|----------|----------|----------|
+| 1 | ~50% | Lowest | Testing only |
+| 3 | ~85% | Very low | High-throughput, tolerates eviction variance |
+| 5 (default) | ~93% | Low | General purpose |
+| 10 | ~98% | Medium | Latency-sensitive, predictable eviction |
+| 20 | ~99%+ | Higher | Rarely needed, diminishing returns |
+
+**Accuracy measurement:** Percentage of time the actual LRU key is evicted (vs. true LRU).
+
+```
+Eviction Accuracy vs. Sample Size:
+
+Accuracy
+   ▲
+99%├───────────────────────────────●───●
+98%├─────────────────────────●
+95%├──────────────────●
+90%├────────────●
+85%├───────●
+80%├───●
+   │
+   └──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──▶ Samples
+      1  2  3  4  5  6  7  8  9  10
+```
+
+**Recommendation:**
+- Default (5) is appropriate for most workloads
+- Increase to 10 if eviction "wrong key" is causing issues
+- Never set below 3 in production
+
+### Per-Shard vs. Global Eviction
+
+FrogDB performs eviction at the **shard level**, not globally:
+
+```
+Per-Shard Eviction Model:
+
+┌─────────────────────────────────────────────────────────────────┐
+│                       Global Memory Check                        │
+│              (total_used > maxmemory triggers eviction)         │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+              ┌─────────────┼─────────────────┐
+              │             │                 │
+              ▼             ▼                 ▼
+        ┌──────────┐  ┌──────────┐      ┌──────────┐
+        │ Shard 0  │  │ Shard 1  │ ...  │ Shard N  │
+        │          │  │          │      │          │
+        │ [Pool 0] │  │ [Pool 1] │      │ [Pool N] │
+        │   ↓      │  │   ↓      │      │   ↓      │
+        │ Evict    │  │ Evict    │      │ Evict    │
+        └──────────┘  └──────────┘      └──────────┘
+              │             │                 │
+              └─────────────┼─────────────────┘
+                            ▼
+                    Memory Reclaimed
+```
+
+**Eviction Decision Flow:**
+
+```rust
+fn trigger_eviction(config: &Config, shards: &[Shard]) -> Result<(), OomError> {
+    let total_used: usize = shards.iter().map(|s| s.memory_used()).sum();
+
+    if total_used <= config.maxmemory {
+        return Ok(()); // No eviction needed
+    }
+
+    let to_free = total_used - config.maxmemory;
+    let mut freed = 0usize;
+
+    // Eviction strategy: Round-robin across shards
+    // Each shard evicts one key per round until target reached
+    let mut round = 0;
+    while freed < to_free {
+        let mut made_progress = false;
+
+        for shard in shards.iter_mut() {
+            if let Some(key_size) = shard.evict_one(config.maxmemory_policy) {
+                freed += key_size;
+                made_progress = true;
+
+                if freed >= to_free {
+                    break;
+                }
+            }
+        }
+
+        // Prevent infinite loop if no keys can be evicted
+        if !made_progress {
+            return Err(OomError::CannotEvict);
+        }
+
+        round += 1;
+        if round > MAX_EVICTION_ROUNDS {
+            return Err(OomError::EvictionTimeout);
+        }
+    }
+
+    Ok(())
+}
+```
+
+**Why per-shard eviction:**
+
+| Aspect | Per-Shard | Global |
+|--------|-----------|--------|
+| Lock contention | None (shard-local) | Requires global lock |
+| LRU accuracy | Per-shard accurate | Would need global time sync |
+| Hot shard handling | May evict cold keys from hot shard | Better at balancing |
+| Implementation | Simple | Complex coordination |
+
+**Imbalanced Shard Scenario:**
+
+When shards have unequal memory usage:
+
+```
+Shard 0: 3GB (hot)    → Has most keys, evicts most
+Shard 1: 1GB (warm)   → Evicts proportionally less
+Shard 2: 0.5GB (cold) → May have no evictable keys
+```
+
+Round-robin eviction naturally balances by attempting eviction from all shards, but shards with no evictable keys (all volatile-* policies with no TTL keys) are skipped.
+
+### Eviction Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_eviction_keys_total` | Total keys evicted (by policy, shard) |
+| `frogdb_eviction_bytes_total` | Total memory freed by eviction |
+| `frogdb_eviction_pool_size` | Current candidates in eviction pool (per shard) |
+| `frogdb_eviction_samples_total` | Total keys sampled for eviction |
+| `frogdb_eviction_oom_total` | OOM errors despite eviction attempts |
+| `frogdb_eviction_latency_seconds` | Time spent in eviction (histogram) |
 
 ---
 

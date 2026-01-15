@@ -700,6 +700,212 @@ Key panels for a FrogDB dashboard:
 
 ---
 
+## Performance Expectations
+
+This section provides baseline performance expectations for FrogDB. These are targets, not guarantees - actual performance depends on hardware, workload, and configuration.
+
+### Latency Targets
+
+| Operation | p50 | p95 | p99 | Notes |
+|-----------|-----|-----|-----|-------|
+| GET (hot) | <100μs | <200μs | <500μs | Key in memory, no contention |
+| SET (async) | <100μs | <200μs | <500μs | Async durability mode |
+| SET (sync) | <1ms | <2ms | <5ms | Sync durability (fsync) |
+| MGET (10 keys) | <200μs | <500μs | <1ms | Single shard |
+| MGET (10 keys, multi-shard) | <500μs | <1ms | <2ms | VLL coordination |
+| EVAL (simple) | <500μs | <1ms | <2ms | Script with few operations |
+| SCAN (100 keys) | <1ms | <2ms | <5ms | Cursor iteration |
+
+**Factors Affecting Latency:**
+- Memory pressure (eviction running)
+- VLL queue depth (contention)
+- Network round-trip time
+- Durability mode
+- Key size and value size
+
+### Throughput Targets
+
+| Metric | Target | Configuration |
+|--------|--------|---------------|
+| Single-core GET/s | 100,000+ | Pipelining, small values |
+| Single-core SET/s | 50,000+ | Async durability, small values |
+| Multi-core GET/s | 100,000 × cores | Linear scaling to ~16 cores |
+| Pub/Sub msg/s | 500,000+ | Per-channel throughput |
+
+**Scaling Characteristics:**
+
+| Factor | Expected Behavior |
+|--------|-------------------|
+| Cores: 1 → 4 | ~4x throughput |
+| Cores: 4 → 16 | ~3.5x throughput (diminishing) |
+| Cores: 16+ | Diminishing returns, depends on workload |
+| Key count: 1M → 100M | <10% latency impact (if in memory) |
+| Value size: 100B → 10KB | ~2x latency increase |
+| Value size: 10KB → 1MB | ~10x latency increase |
+
+### Memory Overhead
+
+| Component | Per-Key Overhead | Notes |
+|-----------|------------------|-------|
+| Key metadata | ~80 bytes | Hash entry, TTL, type, version |
+| Small value (<64B) | Inline | No additional allocation |
+| Large value | +24 bytes | Heap allocation overhead |
+| TTL tracking | +8 bytes | If TTL set |
+| Hash slot mapping | Negligible | O(1) lookup |
+
+**Example Memory Calculation:**
+
+```
+1 million keys with 100-byte values:
+  Key metadata: 1M × 80B = 80MB
+  Values: 1M × 100B = 100MB
+  Overhead: ~180MB / 100MB values = 1.8x
+
+10 million keys with 1KB values:
+  Key metadata: 10M × 80B = 800MB
+  Values: 10M × 1KB = 10GB
+  Overhead: ~10.8GB / 10GB values = 1.08x
+```
+
+**Fragmentation:**
+
+| Scenario | Expected Fragmentation |
+|----------|------------------------|
+| Steady-state, similar sizes | <1.1 (10%) |
+| Mixed sizes, active eviction | <1.3 (30%) |
+| Heavy churn, varied sizes | <1.5 (50%) |
+| Pathological (many deletes) | <2.0 (100%) |
+
+### Network Bandwidth
+
+| Operation | Bytes Per Op | Notes |
+|-----------|--------------|-------|
+| GET (100B value) | ~150B request, ~150B response | RESP overhead |
+| SET (100B value) | ~200B request, ~10B response | |
+| Pipeline (100 ops) | ~15KB total | Amortizes connection overhead |
+
+### Note on Performance Expectations
+
+These targets assume:
+- Modern hardware (SSD, 10+ cores, 32GB+ RAM)
+- Properly configured OS (TCP tuning, ulimits)
+- Workload within memory limits (no swap)
+- Network latency <1ms (same datacenter)
+
+Performance may vary significantly based on:
+- Cloud vs bare-metal
+- Memory pressure
+- Background operations (snapshots, replication)
+- Client implementation quality
+
+---
+
+## Metrics Cardinality Management
+
+High-cardinality metrics can consume excessive memory and slow Prometheus scrapes. FrogDB manages cardinality explicitly.
+
+### Label Cardinality Limits
+
+| Metric Label | Cardinality Limit | Strategy |
+|--------------|-------------------|----------|
+| `command` | ~200 | Fixed set of known commands |
+| `shard` | `num_shards` | Fixed at startup |
+| `status` | ~10 | Fixed set (ok, error, timeout) |
+| `client_type` | 3 | normal, pubsub, replica |
+
+### High-Cardinality Labels NOT Exposed
+
+These values are intentionally NOT used as metric labels:
+
+| Value | Why Not | Alternative |
+|-------|---------|-------------|
+| Key name | Unbounded | Use key patterns in logs |
+| Client IP | Can be 10k+ | Aggregate by subnet if needed |
+| Client name | User-defined | Use CLIENT LIST command |
+| Error message | Many variations | Use error category label |
+| Lua script SHA | Many scripts | Count total, not per-script |
+
+### Cardinality Configuration
+
+```toml
+[metrics]
+# Enable per-command latency histograms (adds ~200 time series)
+per_command_metrics = true
+
+# Enable per-shard metrics (adds ~N time series per metric)
+per_shard_metrics = true
+
+# Maximum unique error messages to track (prevents cardinality explosion)
+max_error_message_labels = 100
+
+# Aggregate clients by /24 subnet instead of individual IPs
+aggregate_client_ips = true
+```
+
+### Cardinality Protection
+
+If metric cardinality exceeds limits:
+
+```rust
+fn record_metric_with_label(metric: &str, label: &str, value: f64) {
+    let cardinality = metric_registry.label_cardinality(metric);
+
+    if cardinality >= MAX_LABEL_CARDINALITY {
+        // Use "other" bucket instead of new label
+        metric_registry.record(metric, "other", value);
+        metric_registry.increment("frogdb_metrics_cardinality_overflow_total");
+    } else {
+        metric_registry.record(metric, label, value);
+    }
+}
+```
+
+### Memory Impact of Metrics
+
+| Metric Type | Approx Memory | Per |
+|-------------|---------------|-----|
+| Counter | 8 bytes | label combination |
+| Gauge | 8 bytes | label combination |
+| Histogram (default buckets) | 200 bytes | label combination |
+| Summary | 1-2 KB | label combination |
+
+**Example Calculation:**
+
+```
+200 commands × 8 shards × 1 histogram = 1,600 time series
+1,600 × 200 bytes = 320 KB for command latencies
+
+With per-command, per-shard, per-status:
+200 × 8 × 10 × 200 bytes = 3.2 MB
+
+Without per-shard aggregation:
+200 × 10 × 200 bytes = 400 KB
+```
+
+### Recommended Production Settings
+
+```toml
+[metrics]
+# Production: aggregate to reduce cardinality
+per_command_metrics = true   # Useful for debugging
+per_shard_metrics = false    # Usually not needed
+aggregate_client_ips = true  # Prevent IP cardinality explosion
+
+# Keep cardinality bounded
+max_error_message_labels = 50
+```
+
+### Metrics for Cardinality Monitoring
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_metrics_cardinality_total` | Current total time series |
+| `frogdb_metrics_cardinality_overflow_total` | Times cardinality limit hit |
+| `frogdb_metrics_scrape_size_bytes` | Prometheus scrape response size |
+| `frogdb_metrics_scrape_duration_ms` | Time to generate metrics |
+
+---
+
 ## References
 
 - [CONFIGURATION.md](CONFIGURATION.md) - Configuration system

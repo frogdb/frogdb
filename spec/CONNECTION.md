@@ -180,6 +180,222 @@ Entered via blocking commands (BLPOP, BRPOP, BLMOVE).
 
 See [BLOCKING.md](BLOCKING.md) for blocking command design.
 
+### State Transition Rules
+
+This section specifies the complete state machine for connection states, including all valid transitions and error handling.
+
+**Complete State Transition Table:**
+
+| From State | Command/Event | To State | Notes |
+|------------|---------------|----------|-------|
+| NORMAL | MULTI | TRANSACTION | Start transaction |
+| NORMAL | SUBSCRIBE/PSUBSCRIBE/SSUBSCRIBE | PUBSUB | Enter pub/sub mode |
+| NORMAL | BLPOP/BRPOP/BLMOVE | BLOCKED | Future: blocking mode |
+| NORMAL | QUIT | CLOSED | Clean disconnect |
+| NORMAL | Any other command | NORMAL | Execute and stay in state |
+| TRANSACTION | EXEC | NORMAL | Execute transaction |
+| TRANSACTION | DISCARD | NORMAL | Abort transaction |
+| TRANSACTION | QUIT | CLOSED | Discard queue, disconnect |
+| TRANSACTION | WATCH/UNWATCH | TRANSACTION | Modify watches |
+| TRANSACTION | Other commands | TRANSACTION | Queue command |
+| PUBSUB | UNSUBSCRIBE/PUNSUBSCRIBE/SUNSUBSCRIBE (all) | NORMAL | When subscription count = 0 |
+| PUBSUB | UNSUBSCRIBE/PUNSUBSCRIBE/SUNSUBSCRIBE (partial) | PUBSUB | Reduce subscriptions |
+| PUBSUB | SUBSCRIBE/PSUBSCRIBE/SSUBSCRIBE | PUBSUB | Add subscriptions |
+| PUBSUB | PING | PUBSUB | Allowed, responds PONG |
+| PUBSUB | QUIT | CLOSED | Unsubscribe all, disconnect |
+| BLOCKED | Timeout | NORMAL | Return nil response |
+| BLOCKED | Data received | NORMAL | Return data |
+| BLOCKED | QUIT | CLOSED | Cancel block, disconnect |
+| BLOCKED | Client disconnect | - | Clean up wait registration |
+
+**Invalid State Transitions:**
+
+| From State | Command | Error Response |
+|------------|---------|----------------|
+| TRANSACTION | MULTI | `-ERR MULTI calls can not be nested` |
+| TRANSACTION | SUBSCRIBE/PSUBSCRIBE | `-ERR SUBSCRIBE not allowed inside MULTI` |
+| PUBSUB | MULTI | `-ERR only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING / QUIT allowed in this context` |
+| PUBSUB | GET/SET/etc. | `-ERR only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING / QUIT allowed in this context` |
+| BLOCKED | MULTI | `-ERR connection is blocked, command not allowed` |
+| BLOCKED | GET/SET/etc. | `-ERR connection is blocked, command not allowed` |
+
+**Commands Allowed per State:**
+
+| Command | NORMAL | TRANSACTION | PUBSUB | BLOCKED |
+|---------|--------|-------------|--------|---------|
+| **All data commands** | Execute | Queue | Error | Error |
+| **MULTI** | Enter TX | Error (nested) | Error | Error |
+| **EXEC** | Error (no MULTI) | Execute TX | Error | Error |
+| **DISCARD** | Error (no MULTI) | Abort TX | Error | Error |
+| **WATCH** | Set watches | Queue (no-op*) | Error | Error |
+| **UNWATCH** | Clear watches | Clear watches | Error | Error |
+| **SUBSCRIBE** | Enter pubsub | Error | Add sub | Error |
+| **UNSUBSCRIBE** | No-op | Error | Remove sub | Error |
+| **PSUBSCRIBE** | Enter pubsub | Error | Add pattern | Error |
+| **PUNSUBSCRIBE** | No-op | Error | Remove pattern | Error |
+| **PING** | Execute | Queue | Execute | Execute** |
+| **QUIT** | Disconnect | Discard+disconnect | Unsub+disconnect | Cancel+disconnect |
+| **CLIENT** | Execute | Queue | Error | Error |
+| **DEBUG** | Execute | Queue | Error | Error |
+
+*WATCH inside MULTI is queued but has no effect (watches must be set before MULTI).
+**PING during block returns immediately; does not cancel block.
+
+**State Detection:**
+
+```rust
+impl ConnectionState {
+    pub fn current_mode(&self) -> ConnectionMode {
+        if self.blocked.is_some() {
+            ConnectionMode::Blocked
+        } else if self.pubsub_mode {
+            ConnectionMode::PubSub
+        } else if self.tx_queue.is_some() {
+            ConnectionMode::Transaction
+        } else {
+            ConnectionMode::Normal
+        }
+    }
+
+    pub fn can_execute(&self, cmd: &ParsedCommand) -> Result<(), StateError> {
+        let mode = self.current_mode();
+        let cmd_name = cmd.name.to_ascii_uppercase();
+
+        match (mode, cmd_name.as_ref()) {
+            // Always allowed in any state
+            (_, b"QUIT") => Ok(()),
+
+            // PING allowed everywhere
+            (_, b"PING") => Ok(()),
+
+            // Normal mode - everything allowed
+            (ConnectionMode::Normal, _) => Ok(()),
+
+            // Transaction mode
+            (ConnectionMode::Transaction, b"MULTI") =>
+                Err(StateError::NestedMulti),
+            (ConnectionMode::Transaction, b"SUBSCRIBE" | b"PSUBSCRIBE" | b"SSUBSCRIBE") =>
+                Err(StateError::SubscribeInMulti),
+            (ConnectionMode::Transaction, _) => Ok(()), // Queue it
+
+            // Pub/Sub mode - very restricted
+            (ConnectionMode::PubSub, b"SUBSCRIBE" | b"UNSUBSCRIBE" |
+                b"PSUBSCRIBE" | b"PUNSUBSCRIBE" |
+                b"SSUBSCRIBE" | b"SUNSUBSCRIBE") => Ok(()),
+            (ConnectionMode::PubSub, _) =>
+                Err(StateError::NotAllowedInPubSub),
+
+            // Blocked mode - very restricted
+            (ConnectionMode::Blocked, _) =>
+                Err(StateError::ConnectionBlocked),
+        }
+    }
+}
+```
+
+**QUIT Behavior by State:**
+
+| State | QUIT Behavior |
+|-------|---------------|
+| NORMAL | Close connection immediately |
+| TRANSACTION | Discard queued commands, clear watches, close connection |
+| PUBSUB | Unsubscribe from all channels/patterns, close connection |
+| BLOCKED | Cancel blocking operation (return nil), clean up wait registration, close connection |
+
+**QUIT Implementation:**
+
+```rust
+async fn handle_quit(&mut self) -> Result<(), ConnectionError> {
+    // Clean up based on current state
+    match self.state.current_mode() {
+        ConnectionMode::Transaction => {
+            // Discard queued commands
+            self.state.tx_queue = None;
+            // Clear watches
+            self.state.watches.clear();
+        }
+        ConnectionMode::PubSub => {
+            // Unsubscribe from all channels
+            for channel in self.state.subscriptions.drain() {
+                self.shard_tx.send(ShardMessage::Unsubscribe {
+                    channel,
+                    conn_id: self.state.id,
+                }).await?;
+            }
+            // Unsubscribe from all patterns
+            for pattern in self.state.patterns.drain() {
+                self.shard_tx.send(ShardMessage::Punsubscribe {
+                    pattern,
+                    conn_id: self.state.id,
+                }).await?;
+            }
+            self.state.pubsub_mode = false;
+        }
+        ConnectionMode::Blocked => {
+            // Cancel blocking operation
+            if let Some(blocked) = self.state.blocked.take() {
+                // Send nil response to waiting task
+                let _ = blocked.response_tx.send(Response::Bulk(None));
+                // Unregister from wait queues
+                for key in blocked.keys {
+                    self.shard_tx.send(ShardMessage::UnregisterBlockedClient {
+                        key,
+                        conn_id: self.state.id,
+                    }).await?;
+                }
+            }
+        }
+        ConnectionMode::Normal => {
+            // Nothing special to clean up
+        }
+    }
+
+    // Send +OK before closing
+    self.send_response(Response::Simple(Bytes::from_static(b"OK"))).await?;
+
+    // Close connection
+    Ok(())
+}
+```
+
+**Timeout Behavior by State:**
+
+| State | Idle Timeout Behavior |
+|-------|----------------------|
+| NORMAL | Disconnect after `timeout` seconds of no commands |
+| TRANSACTION | Disconnect (queued commands discarded) |
+| PUBSUB | **Do not timeout** - waiting for messages is expected |
+| BLOCKED | **Do not timeout** - explicit timeout in blocking command |
+
+**Rationale for PubSub/Blocked No-Timeout:**
+- Pub/Sub clients may be idle for hours waiting for messages
+- Blocked clients have their own timeout (BLPOP with timeout argument)
+- Idle timeout would interrupt valid waiting states
+
+**Concurrent State Assertions:**
+
+These states are mutually exclusive:
+
+```rust
+// Invariant: only one mode at a time
+debug_assert!(
+    [
+        self.tx_queue.is_some(),
+        self.pubsub_mode,
+        self.blocked.is_some(),
+    ].iter().filter(|&&x| x).count() <= 1,
+    "Connection in multiple states simultaneously"
+);
+```
+
+**Metrics for State Transitions:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_connection_state_transitions_total` | Total state transitions (by `from`, `to` labels) |
+| `frogdb_connection_invalid_transitions_total` | Rejected state transitions |
+| `frogdb_connection_quit_by_state_total` | QUIT commands by connection state |
+
 ---
 
 ## Connection Assignment
