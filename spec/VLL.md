@@ -247,6 +247,74 @@ Send lock requests to Shard A, B, C
 3. **Fast failure is better**: Detecting timeout early allows client retry
 4. **Matches Redis behavior**: Redis MULTI/EXEC has similar timeout characteristics
 
+### Timeout Coordination
+
+To avoid race conditions between independent timeouts, shards report their status explicitly
+to the coordinator:
+
+```rust
+/// Shard reports lock acquisition result to coordinator
+enum ShardLockResult {
+    /// Locks acquired successfully
+    Acquired { elapsed_ms: u64 },
+    /// Timed out waiting for locks
+    Timeout { elapsed_ms: u64, waiting_for_txid: Option<u64> },
+    /// Rejected (queue full, key doesn't exist, etc.)
+    Rejected { reason: String },
+}
+
+/// Coordinator tracks shard status
+struct CoordinatorState {
+    shard_results: HashMap<ShardId, Option<ShardLockResult>>,
+    overall_deadline: Instant,
+    started_at: Instant,
+}
+
+impl CoordinatorState {
+    fn handle_shard_result(&mut self, shard: ShardId, result: ShardLockResult) {
+        match result {
+            ShardLockResult::Acquired { .. } => {
+                self.shard_results.insert(shard, Some(result));
+                // Check if all shards ready
+                if self.all_shards_ready() {
+                    self.signal_execute();
+                }
+            }
+            ShardLockResult::Timeout { .. } | ShardLockResult::Rejected { .. } => {
+                // Coordinator KNOWS shard failed (explicit notification)
+                // No need to wait for overall timeout - abort immediately
+                self.abort_all_shards();
+            }
+        }
+    }
+}
+```
+
+**Timeout Invariants:**
+
+```toml
+# ENFORCED AT CONFIG LOAD TIME:
+# per_shard < lock_acquisition < scatter_gather
+#
+# This ensures:
+# 1. Shard timeout fires BEFORE coordinator timeout
+# 2. Coordinator receives explicit failure notification
+# 3. No ambiguous "is it stuck or just slow?" window
+
+vll_per_shard_lock_timeout_ms = 2000      # Fires first
+vll_lock_acquisition_timeout_ms = 4000    # Coordinator-level
+scatter_gather_timeout_ms = 5000          # Overall operation
+```
+
+**Timeout Check Precision:**
+
+```toml
+# Reduce from 100ms default to 50ms for tighter timeout accuracy
+# Worst-case timeout overshoot: 50ms (acceptable)
+# CPU overhead: ~20 checks/second per shard (negligible)
+vll_timeout_check_interval_ms = 50
+```
+
 **Metrics:**
 
 | Metric | Description |
@@ -946,6 +1014,107 @@ fn recover_shard(shard: &mut Shard) {
 
     info!("Shard {} lock state cleared during recovery", shard.id);
 }
+```
+
+#### 4. Multi-Shard Transaction Recovery (Snapshot + WAL)
+
+When recovering from snapshot + WAL, multi-shard operations require special handling to detect
+and skip partial operations.
+
+**Invariant:** Snapshot represents a consistent point-in-time BEFORE any in-flight VLL operation
+completes.
+
+**WAL Entry Format for Multi-Shard Operations:**
+
+```rust
+struct WalEntry {
+    /// Global transaction ID (for grouping multi-shard ops)
+    txid: u64,
+    /// Total shards involved (0 = single-shard operation)
+    shard_count: u8,
+    /// This shard's index in the operation (0..shard_count)
+    shard_index: u8,
+    /// The actual operation
+    operation: Operation,
+    /// RocksDB sequence number
+    sequence: u64,
+}
+```
+
+**Recovery Algorithm:**
+
+```rust
+fn recover_from_wal(
+    snapshot_seq: u64,
+    wal_entries: impl Iterator<Item = WalEntry>,
+) {
+    // Track multi-shard operations by txid
+    let mut pending_multi_shard: HashMap<u64, MultiShardState> = HashMap::new();
+
+    for entry in wal_entries.filter(|e| e.sequence > snapshot_seq) {
+        if entry.shard_count == 0 {
+            // Single-shard operation: apply immediately
+            apply_entry(&entry);
+            continue;
+        }
+
+        // Multi-shard operation: collect all shards before applying
+        let state = pending_multi_shard
+            .entry(entry.txid)
+            .or_insert_with(|| MultiShardState::new(entry.shard_count));
+
+        state.add_entry(entry);
+
+        if state.is_complete() {
+            // All shards present: apply atomically
+            for entry in state.entries() {
+                apply_entry(entry);
+            }
+            pending_multi_shard.remove(&entry.txid);
+        }
+    }
+
+    // Any remaining entries in pending_multi_shard are partial operations
+    for (txid, state) in pending_multi_shard {
+        warn!(
+            "Skipping partial multi-shard operation txid={}: {}/{} shards present",
+            txid, state.present_count(), state.expected_count()
+        );
+        metrics.partial_ops_skipped.inc();
+    }
+}
+```
+
+**Recovery Semantics:**
+
+| Scenario | WAL State | Recovery Action |
+|----------|-----------|-----------------|
+| Single-shard op | Complete entry | Apply |
+| Multi-shard op, all shards | All `shard_count` entries with same `txid` | Apply all |
+| Multi-shard op, partial | Missing some shards | **Skip all** (rollback by omission) |
+| Multi-shard op, crash mid-write | Some shards wrote, some didn't | Skip all (partial writes not durable) |
+
+**Example: MSET k1 v1 k2 v2 (k1 on Shard A, k2 on Shard B)**
+
+```
+Normal completion:
+  WAL entries: [
+    {txid=42, shard_count=2, shard_index=0, op=SET k1 v1},
+    {txid=42, shard_count=2, shard_index=1, op=SET k2 v2},
+  ]
+  Recovery: Both entries present → apply both
+
+Crash after Shard A writes but before Shard B:
+  WAL entries: [
+    {txid=42, shard_count=2, shard_index=0, op=SET k1 v1},
+    // shard_index=1 missing
+  ]
+  Recovery: Only 1/2 shards present → skip txid=42 entirely
+```
+
+**Important:** This provides **rollback-by-omission** for multi-shard operations. If a crash
+occurs mid-operation, the incomplete operation is skipped during recovery, ensuring consistency
+across shards.
 ```
 
 **Cleanup Timing:**

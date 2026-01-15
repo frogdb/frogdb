@@ -456,6 +456,90 @@ Replica: PSYNC ? -1
 Primary: +FULLRESYNC abc123... 80000
 ```
 
+### PSYNC Offset Semantics
+
+**Definition:**
+```
+PSYNC <replication_id> <offset>
+
+offset = RocksDB sequence number of LAST APPLIED write
+  - Primary: GetLatestSequenceNumber() after each write
+  - Replica: Stored atomically with each applied WAL entry
+```
+
+**Offset Monotonicity:**
+```
+Each WriteBatch increments sequence by 1 (not by batch size).
+
+Example:
+  MSET k1 v1 k2 v2 → single WriteBatch → sequence += 1
+  SET k1 v1; SET k2 v2 → two WriteBatches → sequence += 2
+  MULTI; SET k1 v1; SET k2 v2; EXEC → single WriteBatch → sequence += 1
+```
+
+**RocksDB GetUpdatesSince() Guarantees:**
+```rust
+/// FrogDB relies on these guarantees from RocksDB:
+///
+/// 1. Returns all WriteBatches with sequence >= requested
+/// 2. Entries are returned in sequence order
+/// 3. No entries are skipped (unless WAL file deleted)
+///
+/// Caveat: WAL files may be deleted after compaction
+fn get_wal_entries(from_seq: u64) -> Result<WalIterator> {
+    match rocksdb.get_updates_since(from_seq) {
+        Ok(iter) => Ok(iter),
+        Err(e) if e.is_wal_deleted() => {
+            // WAL file was compacted away
+            // Replica must do FULLRESYNC
+            Err(ReplicationError::SequenceTooOld)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+```
+
+**WAL Retention Configuration:**
+```toml
+[rocksdb]
+# Minimum time to keep WAL files (allows replica reconnect)
+# Larger values enable longer disconnection recovery
+min_wal_retention_secs = 3600  # 1 hour default
+
+# Minimum number of WAL files to keep
+min_wal_files_to_keep = 10
+```
+
+**Sequence Number Persistence on Crash:**
+```rust
+/// Replica stores last_applied_sequence in RocksDB metadata column family
+/// This survives crash and enables correct PSYNC on recovery
+fn persist_replication_state(state: &ReplicationState) {
+    let cf = rocksdb.cf_handle("__frogdb_meta__");
+    rocksdb.put_cf(cf, b"last_applied_seq", state.last_applied_seq.to_le_bytes());
+    rocksdb.put_cf(cf, b"repl_id", state.repl_id.as_bytes());
+}
+
+fn load_replication_state() -> Option<ReplicationState> {
+    let cf = rocksdb.cf_handle("__frogdb_meta__")?;
+    let seq = rocksdb.get_cf(cf, b"last_applied_seq")?;
+    let id = rocksdb.get_cf(cf, b"repl_id")?;
+
+    Some(ReplicationState {
+        last_applied_seq: u64::from_le_bytes(seq.try_into().ok()?),
+        repl_id: String::from_utf8(id).ok()?,
+    })
+}
+```
+
+**On Recovery:**
+```
+1. Replica restarts after crash
+2. Load last_applied_seq from RocksDB metadata
+3. Send PSYNC <repl_id> <last_applied_seq>
+4. Primary resumes streaming from that point (if in WAL retention)
+```
+
 ---
 
 ## WAL Streaming

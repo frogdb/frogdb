@@ -314,6 +314,86 @@ impl Value {
 }
 ```
 
+### Total Memory (Including COW Buffers)
+
+FrogDB uses forkless snapshots with explicit Copy-on-Write (COW) buffering. Unlike Redis's
+fork-based approach, COW buffer memory is **explicitly tracked and included in maxmemory
+enforcement**.
+
+```rust
+/// Memory report including transient buffers
+pub struct MemoryReport {
+    /// Keys + values in the store
+    pub store_bytes: usize,
+    /// Snapshot COW buffer (old values pending serialization)
+    pub cow_buffer_bytes: usize,
+    /// Total: store + COW
+    pub total_bytes: usize,
+}
+
+impl Store {
+    /// Total memory usage including transient buffers
+    fn total_memory_used(&self) -> MemoryReport {
+        let store_bytes = self.memory_used();
+        let cow_buffer_bytes = self.snapshot_cow_buffer_bytes();
+        MemoryReport {
+            store_bytes,
+            cow_buffer_bytes,
+            total_bytes: store_bytes + cow_buffer_bytes,
+        }
+    }
+}
+```
+
+**maxmemory Enforcement:**
+
+```rust
+/// maxmemory check uses total_bytes (includes COW)
+fn check_maxmemory(&self) -> bool {
+    self.total_memory_used().total_bytes <= self.config.maxmemory
+}
+```
+
+**Eviction Behavior During Snapshot:**
+
+| Condition | Behavior |
+|-----------|----------|
+| Memory pressure during snapshot | Eviction proceeds normally |
+| Key has pending COW entry | **Skip** - already captured for snapshot |
+| No evictable keys remain | Abort snapshot (`cow_memory_abort_threshold`) |
+
+```rust
+fn select_eviction_candidate(&self) -> Option<Bytes> {
+    // During snapshot, skip keys with pending COW entries
+    let candidates = self.eviction_pool.iter()
+        .filter(|key| !self.cow_buffer.contains_key(key));
+
+    self.eviction_policy.select(candidates)
+}
+```
+
+**INFO Memory Additions:**
+
+```
+# Memory (extended for COW tracking)
+used_memory: 104857600          # Total (store + COW)
+used_memory_store: 100000000    # Keys + values only
+used_memory_cow: 4857600        # Current COW buffer size
+used_memory_cow_peak: 8000000   # Peak COW during current snapshot
+snapshot_eviction_skipped: 150  # Keys skipped due to COW
+```
+
+**Differs from Redis:**
+
+| Aspect | Redis | FrogDB |
+|--------|-------|--------|
+| Snapshot method | Fork-based COW | Forkless epoch-based COW |
+| COW memory tracking | OS-level (not explicit) | Explicit in `total_memory_used()` |
+| maxmemory includes COW | No (operators provision headroom) | Yes (prevents OOM) |
+| Memory predictability | Can spike to 2x | Bounded by `cow_buffer_max_bytes` |
+
+See [PERSISTENCE.md](PERSISTENCE.md#forkless-snapshots) for snapshot implementation details.
+
 ---
 
 ## Expiry Index
@@ -424,33 +504,90 @@ fn hash_slot(key: &[u8]) -> u16 {
     crc16(hash_key) % 16384
 }
 
-/// Extract hash tag content from key
+/// Extract hash tag content from key (Redis Cluster compatible)
+///
 /// Rules:
-/// - First occurrence of `{...}` with non-empty content is used
-/// - If no valid hash tag, entire key is hashed
+/// - First `{` that has a matching `}` with at least one character between
+/// - Nested braces: outer wins (first valid match)
+/// - Empty braces `{}` are ignored (hash entire key)
+/// - Operates on raw bytes (not UTF-8 characters)
 fn extract_hash_tag(key: &[u8]) -> Option<&[u8]> {
-    let start = key.iter().position(|&b| b == b'{')?;
-    let end = key[start + 1..].iter().position(|&b| b == b'}')?;
-
-    if end == 0 {
-        // Empty braces `{}` - hash entire key
-        return None;
+    let mut i = 0;
+    while i < key.len() {
+        if key[i] == b'{' {
+            // Found opening brace, look for closing
+            let start = i + 1;
+            let mut j = start;
+            while j < key.len() && key[j] != b'}' {
+                j += 1;
+            }
+            if j < key.len() && j > start {
+                // Valid hash tag found (non-empty content)
+                return Some(&key[start..j]);
+            }
+            // Empty braces or no closing - continue searching
+        }
+        i += 1;
     }
-
-    Some(&key[start + 1..start + 1 + end])
+    None  // No valid hash tag
 }
 ```
 
 ### Hash Tag Examples
 
-| Key | Hash Tag | Slot Based On |
-|-----|----------|---------------|
-| `user:1234` | None | `user:1234` |
-| `{user}:profile:1234` | `user` | `user` |
-| `{user}:session:1234` | `user` | `user` (same slot as above) |
-| `foo{bar}{zap}` | `bar` | `bar` (first valid match) |
-| `foo{}bar` | None | `foo{}bar` (empty braces ignored) |
-| `{}{user}:data` | None | `{}{user}:data` (empty first braces) |
+| Key | Hash Tag | Slot Based On | Notes |
+|-----|----------|---------------|-------|
+| `user:1234` | None | `user:1234` | No braces |
+| `{user}:profile:1234` | `user` | `user` | Standard usage |
+| `{user}:session:1234` | `user` | `user` | Same slot as above |
+| `foo{bar}{zap}` | `bar` | `bar` | First valid match wins |
+| `foo{}bar` | None | `foo{}bar` | Empty braces ignored |
+| `{}{user}:data` | `user` | `user` | Empty first braces skipped |
+| `foo{{bar}}` | `{bar` | `{bar` | Outer `{` matches first `}` |
+| `foo{bar` | None | `foo{bar` | No closing brace |
+| `{}` | None | `{}` | Empty |
+| `foo{}` | None | `foo{}` | Empty braces at end |
+
+### Hash Tag Edge Cases
+
+**Nested Braces:**
+```
+Key: "foo{{bar}}"
+     ^  ^   ^
+     |  |   └── First `}` found
+     |  └────── Inner `{` (part of content)
+     └───────── Outer `{` (start of tag)
+
+Result: hash_tag = "{bar" (content between outer `{` and first `}`)
+```
+
+**Multiple Brace Blocks:**
+```
+Key: "{}{valid}:data"
+     ^^
+     └── Empty, skipped
+
+Result: hash_tag = "valid" (first non-empty match)
+```
+
+**UTF-8 Handling:**
+```
+Hash tags operate on raw bytes, not UTF-8 characters.
+This matches Redis behavior and avoids validation overhead.
+
+Key: "{日本語}:data"
+Result: hash_tag = bytes of "日本語" (valid)
+
+Key with invalid UTF-8 in hash tag:
+- Still valid for hashing purposes
+- Key can be stored and retrieved
+- Display may be garbled (client responsibility)
+```
+
+**Performance Note:**
+- Keys with many `{` characters: O(n) scan
+- Worst case with many unclosed braces: O(n²)
+- Mitigation: Real-world keys rarely have multiple `{` characters
 
 ### CROSSSLOT Validation
 

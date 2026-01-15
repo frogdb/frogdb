@@ -394,10 +394,173 @@ See [REPLICATION.md - Synchronous Replication](REPLICATION.md#synchronous-replic
 
 ### Partial Failure
 
-- If any command in transaction fails validation, entire EXEC fails
-- RocksDB WriteBatch ensures atomicity at storage level
+**Single-Shard Transactions:**
 
-See [CONSISTENCY.md](CONSISTENCY.md) for detailed consistency semantics.
+- If any command fails validation (syntax error, wrong type), entire EXEC fails before execution
+- RocksDB WriteBatch ensures atomicity at storage level
+- If a runtime error occurs (e.g., INCR on string), that command returns error but others execute
+
+**Cross-Shard Transactions (Multi-Shard MULTI/EXEC):**
+
+FrogDB does NOT implement rollback for cross-shard transactions. This matches Redis/DragonflyDB design philosophy that "the utility of rollbacks would not outweigh the costs in terms of performance and additional complexity."
+
+**Failure Scenarios:**
+
+| Failure Point | Outcome | Client Receives |
+|---------------|---------|-----------------|
+| Lock acquisition timeout | No writes occur | `-ERR TIMEOUT lock_acquisition` |
+| Lock rejection (conflict) | No writes occur | `-ERR REJECTED lock_conflict` |
+| Shard A succeeds, Shard B fails mid-execution | Shard A's writes persist | Detailed error (see below) |
+| Network partition during execution | Partial writes may persist | `-ERR TIMEOUT` with unknown state |
+| Coordinator crash during execution | Orphan detection triggers cleanup | Client times out, must verify state |
+
+**Lock Acquisition vs Execution Phase:**
+
+```
+Phase 1 - Lock Acquisition (via VLL):
+  - All shards must acquire locks before execution begins
+  - If ANY shard fails to acquire lock → abort, no writes occur
+  - Safe: No partial state possible in this phase
+
+Phase 2 - Execution:
+  - All locks held, commands execute on each shard
+  - If shard fails during execution → partial state persists
+  - No rollback: Successful shard writes are NOT undone
+```
+
+**Client-Visible Error Format:**
+
+For partial failures, FrogDB returns a detailed error that differs from Redis (provides more information for client recovery):
+
+```
+-ERR PARTIAL_FAILURE keys_written:[k1,k2] keys_failed:[k3] reason:<reason>
+
+Components:
+  PARTIAL_FAILURE    - Error type identifier
+  keys_written       - Keys that were successfully written
+  keys_failed        - Keys that failed to write
+  reason             - Human-readable reason
+```
+
+**Example Responses:**
+
+```
+# Complete success
++OK
+
+# Complete failure (lock acquisition)
+-ERR REJECTED lock_conflict txid:12345
+
+# Partial failure (execution phase)
+-ERR PARTIAL_FAILURE keys_written:[user:1:name,user:1:email] keys_failed:[user:1:settings] reason:shard_timeout
+
+# Timeout with unknown state
+-ERR TIMEOUT keys_written:[k1] keys_unknown:[k2,k3] reason:scatter_gather_timeout
+```
+
+**Implementation:**
+
+```rust
+#[derive(Debug)]
+enum TransactionResult {
+    /// All commands executed successfully
+    Success(Vec<Response>),
+
+    /// Lock acquisition failed - no writes occurred
+    LockFailure { reason: String },
+
+    /// Partial execution failure - some writes persisted
+    PartialFailure {
+        keys_written: Vec<Bytes>,
+        keys_failed: Vec<Bytes>,
+        reason: String,
+    },
+
+    /// Timeout with unknown state
+    Timeout {
+        keys_written: Vec<Bytes>,
+        keys_unknown: Vec<Bytes>,
+        reason: String,
+    },
+}
+
+impl TransactionResult {
+    fn to_resp(&self) -> Response {
+        match self {
+            TransactionResult::Success(responses) => {
+                Response::Array(responses.clone())
+            }
+            TransactionResult::LockFailure { reason } => {
+                Response::Error(format!("ERR REJECTED {}", reason))
+            }
+            TransactionResult::PartialFailure { keys_written, keys_failed, reason } => {
+                Response::Error(format!(
+                    "ERR PARTIAL_FAILURE keys_written:[{}] keys_failed:[{}] reason:{}",
+                    format_keys(keys_written),
+                    format_keys(keys_failed),
+                    reason
+                ))
+            }
+            TransactionResult::Timeout { keys_written, keys_unknown, reason } => {
+                Response::Error(format!(
+                    "ERR TIMEOUT keys_written:[{}] keys_unknown:[{}] reason:{}",
+                    format_keys(keys_written),
+                    format_keys(keys_unknown),
+                    reason
+                ))
+            }
+        }
+    }
+}
+```
+
+**Client Handling Recommendations:**
+
+```python
+def execute_cross_shard_transaction(client, commands):
+    try:
+        result = client.execute_multi(commands)
+        return {"status": "success", "data": result}
+    except RedisError as e:
+        error = str(e)
+
+        if "PARTIAL_FAILURE" in error:
+            # Parse keys_written and keys_failed
+            written = parse_key_list(error, "keys_written")
+            failed = parse_key_list(error, "keys_failed")
+
+            # Option 1: Accept partial success
+            return {"status": "partial", "written": written, "failed": failed}
+
+            # Option 2: Compensate for partial writes
+            # client.delete(*written)  # Rollback successful writes
+            # retry_transaction()
+
+        elif "TIMEOUT" in error and "keys_unknown" in error:
+            # Unknown state - must verify
+            unknown = parse_key_list(error, "keys_unknown")
+            for key in unknown:
+                actual = client.get(key)
+                # Compare with expected value, decide next action
+
+        elif "REJECTED" in error:
+            # Lock conflict - safe to retry
+            time.sleep(backoff)
+            return execute_cross_shard_transaction(client, commands)
+
+        raise  # Unknown error
+```
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_tx_partial_failure_total` | Transactions with partial execution failure |
+| `frogdb_tx_lock_rejection_total` | Transactions rejected during lock acquisition |
+| `frogdb_tx_timeout_total` | Transactions that timed out |
+| `frogdb_tx_timeout_unknown_keys` | Keys in unknown state after timeout |
+
+See [CONSISTENCY.md](CONSISTENCY.md) for detailed consistency semantics and [VLL.md](VLL.md) for lock coordination details.
 
 ---
 

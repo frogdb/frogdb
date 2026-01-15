@@ -70,6 +70,111 @@ Each column family (shard) stores keys with this format:
 | Set | 2 | `[len:u32][member1_len:u32][member1]...` |
 | Hash | 3 | `[len:u32][k1_len:u32][k1][v1_len:u32][v1]...` |
 | SortedSet | 4 | `[len:u32][score:f64][member_len:u32][member]...` |
+| Stream | 5 | See [Stream Serialization](#stream-serialization) |
+| HyperLogLog | 6 | See [HyperLogLog Serialization](#hyperloglog-serialization) |
+| JSON | 7 | UTF-8 encoded JSON string (via `serde_json`) |
+| Bloom | 8 | `[num_bits:u64][num_hashes:u8][bits...]` |
+| TimeSeries | 9 | `[len:u32][timestamp:i64][value:f64]...` |
+| Geo | 10 | Stored as SortedSet with geohash scores |
+
+### Stream Serialization
+
+Streams are serialized with full entry and consumer group state:
+
+```
+Stream Binary Format:
+┌─────────────────────────────────────────────────────────────┐
+│ Header                                                       │
+├─────────────────────────────────────────────────────────────┤
+│ num_entries: u64        │ Total entry count                  │
+│ last_id_ms: u64         │ Last entry ID (milliseconds)       │
+│ last_id_seq: u64        │ Last entry ID (sequence)           │
+│ first_id_ms: u64        │ First entry ID (milliseconds)      │
+│ first_id_seq: u64       │ First entry ID (sequence)          │
+├─────────────────────────────────────────────────────────────┤
+│ Entries                                                      │
+├─────────────────────────────────────────────────────────────┤
+│ For each entry:                                              │
+│   id_ms: u64            │ Entry ID (milliseconds)            │
+│   id_seq: u64           │ Entry ID (sequence)                │
+│   num_fields: u32       │ Number of field-value pairs        │
+│   For each field:                                            │
+│     key_len: u32        │ Field name length                  │
+│     key_bytes: [u8]     │ Field name                         │
+│     value_len: u32      │ Field value length                 │
+│     value_bytes: [u8]   │ Field value                        │
+├─────────────────────────────────────────────────────────────┤
+│ Consumer Groups                                              │
+├─────────────────────────────────────────────────────────────┤
+│ num_groups: u32         │ Number of consumer groups          │
+│ For each group:                                              │
+│   name_len: u32         │ Group name length                  │
+│   name_bytes: [u8]      │ Group name                         │
+│   last_delivered_ms: u64│ Last delivered ID (ms)             │
+│   last_delivered_seq: u64│ Last delivered ID (seq)           │
+│   entries_read: u64     │ Total entries read by group        │
+│   pel_count: u32        │ Pending entries list count         │
+│   For each PEL entry:                                        │
+│     id_ms: u64          │ Entry ID (milliseconds)            │
+│     id_seq: u64         │ Entry ID (sequence)                │
+│     delivery_time: u64  │ Unix ms when delivered             │
+│     delivery_count: u32 │ Number of deliveries               │
+│   num_consumers: u32    │ Number of consumers                │
+│   For each consumer:                                         │
+│     name_len: u32       │ Consumer name length               │
+│     name_bytes: [u8]    │ Consumer name                      │
+│     seen_time: u64      │ Last seen timestamp                │
+│     pel_count: u32      │ Consumer's pending count           │
+│     pel_ids: [u128]     │ Consumer's pending entry IDs       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Byte Order:** All multi-byte integers are stored in **little-endian** format for consistency.
+
+### HyperLogLog Serialization
+
+HyperLogLog uses a sparse/dense encoding scheme:
+
+```
+HyperLogLog Binary Format:
+┌─────────────────────────────────────────────────────────────┐
+│ encoding: u8            │ 0 = sparse, 1 = dense              │
+├─────────────────────────────────────────────────────────────┤
+│ If encoding == 0 (Sparse):                                   │
+│   num_registers: u32    │ Number of non-zero registers       │
+│   For each register:                                         │
+│     index: u16          │ Register index (0-16383)           │
+│     value: u8           │ Register value                     │
+├─────────────────────────────────────────────────────────────┤
+│ If encoding == 1 (Dense):                                    │
+│   registers: [u8; 12288]│ 16384 × 6-bit packed registers     │
+│                         │ (2 registers per 3 bytes)          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Sparse vs Dense:**
+- Sparse encoding is used when < ~3000 registers are set (saves space)
+- Dense encoding is used when register count exceeds threshold
+- Promotion from sparse to dense happens automatically on PFADD
+
+**Dense Packing:**
+```rust
+// 6-bit registers packed into bytes
+// Register i occupies bits at: (i * 6) / 8, offset (i * 6) % 8
+fn get_register(data: &[u8], index: u16) -> u8 {
+    let bit_offset = (index as usize) * 6;
+    let byte_index = bit_offset / 8;
+    let bit_index = bit_offset % 8;
+
+    // Extract 6 bits, handling byte boundary
+    let val = if bit_index <= 2 {
+        (data[byte_index] >> bit_index) & 0x3F
+    } else {
+        ((data[byte_index] >> bit_index) | (data[byte_index + 1] << (8 - bit_index))) & 0x3F
+    };
+    val
+}
+```
 
 **Expiry Index:**
 - NOT persisted separately
