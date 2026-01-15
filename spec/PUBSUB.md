@@ -409,6 +409,144 @@ User ACL: +@pubsub ~{orders}:*  # Can only subscribe to {orders}:* channels
 
 **Recommendation:** Use orchestrator or config management to ensure ACL consistency across cluster nodes before migrations.
 
+### Node Failover Behavior
+
+When a node fails, pub/sub subscriptions on that node are lost. This section specifies exact behavior and message loss bounds.
+
+**Message Loss Window:**
+
+```
+Maximum message loss window = failover_detection_time + topology_propagation_time
+
+Where:
+  failover_detection_time = health_check_interval × health_check_failures
+                          = 5s × 3 = 15s (default)
+  topology_propagation_time = cluster_bus_broadcast_latency
+                            ≈ 50-100ms
+
+Total: ~15 seconds worst case (default configuration)
+```
+
+**Failover Timeline for Sharded Pub/Sub:**
+
+```
+T=0s:     Primary node (owns slot S) fails
+          - SPUBLISH to slot S: buffered or lost (node unreachable)
+          - SSUBSCRIBE to slot S: rejected with -CLUSTERDOWN
+
+T=0-15s:  Failure detection period
+          - Health checks fail repeatedly
+          - No automatic failover yet
+          - Messages to slot S are lost
+
+T=15s:    Orchestrator detects failure
+          - Selects replica for promotion
+          - Sends ROLE PRIMARY to replica
+
+T=15.1s:  Replica promotes to primary
+          - Inherits slot ownership
+          - Ready to accept SPUBLISH/SSUBSCRIBE
+
+T=15.2s:  Topology broadcast begins
+          - TOPOLOGY_UPDATE sent to all nodes
+          - Clients may still route to failed node
+
+T=15.3s:  Nodes update routing tables
+          - New routes take effect
+          - -MOVED errors stop
+          - Normal operation resumes
+
+T=15.3s+: Messages deliverable again
+          - New subscriptions on promoted node
+          - Old subscriptions on failed node = LOST
+```
+
+**Subscription State After Failover:**
+
+| Subscription Type | On Failed Node | On Promoted Replica | Client Action Required |
+|-------------------|----------------|---------------------|----------------------|
+| SUBSCRIBE (global) | Lost | Not transferred | Resubscribe |
+| SSUBSCRIBE (sharded, owns slot) | Lost | Not transferred | Resubscribe |
+| SSUBSCRIBE (sharded, remote slot) | Unaffected | N/A | None |
+
+**Key Insight:** Pub/sub subscriptions are **connection-bound**, not replicated. Replica promotion does NOT transfer subscription state from failed primary.
+
+**Client Behavior During Failover:**
+
+```
+Client connected to failed node:
+  1. Connection drops (TCP reset or timeout)
+  2. Client receives connection error
+  3. Client should reconnect to any cluster node
+  4. Client should resubscribe to all channels
+
+Client connected to surviving node, subscribed to slot on failed node:
+  1. Messages to that channel: lost during failover window
+  2. After failover: messages to new owner deliverable
+  3. Client subscription still valid (sharded sub routed to new owner)
+```
+
+**Broadcast vs Sharded Failover Impact:**
+
+| Mode | Impact of Single Node Failure |
+|------|-------------------------------|
+| Global (PUBLISH) | Subscribers on failed node miss messages; others unaffected |
+| Sharded (SPUBLISH) | All subscribers to channels owned by failed node miss messages |
+
+**Message Loss Mitigation:**
+
+Pub/sub provides **at-most-once delivery** by design. For applications requiring stronger guarantees:
+
+| Requirement | Solution |
+|-------------|----------|
+| At-least-once delivery | Use Redis Streams (XADD/XREAD) |
+| Exactly-once delivery | Use Streams + idempotent consumers |
+| Message durability | Use Streams with persistence |
+| Delivery confirmation | Use Streams with consumer groups |
+
+**Configuration for Faster Failover:**
+
+```toml
+[cluster]
+# Reduce detection time (trade-off: more false positives)
+health_check_interval_ms = 2000    # Default: 5000
+health_check_failures = 2          # Default: 3
+
+# Faster detection = smaller message loss window
+# 2s × 2 = 4s worst case (vs 15s default)
+```
+
+**Metrics for Failover Monitoring:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_pubsub_failover_message_loss_window_ms` | Estimated message loss duration |
+| `frogdb_pubsub_subscriptions_lost_total` | Subscriptions lost due to node failure |
+| `frogdb_pubsub_resubscribe_after_failover_total` | Clients that resubscribed after failover |
+
+**Client Library Recommendations:**
+
+```python
+class PubSubClient:
+    def __init__(self, cluster):
+        self.cluster = cluster
+        self.subscriptions = set()  # Track subscriptions locally
+
+    def subscribe(self, channel):
+        self.cluster.subscribe(channel)
+        self.subscriptions.add(channel)
+
+    def on_disconnect(self):
+        # Reconnect and resubscribe
+        self.cluster.reconnect()
+        for channel in self.subscriptions:
+            self.cluster.subscribe(channel)
+
+    def on_moved(self, channel, new_node):
+        # For sharded pub/sub: resubscribe to new owner
+        self.cluster.ssubscribe(channel)
+```
+
 ### Scalability Considerations
 
 | Aspect | Global Pub/Sub | Sharded Pub/Sub |

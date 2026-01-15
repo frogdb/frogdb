@@ -1015,6 +1015,178 @@ Orchestrator              Source (A)              Target (B)
      │                        │                       │ Slot 1234 owned
 ```
 
+### Slot Migration Algorithm
+
+This section specifies the detailed algorithm for migrating keys during slot rebalancing.
+
+#### Phase 1: Snapshot
+
+When migration starts, the source creates a **point-in-time key iterator** for the slot:
+
+```rust
+fn start_migration(slot: u16) -> MigrationState {
+    // Create point-in-time snapshot of keys in this slot
+    // Iterator sees keys as they existed at migration START
+    let key_iterator = store.snapshot_keys_in_slot(slot);
+
+    // Mark slot as MIGRATING
+    slot_states.insert(slot, SlotState::Migrating {
+        iterator: key_iterator,
+        migration_acked: HashSet::new(),  // Keys ACK'd by target
+        pending_writes: VecDeque::new(),  // Writes during migration
+    });
+
+    MigrationState::new(key_iterator)
+}
+```
+
+**Key principle:** The iterator captures a consistent snapshot at migration start. New writes during
+migration do NOT appear in the iterator (they're handled separately via `pending_writes`).
+
+#### Phase 2: Streaming
+
+Keys are streamed to the target in batches:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Concurrent Write Handling                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  Write arrives for key K during migration:                               │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ Is K in iterator (existed at migration start)?                   │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│          │                                    │                          │
+│          ▼ YES                                ▼ NO                       │
+│  ┌─────────────────────┐            ┌─────────────────────┐             │
+│  │ Has K been sent to  │            │ Apply locally       │             │
+│  │ target yet?         │            │ Queue for migration │             │
+│  └─────────────────────┘            │ (pending_writes)    │             │
+│      │           │                  └─────────────────────┘             │
+│      ▼ YES       ▼ NO                                                   │
+│  Forward to   Apply locally                                             │
+│  target via   (COW: old value                                           │
+│  ASKING       already captured)                                         │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Deletion During Migration:**
+
+Keys are NOT deleted from source until:
+1. Target ACKs the batch containing the key
+2. Migration is finalized (DFLYMIGRATE FINALIZE received)
+3. Topology update confirms target ownership
+
+```rust
+fn handle_batch_ack(batch_seq: u64, keys: &[Bytes]) {
+    // Mark keys as ACK'd (safe to delete after finalization)
+    for key in keys {
+        migration_state.migration_acked.insert(key.clone());
+    }
+    // DO NOT delete yet - wait for finalization
+}
+
+fn handle_finalization() {
+    // Now safe to delete
+    // Schedule async deletion (low priority, doesn't block migration)
+    task::spawn_low_priority(async move {
+        for key in migration_state.migration_acked.iter() {
+            store.delete(key);
+        }
+    });
+
+    // Keep tombstones for 60s to handle straggler redirects
+    slot_states.insert(slot, SlotState::Tombstone {
+        expires_at: Instant::now() + Duration::from_secs(60),
+    });
+}
+```
+
+#### Orphaned Key Detection
+
+If migration fails or is aborted, orphaned keys may exist on both source and target:
+
+```rust
+fn cleanup_failed_migration(migration_id: Uuid, slot: u16) {
+    // On SOURCE:
+    // - Keys still exist (never deleted)
+    // - Clear MIGRATING state
+    // - Migration never happened from source's perspective
+
+    // On TARGET:
+    // - Keys received during migration must be cleaned up
+    // - Scan slot for keys with migration_id marker
+    // - Delete keys that were only partially migrated
+
+    let orphaned_keys = target.scan_slot(slot)
+        .filter(|k| k.migration_source_id == Some(migration_id));
+
+    for key in orphaned_keys {
+        target.delete(&key);
+        metrics.orphaned_keys_cleaned.inc();
+    }
+}
+```
+
+**Orphan Detection Heuristics:**
+
+| Scenario | Detection | Cleanup |
+|----------|-----------|---------|
+| Target received keys, no FINALIZE | migration_id mismatch with current slot owner | Delete on target |
+| Source sent keys, target unreachable | Migration timeout | Keys remain on source (safe) |
+| Both nodes crash mid-migration | Orchestrator detects incomplete migration | Orchestrator issues explicit cleanup |
+
+#### Oversized Key Handling
+
+If a single key exceeds `batch_size_bytes`:
+
+```rust
+fn create_batch(keys: &mut KeyIterator, config: &MigrationConfig) -> Batch {
+    let mut batch = Batch::new();
+
+    while let Some(key) = keys.peek() {
+        let dump = serialize_key(key);
+
+        // Special case: single key exceeds batch size
+        if batch.is_empty() && dump.len() > config.batch_size_bytes {
+            // Send as single-key batch with LARGE_KEY flag
+            batch.add_large_key(keys.next().unwrap(), dump);
+            batch.flags |= BatchFlags::LARGE_KEY;
+            return batch;  // Return immediately, don't add more keys
+        }
+
+        // Normal batching logic
+        if batch.num_keys >= config.batch_size_keys
+           || batch.size_bytes + dump.len() > config.batch_size_bytes {
+            break;
+        }
+
+        batch.add(keys.next().unwrap(), dump);
+    }
+
+    batch
+}
+```
+
+**Target Handling for Large Keys:**
+
+| Key Size | Target Behavior |
+|----------|-----------------|
+| ≤ batch_size_bytes | Normal batch processing |
+| > batch_size_bytes, ≤ max_key_size | Accept with LARGE_KEY flag |
+| > max_key_size | Reject with `-OOM key too large` |
+
+**Configuration:**
+
+```toml
+[cluster.migration]
+batch_size_bytes = 1048576     # 1MB default batch size
+max_key_size = 536870912       # 512MB maximum single key
+large_key_timeout_ms = 300000  # 5 min timeout for large keys
+```
+
 ### Migration Protocol Details
 
 This section specifies the slot migration protocol at a conceptual level.
@@ -1602,8 +1774,63 @@ Detailed state transitions when a replica is promoted to primary:
 | 4 | Generate new ReplicationId | < 1ms | N/A |
 | 5 | Store old primary's ID as secondary_id | < 1ms | N/A |
 | 6 | Update role to PRIMARY | < 1ms | N/A |
-| 7 | Accept write commands | Immediate | N/A |
-| 8 | Listen for replica PSYNC | Immediate | N/A |
+| 7 | Send ROLE_CHANGED ack to orchestrator | < 1ms | N/A |
+| 8 | Accept write commands | After topology update | N/A |
+| 9 | Listen for replica PSYNC | Immediate | N/A |
+
+### Failover Timing Invariants
+
+**Critical Invariant:** Topology update arrives AFTER ROLE_CHANGED acknowledgment.
+
+```
+Failover sequence (timestamped):
+
+T+0ms:   Orchestrator detects primary failure (health check timeout)
+T+10ms:  Orchestrator selects replica with lowest lag
+T+20ms:  Orchestrator sends ROLE PRIMARY to selected replica
+T+30ms:  Replica:
+           1. Stops accepting replication stream
+           2. Flushes in-memory WAL buffer to RocksDB
+           3. Waits for WAL sync to disk
+           4. Stores old primary's ID as secondary_id
+           5. Transitions to PRIMARY role
+           6. Sends ROLE_CHANGED ack to orchestrator
+T+50ms:  Orchestrator receives ROLE_CHANGED ack
+T+55ms:  Orchestrator updates cluster topology:
+           - Marks old primary as FAILED
+           - Assigns slots to new primary
+           - Broadcasts TOPOLOGY_UPDATE to all nodes
+T+60ms:  All nodes apply topology update
+T+65ms:  New primary begins accepting writes
+
+INVARIANT: Topology update (T+55ms) occurs AFTER ROLE_CHANGED (T+50ms)
+  - Prevents race where writes arrive before replica is ready
+  - If topology arrives early (network reorder), node queues until ROLE completes
+```
+
+**Handling Network Reordering:**
+
+```rust
+fn handle_topology_update(&mut self, update: TopologyUpdate) {
+    if self.promotion_in_progress {
+        // Queue topology update until promotion completes
+        self.pending_topology = Some(update);
+        return;
+    }
+
+    self.apply_topology(update);
+}
+
+fn complete_promotion(&mut self) {
+    self.promotion_in_progress = false;
+    self.role = Role::Primary;
+
+    // Apply any queued topology update
+    if let Some(update) = self.pending_topology.take() {
+        self.apply_topology(update);
+    }
+}
+```
 
 **Configuration:**
 ```toml

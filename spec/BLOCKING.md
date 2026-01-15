@@ -658,6 +658,129 @@ max_blocked_connections = 50000
 
 ---
 
+## Cluster Mode: Slot Migration Interaction
+
+When slots migrate between nodes, blocked clients must be handled correctly.
+This fixes [Redis issue #2379](https://github.com/redis/redis/issues/2379) where BLPOP blocks
+forever after slot migration.
+
+### Behavior During Slot Migration
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Blocked Client During Slot Migration                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  Client A: BLPOP mylist 0  (blocked on Source node, slot S)             │
+│                                                                          │
+│  ┌─ Migration Phase ─────────────────────────────────────────────────┐  │
+│  │                                                                    │  │
+│  │  Phase 1-2 (MIGRATING, key not yet transferred):                  │  │
+│  │    - Block continues at Source                                    │  │
+│  │    - If LPUSH arrives at Source → unblock client normally         │  │
+│  │    - If LPUSH arrives at Target → -MOVED (client retries Source)  │  │
+│  │                                                                    │  │
+│  │  Phase 2 (key transferred, slot not finalized):                   │  │
+│  │    - Source sends UNBLOCK_MIGRATE to blocked client               │  │
+│  │    - Client receives: -MOVED <slot> <target_host>:<port>          │  │
+│  │    - Client must re-issue BLPOP at Target                         │  │
+│  │    *** THIS FIXES THE REDIS BUG ***                               │  │
+│  │                                                                    │  │
+│  │  Phase 3 (MIGRATED):                                              │  │
+│  │    - All new blocks rejected with -MOVED                          │  │
+│  │    - Existing blocks already unblocked in Phase 2                 │  │
+│  │                                                                    │  │
+│  └────────────────────────────────────────────────────────────────────┘  │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Implementation
+
+**Source Node (during slot migration):**
+
+```rust
+fn on_slot_migration_key_transferred(key: &Bytes, target: &NodeAddr) {
+    // Check if any clients are blocked on this key
+    if let Some(waiters) = wait_queue.get(key) {
+        for waiter in waiters {
+            // Unblock with -MOVED redirect
+            waiter.send_moved(key_slot(key), target);
+            metrics.migration_unblocks.inc();
+        }
+        wait_queue.remove(key);
+    }
+}
+
+fn handle_blocking_command_during_migration(cmd: BlockingCmd) -> Result<Response> {
+    let slot = key_slot(&cmd.keys[0]);
+
+    match slot_state(slot) {
+        SlotState::Migrating { target, .. } => {
+            // Slot is being migrated - check if keys are already transferred
+            if all_keys_transferred(&cmd.keys) {
+                // Redirect immediately, don't block
+                return Err(Error::Moved { slot, target });
+            }
+            // Keys not yet transferred - allow blocking
+            register_blocking_wait(cmd)
+        }
+        SlotState::Migrated { target } => {
+            // Slot fully migrated - redirect
+            Err(Error::Moved { slot, target })
+        }
+        SlotState::Owned => {
+            // Normal case - block
+            register_blocking_wait(cmd)
+        }
+    }
+}
+```
+
+### Wait Queue Transfer
+
+**Wait queues are NOT transferred** during migration:
+
+| Approach | Pros | Cons | Decision |
+|----------|------|------|----------|
+| Transfer wait queues | Seamless client experience | Race conditions, complex state transfer | **Rejected** |
+| Unblock with -MOVED | Simple, predictable | Client must retry | **Chosen** |
+
+**Rationale:**
+- Transferring wait queues would require coordinating state between nodes during a sensitive migration window
+- Client libraries already handle -MOVED redirects gracefully
+- Matches Redis Cluster semantics (though fixes the "block forever" bug)
+
+### DIFFERS FROM REDIS
+
+| Aspect | Redis (broken) | FrogDB (fixed) |
+|--------|----------------|----------------|
+| Client blocked when slot migrates | **Blocks forever** - never receives -MOVED | Unblocked with -MOVED |
+| Client behavior | Must timeout and retry | Immediate redirect |
+| Data safety | May pop from wrong node after migration | Always correct node |
+
+### Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_blocking_migration_unblocks_total` | Clients unblocked due to slot migration |
+| `frogdb_blocking_migration_redirects_total` | -MOVED sent to blocked clients |
+| `frogdb_blocking_migration_keys_total` | Keys with blocked clients during migration |
+
+### Configuration
+
+```toml
+[blocking.cluster]
+# Proactively unblock clients when slot enters MIGRATING state
+# (vs waiting until key is actually transferred)
+aggressive_migration_unblock = false
+
+# Delay before unblocking to allow in-flight operations
+migration_unblock_delay_ms = 100
+```
+
+---
+
 ## Metrics
 
 | Metric | Description |

@@ -27,6 +27,57 @@ EVAL "return redis.call('GET', KEYS[1])" 1 mykey
 - **Per-shard VM**: Each shard has its own Lua VM instance
 - **No cross-shard access**: Scripts can only access keys owned by the executing shard
 
+### Scripts and SCA (Out-of-Order Execution)
+
+**Critical:** Scripts are **exempt** from SCA (Selective Contention Analysis) out-of-order execution. This matches DragonflyDB behavior exactly.
+
+**Background:**
+
+FrogDB uses SCA to execute independent commands out-of-order for better throughput. However, scripts require special handling:
+
+| Operation Type | SCA Eligible | Execution Order |
+|---------------|--------------|-----------------|
+| Simple commands (GET, SET, INCR) | Yes | May execute out-of-order |
+| Multi-key commands (MGET, MSET) | Yes | May execute out-of-order |
+| **Lua scripts (EVAL, EVALSHA)** | **No** | Always sequential, atomic |
+
+**Rationale:**
+
+1. **Determinism:** Scripts must produce identical results on primary and replica. Out-of-order execution could produce different results.
+
+2. **Atomicity:** Scripts are already atomic (via continuation locks or shard-local execution). SCA optimization is unnecessary.
+
+3. **Complexity:** Scripts may have complex data dependencies that are not visible from the KEYS array alone.
+
+**Implementation:**
+
+```rust
+fn should_use_sca(op: &Operation) -> bool {
+    // Scripts are NEVER eligible for out-of-order execution
+    if op.is_script() {
+        return false;
+    }
+
+    // Other operations may use SCA if keys don't conflict
+    op.keys.len() > 0 && !op.has_side_effects()
+}
+```
+
+**DragonflyDB Compatibility:**
+
+This design matches [DragonflyDB's Lua scripting](https://www.dragonflydb.io/blog/leveraging-power-of-lua-scripting) behavior:
+
+> "Lua scripts run atomically by default, meaning each operation is executed in one uninterrupted sequence"
+
+DragonflyDB's out-of-order execution is for regular commands only, not scripts. FrogDB follows this same principle.
+
+**Implications:**
+
+- Scripts always see a consistent view of data (no interleaving)
+- Script results are deterministic and safely replicated
+- High script volume may reduce throughput benefit from SCA (scripts serialize)
+- Prefer simple commands over scripts when atomicity isn't required
+
 ---
 
 ## Multi-Key Scripts (Same-Shard Requirement)
@@ -400,6 +451,96 @@ return sum
 - VM is reset to clean state
 - Cached scripts (bytecode) remain valid
 - Shard resumes normal operation
+
+### Cross-Shard Script Timeout Cleanup
+
+When a cross-shard script (with `allow_cross_slot_standalone = true`) times out, additional cleanup is required to release VLL locks on other shards.
+
+**Cleanup Sequence:**
+
+```rust
+fn script_timeout_handler(script_ctx: &mut ScriptContext, shard: &mut Shard) {
+    // 1. Set kill flag (script checks this at yield points)
+    script_ctx.kill_flag.store(true, Ordering::SeqCst);
+
+    // 2. Wait for grace period or forcible termination
+
+    // 3. Cleanup runs after script stops
+    script_cleanup(script_ctx, shard);
+}
+
+fn script_cleanup(script_ctx: &ScriptContext, shard: &mut Shard) {
+    // Release continuation lock if held (cross-shard scripts)
+    if let Some(lock) = script_ctx.continuation_lock.take() {
+        shard.vll.release_continuation_lock(lock.txid);
+    }
+
+    // Release any per-key locks on this shard
+    for key in &script_ctx.locked_keys {
+        shard.vll.release_key_lock(key, script_ctx.txid);
+    }
+
+    // Clear intent table entry
+    shard.vll.intent_table.remove(script_ctx.txid);
+
+    // For cross-shard scripts: notify other shards to release locks
+    if script_ctx.is_cross_shard {
+        for other_shard_id in &script_ctx.participating_shards {
+            if *other_shard_id != shard.id {
+                // Send abort message to other shards
+                send_vll_abort(*other_shard_id, script_ctx.txid);
+            }
+        }
+    }
+}
+```
+
+**Cross-Shard Abort Flow:**
+
+```
+Scenario: Script on Shard A holds continuation lock, has acquired locks on Shard B
+
+T=0:      Script starts, acquires locks on Shard A and B
+T=5000ms: Script timeout on Shard A (where script VM runs)
+
+T=5100ms: Forcible termination
+          Shard A: script_cleanup() executes
+            - Releases continuation lock (Shard A)
+            - Sends VllAbort(txid) to Shard B
+
+T=5102ms: Shard B: Receives VllAbort
+            - Releases any locks held for txid
+            - Wakes up operations blocked on those keys
+            - Clears intent table entry for txid
+
+T=5150ms: All locks released, blocked operations unblock
+```
+
+**Timing Guarantees:**
+
+| Phase | Typical Duration | Bound |
+|-------|------------------|-------|
+| Script timeout detection | Immediate | `lua_timeout_check_interval_ms` (50ms) |
+| Grace period | 100ms | `lua_timeout_grace_ms` |
+| Local cleanup | <1ms | Synchronous |
+| Cross-shard VllAbort delivery | ~5-20ms | Network RTT |
+| Remote shard cleanup | <1ms | Synchronous on receipt |
+
+**Blocked Operations:**
+
+Operations blocked waiting for locks held by the timed-out script:
+- Unblock within `grace_period + network_rtt + remote_processing` (~150ms typical)
+- Receive lock and continue normal execution
+- No special error returned (timeout was transparent to waiting operation)
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_script_timeout_total` | Scripts killed by timeout |
+| `frogdb_script_timeout_cleanup_ms` | Time to cleanup after timeout |
+| `frogdb_script_cross_shard_abort_total` | VllAbort messages sent on timeout |
+| `frogdb_script_timeout_blocked_ops_unblocked` | Operations unblocked by script timeout |
 
 ### Script Timeout vs Client Timeout Interaction
 
