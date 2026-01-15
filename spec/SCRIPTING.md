@@ -51,8 +51,8 @@ When `allow_cross_slot_standalone = true` is configured in standalone mode, Frog
 
 - Continuation locks block entire shards during script execution
 - All participating shards acquire exclusive access before script runs
-- Script executes atomically across shards with full isolation
-- Rollback on failure ensures no partial state changes
+- Script executes with full isolation (no interleaving from other operations)
+- **No rollback**: If script fails mid-execution, partial writes persist (Redis-compatible)
 
 ```lua
 -- With allow_cross_slot_standalone = true:

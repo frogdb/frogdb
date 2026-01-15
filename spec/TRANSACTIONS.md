@@ -105,8 +105,11 @@ fn validate_transaction(cmds: &[ParsedCommand]) -> Result<(), Error> {
 When `allow_cross_slot_standalone = true` is configured in standalone mode, FrogDB supports atomic cross-shard MULTI/EXEC transactions via [VLL coordination](VLL.md):
 
 - Transaction commands are coordinated across multiple shards using continuation locks
-- Atomicity is guaranteed: all commands execute or all are rolled back
+- **Execution atomicity**: All commands execute without interleaving from other operations
+- **No rollback**: If a command fails mid-transaction, prior commands' effects persist (matches Redis/DragonflyDB behavior)
 - See [VLL.md - Continuation Locks](VLL.md#continuation-locks) for implementation details
+
+> **Important:** Cross-shard transactions provide execution atomicity (isolation), not failure atomicity (rollback). If a shard fails during execution, partial state may remain. This follows Redis's design philosophy that "the utility of rollbacks would not outweigh the costs in terms of performance and additional complexity."
 
 **Recommendation:** Use hash tags to colocate transaction keys for best performance:
 
