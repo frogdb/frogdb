@@ -1127,7 +1127,7 @@ VLL exposes the following metrics:
 | `frogdb_vll_transactions_total` | Counter | Total VLL transactions |
 | `frogdb_vll_ooo_executions_total` | Counter | Out-of-order executions (SCA) |
 | `frogdb_vll_queue_depth` | Gauge | Current pending operations per shard |
-| `frogdb_vll_lock_wait_seconds` | Histogram | Time waiting for lock acquisition |
+| `frogdb_vll_lock_wait_ms` | Histogram | Time waiting for lock acquisition |
 | `frogdb_vll_partial_failures_total` | Counter | Cross-shard operations with partial failure |
 
 ---

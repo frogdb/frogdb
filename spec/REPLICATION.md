@@ -997,7 +997,7 @@ This enables applications to selectively wait for stronger replication on critic
 **Detection:**
 - `frogdb_replica_streaming_stall_total` metric increments
 - Log entry: `"Replica streaming stalled for {duration}ms"`
-- Lag metrics increase: `frogdb_replication_lag_seconds`
+- Lag metrics increase: `frogdb_replication_lag_ms`
 
 **Recovery:**
 1. Replica automatically reconnects after timeout
@@ -1381,7 +1381,7 @@ All replication-related configuration settings:
 | Metric | Type | Description |
 |--------|------|-------------|
 | `frogdb_replication_offset` | Gauge | Current replication offset (seq number) |
-| `frogdb_replication_lag_seconds` | Gauge | Lag behind primary |
+| `frogdb_replication_lag_ms` | Gauge | Lag behind primary |
 | `frogdb_replication_lag_bytes` | Gauge | Lag in bytes behind primary |
 | `frogdb_connected_replicas` | Gauge | Number of connected replicas (primary only) |
 | `frogdb_sync_full_count` | Counter | Full syncs performed |
@@ -1419,14 +1419,14 @@ All replication-related configuration settings:
 
 | Metric | Calculation | Description |
 |--------|-------------|-------------|
-| `lag_seconds` | `now - last_ack_time` | Seconds since last REPLCONF ACK from replica |
+| `lag_ms` | `now - last_ack_time` | Milliseconds since last REPLCONF ACK from replica |
 | `lag_bytes` | `primary_offset - replica_offset` | Bytes behind primary |
 
 Replicas send `REPLCONF ACK <offset>` every `repl_ping_interval_ms` (default: 1000ms).
 
-**Why seconds-since-ACK?**
+**Why time-since-ACK?**
 - Simple and reliable (no throughput estimation needed)
-- Matches Redis behavior exactly
+- Matches Redis behavior (though exposed as milliseconds for consistency)
 - Works correctly even when write throughput is zero
 
 **Lag Visibility:**
@@ -1464,7 +1464,7 @@ master_repl_offset:12345700
 **Data Loss Bound:**
 
 On failover, maximum data loss = replication lag at time of failure.
-With `lag_seconds = 5`, up to 5 seconds of writes may be lost.
+With `lag_ms = 5000`, up to 5 seconds of writes may be lost.
 
 **Reducing Lag:**
 - Ensure sufficient network bandwidth

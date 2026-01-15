@@ -352,7 +352,7 @@ Round-robin eviction naturally balances by attempting eviction from all shards, 
 | `frogdb_eviction_pool_size` | Current candidates in eviction pool (per shard) |
 | `frogdb_eviction_samples_total` | Total keys sampled for eviction |
 | `frogdb_eviction_oom_total` | OOM errors despite eviction attempts |
-| `frogdb_eviction_latency_seconds` | Time spent in eviction (histogram) |
+| `frogdb_eviction_latency_ms` | Time spent in eviction (histogram) |
 
 ---
 
