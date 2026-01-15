@@ -351,17 +351,8 @@ pub struct PendingOp {
     pub ready_tx: Option<oneshot::Sender<ShardReadyResult>>,
     /// Channel to receive execute signal from coordinator
     pub execute_rx: Option<oneshot::Receiver<ExecuteSignal>>,
-    /// For rollback: writes made by this transaction
-    pub writes: Vec<WriteRecord>,
     /// Timestamp for timeout tracking
     pub started_at: Instant,
-}
-
-/// Record of a write for potential rollback
-#[derive(Debug, Clone)]
-pub struct WriteRecord {
-    pub key: Bytes,
-    pub previous_value: Option<Value>,  // None if key didn't exist
 }
 
 /// Transaction queue per shard
@@ -425,8 +416,8 @@ pub enum TxPhase {
     Gathering,
     /// Completed successfully
     Committed,
-    /// Failed, rolling back
-    Aborting,
+    /// Failed - locks released, partial state may persist (no rollback)
+    Failed,
 }
 
 /// Result from shard lock acquisition
@@ -486,7 +477,7 @@ pub enum ShardMessage {
         result_tx: oneshot::Sender<VllShardResult>,
     },
 
-    /// Abort transaction and rollback
+    /// Abort transaction (release locks, no rollback - partial state persists)
     VllAbort {
         txid: u64,
     },
@@ -662,60 +653,35 @@ SCA Algorithm:
 
 ---
 
-### Rollback Mechanism
+### Failure Handling (No Rollback)
 
-#### Write Tracking
-
-Before applying any write, record the previous state:
+When a cross-shard operation fails:
 
 ```rust
-fn execute_write_with_tracking(
-    &mut self,
-    txid: u64,
-    key: &Bytes,
-    new_value: Value,
-) {
-    // Record for potential rollback
-    let previous = self.store.get(key).cloned();
-
-    if let Some(op) = self.tx_queue.pending.get_mut(&txid) {
-        op.writes.push(WriteRecord {
-            key: key.clone(),
-            previous_value: previous,
-        });
-    }
-
-    // Apply the write
-    self.store.set(key.clone(), new_value);
-}
-```
-
-#### Rollback Execution
-
-```rust
-async fn rollback_transaction(&mut self, txid: u64) {
+async fn handle_shard_failure(&mut self, txid: u64) {
     let op = match self.tx_queue.remove(txid) {
         Some(op) => op,
         None => return,
     };
 
-    // Apply undos in reverse order
-    for write in op.writes.iter().rev() {
-        match &write.previous_value {
-            Some(value) => self.store.set(write.key.clone(), value.clone()),
-            None => self.store.delete(&write.key),
-        }
-    }
-
-    // Release locks
+    // Release locks - writes that completed remain in place
     for (key, mode) in op.keys.iter().zip(op.modes.iter()) {
         self.store.release_lock(key, *mode);
     }
 
     // Remove from intent table
     self.intent_table.remove_txid(txid);
+
+    // Note: No rollback of writes - partial state persists
+    // This matches Redis/DragonflyDB behavior
 }
 ```
+
+**Why this is acceptable:**
+- Single-shard operations (the common case) are always atomic
+- Cross-shard operations are opt-in via `allow_cross_slot_standalone`
+- Users choosing cross-shard mode accept the partial failure semantics
+- Hash tags provide a zero-overhead way to ensure atomicity for related keys
 
 ---
 
@@ -785,17 +751,34 @@ When a client disconnects while holding a continuation lock:
 
 When `allow_cross_slot_standalone = true`, these commands use VLL for atomicity:
 
-| Command | Atomicity | Rollback on Failure |
-|---------|-----------|---------------------|
-| MSET | All-or-nothing | Yes - no keys modified |
+| Command | Atomicity | On Partial Failure |
+|---------|-----------|-------------------|
+| MSET | Execution atomic (no interleaving) | Error returned; partial writes may persist |
 | MGET | Atomic snapshot | N/A (read-only) |
-| DEL | All-or-nothing | Yes - no keys deleted |
+| DEL | Execution atomic (no interleaving) | Error returned; partial deletes may persist |
 
 **Behavior:**
 - Coordinator acquires intents on all shards
 - All shards execute atomically via VLL ordering
-- On any shard failure: coordinator sends rollback to successful shards
-- Return count reflects actual deletions (DEL) or success (MSET)
+- On any shard failure: operation returns error to client
+- **No rollback**: Partial state from successful shards persists (Redis/DragonflyDB-compatible)
+
+**Design Rationale:**
+
+FrogDB does **not** implement cross-shard rollback, following Redis and DragonflyDB's approach:
+
+> "For Redis, the utility of rollbacks would not outweigh the costs in terms of performance and additional complexity." — [Redis Blog](https://redis.io/blog/you-dont-need-transaction-rollbacks-in-redis/)
+
+**Why no rollback:**
+1. **Complexity**: Distributed rollback requires two-phase commit or compensation logic
+2. **Performance**: Write tracking and undo operations add overhead to every write
+3. **Rollback can fail**: If rollback itself fails (shard crash), state becomes inconsistent anyway
+4. **Client responsibility**: Idempotent operations and application-level compensation are cleaner
+
+**Client guidance:**
+- Design operations to be idempotent where possible
+- Use hash tags to keep related keys on same shard (avoids cross-shard entirely)
+- For critical operations, verify state after errors and retry/compensate as needed
 
 ---
 
@@ -859,8 +842,8 @@ pub enum VllError {
     #[error("Shard {0} dropped request")]
     ShardDropped(usize),
 
-    #[error("Rollback required: {0}")]
-    RollbackRequired(String),
+    #[error("Partial failure: {0}")]
+    PartialFailure(String),
 }
 ```
 
@@ -885,7 +868,7 @@ VLL exposes the following metrics:
 | `frogdb_vll_ooo_executions_total` | Counter | Out-of-order executions (SCA) |
 | `frogdb_vll_queue_depth` | Gauge | Current pending operations per shard |
 | `frogdb_vll_lock_wait_seconds` | Histogram | Time waiting for lock acquisition |
-| `frogdb_vll_rollbacks_total` | Counter | Transactions rolled back |
+| `frogdb_vll_partial_failures_total` | Counter | Cross-shard operations with partial failure |
 
 ---
 

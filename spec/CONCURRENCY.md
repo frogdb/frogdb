@@ -227,7 +227,7 @@ pub enum ShardMessage {
         result_tx: oneshot::Sender<VllShardResult>,
     },
 
-    /// Abort transaction and rollback
+    /// Abort transaction (release locks, no rollback - partial state persists)
     VllAbort {
         txid: u64,
     },
@@ -434,30 +434,30 @@ MSET key1 val1 key2 val2 (keys on different shards)
          ├── 4. Await all responses
          │
          └── 5. All complete → return OK
-              Any fail → rollback and return error (atomic)
+              Any fail → return error (partial writes may persist)
 ```
 
 ### Atomicity Semantics
 
-VLL provides **atomic execution** through ordered multi-shard locking:
+VLL provides **execution atomicity** (isolation) through ordered multi-shard locking:
 
 1. **Lock Phase:** Acquire write locks on all target shards (sorted order prevents deadlock)
-2. **Execute Phase:** Execute writes on each shard sequentially while holding all locks
-3. **Release Phase:** Release all locks atomically
+2. **Execute Phase:** Execute writes on each shard while holding all locks
+3. **Release Phase:** Release all locks
 
 | Scenario | Behavior | Data State |
 |----------|----------|------------|
 | **Single-shard operation** | True atomicity (all-or-nothing) | Consistent |
-| **Multi-shard success** | All shards commit atomically | Consistent, globally ordered |
+| **Multi-shard success** | All shards execute with isolation | Consistent, globally ordered |
 | **Lock acquisition timeout** | Client receives `-TIMEOUT` | **No changes** (no locks acquired) |
-| **Failure during execution** | Rollback prior writes | **No partial commits** |
-| **Coordinator crash mid-op** | Locks timeout and release | **No partial commits** |
+| **Failure during execution** | Error returned; partial writes persist | **Partial state** (no rollback) |
+| **Coordinator crash mid-op** | Locks timeout and release | **Partial state possible** |
 
-**Key Insight:** Because all locks are acquired **before** any writes execute, partial commits
-cannot occur. If a write fails after locks are acquired, prior writes in the batch are rolled
-back before locks are released.
+**Key Insight:** VLL provides **execution atomicity** (no interleaving) but **not failure atomicity** (no rollback). This matches Redis and DragonflyDB behavior:
 
-**Example - Atomic Execution:**
+> "For Redis, the utility of rollbacks would not outweigh the costs in terms of performance and additional complexity."
+
+**Example - Successful Execution:**
 ```
 MSET {a}key1 val1 {b}key2 val2  # Keys on different shards
          │
@@ -467,26 +467,27 @@ MSET {a}key1 val1 {b}key2 val2  # Keys on different shards
          ├── 4. Execute SET {b}key2 val2 (while holding both locks)
          ├── 5. Release both locks
          │
-         └── Client receives: +OK (both committed atomically)
+         └── Client receives: +OK (both committed)
 
 If step 4 fails:
-         ├── Rollback step 3 (delete {a}key1)
+         ├── {a}key1 write from step 3 persists (NO ROLLBACK)
          ├── Release both locks
-         └── Client receives: -ERR (no changes persisted)
+         └── Client receives: -ERR (partial state - {a}key1 is set, {b}key2 is not)
 ```
 
-**Note:** Hash tags are still recommended for performance, as same-shard operations avoid
-the lock coordination overhead: `MSET {user:1}:name Alice {user:1}:email alice@example.com`
+**Recommendation:** Use hash tags to ensure same-shard operations for true atomicity:
+`MSET {user:1}:name Alice {user:1}:email alice@example.com`
 
 ### VLL Properties
 
 | Property | Guarantee |
 |----------|-----------|
-| **Atomicity** | All-or-nothing for multi-shard operations (via ordered locking) |
+| **Execution Atomicity** | No interleaving during multi-shard operations (isolation) |
 | **Serializable Order** | Operations with lower txid execute before higher ones globally |
 | **No deadlocks** | Lock acquisition in sorted shard order prevents circular waits |
 | **No starvation** | BTreeMap ensures FIFO within txid ordering |
 | **Durability** | Writes are durable per configured durability mode |
+| **No Rollback** | Partial state persists on failure (Redis/DragonflyDB-compatible) |
 
 ### Why VLL vs Traditional Approaches
 
@@ -498,7 +499,7 @@ Traditional approaches and their drawbacks:
 VLL advantages:
 - Ordered locking with deadlock prevention (no 2PC overhead)
 - Minimal lock contention (each shard is single-threaded internally)
-- Atomic rollback on failure (no partial commits)
+- Simple failure model (no complex rollback logic)
 - Deterministic ordering via txid counter
 
 ### VLL Queue Configuration
