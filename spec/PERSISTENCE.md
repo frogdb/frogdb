@@ -174,6 +174,104 @@ When WAL errors persist:
 
 **Recommendation:** Monitor `frogdb_wal_errors_total` and `frogdb_disk_usage_bytes`. Alert operators before disk fills. For critical data, use `Sync` durability mode.
 
+### WAL Corruption Recovery
+
+When corruption is detected in the WAL during recovery, FrogDB must decide how to proceed. Different corruption types warrant different recovery strategies.
+
+**Corruption Types and Recovery:**
+
+| Corruption Type | Detection | Default Recovery | Rationale |
+|-----------------|-----------|------------------|-----------|
+| **Truncated entry** | Entry length exceeds remaining file bytes | Truncate WAL at corruption point | Likely crash during write; preceding entries are valid |
+| **Checksum mismatch** | CRC32 of entry data doesn't match header | Truncate WAL at corruption point | Partial write or bit rot; cannot trust this or later entries |
+| **Invalid type marker** | Unknown operation type byte | Truncate WAL at corruption point | Indicates structural corruption |
+| **Incomplete header** | Header bytes < expected size | Truncate WAL at corruption point | Likely crash during header write |
+| **Sequence gap** | Expected sequence N, found N+k | Policy-dependent | May indicate lost WAL file or corruption |
+| **Future timestamp** | Entry timestamp > current time | Accept entry (warn) | Clock skew during write; data is likely valid |
+
+**Recovery Decision Matrix:**
+
+```
+Corruption detected
+       │
+       ▼
+Is corruption at end of WAL?
+       │
+   ┌───┴───┐
+   │ Yes   │ No
+   │       │
+   ▼       ▼
+Truncate   Is wal_corruption_policy = "fail"?
+at point   │
+   │   ┌───┴───┐
+   │   │ Yes   │ No (truncate)
+   │   │       │
+   │   ▼       ▼
+   │  Abort   Truncate at corruption,
+   │  startup  log data loss warning
+   │
+   ▼
+Continue recovery
+from truncation point
+```
+
+**Configuration:**
+
+```toml
+[persistence]
+# Policy when WAL corruption is detected mid-file
+# "truncate" - Discard corrupted entry and all subsequent entries (default)
+# "fail" - Abort startup, require manual intervention
+wal_corruption_policy = "truncate"
+
+# Maximum acceptable sequence gap before treating as corruption
+# Allows for intentional WAL file deletion during maintenance
+wal_max_sequence_gap = 1000
+```
+
+**Recovery Behavior by Policy:**
+
+| Policy | Mid-file Corruption | End-of-file Corruption | Sequence Gap |
+|--------|---------------------|------------------------|--------------|
+| `truncate` | Truncate, warn, continue | Truncate, continue | Accept if ≤ max_gap, else truncate |
+| `fail` | Abort with error | Truncate, continue | Accept if ≤ max_gap, else abort |
+
+**Why Truncation is the Default:**
+
+1. **Availability over consistency:** FrogDB prioritizes returning to service. Operators can inspect logs and decide if data loss is acceptable.
+2. **Corruption typically occurs at end:** Crashes during write leave partial entries at WAL end. Truncation is safe.
+3. **Snapshots provide fallback:** Recent snapshot + truncated WAL recovers most data.
+4. **Matches Redis behavior:** Redis AOF uses similar truncation semantics.
+
+**When to Use `fail` Policy:**
+
+- Financial or audit data where any data loss requires investigation
+- Environments where operator intervention is preferred over automatic recovery
+- Systems with robust snapshot schedules where WAL corruption indicates larger issues
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_wal_corruption_total` | Count of corruption events detected |
+| `frogdb_wal_entries_truncated` | Entries discarded due to corruption |
+| `frogdb_wal_recovery_truncation_point` | Sequence number where truncation occurred |
+
+**Manual Recovery:**
+
+If `fail` policy triggers startup abort:
+
+```bash
+# 1. Inspect WAL state
+frogdb-cli --wal-inspect /var/lib/frogdb/data/
+
+# 2. If data loss is acceptable, force truncation
+frogdb-cli --wal-truncate /var/lib/frogdb/data/ --at-sequence <seq>
+
+# 3. Restart server
+systemctl start frogdb
+```
+
 ---
 
 ## Durability Modes
@@ -320,6 +418,151 @@ Based on Dragonfly's approach - no fork(), no memory spike:
 **Keys Deleted During Snapshot:**
 - If not yet visited by iterator: **Skip** (key excluded from snapshot)
 - If already visited: Already serialized, deletion is part of subsequent WAL entries
+
+#### Detailed Key Modification Behavior
+
+The following table specifies exact behavior for all key operations during an active snapshot:
+
+| Operation | Key State | Visited? | Snapshot Action | In-Memory Action | WAL Action |
+|-----------|-----------|----------|-----------------|------------------|------------|
+| **SET** | Exists | No | COW: serialize old value | Apply new value | Append SET |
+| **SET** | Exists | Yes | None (already captured) | Apply new value | Append SET |
+| **SET** | New key | N/A | None (key didn't exist at epoch) | Create key | Append SET |
+| **DEL** | Exists | No | None (skip key) | Delete key | Append DEL |
+| **DEL** | Exists | Yes | None (already captured) | Delete key | Append DEL |
+| **EXPIRE** | Exists | No | COW: serialize with old TTL | Update TTL | Append EXPIRE |
+| **EXPIRE** | Exists | Yes | None | Update TTL | Append EXPIRE |
+| **PERSIST** | Exists | No | COW: serialize with old TTL | Remove TTL | Append PERSIST |
+| **PERSIST** | Exists | Yes | None | Remove TTL | Append PERSIST |
+| **RENAME** | src exists | See below | Special handling | Atomic rename | Append RENAME |
+
+**RENAME During Snapshot:**
+
+RENAME requires special handling because it involves two keys:
+
+```
+RENAME src dst (during snapshot)
+
+1. If src NOT visited AND dst NOT visited:
+   - COW: serialize src with old value
+   - Mark src as visited (will be absent in snapshot iteration)
+   - Do NOT serialize dst (new key at this position)
+   - Apply rename in-memory
+
+2. If src visited AND dst NOT visited:
+   - No COW needed for src (already captured)
+   - Do NOT serialize dst
+   - Apply rename in-memory
+
+3. If src NOT visited AND dst visited:
+   - COW: serialize src with old value
+   - dst already captured (will be overwritten by WAL replay)
+   - Apply rename in-memory
+
+4. If src visited AND dst visited:
+   - Both already captured
+   - Apply rename in-memory
+```
+
+**Multiple Modifications to Same Key:**
+
+When a key is modified multiple times during snapshot:
+
+```
+Key "foo" exists with value "A" at snapshot start, not yet visited
+
+T1: SET foo B
+    → COW: serialize (foo, A), mark visited
+    → In-memory: foo = B
+
+T2: SET foo C
+    → Already visited, no COW
+    → In-memory: foo = C
+
+T3: DEL foo
+    → Already visited, no COW
+    → In-memory: foo deleted
+
+Snapshot result: foo = A (original value at epoch start)
+WAL replay: SET foo B, SET foo C, DEL foo → foo deleted
+Final state: foo deleted ✓
+```
+
+**Multi-Key Operations (MSET, DEL with multiple keys):**
+
+Each key in a multi-key operation is handled independently:
+
+```
+MSET k1 v1 k2 v2 k3 v3 (during snapshot)
+
+For each key ki:
+  - Check if visited
+  - If not visited AND exists: COW serialize old value
+  - Apply new value
+  - Mark as visited
+
+All keys are processed atomically in-memory, but COW serialization
+may capture different "moments" for each key. WAL replay ensures
+final consistency.
+```
+
+**Memory Accounting for COW Buffers:**
+
+During snapshot, COW operations buffer serialized values before sending to the snapshot writer:
+
+```rust
+struct SnapshotCOWBuffer {
+    /// Pending COW entries waiting to be written
+    entries: Vec<(Bytes, SerializedValue)>,
+
+    /// Current buffer memory usage
+    buffer_bytes: usize,
+
+    /// Maximum buffer size before flush (default: 16MB)
+    max_buffer_bytes: usize,
+}
+
+impl SnapshotCOWBuffer {
+    fn add_cow_entry(&mut self, key: Bytes, value: SerializedValue) {
+        let entry_size = key.len() + value.len();
+        self.entries.push((key, value));
+        self.buffer_bytes += entry_size;
+
+        // Flush if buffer exceeds threshold
+        if self.buffer_bytes >= self.max_buffer_bytes {
+            self.flush_to_writer();
+        }
+    }
+}
+```
+
+**Memory Impact During Snapshot:**
+
+| Scenario | Additional Memory | Duration |
+|----------|-------------------|----------|
+| Low write rate | Minimal (~COW buffer size) | Snapshot duration |
+| High write rate, few key overwrites | Minimal | Snapshot duration |
+| High write rate, many key overwrites | Up to COW buffer × num shards | Snapshot duration |
+| Pathological: every key overwritten | ~dataset size (worst case) | Snapshot duration |
+
+**Configuration:**
+
+```toml
+[snapshot]
+# Maximum COW buffer size per shard before flushing to writer
+cow_buffer_max_bytes = 16777216  # 16MB
+
+# Abort snapshot if COW memory exceeds this percentage of maxmemory
+cow_memory_abort_threshold_percent = 25
+```
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_snapshot_cow_entries_total` | Total COW entries written during snapshot |
+| `frogdb_snapshot_cow_bytes_total` | Total bytes written via COW |
+| `frogdb_snapshot_cow_buffer_bytes` | Current COW buffer memory usage |
 
 **Note on Point-in-Time Semantics:**
 Unlike fork-based snapshots (Redis), our epoch-based approach does NOT capture a perfect point-in-time.
@@ -852,6 +1095,168 @@ frogdb_recovery_expired_bytes      # Memory reclaimed from expired keys
 ```
 
 **Important:** Monitor memory usage after recovery. If expired keys consume significant memory, consider using `immediate` strategy or reducing `expired_scan_delay_ms`.
+
+### Replication State Recovery
+
+When a node restarts, it must recover replication state to resume as a primary or reconnect as a replica. This state is persisted separately from the main data.
+
+**Persisted Replication State:**
+
+| Field | Purpose | Storage |
+|-------|---------|---------|
+| `replication_id` | Primary's unique identifier (40-char hex) | Metadata file |
+| `secondary_replication_id` | Previous primary's ID (for failover) | Metadata file |
+| `replication_offset` | Current position in replication stream | Metadata file |
+| `role` | `primary` or `replica` | Metadata file |
+| `primary_host` | Primary's address (replica only) | Metadata file |
+| `primary_port` | Primary's port (replica only) | Metadata file |
+
+**Storage Location:**
+
+```
+data_dir/
+├── rocksdb/
+│   └── ...                     # Main data
+└── replication_state.json      # Replication metadata
+```
+
+**Metadata Format:**
+
+```json
+{
+  "version": 1,
+  "replication_id": "8a3b9c2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b",
+  "secondary_replication_id": "0000000000000000000000000000000000000000",
+  "replication_offset": 1523456,
+  "role": "primary",
+  "primary_host": null,
+  "primary_port": null,
+  "last_updated_ms": 1704825600000
+}
+```
+
+**Recovery Sequence:**
+
+```
+1. Open RocksDB (data recovery)
+       │
+       ▼
+2. Read replication_state.json
+       │
+       ├── File exists?
+       │   │
+       │   ├── Yes: Parse and validate
+       │   │        │
+       │   │        └── Valid? Continue to step 3
+       │   │            Invalid? Generate new primary state
+       │   │
+       │   └── No: Generate new replication_id, become primary
+       │
+       ▼
+3. Determine recovery mode based on role
+       │
+       ├── role = "primary"
+       │   │
+       │   └── Resume as primary
+       │       - Keep existing replication_id
+       │       - WAL replay updates replication_offset
+       │       - Accept replica connections
+       │
+       └── role = "replica"
+           │
+           └── Reconnect to primary
+               - Attempt PSYNC with stored replication_id + offset
+               - If PSYNC succeeds: Continue as replica
+               - If FULLRESYNC required: Accept full sync
+```
+
+**Replication ID Generation:**
+
+When a new replication ID is needed (first startup, promotion, or corruption):
+
+```rust
+fn generate_replication_id() -> String {
+    // 40 character hex string (160 bits of entropy)
+    // Matches Redis replication ID format
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 20] = rng.gen();
+    hex::encode(bytes)
+}
+```
+
+**When Replication IDs Change:**
+
+| Event | `replication_id` | `secondary_replication_id` |
+|-------|------------------|---------------------------|
+| First startup | Generated new | All zeros |
+| Replica promoted to primary | Generated new | Previous primary's ID |
+| Primary recovers after crash | Unchanged | Unchanged |
+| Replica reconnects after crash | Unchanged | Unchanged |
+| FULLRESYNC completed | Primary's ID | All zeros |
+
+**Stale Replication State Handling:**
+
+If a replica has been offline for an extended period, its stored `replication_offset` may reference WAL entries that have been purged from the primary:
+
+```
+Replica stored state:
+  replication_id: abc123...
+  replication_offset: 5000
+
+Primary current state:
+  replication_id: abc123...
+  replication_offset: 50000
+  oldest_available_offset: 10000  (WAL purged before this)
+
+Result: PSYNC fails → FULLRESYNC required
+```
+
+**Configuration:**
+
+```toml
+[replication]
+# How often to persist replication offset (ms)
+# Lower = less data loss on crash, Higher = less I/O
+state_persist_interval_ms = 1000
+
+# Persist state immediately on role change
+persist_on_role_change = true
+```
+
+**Persistence Triggers:**
+
+| Trigger | Action |
+|---------|--------|
+| Timer (every `state_persist_interval_ms`) | Persist if offset changed |
+| Role change (promotion/demotion) | Immediate persist |
+| Graceful shutdown | Immediate persist |
+| FULLRESYNC complete | Immediate persist |
+
+**Corruption Handling:**
+
+If `replication_state.json` is corrupted or missing:
+
+| Scenario | Recovery Action |
+|----------|-----------------|
+| File missing | Generate new primary state |
+| JSON parse error | Generate new primary state, warn |
+| Invalid replication_id format | Generate new primary state, warn |
+| Offset > WAL end | Warn, use WAL end as offset |
+
+**Interaction with Snapshots:**
+
+Replication state is **not** included in snapshots. This is intentional:
+- Snapshots are for data backup/restore
+- Replication state is node-specific
+- Restoring a snapshot to a new node should not carry over replication identity
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_replication_state_persists_total` | Number of state file writes |
+| `frogdb_replication_state_persist_latency_ms` | Time to persist state file |
+| `frogdb_replication_state_recovery_success` | 1 if recovery succeeded, 0 otherwise |
 
 ---
 

@@ -361,6 +361,175 @@ fn next_cursor(cursor: u64) -> u64 {
 | Missing | Keys added/removed during scan may be missed |
 | State | Stateless on server - cursor encodes all state |
 
+### Cursor Validity and Consistency Guarantees
+
+This section specifies the exact behavior of SCAN cursors across keyspace modifications and edge cases.
+
+**Cursor Validity Across Modifications:**
+
+| Modification | Cursor Validity | Behavior |
+|--------------|-----------------|----------|
+| Key added (not scanned yet) | Valid | Key will be returned |
+| Key added (already scanned) | Valid | Key may be missed |
+| Key deleted (not scanned yet) | Valid | Key won't be returned |
+| Key deleted (already scanned) | Valid | Key was already returned |
+| Key modified (SET/INCR/etc.) | Valid | Value change doesn't affect cursor |
+| Key renamed (same shard) | Valid | Old name scanned, new name may be missed or returned |
+| Hash table rehash | Valid | May cause duplicates |
+
+**Key Insight:** Cursors remain valid across ALL keyspace modifications. The scan may return duplicates or miss keys, but the cursor itself never becomes "invalid" in a way that causes errors.
+
+**Consistency Guarantees:**
+
+```
+Full SCAN Consistency Model:
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    SCAN Guarantees                              │
+├─────────────────────────────────────────────────────────────────┤
+│ ✓ Every key present from START to END is returned at least once│
+│ ✓ No phantom keys (keys never existing are never returned)     │
+│ ✓ Cursor always terminates (returns 0 eventually)              │
+├─────────────────────────────────────────────────────────────────┤
+│ ✗ NOT guaranteed: Exactly-once delivery                        │
+│ ✗ NOT guaranteed: Point-in-time snapshot                       │
+│ ✗ NOT guaranteed: Ordering                                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Duplicate Key Scenarios:**
+
+| Scenario | Cause | Mitigation |
+|----------|-------|------------|
+| Hash table grow | Rehash during scan | Keys may move to "already scanned" buckets |
+| Hash table shrink | Rehash during scan | Keys may appear in new bucket positions |
+| Cross-shard transition | Internal cursor advancement | Shard boundary keys |
+
+**Implementation: Reverse-Bit Cursor:**
+
+FrogDB uses the Redis cursor algorithm that handles rehashing gracefully:
+
+```rust
+/// Cursor advancement using bit reversal
+/// This algorithm ensures all buckets are visited even during table resize
+fn advance_cursor(cursor: u64, table_size_mask: u64) -> u64 {
+    // Reverse bits, increment, reverse back
+    // This visits buckets in an order that handles 2x growth/shrink
+    let mut v = cursor;
+
+    // Reverse bits
+    v = bit_reverse(v);
+
+    // Increment
+    v = v.wrapping_add(1);
+
+    // Reverse back
+    v = bit_reverse(v);
+
+    // Mask to table size
+    v & table_size_mask
+}
+
+/// During table resize (both tables active)
+fn scan_during_rehash(cursor: u64, old_table: &Table, new_table: &Table) -> Vec<Bytes> {
+    let mut keys = Vec::new();
+
+    // Scan smaller table first (guaranteed to visit all keys)
+    let small_mask = old_table.size().min(new_table.size()) - 1;
+    let bucket = cursor & small_mask;
+
+    // Collect from both tables at this bucket position
+    keys.extend(old_table.bucket_keys(bucket));
+    keys.extend(new_table.bucket_keys(bucket));
+
+    // May collect duplicates if key migrated between tables
+    keys
+}
+```
+
+**No Cursor Expiration:**
+
+```rust
+// Cursors have NO server-side state - no expiration possible
+// The cursor encodes all iteration state:
+
+struct CursorState {
+    // Encoded in 64-bit cursor value:
+    shard_id: u16,        // Which shard (bits 48-63)
+    position: u48,        // Position within shard's hash table (bits 0-47)
+
+    // NOT stored:
+    // - Timestamp (no timeout)
+    // - Session ID (no connection affinity)
+    // - Keys seen (would require O(n) memory)
+}
+
+// Client can resume iteration at any time:
+// - After disconnect/reconnect
+// - After hours/days
+// - After server restart (but results may differ due to keyspace changes)
+```
+
+**Cross-Shard Cursor Behavior:**
+
+| Scenario | Behavior |
+|----------|----------|
+| Shard count unchanged | Cursor progresses through shards sequentially |
+| Shard count increased (cluster scale-up) | Cursor may become invalid (shard ID out of range → restart) |
+| Shard count decreased (cluster scale-down) | Cursor may become invalid (shard ID out of range → restart) |
+| Shard migration (cluster rebalance) | Keys may be missed or duplicated during migration |
+
+**Cluster Mode Considerations:**
+
+In cluster mode, SCAN operates differently:
+
+```
+Standalone Mode:
+  SCAN → iterates ALL shards sequentially (cursor encodes shard)
+
+Cluster Mode:
+  SCAN → iterates keys on CURRENT NODE only
+  Client must issue SCAN to each node for full keyspace iteration
+
+  For full cluster SCAN:
+  1. CLUSTER NODES → get all primary nodes
+  2. For each node: iterate SCAN until cursor = 0
+  3. Aggregate results client-side
+```
+
+**Cross-Shard Cursor Encoding (Cluster Mode):**
+
+```rust
+// In cluster mode, cursor encodes slot range rather than shard ID
+struct ClusterCursor {
+    slot_range_id: u16,   // Which slot range on this node
+    position: u48,        // Position within slot's hash table
+}
+
+// Node may own multiple non-contiguous slot ranges
+// Cursor advances through owned slots sequentially
+```
+
+**Edge Cases:**
+
+| Edge Case | Behavior |
+|-----------|----------|
+| SCAN on empty database | Returns cursor 0, empty array |
+| SCAN with cursor 0 | Starts fresh iteration |
+| SCAN with non-zero cursor on empty database | Returns cursor 0, empty array |
+| COUNT hint larger than keyspace | Returns all keys in fewer iterations |
+| MATCH pattern matching no keys | Returns cursor 0 eventually, empty arrays |
+| TYPE filter with no matching types | Returns cursor 0 eventually, empty arrays |
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_scan_calls_total` | Total SCAN command invocations |
+| `frogdb_scan_keys_returned_total` | Total keys returned across all SCAN calls |
+| `frogdb_scan_iterations_total` | Full iterations completed (cursor returned to 0) |
+| `frogdb_scan_restarts_total` | Iterations restarted due to invalid cursor |
+
 ### Cursor Validation and Security
 
 **Cursor Format:**

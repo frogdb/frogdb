@@ -149,6 +149,112 @@ When conflicts occur:
 
 When `vll_max_queue_depth` is exceeded, new operations receive `-BUSY` error.
 
+### Lock Timeout Behavior
+
+Lock timeouts ensure operations don't wait indefinitely and that locks don't become orphaned. The timeout system operates at multiple levels.
+
+**Timeout Hierarchy:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Timeout Hierarchy                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  scatter_gather_timeout_ms (5000ms default)                     │
+│  └── Total time for entire multi-shard operation                │
+│      │                                                           │
+│      ├── vll_lock_acquisition_timeout_ms (4000ms default)       │
+│      │   └── Time to acquire locks on ALL shards                │
+│      │                                                           │
+│      └── Remaining: execution + response aggregation             │
+│                                                                  │
+│  connection_timeout_ms (60000ms default)                        │
+│  └── Maximum time for continuation locks (MULTI/Lua)            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Configuration:**
+
+```toml
+[vll]
+# Maximum time to acquire locks across all participating shards
+# Must be less than scatter_gather_timeout_ms to leave time for execution
+vll_lock_acquisition_timeout_ms = 4000
+
+# Per-shard lock wait timeout (should be <= lock_acquisition_timeout)
+# Operations waiting longer than this on a single shard are aborted
+vll_per_shard_lock_timeout_ms = 2000
+
+# Interval for checking and cleaning up timed-out operations
+vll_timeout_check_interval_ms = 100
+```
+
+**Timeout Calculation for Multi-Shard Operations:**
+
+```rust
+fn calculate_operation_budget(config: &VllConfig) -> OperationBudget {
+    let total = config.scatter_gather_timeout_ms;
+    let lock_budget = config.vll_lock_acquisition_timeout_ms;
+    let execution_budget = total - lock_budget;
+
+    OperationBudget {
+        total_ms: total,
+        lock_acquisition_ms: lock_budget,
+        execution_ms: execution_budget,
+    }
+}
+```
+
+**Timeout Behavior by Phase:**
+
+| Phase | Timeout | Behavior on Expiry | Error Response |
+|-------|---------|-------------------|----------------|
+| Lock acquisition | `vll_lock_acquisition_timeout_ms` | Abort operation, release acquired locks | `-TIMEOUT lock acquisition timed out` |
+| Per-shard wait | `vll_per_shard_lock_timeout_ms` | Remove from shard queue, notify coordinator | Internal error to coordinator |
+| Total operation | `scatter_gather_timeout_ms` | Abort entire operation | `-TIMEOUT operation timed out` |
+| Continuation lock | `connection_timeout_ms` | Release lock on connection close | N/A (connection closed) |
+
+**Lock Acquisition Timeout Flow:**
+
+```
+Multi-shard MSET starts (txid=42)
+       │
+       ▼
+Send lock requests to Shard A, B, C
+       │
+       ├── Shard A: Locks acquired (200ms)
+       ├── Shard B: Locks acquired (500ms)
+       └── Shard C: Waiting for txid=30... (blocked)
+              │
+              ▼
+       vll_lock_acquisition_timeout_ms expires
+              │
+              ▼
+       Coordinator aborts:
+         - Send VllAbort to Shard A (releases locks)
+         - Send VllAbort to Shard B (releases locks)
+         - Send VllAbort to Shard C (removes from queue)
+              │
+              ▼
+       Return: -TIMEOUT lock acquisition timed out
+```
+
+**Why Default is 4000ms (80% of scatter_gather_timeout):**
+
+1. **Most time spent waiting for locks**: Lock acquisition is typically the bottleneck
+2. **Leave buffer for execution**: 1000ms is usually sufficient for execution
+3. **Fast failure is better**: Detecting timeout early allows client retry
+4. **Matches Redis behavior**: Redis MULTI/EXEC has similar timeout characteristics
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_vll_lock_timeout_total` | Operations that timed out during lock acquisition |
+| `frogdb_vll_lock_wait_ms` | Histogram of time waiting for locks |
+| `frogdb_vll_operations_total{result="timeout"}` | Total timeout failures |
+
 ---
 
 ## Comparison with Alternatives
@@ -742,8 +848,162 @@ When a client disconnects while holding a continuation lock:
 - Other operations on the shard resume immediately after lock release
 - No orphaned locks - cleanup is synchronous with connection teardown
 
+### Orphaned Lock Prevention and Cleanup
+
+Orphaned locks occur when lock-holding operations fail to release their locks. FrogDB employs multiple mechanisms to prevent and clean up orphaned locks.
+
+**Scenarios That Can Create Orphaned Locks:**
+
+| Scenario | Cause | Detection Method |
+|----------|-------|------------------|
+| Client disconnect during MULTI | Network failure, client crash | Connection close event |
+| Lua script timeout | Script exceeds `lua_time_limit_ms` | Script timeout handler |
+| Coordinator crash during multi-shard op | Process crash, OOM | Shard-side timeout |
+| Shard crash during lock hold | Process crash, panic | Restart recovery |
+| VLL queue operation timeout | Deadlock, slow shard | Per-operation timeout |
+
+**Cleanup Mechanisms:**
+
+#### 1. Connection-Based Cleanup (Primary)
+
+```rust
+impl Connection {
+    async fn on_disconnect(&mut self, shard_tx: &ShardSender) {
+        // Release any continuation lock held by this connection
+        if let Some(txid) = self.continuation_lock_txid.take() {
+            shard_tx.send(ShardMessage::VllAbort { txid }).await;
+        }
+
+        // Clear MULTI state
+        self.multi_state = None;
+
+        // Clear WATCH state
+        self.watched_keys.clear();
+    }
+}
+```
+
+#### 2. Timeout-Based Cleanup (Backup)
+
+Per-shard background task scans for stale locks:
+
+```rust
+async fn orphaned_lock_scanner(shard: &mut Shard, config: &VllConfig) {
+    let mut interval = tokio::time::interval(
+        Duration::from_millis(config.vll_timeout_check_interval_ms)
+    );
+
+    loop {
+        interval.tick().await;
+
+        // Check continuation locks
+        if let Some(ref lock) = shard.continuation_lock {
+            if lock.started_at.elapsed() > config.max_continuation_lock_duration() {
+                warn!(
+                    "Releasing orphaned continuation lock for txid={}",
+                    lock.txid
+                );
+                shard.continuation_lock = None;
+                shard.metrics.orphaned_locks_cleaned.inc();
+            }
+        }
+
+        // Check pending VLL operations
+        let expired_txids = shard.tx_queue.cleanup_expired(
+            Duration::from_millis(config.vll_lock_acquisition_timeout_ms)
+        );
+
+        for txid in expired_txids {
+            // Release any per-key locks
+            if let Some(op) = shard.tx_queue.pending.get(&txid) {
+                for (key, mode) in op.keys.iter().zip(op.modes.iter()) {
+                    shard.store.release_lock(key, *mode);
+                }
+            }
+            shard.intent_table.remove_txid(txid);
+            shard.metrics.orphaned_locks_cleaned.inc();
+        }
+    }
+}
+```
+
+#### 3. Startup Recovery
+
+After crash or restart, all lock state is cleared:
+
+```rust
+fn recover_shard(shard: &mut Shard) {
+    // Lock state is in-memory only - cleared on restart
+    // All entries start unlocked
+    for entry in shard.store.entries.values_mut() {
+        entry.lock = KeyLockState::new();
+    }
+
+    // Clear any transaction queue state
+    shard.tx_queue = TransactionQueue::new(shard.config.vll_max_queue_depth);
+    shard.intent_table = IntentTable::new();
+    shard.continuation_lock = None;
+
+    info!("Shard {} lock state cleared during recovery", shard.id);
+}
+```
+
+**Cleanup Timing:**
+
+| Mechanism | When Triggered | Maximum Lock Duration |
+|-----------|----------------|----------------------|
+| Connection cleanup | TCP close detected | ~100ms (TCP keepalive detection) |
+| Timeout cleanup | Background scan | `vll_lock_acquisition_timeout_ms` + scan interval |
+| Restart recovery | Server start | Immediate (lock state is volatile) |
+
+**Configuration:**
+
+```toml
+[vll]
+# Maximum duration for a continuation lock before forced cleanup
+# Should be >= connection_timeout_ms
+max_continuation_lock_ms = 65000
+
+# Interval for orphaned lock scanning
+vll_timeout_check_interval_ms = 100
+
+# Enable aggressive cleanup (scan more frequently, tighter timeouts)
+# Recommended for high-throughput environments
+aggressive_lock_cleanup = false
+```
+
+**Interaction with Transaction State:**
+
+| Lock Type | State After Cleanup | Data Impact |
+|-----------|--------------------|--------------------|
+| Continuation (MULTI) | Transaction discarded | No writes applied (EXEC never called) |
+| Continuation (Lua) | Script aborted | Partial writes may persist (no rollback) |
+| Per-key VLL lock | Operation aborted | Partial writes may persist (no rollback) |
+| Intent (not acquired) | Intent removed | No data impact |
+
 **Metrics:**
-- `frogdb_continuation_lock_disconnects_total` - Locks released due to disconnect
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_vll_orphaned_locks_total` | Total orphaned locks detected and cleaned |
+| `frogdb_vll_orphaned_lock_duration_ms` | Duration locks were held before cleanup |
+| `frogdb_continuation_lock_disconnects_total` | Continuation locks released due to disconnect |
+| `frogdb_continuation_lock_timeouts_total` | Continuation locks released due to timeout |
+
+**Debugging Orphaned Locks:**
+
+If orphaned locks are suspected:
+
+```
+# Check current lock state
+DEBUG VLL LOCKS
+
+# Sample output:
+# vll_queue_depth: 5
+# continuation_lock: txid=12345, held_for_ms=2340
+# pending_intents: 12
+# locked_keys: ["user:1", "user:2"]
+```
 
 ---
 

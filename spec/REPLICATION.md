@@ -217,6 +217,198 @@ sync_memory_limit_pct = 90
 sync_retry_delay_ms = 5000
 ```
 
+### Memory Limit Race Conditions
+
+Several race conditions can occur between memory limit checks and actual memory consumption during replication. FrogDB handles these explicitly.
+
+**Race Condition 1: Memory Fills During FULLRESYNC**
+
+```
+Time    Replica Memory    Primary Activity         Replica Activity
+────    ──────────────    ────────────────         ────────────────
+T0      75%               Checkpoint: 500MB        Check: 75% < 90% ✓
+T1      80%               Streaming...             Loading file 1...
+T2      85%               Streaming...             Loading file 2...
+T3      87%               Client writes 100MB      Loading file 3...
+        (sync'd)
+T4      95%               [RACE]                   Check: 95% > 90% ✗
+                                                   ABORT
+```
+
+**Behavior:** Replica aborts mid-checkpoint, discards partial data, retries.
+
+**Race Condition 2: Memory Fills During WAL Streaming**
+
+More insidious - streaming can continue indefinitely with gradual memory growth:
+
+```
+Time    Replica Memory    Streaming Activity
+────    ──────────────    ──────────────────
+T0      75%               WAL entries applying, memory check: OK
+T1      78%               Large SET batch received
+T2      82%               Memory growing faster than eviction
+T3      88%               Approaching limit, no check yet
+T4      94%               Next batch pushes over limit → OOM
+```
+
+**Detection and Backpressure:**
+
+FrogDB implements continuous memory monitoring during WAL streaming:
+
+```rust
+async fn apply_wal_entry(&mut self, entry: &WalEntry) -> Result<(), ReplicationError> {
+    // Check memory BEFORE applying
+    let current_pct = self.memory_usage_percent();
+
+    if current_pct >= self.config.sync_memory_pause_pct {
+        // Pause consumption - TCP backpressure will slow primary
+        warn!(
+            "Memory at {}%, pausing WAL consumption (threshold: {}%)",
+            current_pct, self.config.sync_memory_pause_pct
+        );
+
+        // Wait for memory to drop or timeout
+        let result = self.wait_for_memory_headroom().await;
+
+        if result.is_err() {
+            return Err(ReplicationError::MemoryPressure);
+        }
+    }
+
+    // Apply entry
+    self.store.apply_write_batch(&entry.batch)?;
+
+    Ok(())
+}
+
+async fn wait_for_memory_headroom(&self) -> Result<(), ReplicationError> {
+    let mut attempts = 0;
+    let max_attempts = self.config.sync_memory_wait_attempts;
+
+    loop {
+        // Yield to allow background processes (eviction, expiry)
+        tokio::time::sleep(Duration::from_millis(
+            self.config.sync_memory_check_interval_ms
+        )).await;
+
+        let current_pct = self.memory_usage_percent();
+
+        if current_pct < self.config.sync_memory_resume_pct {
+            return Ok(());
+        }
+
+        attempts += 1;
+        if attempts >= max_attempts {
+            // Give up - memory won't drop
+            return Err(ReplicationError::MemoryPressure);
+        }
+    }
+}
+```
+
+**Eviction Interaction During Sync:**
+
+| Scenario | Eviction Enabled? | Behavior |
+|----------|-------------------|----------|
+| Memory > pause threshold | Yes | Pause streaming, wait for eviction |
+| Memory > pause threshold | No | Pause briefly, then abort sync |
+| Eviction running but not keeping up | Yes | Eventually abort if wait timeout |
+| Memory spike from single large batch | Either | May OOM before check runs |
+
+**Why NOT Evict During Sync:**
+
+FrogDB does **not** run eviction during FULLRESYNC checkpoint load:
+
+1. **Eviction may delete keys about to be restored:** Race between eviction and checkpoint loading could cause data inconsistency
+2. **Checkpoint represents a point-in-time:** Evicting during load creates hybrid state
+3. **Pause is safer:** Let streaming pause, wait for headroom, then continue
+
+For WAL streaming (after FULLRESYNC), eviction CAN run:
+- Streaming applies individual operations, not a bulk checkpoint
+- Each operation is applied atomically
+- Eviction and streaming interleave safely
+
+**Configuration:**
+
+```toml
+[replication]
+# Pause WAL consumption when memory exceeds this percentage
+sync_memory_pause_pct = 85
+
+# Resume WAL consumption when memory drops below this percentage
+sync_memory_resume_pct = 80
+
+# Interval between memory checks while paused
+sync_memory_check_interval_ms = 100
+
+# Maximum wait attempts before aborting sync
+sync_memory_wait_attempts = 300  # 30 seconds at 100ms interval
+
+# Reserve headroom during sync (reduces effective max_memory)
+sync_memory_headroom_percent = 5
+```
+
+**Memory Headroom Calculation:**
+
+During active replication, effective memory limit is reduced:
+
+```rust
+fn effective_max_memory(&self) -> usize {
+    if self.is_syncing() {
+        let headroom_pct = self.config.sync_memory_headroom_percent;
+        self.config.max_memory * (100 - headroom_pct) / 100
+    } else {
+        self.config.max_memory
+    }
+}
+```
+
+**Example with 10GB max_memory, 5% headroom:**
+- Normal operation: 10GB effective
+- During sync: 9.5GB effective (500MB reserved for replication buffers)
+
+**Race Recovery Flow:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              Memory Race Recovery Flow                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Memory > sync_memory_pause_pct (85%)                           │
+│         │                                                        │
+│         ▼                                                        │
+│  Pause WAL consumption (TCP backpressure to primary)            │
+│         │                                                        │
+│         ▼                                                        │
+│  Wait for memory < sync_memory_resume_pct (80%)                 │
+│         │                                                        │
+│    ┌────┴────┐                                                  │
+│    │         │                                                   │
+│    ▼         ▼                                                   │
+│  Memory     Timeout                                              │
+│  dropped    (30s)                                                │
+│    │         │                                                   │
+│    ▼         ▼                                                   │
+│  Resume    Abort sync                                            │
+│  streaming  │                                                    │
+│             ▼                                                    │
+│         Exponential backoff                                      │
+│             │                                                    │
+│             ▼                                                    │
+│         Retry PSYNC                                              │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_sync_memory_pauses_total` | Times streaming paused for memory |
+| `frogdb_sync_memory_pause_duration_ms` | Total pause duration |
+| `frogdb_sync_aborted_memory_total` | Syncs aborted due to memory |
+| `frogdb_sync_memory_headroom_bytes` | Current reserved headroom |
+
 **Checkpoint Cleanup on Abort:**
 
 When replica aborts full sync due to OOM:

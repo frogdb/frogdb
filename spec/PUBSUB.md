@@ -197,6 +197,135 @@ Client: SPUBLISH channel message
 | SUBSCRIBE | Store on all internal shards | Store locally (global: any node receives) |
 | SSUBSCRIBE | Store on owner shard | Store on slot owner node's owner shard |
 
+### Message Ordering Guarantees in Cluster Mode
+
+This section clarifies exactly what ordering guarantees pub/sub provides in cluster deployments.
+
+**Ordering Scope:**
+
+| Scope | Guarantee | Notes |
+|-------|-----------|-------|
+| Single subscriber | FIFO | Messages arrive in publication order |
+| Multiple subscribers, same node | FIFO per subscriber | Each sees FIFO, but not synchronized across subscribers |
+| Multiple subscribers, different nodes | **No guarantee** | Network timing determines order |
+| Multiple publishers, same channel | **No guarantee** | Messages interleave arbitrarily |
+
+**Why No Cross-Node Ordering:**
+
+```
+Publisher                Node A                 Node B
+    │                       │                      │
+    │── PUBLISH chan m1 ──▶│                      │
+    │                       │── forward m1 ──────▶│
+    │                       │                      │
+    │── PUBLISH chan m2 ──▶│                      │
+    │                       │── forward m2 ──────▶│
+    │                       │                      │
+
+If m2 arrives at Node B before m1 (network reordering):
+- Subscriber on Node A sees: m1, m2 ✓ (local, FIFO)
+- Subscriber on Node B sees: m2, m1 ✗ (network reordering)
+```
+
+**Global Pub/Sub (PUBLISH) Ordering:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 PUBLISH Ordering Guarantees                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  Guaranteed:                                                     │
+│  • Per-subscriber FIFO for messages from a SINGLE publisher      │
+│    (if messages go through the same node)                       │
+│                                                                   │
+│  NOT Guaranteed:                                                 │
+│  • Cross-publisher ordering (multiple publishers = arbitrary)    │
+│  • Cross-node ordering for subscribers on different nodes        │
+│  • Total ordering across all subscribers                         │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Sharded Pub/Sub (SPUBLISH) Ordering:**
+
+Sharded pub/sub has STRONGER ordering guarantees because messages only go to one node:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 SPUBLISH Ordering Guarantees                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  Guaranteed:                                                     │
+│  • Per-channel FIFO for all subscribers to that channel          │
+│    (single slot owner = single point of serialization)          │
+│                                                                   │
+│  NOT Guaranteed:                                                 │
+│  • Cross-channel ordering (different channels may be on          │
+│    different nodes)                                             │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Per-Publisher FIFO:**
+
+Messages from the same publisher to the same channel are delivered in order:
+
+```
+Publisher P (connected to Node A)
+    │
+    ├── PUBLISH chan m1
+    ├── PUBLISH chan m2
+    └── PUBLISH chan m3
+
+All subscribers see: m1, m2, m3 (in order)
+
+Why: Single TCP connection serializes messages.
+```
+
+**Cross-Publisher Non-Ordering:**
+
+Messages from different publishers may interleave in any order:
+
+```
+Publisher P1 (Node A)        Publisher P2 (Node B)
+    │                             │
+    ├── PUBLISH chan p1_m1        ├── PUBLISH chan p2_m1
+    ├── PUBLISH chan p1_m2        ├── PUBLISH chan p2_m2
+
+Subscriber might see:
+- p1_m1, p2_m1, p1_m2, p2_m2
+- p2_m1, p1_m1, p2_m2, p1_m2
+- p1_m1, p1_m2, p2_m1, p2_m2  (if P1's messages arrive first)
+- Any other interleaving
+```
+
+**Client Recommendations for Ordering-Sensitive Workloads:**
+
+| Requirement | Solution |
+|-------------|----------|
+| Total ordering across all messages | Use a single publisher |
+| Per-topic ordering | Use sharded pub/sub (SPUBLISH) |
+| Causally-related message ordering | Include sequence numbers in messages |
+| Strong ordering | Use Redis Streams instead of pub/sub |
+
+**Configuration for Network Timing:**
+
+```toml
+[cluster]
+# Cluster bus message timeout affects forwarding latency
+cluster_bus_timeout_ms = 5000
+
+# No configuration for message ordering - it's inherent to distributed systems
+```
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_pubsub_messages_forwarded_total` | Messages forwarded between nodes |
+| `frogdb_pubsub_forward_latency_ms` | Latency of cross-node message delivery |
+| `frogdb_pubsub_out_of_order_total` | Detected out-of-order deliveries (if sequence tracked) |
+
 ### Slot Migration (Sharded Channels) {#cluster-integration}
 
 During slot migration, sharded pub/sub subscriptions require special handling.
@@ -356,3 +485,157 @@ struct ConnectionState {
     pubsub_mode: bool,
 }
 ```
+
+### Subscription Limits
+
+FrogDB enforces limits on subscriptions to prevent resource exhaustion from misbehaving or malicious clients.
+
+**Per-Connection Limits:**
+
+| Limit | Default | Description |
+|-------|---------|-------------|
+| `max_subscriptions_per_connection` | 10000 | Maximum channel subscriptions per connection |
+| `max_pattern_subscriptions_per_connection` | 1000 | Maximum pattern subscriptions per connection |
+| `max_sharded_subscriptions_per_connection` | 10000 | Maximum sharded channel subscriptions |
+
+**Per-Shard Limits:**
+
+| Limit | Default | Description |
+|-------|---------|-------------|
+| `max_total_subscriptions_per_shard` | 1000000 | Total subscriptions across all connections |
+| `max_unique_channels_per_shard` | 100000 | Unique channel names per shard |
+| `max_unique_patterns_per_shard` | 10000 | Unique patterns per shard |
+
+**Configuration:**
+
+```toml
+[pubsub]
+# Per-connection limits
+max_subscriptions_per_connection = 10000
+max_pattern_subscriptions_per_connection = 1000
+max_sharded_subscriptions_per_connection = 10000
+
+# Per-shard limits (0 = unlimited)
+max_total_subscriptions_per_shard = 1000000
+max_unique_channels_per_shard = 100000
+max_unique_patterns_per_shard = 10000
+```
+
+**Behavior When Limits Exceeded:**
+
+| Limit Exceeded | Error Response | Existing Subscriptions |
+|----------------|----------------|------------------------|
+| Per-connection channel | `-ERR max subscriptions reached for this connection` | Unchanged |
+| Per-connection pattern | `-ERR max pattern subscriptions reached for this connection` | Unchanged |
+| Per-shard total | `-ERR shard subscription limit reached` | Unchanged |
+| Per-shard unique channels | `-ERR too many unique channels on this shard` | Unchanged |
+
+**Limit Enforcement:**
+
+```rust
+fn handle_subscribe(&mut self, channels: Vec<Bytes>) -> Result<Response, Error> {
+    let current_count = self.connection.subscriptions.len();
+    let new_count = current_count + channels.len();
+
+    // Per-connection limit
+    if new_count > self.config.max_subscriptions_per_connection {
+        return Err(Error::MaxSubscriptionsReached);
+    }
+
+    // Per-shard limit
+    let shard_total = self.shard.subscription_count();
+    if shard_total + channels.len() > self.config.max_total_subscriptions_per_shard {
+        return Err(Error::ShardSubscriptionLimitReached);
+    }
+
+    // All limits passed - subscribe
+    for channel in channels {
+        self.shard.add_subscription(&channel, self.connection.id);
+        self.connection.subscriptions.insert(channel);
+    }
+
+    Ok(Response::Subscribed(new_count))
+}
+```
+
+**Memory Impact Per Subscription:**
+
+| Component | Approximate Size |
+|-----------|------------------|
+| Channel name in HashMap key | `len(channel) + 24 bytes` (Bytes overhead) |
+| Connection ID in HashSet | 8 bytes |
+| Pattern (compiled regex) | ~200-500 bytes |
+| Per-connection tracking | 8 bytes per subscription |
+
+**Example Memory Calculation:**
+
+```
+10,000 connections × 100 subscriptions each = 1,000,000 total subscriptions
+
+Per subscription: ~50 bytes (channel) + 8 bytes (conn ID) + 8 bytes (tracking) = ~66 bytes
+Total: 1,000,000 × 66 bytes ≈ 63 MB for subscription metadata
+
+Pattern subscriptions are more expensive:
+1,000 patterns × 300 bytes (compiled) = 300 KB
+```
+
+**Why Pattern Limits Are Lower:**
+
+1. **CPU cost**: Pattern matching requires regex evaluation for every PUBLISH
+2. **Memory cost**: Compiled regex patterns consume more memory than simple strings
+3. **Complexity**: Many patterns increase matching time significantly
+4. **Attack surface**: Pathological regex patterns can cause ReDoS
+
+**Subscription Count Reporting:**
+
+```
+PUBSUB NUMSUB channel1 channel2
+*4
+$8
+channel1
+:150       # 150 subscribers
+$8
+channel2
+:25        # 25 subscribers
+```
+
+**DEBUG Command for Limits:**
+
+```
+DEBUG PUBSUB LIMITS
+
+# Sample output:
+connection_subscriptions: 523/10000
+connection_patterns: 5/1000
+shard_total_subscriptions: 45230/1000000
+shard_unique_channels: 8421/100000
+shard_unique_patterns: 234/10000
+```
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_pubsub_subscriptions_total` | Total active subscriptions |
+| `frogdb_pubsub_subscriptions_per_connection` | Histogram of subscriptions per connection |
+| `frogdb_pubsub_patterns_total` | Total active pattern subscriptions |
+| `frogdb_pubsub_subscription_limit_errors_total` | Times limit was hit |
+| `frogdb_pubsub_unique_channels_total` | Unique channel names with subscribers |
+
+**Graceful Degradation:**
+
+When approaching limits:
+
+| Threshold | Behavior |
+|-----------|----------|
+| 80% of per-connection limit | Log warning |
+| 90% of per-shard limit | Log warning, emit metric |
+| 100% limit hit | Reject new subscriptions, log error |
+
+**Client Guidance:**
+
+1. **Use sharded pub/sub** for high-subscription-count workloads
+2. **Reuse channels** instead of creating unique channel per entity
+3. **Use wildcards** (PSUBSCRIBE) sparingly - prefer explicit subscriptions
+4. **Unsubscribe** when no longer needed to free resources
+5. **Monitor** subscription counts via `PUBSUB NUMSUB` and metrics

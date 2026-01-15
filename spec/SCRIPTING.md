@@ -675,30 +675,120 @@ val1
 
 ### MULTI Forbidden Inside Scripts
 
-Scripts cannot start their own transactions:
+Scripts cannot start their own transactions. This section specifies exact behavior for transaction commands inside Lua scripts.
+
+**Transaction Commands in Scripts:**
+
+| Command | Error Response | Script Behavior |
+|---------|----------------|-----------------|
+| `MULTI` | `-ERR MULTI calls can not be nested` | Script aborts (redis.call) or returns error table (redis.pcall) |
+| `EXEC` | `-ERR EXEC without MULTI` | Script aborts or returns error table |
+| `DISCARD` | `-ERR DISCARD without MULTI` | Script aborts or returns error table |
+| `WATCH` | `-ERR WATCH inside MULTI is not allowed` | Script aborts or returns error table |
+| `UNWATCH` | No error | Executes (no-op if no watches) |
+
+**Behavior with redis.call() vs redis.pcall():**
 
 ```lua
--- This will ERROR:
-redis.call('MULTI')    -- -ERR MULTI calls not allowed inside scripts
-redis.call('SET', KEYS[1], 'val')
-redis.call('EXEC')
+-- Using redis.call() - script ABORTS on error
+redis.call('MULTI')  -- Script immediately aborts
+                     -- Error propagates to client
+                     -- No further script lines execute
+
+-- Using redis.pcall() - script CONTINUES, receives error table
+local result = redis.pcall('MULTI')
+-- result = {err = "ERR MULTI calls can not be nested"}
+-- Script continues executing
+-- Application can handle the error
 ```
 
-**Why?**
-- Scripts already execute atomically (implicit transaction)
-- Nested transactions are undefined behavior
-- Would complicate transaction ordering
+**Examples:**
+
+```lua
+-- Example 1: MULTI with redis.call()
+redis.call('SET', KEYS[1], 'before')
+redis.call('MULTI')  -- ERROR HERE: script aborts
+redis.call('SET', KEYS[1], 'after')  -- Never executes
+-- Client receives: -ERR MULTI calls can not be nested
+-- KEYS[1] = 'before' (first SET succeeded)
+
+-- Example 2: MULTI with redis.pcall()
+redis.call('SET', KEYS[1], 'before')
+local result = redis.pcall('MULTI')
+if result.err then
+    -- Handle error gracefully
+    redis.log(redis.LOG_WARNING, "MULTI not allowed: " .. result.err)
+end
+redis.call('SET', KEYS[1], 'after')  -- This DOES execute
+return "done"
+-- KEYS[1] = 'after' (both SETs succeeded)
+
+-- Example 3: WATCH inside script
+redis.call('WATCH', KEYS[1])  -- ERROR: script aborts
+-- -ERR WATCH inside MULTI is not allowed
+-- (Scripts always execute inside implicit "transaction context")
+
+-- Example 4: EXEC without MULTI
+redis.call('EXEC')  -- ERROR: script aborts
+-- -ERR EXEC without MULTI
+```
+
+**Why WATCH Is Forbidden:**
+
+Even though WATCH normally operates *outside* MULTI, it's forbidden in scripts because:
+
+1. **Scripts are atomic:** WATCH's purpose is to detect concurrent modifications - irrelevant inside atomic script
+2. **Implicit transaction context:** Scripts execute in a transaction-like context even without explicit MULTI
+3. **VLL ordering:** Script keys are locked via VLL; WATCH would be redundant and confusing
+
+**Why No Nested Transactions:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                Why Scripts Don't Need MULTI                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  Script execution:                                               │
+│    1. Keys declared in EVAL command                              │
+│    2. VLL acquires locks on all keys (or continuation lock)     │
+│    3. Script runs atomically - no other commands interleave     │
+│    4. All modifications visible together when script completes  │
+│                                                                   │
+│  This is equivalent to:                                          │
+│    MULTI                                                         │
+│    ... all script commands ...                                   │
+│    EXEC                                                          │
+│                                                                   │
+│  Adding MULTI inside would be redundant and create ambiguity    │
+│  about transaction boundaries.                                   │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 **Workaround:**
 
 Scripts are already atomic. Use the script itself as the transaction boundary:
 
 ```lua
--- All operations here are atomic
+-- All operations here are atomic - no MULTI needed
 redis.call('SET', KEYS[1], 'val1')
 redis.call('SET', KEYS[2], 'val2')
 redis.call('SET', KEYS[3], 'val3')
--- Entire script is atomic, no MULTI needed
+-- Entire script commits atomically
+```
+
+**Error Response Format:**
+
+All transaction command errors inside scripts follow this format:
+
+```
+-ERR <command> <reason>
+
+Examples:
+-ERR MULTI calls can not be nested
+-ERR EXEC without MULTI
+-ERR DISCARD without MULTI
+-ERR WATCH inside MULTI is not allowed
 ```
 
 ### Script Errors in Transaction

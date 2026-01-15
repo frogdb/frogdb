@@ -168,6 +168,187 @@ fn exec(conn: &mut Connection) -> Result<Vec<Response>, Error> {
 }
 ```
 
+### Key Version Implementation
+
+This section specifies exactly how key versions are generated and managed for WATCH.
+
+**Version Number Type:**
+
+```rust
+/// Key version for WATCH tracking
+/// u64 provides 18 quintillion versions - overflow is not a practical concern
+type KeyVersion = u64;
+```
+
+**Version Counter Scope:**
+
+- **Per-shard**: Each shard maintains its own version counter
+- **Not global**: Version numbers are NOT unique across shards (not needed for WATCH)
+- **In-memory only**: Versions are NOT persisted (reset on restart)
+
+```rust
+pub struct Shard {
+    /// Monotonically increasing version counter for this shard
+    /// Increments on any key modification
+    key_version_counter: AtomicU64,
+
+    /// Per-key version tracking (optional optimization)
+    /// If None, use global counter for all keys
+    per_key_versions: Option<HashMap<Bytes, KeyVersion>>,
+}
+```
+
+**Version Increment Triggers:**
+
+| Operation | Version Incremented? | Notes |
+|-----------|---------------------|-------|
+| SET/SETNX/SETEX | Yes | Any value change |
+| GET | No | Read-only |
+| DEL | Yes | Even if key didn't exist |
+| EXPIRE/PEXPIRE | Yes | TTL is a modification |
+| PERSIST | Yes | Removing TTL is a modification |
+| RENAME src dst | Yes (both keys) | src and dst versions increment |
+| INCR/DECR/INCRBY | Yes | Value modification |
+| APPEND | Yes | Value modification |
+| HSET/HDEL/etc. | Yes | Any hash modification |
+| LPUSH/RPUSH/etc. | Yes | Any list modification |
+| SADD/SREM/etc. | Yes | Any set modification |
+| ZADD/ZREM/etc. | Yes | Any sorted set modification |
+| Key expiration | Yes | Background expiry triggers version bump |
+
+**Non-Existent Key Handling:**
+
+```rust
+fn key_version(&self, key: &Bytes) -> KeyVersion {
+    match self.store.get(key) {
+        Some(entry) => entry.version,
+        None => 0,  // Non-existent keys have version 0
+    }
+}
+
+fn watch_check(&self, key: &Bytes, watched_version: KeyVersion) -> bool {
+    let current = self.key_version(key);
+
+    // Special case: key didn't exist at WATCH time and still doesn't
+    if watched_version == 0 && current == 0 {
+        return true; // No change
+    }
+
+    // Special case: key didn't exist but now does (was created)
+    if watched_version == 0 && current > 0 {
+        return false; // Changed
+    }
+
+    // Normal case: compare versions
+    current == watched_version
+}
+```
+
+**DEL Behavior:**
+
+When a key is deleted:
+
+```rust
+fn delete_key(&mut self, key: &Bytes) -> bool {
+    let existed = self.store.remove(key).is_some();
+
+    // Always increment version, even if key didn't exist
+    // This ensures WATCH on non-existent key detects if key was
+    // created then deleted during the watch period
+    self.increment_version(key);
+
+    existed
+}
+```
+
+**Version Overflow Handling:**
+
+```rust
+fn increment_version(&mut self, key: &Bytes) {
+    // Use wrapping add for overflow
+    // At 1 billion increments/second, overflow takes 584 years
+    let new_version = self.key_version_counter.fetch_add(1, Ordering::SeqCst)
+        .wrapping_add(1);
+
+    if let Some(entry) = self.store.get_mut(key) {
+        entry.version = new_version;
+    }
+}
+```
+
+**Persistence: NOT Persisted:**
+
+Key versions are **intentionally not persisted**. On restart, all versions reset to 0.
+
+**Rationale:**
+- WATCH is for short-lived optimistic locking, not durable state
+- Matches Redis behavior exactly
+- Simplifies persistence (no version metadata in snapshots)
+- All connections reset on restart anyway, so watched versions are meaningless
+
+**Behavior After Restart:**
+
+```
+Before crash:
+  WATCH key1  (version = 12345)
+  SET key1 value
+  ... server crashes ...
+
+After restart:
+  - key1 loaded from snapshot
+  - key1 version = 0 (reset)
+  - Any WATCH from previous session = invalid (connection gone)
+  - New WATCHes start fresh
+```
+
+**WATCH on Expired Keys:**
+
+```rust
+fn key_version_with_expiry(&self, key: &Bytes) -> KeyVersion {
+    match self.store.get(key) {
+        Some(entry) if !entry.is_expired() => entry.version,
+        Some(_) => 0,  // Expired = treat as non-existent
+        None => 0,
+    }
+}
+```
+
+| Scenario | Behavior |
+|----------|----------|
+| WATCH on expired key | Version = 0 (as if non-existent) |
+| Key expires during WATCH | Version changes (background expiry increments) |
+| WATCH, key expires, key recreated | Version mismatch detected, transaction aborts |
+
+**Per-Key vs Global Version Counter:**
+
+| Approach | Memory | Precision | Use Case |
+|----------|--------|-----------|----------|
+| Global counter | O(1) | Low | Simple, most workloads |
+| Per-key versions | O(n) | High | High-contention workloads |
+
+FrogDB uses **global per-shard counter** by default:
+
+- Simpler implementation
+- Lower memory overhead
+- False positives possible (unrelated key modified causes abort)
+- Matches Redis behavior
+
+**Configuration:**
+
+```toml
+[transactions]
+# Use per-key version tracking (more memory, fewer false positive WATCH aborts)
+per_key_watch_versions = false
+```
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_watch_abort_total` | Total WATCH-triggered transaction aborts |
+| `frogdb_watch_false_positive_total` | Aborts from unrelated key changes (if per-key disabled) |
+| `frogdb_key_version_counter` | Current version counter value (per shard) |
+
 ---
 
 ## Transaction Durability

@@ -255,6 +255,178 @@ These parameters can be changed at runtime:
 | `maxclients` | int | Max concurrent connections |
 | `requirepass` | string | Authentication password |
 
+### Complete Parameter Reference
+
+This table lists ALL configuration parameters with mutability and side effects.
+
+**Server Parameters:**
+
+| Parameter | Mutable | Default | Side Effects on Change |
+|-----------|---------|---------|------------------------|
+| `bind` | No | `127.0.0.1` | N/A - requires restart |
+| `port` | No | `6379` | N/A - requires restart |
+| `admin_port` | No | `6380` | N/A - requires restart |
+| `unixsocket` | No | `""` | N/A - requires restart |
+| `maxclients` | Yes | `10000` | Immediate - new connections rejected if over limit |
+| `timeout` | Yes | `0` | Immediate - applies to existing idle connections |
+| `tcp-keepalive` | Yes | `300` | New connections only |
+| `tcp-backlog` | No | `511` | N/A - requires restart |
+
+**Memory Parameters:**
+
+| Parameter | Mutable | Default | Side Effects on Change |
+|-----------|---------|---------|------------------------|
+| `maxmemory` | Yes | `0` | Immediate - triggers eviction if exceeded |
+| `maxmemory-policy` | Yes | `noeviction` | Immediate - next eviction uses new policy |
+| `maxmemory-samples` | Yes | `5` | Immediate - next eviction uses new sample size |
+
+**Persistence Parameters:**
+
+| Parameter | Mutable | Default | Side Effects on Change |
+|-----------|---------|---------|------------------------|
+| `dir` | No | `./data` | N/A - requires restart |
+| `dbfilename` | No | `dump.fdb` | N/A - requires restart |
+| `durability_mode` | Yes | `periodic` | Immediate - affects next write |
+| `wal_batch_timeout_ms` | Yes | `10` | Immediate |
+| `snapshot_interval_s` | Yes | `3600` | Reschedules next snapshot |
+
+**Concurrency Parameters:**
+
+| Parameter | Mutable | Default | Side Effects on Change |
+|-----------|---------|---------|------------------------|
+| `num_shards` | No | `0` (auto) | N/A - requires restart |
+| `allow_cross_slot_standalone` | No | `false` | N/A - requires restart |
+| `scatter_gather_timeout_ms` | Yes | `5000` | Immediate - affects new operations |
+| `vll_max_queue_depth` | Yes | `10000` | Immediate |
+
+**Replication Parameters:**
+
+| Parameter | Mutable | Default | Side Effects on Change |
+|-----------|---------|---------|------------------------|
+| `repl_timeout_ms` | Yes | `60000` | Immediate - applies to existing connections |
+| `repl_backlog_size` | Yes | `1048576` | Immediate - backlog resized |
+| `min_replicas_to_write` | Yes | `0` | Immediate - affects next write |
+| `sync_timeout_ms` | Yes | `1000` | Immediate |
+
+**Logging Parameters:**
+
+| Parameter | Mutable | Default | Side Effects on Change |
+|-----------|---------|---------|------------------------|
+| `loglevel` | Yes | `info` | Immediate - affects all logging |
+| `slowlog-log-slower-than` | Yes | `10000` | Immediate |
+| `slowlog-max-len` | Yes | `128` | Immediate - truncates if reduced |
+
+**TLS Parameters:**
+
+| Parameter | Mutable | Default | Side Effects on Change |
+|-----------|---------|---------|------------------------|
+| `tls-cert-file` | No | `""` | N/A - requires restart |
+| `tls-key-file` | No | `""` | N/A - requires restart |
+| `tls-ca-cert-file` | No | `""` | N/A - requires restart |
+| `tls-port` | No | `0` | N/A - requires restart |
+
+### Immutability Rationale
+
+| Parameter | Why Immutable |
+|-----------|---------------|
+| `bind`, `port` | Changing network addresses requires new socket bindings |
+| `num_shards` | Data distribution is fixed at startup; changing requires data migration |
+| `allow_cross_slot_standalone` | Affects command routing logic deeply embedded in execution |
+| `dir`, `dbfilename` | Changing paths mid-operation would orphan existing data |
+| `tls-*` | TLS contexts are expensive to recreate; requires connection termination |
+| `tcp-backlog` | OS socket option set at bind time |
+| `unixsocket` | Unix socket created at startup |
+
+### CONFIG SET Side Effects
+
+When mutable parameters change, FrogDB takes immediate action:
+
+**`maxmemory` Reduced:**
+
+```rust
+fn on_maxmemory_change(new_value: u64) {
+    let current_usage = memory_usage();
+    if current_usage > new_value {
+        // Trigger immediate eviction
+        trigger_eviction_cycle();
+    }
+}
+```
+
+**`maxclients` Reduced:**
+
+```rust
+fn on_maxclients_change(new_value: u32) {
+    // Don't kill existing connections
+    // Just reject new connections until under limit
+    // Log warning if currently over limit
+    let current = connection_count();
+    if current > new_value {
+        warn!(
+            "maxclients reduced to {} but {} connections active",
+            new_value, current
+        );
+    }
+}
+```
+
+**`slowlog-max-len` Reduced:**
+
+```rust
+fn on_slowlog_maxlen_change(new_value: u32) {
+    // Truncate slowlog immediately
+    while slowlog.len() > new_value as usize {
+        slowlog.pop_back();
+    }
+}
+```
+
+**`repl_backlog_size` Changed:**
+
+```rust
+fn on_backlog_size_change(new_value: u64) {
+    // Resize ring buffer
+    // May truncate oldest entries if reduced
+    repl_backlog.resize(new_value);
+}
+```
+
+### Runtime Validation
+
+CONFIG SET validates parameters before applying:
+
+```rust
+fn validate_config_set(param: &str, value: &str) -> Result<(), ConfigError> {
+    match param {
+        "maxmemory" => {
+            let bytes = parse_bytes(value)?;
+            if bytes > 0 && bytes < MIN_MAXMEMORY {
+                return Err(ConfigError::Invalid(
+                    format!("maxmemory must be >= {} or 0", MIN_MAXMEMORY)
+                ));
+            }
+        }
+        "maxmemory-policy" => {
+            if !VALID_POLICIES.contains(&value) {
+                return Err(ConfigError::Invalid(
+                    format!("unknown eviction policy: {}", value)
+                ));
+            }
+        }
+        "loglevel" => {
+            if !["debug", "info", "warn", "error"].contains(&value) {
+                return Err(ConfigError::Invalid(
+                    format!("unknown log level: {}", value)
+                ));
+            }
+        }
+        // ... other validations
+        _ => {}
+    }
+    Ok(())
+}
+```
+
 ### Parameter Naming
 
 CONFIG GET/SET uses Redis-compatible parameter names, mapped to TOML structure internally:
@@ -554,6 +726,114 @@ impl ConfigManager {
     }
 }
 ```
+
+---
+
+## Timeout Reference
+
+This section consolidates all timeout values across FrogDB for easy reference.
+
+### Connection Timeouts
+
+| Timeout | Config Key | Default | Description |
+|---------|------------|---------|-------------|
+| Client idle | `timeout` | `0` (disabled) | Disconnect idle clients |
+| TCP keepalive | `tcp_keepalive` | `300s` | OS-level keepalive interval |
+| Protocol frame | `frame_timeout_ms` | `30000` | Max time for incomplete frame |
+
+### Operation Timeouts
+
+| Timeout | Config Key | Default | Description |
+|---------|------------|---------|-------------|
+| Scatter-gather | `scatter_gather_timeout_ms` | `5000` | Total multi-shard operation time |
+| VLL lock acquisition | `vll_lock_acquisition_timeout_ms` | `4000` | Time to acquire locks |
+| Per-shard lock | `vll_per_shard_lock_timeout_ms` | `2000` | Per-shard queue wait time |
+| Lua script | `lua_time_limit_ms` | `5000` | Max script execution time |
+| Blocking command | Command argument | varies | BLPOP/BRPOP timeout |
+
+### Persistence Timeouts
+
+| Timeout | Config Key | Default | Description |
+|---------|------------|---------|-------------|
+| WAL batch | `wal_batch_timeout_ms` | `10` | Max delay before WAL flush |
+| Snapshot | N/A | No timeout | Snapshot runs to completion |
+
+### Replication Timeouts
+
+| Timeout | Config Key | Default | Description |
+|---------|------------|---------|-------------|
+| Replication connection | `repl_timeout_ms` | `60000` | Disconnect on no data |
+| Replication ping | `repl_ping_interval_ms` | `10000` | Heartbeat frequency |
+| Checkpoint transfer | `checkpoint_transfer_timeout_ms` | `300000` | Total FULLRESYNC time |
+| Checkpoint file | `checkpoint_file_timeout_ms` | `60000` | Per-file transfer time |
+| Sync ACK | `sync_timeout_ms` | `1000` | Wait for replica ACK |
+| Reconnect base | `repl_reconnect_base_ms` | `1000` | Initial reconnect delay |
+| Reconnect max | `repl_reconnect_max_ms` | `30000` | Maximum reconnect delay |
+| Data timeout | `repl_data_timeout_ms` | `30000` | Time without data before reconnect |
+
+### Cluster Timeouts
+
+| Timeout | Config Key | Default | Description |
+|---------|------------|---------|-------------|
+| Cluster bus | `cluster_bus_timeout_ms` | `5000` | Inter-node communication |
+| Node timeout | `cluster_node_timeout_ms` | `15000` | Mark node as failing |
+| Failover timeout | `cluster_failover_timeout_ms` | `5000` | Complete failover |
+
+### Timeout Relationships
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Timeout Hierarchy                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  Client perspective:                                             │
+│    client_timeout (application)                                  │
+│         │                                                         │
+│         ├── Must be > scatter_gather_timeout_ms                  │
+│         │   (client should wait longer than server operation)    │
+│         │                                                         │
+│         └── Consider repl_timeout_ms for sync writes             │
+│             (WAIT command may take longer)                       │
+│                                                                   │
+│  Operation perspective:                                          │
+│    scatter_gather_timeout_ms (5000ms)                           │
+│         │                                                         │
+│         ├── vll_lock_acquisition_timeout_ms (4000ms)            │
+│         │   └── Should be < scatter_gather to leave execution   │
+│         │                                                         │
+│         └── Execution time (remaining ~1000ms)                   │
+│                                                                   │
+│  Replication perspective:                                        │
+│    repl_timeout_ms (60000ms)                                    │
+│         │                                                         │
+│         ├── repl_ping_interval_ms (10000ms)                     │
+│         │   └── Should be < repl_timeout                        │
+│         │                                                         │
+│         └── sync_timeout_ms (1000ms)                            │
+│             └── Per-write ACK wait, << repl_timeout             │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Recommended Relationships
+
+| Relationship | Constraint | Reason |
+|--------------|------------|--------|
+| `vll_lock_acquisition_timeout_ms` < `scatter_gather_timeout_ms` | 80% or less | Leave time for execution |
+| `repl_ping_interval_ms` < `repl_timeout_ms` | 10% or less | Multiple heartbeats before timeout |
+| `sync_timeout_ms` < `repl_timeout_ms` | Much smaller | Per-write vs connection timeout |
+| Client timeout > `scatter_gather_timeout_ms` | At least 2x | Account for network latency |
+| `cluster_node_timeout_ms` > `cluster_bus_timeout_ms` | At least 2x | Allow retries before marking failed |
+
+### Timeout Units
+
+All timeout configuration keys follow this convention:
+
+| Suffix | Unit |
+|--------|------|
+| `_ms` | Milliseconds |
+| `_s` | Seconds |
+| No suffix | Seconds (legacy Redis compatibility) |
 
 ---
 

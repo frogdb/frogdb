@@ -249,6 +249,289 @@ Flags inform the router and execution engine about command characteristics:
 
 ---
 
+## Extended Command Flags
+
+Beyond the core flags, FrogDB supports additional flags for specialized command behavior:
+
+```rust
+bitflags! {
+    pub struct CommandFlags: u32 {
+        // === Core Flags (documented above) ===
+        const WRITE       = 0b0000_0000_0001;
+        const READONLY    = 0b0000_0000_0010;
+        const FAST        = 0b0000_0000_0100;
+        const BLOCKING    = 0b0000_0000_1000;
+        const MULTI_KEY   = 0b0000_0001_0000;
+        const PUBSUB      = 0b0000_0010_0000;
+        const SCRIPT      = 0b0000_0100_0000;
+
+        // === Extended Flags ===
+
+        /// Command cannot be called from Lua scripts
+        /// Example: SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE
+        const NOSCRIPT    = 0b0000_1000_0000;
+
+        /// Command allowed during database loading (startup recovery)
+        /// Most commands are rejected until loading completes
+        /// Example: INFO, SUBSCRIBE, CLIENT
+        const LOADING     = 0b0001_0000_0000;
+
+        /// Command allowed on stale replica (replica not synced with primary)
+        /// Example: INFO, DEBUG, CONFIG GET
+        const STALE       = 0b0010_0000_0000;
+
+        /// Command should not be logged to slowlog
+        /// Example: SLOWLOG GET (prevents infinite recursion)
+        const SKIP_SLOWLOG = 0b0100_0000_0000;
+
+        /// Command may involve random data (affects test determinism)
+        /// Example: RANDOMKEY, SCAN (hash table iteration order)
+        const RANDOM      = 0b1000_0000_0000;
+
+        /// Command modifies server state (not data)
+        /// Example: CONFIG SET, DEBUG, SHUTDOWN
+        const ADMIN       = 0b0001_0000_0000_0000;
+
+        /// Command returns data that varies by time
+        /// Example: TIME, TTL (remaining time changes)
+        const NONDETERMINISTIC = 0b0010_0000_0000_0000;
+
+        /// Command should not be propagated to replicas
+        /// Example: DEBUG, CLIENT REPLY OFF
+        const NO_PROPAGATE = 0b0100_0000_0000_0000;
+    }
+}
+```
+
+### Extended Flag Usage
+
+| Flag | Purpose | Commands |
+|------|---------|----------|
+| `NOSCRIPT` | Prevent script execution (connection state issues) | SUBSCRIBE, MULTI, WATCH |
+| `LOADING` | Allow during startup recovery | INFO, PING, AUTH, QUIT |
+| `STALE` | Allow on out-of-sync replica | INFO, DEBUG, CLIENT |
+| `SKIP_SLOWLOG` | Avoid slowlog recursion/spam | SLOWLOG, LATENCY |
+| `RANDOM` | Mark non-deterministic iteration | RANDOMKEY, SCAN, KEYS |
+| `ADMIN` | Mark administrative commands | CONFIG, DEBUG, SHUTDOWN |
+| `NONDETERMINISTIC` | Time-dependent results | TIME, TTL, OBJECT IDLETIME |
+| `NO_PROPAGATE` | Don't replicate to replicas | DEBUG, CLIENT REPLY |
+
+### Flag Combinations and Routing Effects
+
+Certain flag combinations have special routing and execution effects:
+
+```
+Flag Combination Decision Tree:
+
+                    ┌─────────────────────┐
+                    │  Incoming Command   │
+                    └──────────┬──────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+        ┌─────────┐      ┌─────────┐      ┌─────────┐
+        │ LOADING │      │  STALE  │      │ NOSCRIPT│
+        │  check  │      │  check  │      │  check  │
+        └────┬────┘      └────┬────┘      └────┬────┘
+             │                │                │
+     ┌───────┴───────┐ ┌─────┴─────┐   ┌─────┴─────┐
+     │ Server still  │ │ Replica   │   │ Inside    │
+     │ loading?      │ │ stale?    │   │ script?   │
+     └───────┬───────┘ └─────┬─────┘   └─────┬─────┘
+             │               │               │
+        Yes──┴──No      Yes──┴──No      Yes──┴──No
+         │      │        │      │        │      │
+         ▼      ▼        ▼      ▼        ▼      ▼
+    ┌────────┐  │   ┌────────┐  │   ┌────────┐  │
+    │LOADING │  │   │ STALE  │  │   │NOSCRIPT│  │
+    │ flag?  │  │   │ flag?  │  │   │ flag?  │  │
+    └───┬────┘  │   └───┬────┘  │   └───┬────┘  │
+        │       │       │       │       │       │
+   Yes──┴──No   │  Yes──┴──No   │  Yes──┴──No   │
+    │      │    │   │      │    │   │      │    │
+    ▼      ▼    ▼   ▼      ▼    ▼   ▼      ▼    ▼
+   OK    ERR   OK  OK    ERR   OK ERR    OK    OK
+         BUSY                  STALE
+```
+
+**Flag Combination Effects:**
+
+| Combination | Effect |
+|-------------|--------|
+| `WRITE \| MULTI_KEY` | Scatter-gather write (MSET, DEL) |
+| `READONLY \| MULTI_KEY` | Scatter-gather read (MGET, EXISTS) |
+| `WRITE \| BLOCKING` | Blocking list operation, modifies data |
+| `READONLY \| BLOCKING` | Blocking read (BLMPOP with COUNT 0) |
+| `WRITE \| SCRIPT` | Lua script, single atomic execution |
+| `READONLY \| STALE` | Safe to execute on stale replica |
+| `ADMIN \| NO_PROPAGATE` | Admin command, don't replicate |
+| `FAST \| SKIP_SLOWLOG` | O(1) command, no slowlog needed |
+
+**Mutual Exclusivity:**
+
+| Flag A | Flag B | Relationship |
+|--------|--------|--------------|
+| `WRITE` | `READONLY` | Mutually exclusive (one must be set) |
+| `FAST` | `BLOCKING` | Mutually exclusive |
+| `PUBSUB` | `MULTI_KEY` | Mutually exclusive |
+
+```rust
+fn validate_flags(flags: CommandFlags) -> Result<(), Error> {
+    // WRITE and READONLY are mutually exclusive
+    if flags.contains(CommandFlags::WRITE | CommandFlags::READONLY) {
+        return Err(Error::InvalidFlags("WRITE and READONLY are mutually exclusive"));
+    }
+
+    // Must have either WRITE or READONLY
+    if !flags.intersects(CommandFlags::WRITE | CommandFlags::READONLY) {
+        return Err(Error::InvalidFlags("Command must be WRITE or READONLY"));
+    }
+
+    // FAST and BLOCKING are mutually exclusive
+    if flags.contains(CommandFlags::FAST | CommandFlags::BLOCKING) {
+        return Err(Error::InvalidFlags("FAST and BLOCKING are mutually exclusive"));
+    }
+
+    Ok(())
+}
+```
+
+---
+
+## Arity Validation Details
+
+### Validation Timing
+
+Arity is validated **before authentication** for performance and security:
+
+```
+Command Processing Order:
+
+1. Parse RESP frame                    ← Protocol layer
+2. Extract command name                ← Lookup in registry
+3. Validate arity                      ← BEFORE auth check
+4. Check authentication               ← May reject command
+5. Check authorization (ACL)          ← May reject command
+6. Execute command                     ← Finally run
+
+Rationale:
+- Arity check is O(1) - cheap to run first
+- Prevents auth bypass via malformed commands
+- Consistent error messages regardless of auth state
+```
+
+**Error Response for Arity Failure:**
+
+```
+-ERR wrong number of arguments for '{command}' command
+```
+
+This error is returned **even if the client is not authenticated**, revealing the command exists. This matches Redis behavior and is considered acceptable information disclosure.
+
+### Subcommand Arity Handling
+
+Commands with subcommands (CLIENT, CONFIG, ACL, etc.) use hierarchical arity validation:
+
+```rust
+/// Arity for commands with subcommands
+pub enum SubcommandArity {
+    /// Parent command requires at least 1 arg (the subcommand name)
+    /// Each subcommand has its own arity
+    Hierarchical {
+        /// Minimum args to parent (usually 1 for subcommand name)
+        min_parent_args: usize,
+        /// Map of subcommand name → arity
+        subcommands: HashMap<&'static str, Arity>,
+    },
+}
+
+// Example: CLIENT command
+impl ClientCommand {
+    fn arity(&self) -> SubcommandArity {
+        SubcommandArity::Hierarchical {
+            min_parent_args: 1,  // At least subcommand name
+            subcommands: hashmap! {
+                "GETNAME"  => Arity::Fixed(0),     // CLIENT GETNAME
+                "SETNAME"  => Arity::Fixed(1),     // CLIENT SETNAME name
+                "ID"       => Arity::Fixed(0),     // CLIENT ID
+                "INFO"     => Arity::Fixed(0),     // CLIENT INFO
+                "LIST"     => Arity::Range { min: 0, max: 2 }, // CLIENT LIST [TYPE type]
+                "KILL"     => Arity::AtLeast(1),   // CLIENT KILL addr/ID/TYPE...
+                "PAUSE"    => Arity::Range { min: 1, max: 2 }, // CLIENT PAUSE timeout [WRITE]
+                "UNPAUSE"  => Arity::Fixed(0),     // CLIENT UNPAUSE
+                "REPLY"    => Arity::Fixed(1),     // CLIENT REPLY ON|OFF|SKIP
+                "NO-EVICT" => Arity::Fixed(1),     // CLIENT NO-EVICT ON|OFF
+            },
+        }
+    }
+}
+```
+
+**Subcommand Validation Flow:**
+
+```rust
+fn validate_subcommand_arity(
+    cmd: &ParsedCommand,
+    arity: &SubcommandArity,
+) -> Result<(), CommandError> {
+    let SubcommandArity::Hierarchical { min_parent_args, subcommands } = arity;
+
+    // Check minimum args for parent
+    if cmd.args.len() < *min_parent_args {
+        return Err(CommandError::WrongArity { command: cmd.name });
+    }
+
+    // Extract and validate subcommand
+    let subcmd_name = std::str::from_utf8(&cmd.args[0])
+        .map_err(|_| CommandError::SyntaxError)?
+        .to_ascii_uppercase();
+
+    let subcmd_arity = subcommands.get(subcmd_name.as_str())
+        .ok_or_else(|| CommandError::InvalidArgument {
+            message: format!("Unknown subcommand '{}'", subcmd_name),
+        })?;
+
+    // Validate subcommand arity (args after subcommand name)
+    let subcmd_args_count = cmd.args.len() - 1;
+    if !subcmd_arity.check(subcmd_args_count) {
+        return Err(CommandError::WrongArity {
+            command: Box::leak(format!("{} {}", cmd.name, subcmd_name).into_boxed_str()),
+        });
+    }
+
+    Ok(())
+}
+```
+
+**Commands with Subcommands:**
+
+| Parent Command | Subcommands |
+|----------------|-------------|
+| CLIENT | GETNAME, SETNAME, ID, INFO, LIST, KILL, PAUSE, UNPAUSE, REPLY, NO-EVICT |
+| CONFIG | GET, SET, REWRITE, RESETSTAT |
+| ACL | LIST, GETUSER, SETUSER, DELUSER, CAT, GENPASS, WHOAMI, LOG, LOAD, SAVE |
+| DEBUG | SLEEP, SEGFAULT, SET-ACTIVE-EXPIRE, CRASH-AND-RECOVER, ... |
+| MEMORY | USAGE, DOCTOR, STATS, MALLOC-SIZE, PURGE |
+| MODULE | LIST, LOAD, UNLOAD |
+| SLOWLOG | GET, LEN, RESET |
+| CLUSTER | INFO, NODES, SLOTS, MEET, ADDSLOTS, DELSLOTS, FAILOVER, ... |
+| OBJECT | ENCODING, FREQ, IDLETIME, REFCOUNT, HELP |
+| SCRIPT | LOAD, EXISTS, FLUSH, KILL, DEBUG |
+| LATENCY | DOCTOR, GRAPH, HISTORY, LATEST, RESET, HELP |
+
+### Arity Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| Negative arity in Redis | FrogDB uses positive `AtLeast` instead |
+| Zero args command (PING) | `Range { min: 0, max: 1 }` or `Fixed(0)` |
+| Variadic with minimum | `AtLeast(n)` - no maximum |
+| Unknown subcommand | Error: `ERR Unknown subcommand 'XXX'` |
+| Missing subcommand | Error: `ERR wrong number of arguments for '{parent}' command` |
+
+---
+
 ## Command Registry
 
 Commands are registered at startup in a static hashmap:
