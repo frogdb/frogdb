@@ -453,13 +453,119 @@ maxclients = 10000  # Maximum simultaneous connections (0 = OS limit)
 
 ### Admin Port
 
-The admin port (`admin_port`, default 6380) is exempt from `maxclients` limits. This ensures operators and the orchestrator can always connect for cluster management, debugging, and emergency operations.
+The admin port (`admin_port`, default 6380) provides administrative access with special characteristics.
+
+#### Configuration
 
 ```toml
 [server]
+port = 6379             # Main client port
+admin_port = 6380       # Admin port (separate listener)
+admin_bind = "127.0.0.1"  # Bind admin to localhost only (security)
 maxclients = 10000      # Limit on main port only
-admin_port = 6380       # Not subject to maxclients
 ```
+
+#### Admin Port vs Main Port
+
+| Property | Main Port (6379) | Admin Port (6380) |
+|----------|------------------|-------------------|
+| maxclients | Enforced | **Exempt** |
+| TLS | If configured | **Always plaintext** |
+| ACL | Enforced | Optional (configurable) |
+| Protocol | RESP2/RESP3 | RESP2/RESP3 |
+| Typical clients | Application clients | Orchestrator, operators |
+
+**Why admin port stays plaintext:**
+- Simplifies orchestrator configuration (no client certs needed)
+- Admin port should be bound to localhost or private network
+- Reduces TLS overhead for high-frequency health checks
+- Matches DragonflyDB behavior
+
+#### Admin-Only Commands
+
+These commands only work on the admin port (rejected on main port):
+
+| Command | Description |
+|---------|-------------|
+| `FROGCLUSTER *` | Cluster management (topology, migration) |
+| `DEBUG *` | Debugging commands |
+| `CONFIG SET` | Runtime configuration changes |
+| `SHUTDOWN` | Server shutdown |
+| `FAILOVER` | Trigger manual failover |
+| `REPLICAOF` | Change replication configuration |
+
+#### Regular Commands on Admin Port
+
+Regular Redis commands (GET, SET, etc.) are **allowed** on admin port:
+- Enables orchestrator health checks (`PING`)
+- Allows operator debugging (`DEBUG OBJECT key`)
+- Supports administrative scripts
+
+#### ACL on Admin Port
+
+By default, admin port **skips ACL checks** (equivalent to `admin_acl = "skip"`).
+
+```toml
+[server]
+# Options: "skip" (default), "require", "admin_user"
+admin_acl = "skip"         # No authentication on admin port
+admin_acl = "require"      # Require normal ACL authentication
+admin_acl = "admin_user"   # Require "admin" user specifically
+```
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `skip` | No auth required | Localhost-only access |
+| `require` | Normal ACL applies | Production with network exposure |
+| `admin_user` | Only "admin" user can connect | Strict separation of duties |
+
+#### Orchestrator Access
+
+The orchestrator connects via admin port for:
+- Health checks (`PING`)
+- Topology updates (`FROGCLUSTER CONFIG`)
+- Replication setup (`REPLICAOF`)
+- Migration coordination (`FROGCLUSTER MIGRATE`)
+- Failover commands (`FAILOVER`)
+
+```
+Orchestrator ──────────────────────► FrogDB Admin Port (6380)
+    │                                       │
+    │  PING                                 │  Health check
+    │  FROGCLUSTER CONFIG {...}             │  Topology push
+    │  FROGCLUSTER MIGRATE ...              │  Slot migration
+    │                                       │
+```
+
+#### Security Best Practices
+
+**CRITICAL:** Admin port should only bind to localhost or private network. Never expose admin port to public internet.
+
+| Deployment | Recommended `admin_bind` |
+|------------|--------------------------|
+| Development | `127.0.0.1` |
+| Kubernetes (sidecar orchestrator) | `127.0.0.1` |
+| Kubernetes (separate orchestrator pod) | Pod network CIDR |
+| VPC with orchestrator | VPC private subnet |
+| Public cloud | Never expose publicly |
+
+```toml
+# Secure configuration example
+[server]
+port = 6379
+bind = "0.0.0.0"           # Main port: accept from anywhere (with TLS)
+admin_port = 6380
+admin_bind = "127.0.0.1"   # Admin port: localhost only
+tls_enabled = true         # TLS on main port
+```
+
+#### Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_admin_connections_total` | Total admin port connections |
+| `frogdb_admin_connections_current` | Current admin port connections |
+| `frogdb_admin_commands_total` | Commands executed on admin port |
 
 **Security:** The admin port should be bound to localhost or protected by network policies. See [CLUSTER.md](CLUSTER.md#orchestrator-security) for admin API security options.
 

@@ -20,6 +20,30 @@ VLL provides atomic multi-shard operations without traditional mutex-based locki
 
 ---
 
+## VLL Use Cases
+
+VLL coordinates atomicity for ALL operations touching multiple internal shards:
+
+| Operation Type | Example Commands | VLL Behavior |
+|----------------|------------------|--------------|
+| Multi-key commands | MGET, MSET, DEL (multi), RENAME, COPY | Lock all touched shards |
+| Transactions | MULTI/EXEC | Lock shards on EXEC |
+| Lua scripts | EVAL, EVALSHA | Lock shards before execution |
+| Blocking commands | BLPOP (multi-key), BRPOP (multi-key) | Lock during wake evaluation |
+| Set operations | SINTER, SUNION, SDIFF, SMOVE | Lock all source shards |
+| Sorted set ops | ZUNIONSTORE, ZINTERSTORE, ZDIFF | Lock source and dest shards |
+| List operations | LMOVE, BLMOVE, LMPOP | Lock source and dest shards |
+| Generic ops | OBJECT COPY, MIGRATE | Lock source and dest shards |
+
+**Single-node vs Cluster behavior:**
+
+- **Single-node mode:** VLL coordinates across INTERNAL shards (same process). Cross-shard operations are atomic when `allow_cross_slot_standalone = true`.
+- **Cluster mode:** Cross-NODE operations return `-CROSSSLOT` error. VLL only coordinates within a single node's internal shards.
+
+This matches DragonflyDB behavior where VLL provides atomicity within a node, but cross-node atomicity requires hash tags to colocate keys.
+
+---
+
 ## Key Concepts
 
 ### Transaction IDs

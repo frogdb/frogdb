@@ -1416,6 +1416,162 @@ repl_heartbeat_interval_ms = 10000
 
 ---
 
+## Key Expiration and Replication
+
+This section specifies how TTL-based key expiration interacts with primary-replica replication.
+
+### Expiry Strategy
+
+FrogDB uses a **hybrid approach** for TTL handling on replicas, combining the best of both worlds:
+
+**Primary behavior:**
+- Active expiration (background sampling every 100ms)
+- Lazy expiration (on access)
+- Replicates `DEL` command when key expires
+
+**Replica behavior:**
+- Tracks TTLs independently
+- Performs local lazy expiration on reads
+- Also receives `DEL` from primary (belt and suspenders)
+- Filters logically-expired keys from read responses
+
+### Why Hybrid?
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Primary sends DEL only** (Redis) | Guaranteed consistency | Expired keys visible on replica until DEL arrives |
+| **Replica expires locally only** | Lower memory on replica | Clock skew issues, potential inconsistency |
+| **Hybrid (FrogDB)** | Low memory + consistency | Slight complexity |
+
+### Read Filtering on Replicas
+
+Replicas use the local clock to hide logically-expired keys from reads, even before receiving the `DEL` from primary:
+
+```rust
+impl Replica {
+    fn get(&self, key: &[u8]) -> Option<Value> {
+        let entry = self.store.get(key)?;
+
+        // Check if key is logically expired based on local time
+        if let Some(expires_at) = entry.expires_at {
+            if Instant::now() >= expires_at {
+                // Key expired - hide from client
+                // DEL from primary will clean up storage eventually
+                return None;
+            }
+        }
+
+        Some(entry.value)
+    }
+}
+```
+
+### Expiry Replication Flow
+
+```
+Primary                                   Replica
+   │                                         │
+   │  Key "foo" expires (TTL reached)        │
+   │                                         │
+   │  1. Active expiration detects expiry    │
+   │  2. Delete from local store             │
+   │  3. Generate DEL command                │
+   │                                         │
+   │── DEL foo (via replication stream) ────▶│
+   │                                         │
+   │                                4. Apply DEL to local store
+   │                                5. Key removed from replica
+```
+
+### Clock Skew Considerations
+
+**If replica clock is AHEAD of primary:**
+- Replica may filter keys as expired before primary sends DEL
+- This is acceptable (key was logically expired anyway)
+- DEL from primary is idempotent (deleting non-existent key is fine)
+
+**If replica clock is BEHIND primary:**
+- Replica may serve expired keys briefly
+- Window is bounded by clock skew + replication lag
+- DEL from primary will clean up
+
+**Mitigation:**
+- Use NTP to synchronize clocks across nodes
+- Clock skew < 1 second is acceptable for most workloads
+- Monitor `frogdb_clock_skew_ms` metric
+
+### Active Expiration on Replicas
+
+Replicas also run background expiration sampling (like primaries), but with a key difference:
+
+| Node Type | Background Expiration | Storage Cleanup |
+|-----------|----------------------|-----------------|
+| Primary | Deletes keys, sends DEL to replicas | Immediate |
+| Replica | Deletes keys locally (no replication) | Immediate |
+
+**Why replicas actively expire:**
+- Reduces memory pressure without waiting for primary DEL
+- Handles case where primary's DEL is delayed or lost
+- Improves read latency (fewer expired keys to filter)
+
+**Important:** Replica expiration does NOT generate replication traffic. The primary is still the source of truth for expiration commands.
+
+### EXPIRE Command Replication
+
+When a client sets or modifies TTL:
+
+```
+Client → Primary: EXPIRE mykey 3600
+Primary: Set mykey.expires_at = now + 3600s
+Primary → Replica: EXPIRE mykey 3600 (via replication)
+Replica: Set mykey.expires_at = now + 3600s (using replica's clock)
+```
+
+**Note:** Each node computes the absolute expiry time using its own clock. Small clock differences are acceptable.
+
+### TTL Persistence and Recovery
+
+TTLs are persisted with keys in RocksDB:
+
+```rust
+struct StoredValue {
+    value: Bytes,
+    type_id: u8,
+    expires_at: Option<u64>,  // Unix timestamp milliseconds
+    // ... other metadata
+}
+```
+
+**After recovery:**
+- Expired keys may exist in storage (not yet cleaned up)
+- Background expiration resumes, cleaning up stale keys
+- Reads filter expired keys immediately (no stale data served)
+
+### Configuration
+
+```toml
+[expiry]
+# Active expiration sample rate (keys per cycle)
+active_expire_sample_keys = 20
+
+# Active expiration cycle interval
+active_expire_interval_ms = 100
+
+# Lazy expiration on replica reads
+replica_lazy_expire = true
+```
+
+### Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `frogdb_expired_keys_total` | Keys expired (by node type: primary/replica) |
+| `frogdb_expired_stale_reads` | Reads filtered due to local expiry check |
+| `frogdb_expired_del_replicated` | DEL commands received via replication |
+| `frogdb_clock_skew_ms` | Estimated clock skew from primary |
+
+---
+
 ## Configuration Reference
 
 All replication-related configuration settings:

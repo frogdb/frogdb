@@ -104,12 +104,82 @@ fn validate_transaction(cmds: &[ParsedCommand]) -> Result<(), Error> {
 
 When `allow_cross_slot_standalone = true` is configured in standalone mode, FrogDB supports atomic cross-shard MULTI/EXEC transactions via [VLL coordination](VLL.md):
 
-- Transaction commands are coordinated across multiple shards using continuation locks
+### VLL Execution Flow for Cross-Shard MULTI/EXEC
+
+```
+Client: MULTI
+Client: SET foo 1      → queued (routes to shard 0)
+Client: SET bar 2      → queued (routes to shard 1)
+Client: INCR baz       → queued (routes to shard 2)
+Client: EXEC
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    EXEC Processing                           │
+├─────────────────────────────────────────────────────────────┤
+│ 1. Identify touched shards: {0, 1, 2}                       │
+│                                                              │
+│ 2. Acquire VLL locks in shard order (prevents deadlock):    │
+│    shard 0 → lock acquired                                  │
+│    shard 1 → lock acquired                                  │
+│    shard 2 → lock acquired                                  │
+│                                                              │
+│ 3. Execute all commands atomically:                         │
+│    SET foo 1 → OK                                           │
+│    SET bar 2 → OK                                           │
+│    INCR baz  → 1                                            │
+│                                                              │
+│ 4. Release locks in reverse order:                          │
+│    shard 2 → released                                       │
+│    shard 1 → released                                       │
+│    shard 0 → released                                       │
+│                                                              │
+│ 5. Return results array to client                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Properties:**
 - **Execution atomicity**: All commands execute without interleaving from other operations
+- **Deadlock prevention**: Locks acquired in consistent order (shard ID ascending)
 - **No rollback**: If a command fails mid-transaction, prior commands' effects persist (matches Redis/DragonflyDB behavior)
 - See [VLL.md - Continuation Locks](VLL.md#continuation-locks) for implementation details
 
+### WATCH and VLL
+
+WATCH does NOT acquire VLL locks:
+- WATCH only records key versions at WATCH time
+- VLL locks are acquired only at EXEC time
+- This is optimistic concurrency, not pessimistic locking
+
+```
+T=0:  WATCH foo              → record foo.version = 5
+T=1:  [Another client: SET foo x]  → foo.version becomes 6
+T=2:  MULTI
+T=3:  GET foo
+T=4:  EXEC
+      │
+      ├─ Check: foo.version (6) != watched (5)
+      ├─ Transaction ABORTED
+      └─ Return: nil (not array of results)
+```
+
 > **Important:** Cross-shard transactions provide execution atomicity (isolation), not failure atomicity (rollback). If a shard fails during execution, partial state may remain. This follows Redis's design philosophy that "the utility of rollbacks would not outweigh the costs in terms of performance and additional complexity."
+
+### Cluster Mode Restriction
+
+In cluster mode, MULTI/EXEC is restricted to **single slot** (single node):
+
+```
+Client: MULTI
+Client: SET {user:1}:name "alice"    → slot 5649
+Client: SET {user:1}:email "a@b.c"   → slot 5649 (same hash tag)
+Client: SET {user:2}:name "bob"      → slot 1716 (DIFFERENT!)
+        │
+        ▼
+-CROSSSLOT Keys in request don't hash to the same slot
+```
+
+Cross-node transactions are NOT supported - use hash tags `{...}` to ensure keys land in same slot.
 
 **Recommendation:** Use hash tags to colocate transaction keys for best performance:
 

@@ -251,9 +251,67 @@ The external orchestrator must satisfy these requirements:
 | Orchestrator majority down | Cluster frozen (no topology changes, no failover) |
 | All orchestrators down | Nodes continue with last known topology, no failover possible |
 
+**What Works Without Orchestrator:**
+- All read/write operations to existing keys
+- Client connections and disconnections
+- Replication streaming (already established connections continue)
+- Health endpoint responses (for load balancer health checks)
+- Node serving its assigned slots
+
+**What Requires Orchestrator:**
+- Automatic failover (primary → replica promotion)
+- Slot migration (rebalancing)
+- Adding new nodes to cluster
+- Removing nodes from cluster
+- Topology updates (CLUSTER SLOTS responses won't reflect changes)
+- Promoting replicas manually (requires topology push)
+
+**In-Progress Migration Handling:**
+
+If orchestrator fails during slot migration:
+
+| Migration Phase | State | Behavior |
+|-----------------|-------|----------|
+| Before MIGRATE START | No migration state | Clean - no action needed |
+| MIGRATING phase (keys transferring) | Source: slots MIGRATING | Migration pauses, source continues serving slot |
+| Keys transferred, not finalized | Source: MIGRATING, Target: IMPORTING | Both nodes have data, source is authoritative |
+| After MIGRATE COMPLETE | Target owns slot | Migration was successful |
+
+**Recovery from Mid-Migration:**
+1. Orchestrator recovers and queries node states
+2. Detects migration in progress (source has MIGRATING slots)
+3. Options:
+   - **Complete migration:** Issue MIGRATE FINALIZE to target, update topology
+   - **Rollback migration:** Issue MIGRATE ABORT to both nodes, clear MIGRATING/IMPORTING flags
+
+```
+Orchestrator Recovery Flow:
+
+1. Query all nodes for current state
+   GET_NODE_STATE → returns slots, role, migration state
+
+2. For each slot in MIGRATING state:
+   If target has received all keys:
+     → MIGRATE FINALIZE (complete migration)
+   Else:
+     → MIGRATE ABORT (rollback to source)
+
+3. Push reconciled topology to all nodes
+```
+
+**Stale Topology During Orchestrator Outage:**
+
+Clients cache slot→node mappings. During orchestrator outage:
+- Cached mappings remain valid (topology frozen)
+- New client connections learn topology from any node
+- `CLUSTER SLOTS` returns last known topology
+- No MOVED redirects (topology unchanged)
+
 **Recovery:**
 - Orchestrator state should be persisted (slot assignments, node registry)
 - On orchestrator restart: reload state, health check all nodes, resume operations
+- Reconcile any in-progress migrations
+- Push current topology to all nodes
 
 **Reference Implementations:**
 - Kubernetes StatefulSet with etcd

@@ -343,6 +343,16 @@ See [ROADMAP.md](ROADMAP.md) for the detailed implementation roadmap with progre
 
 ## References
 
+### Design Sources
+
+See [SOURCES.md](SOURCES.md) for a comprehensive list of external references used in FrogDB's design, including:
+- Redis, DragonflyDB, and Valkey documentation
+- Academic papers (VLL algorithm, consistency models)
+- GitHub issues documenting known edge cases
+- Testing and verification tools (Jepsen, Loom, etc.)
+
+These sources document how similar systems handle edge cases and can be consulted when implementing or debugging FrogDB features.
+
 ### Prior Art
 
 - [Redis](https://redis.io/) - The original in-memory data store
@@ -392,3 +402,4 @@ See [ROADMAP.md](ROADMAP.md) for the detailed implementation roadmap with progre
 | [CONSISTENCY.md](CONSISTENCY.md) | Consistency guarantees |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Docker, K8s deployment |
 | [COMPATIBILITY.md](COMPATIBILITY.md) | Redis incompatibilities and migration guide |
+| [SOURCES.md](SOURCES.md) | External references (Redis, DragonflyDB, papers) |

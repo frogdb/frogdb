@@ -514,6 +514,60 @@ Based on Dragonfly's approach - no fork(), no memory spike:
 - Server continues processing during snapshot
 - Consistent point-in-time capture across all shards
 
+### Cross-Shard Snapshot Consistency
+
+FrogDB achieves consistent snapshots without fork() using epoch-based versioning, similar to DragonflyDB's approach.
+
+**Key Insight:** There is NO global coordination moment where all shards simultaneously freeze. Instead, consistency is achieved through:
+1. Entry versioning (each key tracks its modification version)
+2. OnWriteHook capturing old values during concurrent modifications
+
+**Mechanism:**
+
+```
+1. Snapshot coordinator broadcasts START_SNAPSHOT to all shards
+
+2. Each shard atomically captures:
+   snapshot_epoch = current_epoch++
+
+3. Shard iterates entries, serializing those with:
+   version <= snapshot_epoch
+
+4. Concurrent writes trigger OnWriteHook:
+   - If key version <= snapshot_epoch: serialize old value first
+   - Then apply new value with incremented version
+
+5. Shards complete independently
+   - Coordinator waits for all shards to finish
+   - No global barrier needed during iteration
+```
+
+**Diagram:**
+
+```
+Shard 0: [capture epoch=42] → iterate → serialize entries ≤42 → done
+Shard 1: [capture epoch=87] → iterate → serialize entries ≤87 → done
+Shard 2: [capture epoch=31] → iterate → serialize entries ≤31 → done
+                    ↓
+         Coordinator: wait for all shards → snapshot complete
+```
+
+**Why Different Epochs Are Okay:**
+
+Each shard's epoch is independent because:
+- Entries are never written twice to the same snapshot
+- OnWriteHook ensures the "old" value at snapshot start is captured
+- The combination of all shard snapshots represents a consistent cut across all data
+
+**Comparison with Redis:**
+
+| Approach | Redis (fork) | FrogDB (epoch) |
+|----------|--------------|----------------|
+| Coordination | OS fork() syscall | Per-shard epoch capture |
+| Memory overhead | Up to 2x (COW pages) | Minimal (COW buffer) |
+| Blocking | Brief fork pause | None |
+| Consistency | Physical point-in-time | Logical point-in-time |
+
 ### Edge Cases During Snapshot
 
 **Keys Modified During Snapshot:**
@@ -1108,13 +1162,85 @@ See [CLUSTER.md](CLUSTER.md) for complete replication protocol details.
 
 ## Recovery Process
 
+### RocksDB Configuration for Recovery
+
+FrogDB uses `atomic_flush=true` to ensure all column families (shards) are consistent after crash recovery.
+
+```rust
+fn create_db_options() -> DBOptions {
+    let mut opts = DBOptions::default();
+
+    // CRITICAL: Ensures all column families are flushed atomically
+    // Without this, crash recovery could leave shards inconsistent
+    opts.set_atomic_flush(true);
+
+    // Enable parallel recovery for faster startup
+    opts.set_max_background_jobs(num_cpus::get() as i32);
+
+    opts
+}
+```
+
+**Why `atomic_flush=true` Matters:**
+
+Without atomic flush, a crash during flush could leave some column families (shards) at different points in the WAL, causing cross-shard inconsistencies. With atomic flush:
+- All column families are flushed together
+- WAL entries are applied atomically across all CFs during recovery
+- Cross-shard operations remain consistent after crash
+
 ### Startup Sequence
+
+```
+1. Open RocksDB with all column families
+   └── atomic_flush=true in DBOptions
+
+2. RocksDB replays WAL automatically
+   └── All CFs recover to consistent point
+
+3. Find latest valid snapshot from metadata
+   └── Validate completion marker and checksums
+
+4. Spawn shard workers in parallel
+   └── Each worker owns one column family
+
+5. Rebuild in-memory indexes per shard (parallel):
+   - Expiry index (keys sorted by TTL)
+   - Sorted set BTrees (for ZRANGE operations)
+   - Stream consumer groups (pending entry lists)
+
+6. Accept client connections
+```
+
+### Detailed Steps
 
 1. **Open RocksDB** with all column families (one per shard)
 2. **Find latest snapshot** from metadata
 3. **Replay WAL** from snapshot's sequence number to end
 4. **Rebuild expiry index** from `expires_at` field in each value
 5. **Initialize shard workers** with recovered data
+
+### Recovery Failure Handling
+
+| Failure | Behavior |
+|---------|----------|
+| WAL corruption | Recover to last consistent point, log warning (see WAL Corruption Recovery) |
+| Single CF fails to open | **Refuse to start** (data integrity risk) |
+| All CFs recover | Normal startup |
+| Snapshot metadata missing | Use previous snapshot or start empty |
+| Checksum mismatch on snapshot | Use previous valid snapshot |
+
+### Recovery Time Factors
+
+Recovery time depends on:
+- WAL size (operations since last flush)
+- Number of keys with complex indexes (sorted sets, streams)
+- Disk I/O speed (SSD recommended)
+- Number of CPU cores (parallel index rebuild)
+
+**Typical recovery times:**
+- Small dataset (<1GB): 1-5 seconds
+- Medium dataset (1-10GB): 5-30 seconds
+- Large dataset (>10GB): 30+ seconds (dominated by index rebuild)
 
 ### Column Families and Sequence Numbers
 
