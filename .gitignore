@@ -22,3 +22,12 @@ target
 
 # Claude.ai
 .claude/settings.local.json
+
+# Onyx Knowledge Base
+onyx/.env
+.mcp.json
+*.zip
+
+# bun
+node_modules/
+dist/
