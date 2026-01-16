@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "onyx-frogdb": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "onyx-mcp-server"],
+      "env": {
+        "ONYX_API_TOKEN": "<your-onyx-api-token>",
+        "ONYX_API_URL": "http://localhost:8080/api"
+      }
+    }
+  }
+}

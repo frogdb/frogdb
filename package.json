@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "onyx-mcp-server": "^1.2.2"
+  }
+}
