@@ -414,30 +414,63 @@ the 2Q algorithm becomes a natural fit. Until then, Redis-style sampling provide
 
 ## Memory Thresholds
 
-Eviction is triggered on write operations when memory exceeds `max_memory`:
+### Global Memory Limit
+
+`maxmemory` applies to the **TOTAL memory across all internal shards**, not per-shard:
+
+```
+Total used = Σ(shard[i].used_memory) for i in 0..num_shards
+OOM condition: Total used > maxmemory
+```
+
+### Enforcement Mechanism
+
+1. **Periodic aggregation:** Background task sums shard memory every 100ms
+2. **Write-time check:** Before each write, check global counter
+3. **Eviction trigger:** If over limit, trigger eviction on heaviest shard(s)
 
 ```rust
-fn check_memory_on_write(shard: &mut Shard) -> Result<(), Error> {
-    let used = shard.memory_used();
+fn check_memory_on_write(shards: &[Shard]) -> Result<(), Error> {
+    // Global memory check across all shards
+    let total_used: usize = shards.iter().map(|s| s.memory_used()).sum();
     let max = config.max_memory;
 
-    if max == 0 || used < max {
+    if max == 0 || total_used < max {
         return Ok(());
     }
 
     match config.maxmemory_policy {
         Policy::NoEviction => Err(Error::Oom),
         policy => {
-            // Try to free memory
-            let freed = shard.evict(policy, used - max);
-            if freed < (used - max) {
-                Err(Error::Oom)
-            } else {
-                Ok(())
-            }
+            // Evict from heaviest shards first
+            let to_free = total_used - max;
+            trigger_eviction(shards, policy, to_free)
         }
     }
 }
+```
+
+### Per-Shard vs Global Metrics
+
+| Metric | Scope | Use |
+|--------|-------|-----|
+| `used_memory` | Global (sum) | OOM decisions, INFO memory |
+| `shard_used_memory` | Per-shard | Eviction targeting |
+| `maxmemory` | Global config | Total limit |
+
+### Imbalanced Shards
+
+If one shard holds 80% of data and another holds 20%:
+- Global limit still enforced on the sum
+- Eviction targets the heavy shard first
+- Keys evicted until global total < maxmemory
+
+```
+Example: maxmemory = 10GB
+  Shard 0: 8GB (80%)  → Primary eviction target
+  Shard 1: 2GB (20%)  → Eviction only if Shard 0 exhausted
+
+Total: 10GB → at limit → evict from Shard 0
 ```
 
 ---
@@ -493,6 +526,101 @@ max_memory_policy = "noeviction" # or eviction policy
 | `lfu-decay-time` | 1 | LFU decay period (minutes) |
 
 See [CONFIGURATION.md](CONFIGURATION.md) for configuration details.
+
+---
+
+## Eviction and Replication
+
+This section specifies how eviction interacts with primary-replica replication.
+
+### Primary Behavior
+
+When the primary evicts a key due to memory pressure:
+1. Key is removed from local storage
+2. Synthetic `DEL key` command is generated and replicated to all replicas
+3. Eviction counts toward replication backlog
+
+```rust
+fn evict_key(key: &Bytes, replication: &mut ReplicationStream) {
+    // 1. Remove from local storage
+    self.store.delete(key);
+
+    // 2. Generate DEL for replication
+    let del_cmd = Command::Del { keys: vec![key.clone()] };
+    replication.append(del_cmd);
+
+    // 3. Update metrics
+    metrics.eviction_keys_total.inc();
+    metrics.eviction_bytes_total.inc_by(key_size);
+}
+```
+
+### Replica Behavior
+
+**Replicas do NOT evict independently:**
+- Replicas **ignore** the `maxmemory` setting
+- All eviction decisions come from primary via replicated `DEL` commands
+- Replicas may use MORE memory than primary (due to replication buffers, copy-on-write overhead)
+
+```
+# Primary memory (at limit, evicting)
+used_memory: 10737418240  (10GB)
+maxmemory:   10737418240  (10GB)
+
+# Replica memory (may exceed primary)
+used_memory: 11811160064  (11GB - 10% higher)
+maxmemory:   10737418240  (ignored on replica)
+```
+
+### Why Replicas Don't Evict
+
+If replicas evicted independently:
+1. **Inconsistency:** Replica could have different keys than primary
+2. **Clock skew:** Different eviction timing due to clock drift
+3. **Read anomalies:** Client reads different data depending on which replica
+
+By having the primary drive all eviction decisions:
+- Primary and replicas stay consistent
+- Eviction is deterministic and replayable
+- Failover preserves expected data
+
+### Memory Monitoring for Replicas
+
+Since replicas don't respect `maxmemory`, operators must:
+1. **Provision replicas with extra memory** (10-20% more than primary)
+2. **Monitor replica memory usage** separately
+3. **Alert on replica memory approaching system limits**
+
+```
+# Recommended alerting thresholds
+replica_memory_warning:  80% of system RAM
+replica_memory_critical: 90% of system RAM
+```
+
+### Replica Promotion and Eviction
+
+When a replica is promoted to primary:
+1. `maxmemory` setting becomes active
+2. If over limit, eviction begins immediately
+3. New replicas receive eviction via replication
+
+```
+Replica (11GB used, maxmemory ignored)
+           │
+           ▼  [FAILOVER - promoted to primary]
+           │
+Primary (11GB used, maxmemory=10GB active)
+           │
+           ▼  [Eviction triggered - 1GB over limit]
+           │
+Primary (10GB used, eviction DELs sent to new replicas)
+```
+
+### References
+
+This behavior matches Redis: [Redis Replication Docs](https://redis.io/docs/latest/operate/oss_and_stack/management/replication/)
+
+> "By default, a replica will ignore maxmemory. This means that the eviction of keys will be handled by the master, sending the DEL commands to the replica as keys evict in the master side."
 
 ---
 
