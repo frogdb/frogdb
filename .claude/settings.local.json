@@ -20,7 +20,8 @@
       "Bash(npm view:*)",
       "Bash(ONYX_API_TOKEN=\"on_IAX5_vXYCfU2e30AXEbDl8xwDvcUbk3yXxZZ_D1o9oSh75DyiMT2vdlQSIhCe0626-ZY8cPKCTdV5FeXmpfBXL60oBq-VP9aMCWBcM5QifEXZ7ME6M_d98-L2wv6gye6ckiPmpSwa_XwIw9p04DLStzs9zC_EYYmUqk1-pKxA5KF2zVQMcVvjWlZPtPoYDAfJr95XqUqZ7n3LmY3qLa8R_K4i7Fc2jB1d6nqT2luPWILotsh0KuGzXvKS9s3WY4h\" ONYX_API_URL=\"http://localhost:8080\" timeout 5 npx:*)",
       "Bash(npm info:*)",
-      "mcp__onyx-frogdb__search_onyx"
+      "mcp__onyx-frogdb__search_onyx",
+      "mcp__onyx-frogdb__chat_with_onyx"
     ]
   },
   "enableAllProjectMcpServers": true,
