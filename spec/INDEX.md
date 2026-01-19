@@ -373,6 +373,7 @@ These sources document how similar systems handle edge cases and can be consulte
 
 | Document | Description |
 |----------|-------------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Software architecture: component relationships and boundaries |
 | [VLL.md](VLL.md) | Very Lightweight Locking transaction coordination |
 | [CONCURRENCY.md](CONCURRENCY.md) | Shard worker architecture, scatter-gather |
 | [STORAGE.md](STORAGE.md) | Store trait, key metadata, expiry |
