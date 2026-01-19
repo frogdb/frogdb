@@ -46,7 +46,7 @@ No locks are needed for data access because each shard has exclusive ownership o
 ### Message-Passing Over Shared State
 
 Shard workers communicate via `mpsc` channels:
-- `ShardMessage` for cross-shard requests
+- `ShardMessage` for cross-shard requests (see [CONCURRENCY.md](CONCURRENCY.md#message-types) for full enum definition)
 - `NewConnection` for connection assignment from the acceptor
 
 This eliminates lock contention and simplifies reasoning about concurrency.
@@ -57,6 +57,17 @@ When a client connects:
 1. The Acceptor assigns it to a shard worker (round-robin)
 2. The connection remains pinned to that shard for its lifetime
 3. Commands for keys on other shards are forwarded via message-passing
+
+### Key Hashing
+
+FrogDB uses two hash algorithms for different purposes:
+
+| Purpose | Algorithm | Range | Reference |
+|---------|-----------|-------|-----------|
+| Internal shard routing | xxhash64 | `hash % num_shards` | [CONCURRENCY.md](CONCURRENCY.md#key-hashing) |
+| Cluster slot assignment | CRC16 | `hash % 16384` | [STORAGE.md](STORAGE.md#hash-algorithms) |
+
+Both use the same hash tag extraction logic (`{tag}` syntax) for colocation.
 
 ### Separation of Concerns
 
@@ -97,7 +108,7 @@ graph TD
 |--------|---------|
 | **Owns** | Frame parsing, Response encoding, Tokio codec |
 | **Does NOT own** | Command semantics, execution logic |
-| **Key types** | `ParsedCommand`, `Response`, `ProtocolVersion` |
+| **Key types** | `ParsedCommand { name: Bytes, args: Vec<Bytes> }`, `Response` ([enum definition](PROTOCOL.md#outbound-response--frame)), `ProtocolVersion` |
 | **Dependencies** | `bytes`, `redis-protocol`, `tokio-util` |
 | **Dependents** | `frogdb-server` |
 
@@ -109,7 +120,7 @@ graph TD
 |--------|---------|
 | **Owns** | `Store` trait, `Value` enum, `Command` trait, command implementations |
 | **Does NOT own** | I/O, networking, concurrency primitives |
-| **Key types** | `Store`, `HashMapStore`, `Value`, `Command`, `CommandRegistry`, `CommandError` |
+| **Key types** | `Store` ([trait definition](STORAGE.md#store-trait)), `HashMapStore`, `Value`, `Command`, `CommandRegistry`, `CommandError` |
 | **Dependencies** | `bytes`, `griddle` |
 | **Dependents** | `frogdb-server`, `frogdb-lua`, `frogdb-persistence` |
 
@@ -147,7 +158,7 @@ graph TD
 |--------|---------|
 | **Owns** | TCP acceptor, shard workers, connection handling, routing, configuration |
 | **Does NOT own** | Protocol parsing (delegates to `frogdb-protocol`), command logic (delegates to `frogdb-core`) |
-| **Key types** | `Server`, `Acceptor`, `ShardWorker`, `ConnectionHandler`, `Router`, `Config` |
+| **Key types** | `Server`, `Acceptor`, `ShardWorker`, `ConnectionHandler`, `Config` |
 | **Dependencies** | All other crates, `tokio`, `figment`, `clap`, `tracing` |
 
 ---
@@ -186,6 +197,8 @@ sequenceDiagram
     P-->>H: Bytes
     H->>C: RESP2 response
 ```
+
+Commands execute with access to `CommandContext`, which provides store access, connection state, and shard routing. See [EXECUTION.md](EXECUTION.md#commandcontext-definition) for the complete definition.
 
 ### Shard Architecture
 
@@ -232,7 +245,7 @@ graph TB
 
 | Interaction | Description |
 |-------------|-------------|
-| **Acceptor → ShardWorker** | New connections sent via `NewConnection` struct |
+| **Acceptor → ShardWorker** | New connections sent via `NewConnection { socket, addr, conn_id }` struct |
 | **ConnectionHandler → Protocol** | Parsing and encoding via `frogdb-protocol` types |
 | **ConnectionHandler → Router** | Command routing based on key hashing |
 | **Router → ACL** | Permission check before execution (NOOP: always allowed) |
@@ -296,6 +309,16 @@ graph TB
 │    - frogdb-lua: script execution (NOOP)                 │
 └─────────────────────────────────────────────────────────┘
 ```
+
+### Error Handling
+
+Command errors are returned via `CommandError` enum (see [EXECUTION.md](EXECUTION.md#commanderror) for complete definition). Key variants:
+- `WrongArity` - Incorrect number of arguments
+- `WrongType` - Operation on wrong value type
+- `InvalidArgument` - Invalid argument format
+- `OutOfMemory` - maxmemory limit reached
+
+> **Note:** Key routing is implemented as functions within the server crate, not as a separate `Router` struct. The routing logic uses hash functions defined in [CONCURRENCY.md](CONCURRENCY.md#key-hashing).
 
 ### NOOP Crate Boundaries
 
@@ -460,6 +483,80 @@ Key aspects:
 2. **Logs the invocation** for debugging visibility
 3. **Returns success** (or appropriate passthrough value)
 4. **No side effects** (no actual persistence, no actual checks)
+
+### NOOP Trait Interfaces
+
+The following traits define the contracts that NOOP implementations must fulfill. These will be implemented fully in later phases.
+
+#### AclChecker Trait
+
+```rust
+pub trait AclChecker: Send + Sync {
+    /// Check if user has permission to execute command on given keys
+    fn check_command(&self, user: &User, cmd: &str, keys: &[&[u8]]) -> AclResult;
+
+    /// Check if user can access a specific key
+    fn check_key(&self, user: &User, key: &[u8], access: KeyAccess) -> AclResult;
+
+    /// Check if user can subscribe to a channel
+    fn check_channel(&self, user: &User, channel: &[u8]) -> AclResult;
+}
+
+pub enum AclResult {
+    Allowed,
+    Denied { reason: &'static str },
+}
+
+pub enum KeyAccess {
+    Read,
+    Write,
+}
+```
+
+#### WalWriter Trait
+
+```rust
+pub trait WalWriter: Send {
+    /// Append a write operation to the WAL
+    fn write(&mut self, entry: &WalEntry) -> Result<(), PersistenceError>;
+
+    /// Flush pending writes to disk
+    fn flush(&mut self) -> Result<(), PersistenceError>;
+
+    /// Sync WAL to durable storage
+    fn sync(&mut self) -> Result<(), PersistenceError>;
+}
+
+pub struct WalEntry {
+    pub key: Bytes,
+    pub operation: WalOperation,
+    pub timestamp: u64,
+}
+
+pub enum WalOperation {
+    Set(Bytes),
+    Delete,
+    Expire(u64),
+}
+```
+
+#### SnapshotManager Trait
+
+```rust
+pub trait SnapshotManager: Send {
+    /// Start a new snapshot
+    fn start(&mut self) -> Result<SnapshotId, PersistenceError>;
+
+    /// Write key-value batch to snapshot
+    fn write_batch(&mut self, id: SnapshotId, batch: &[(Bytes, Value)]) -> Result<(), PersistenceError>;
+
+    /// Finalize snapshot
+    fn finish(&mut self, id: SnapshotId) -> Result<(), PersistenceError>;
+
+    /// Abort snapshot
+    fn abort(&mut self, id: SnapshotId) -> Result<(), PersistenceError>;
+}
+```
 
 ---
 
