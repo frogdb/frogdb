@@ -13,8 +13,8 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 0 (Design)
-**Next Milestone**: Phase 1 - Foundation
+**Phase**: 1 (Foundation) ✓
+**Next Milestone**: Phase 2 - Complete String Commands & TTL
 
 ---
 
@@ -24,32 +24,32 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ### 1.1 Project Structure
 
-- [ ] Create Cargo workspace with crates:
-  - [ ] `frogdb-server/` - Main server binary
-  - [ ] `frogdb-core/` - Core data structures and traits
-  - [ ] `frogdb-protocol/` - RESP protocol handling
-- [ ] Configure dependencies:
-  - [ ] `tokio` (rt-multi-thread, net, sync, macros)
-  - [ ] `bytes`
-  - [ ] `redis-protocol` v5 with `bytes` and `codec` features
-  - [ ] `tracing` + `tracing-subscriber` (with `json` feature)
-  - [ ] `griddle` (HashMap without resize spikes)
-  - [ ] `figment` with `toml` and `env` features (layered configuration)
-  - [ ] `serde` + `serde_derive` (config deserialization)
-  - [ ] `clap` with `derive` feature (CLI argument parsing)
+- [x] Create Cargo workspace with crates:
+  - [x] `frogdb-server/` - Main server binary
+  - [x] `frogdb-core/` - Core data structures and traits
+  - [x] `frogdb-protocol/` - RESP protocol handling
+- [x] Configure dependencies:
+  - [x] `tokio` (rt-multi-thread, net, sync, macros)
+  - [x] `bytes`
+  - [x] `redis-protocol` v5 with `bytes` and `codec` features
+  - [x] `tracing` + `tracing-subscriber` (with `json` feature)
+  - [x] `griddle` (HashMap without resize spikes)
+  - [x] `figment` with `toml` and `env` features (layered configuration)
+  - [x] `serde` + `serde_derive` (config deserialization)
+  - [x] `clap` with `derive` feature (CLI argument parsing)
 
 ### 1.2 Protocol Layer
 
-- [ ] `ParsedCommand` struct (name: Bytes, args: Vec<Bytes>)
-- [ ] `Response` enum:
-  - [ ] RESP2 types: Simple, Error, Integer, Bulk, Array
-  - [ ] RESP3 types: defined but `unimplemented!()` (future-proofing)
-- [ ] `ProtocolVersion` enum (Resp2 default)
-- [ ] Frame conversions (BytesFrame <-> ParsedCommand, Response -> BytesFrame)
+- [x] `ParsedCommand` struct (name: Bytes, args: Vec<Bytes>)
+- [x] `Response` enum:
+  - [x] RESP2 types: Simple, Error, Integer, Bulk, Array
+  - [x] RESP3 types: defined but `unimplemented!()` (future-proofing)
+- [x] `ProtocolVersion` enum (Resp2 default)
+- [x] Frame conversions (BytesFrame <-> ParsedCommand, Response -> BytesFrame)
 
 ### 1.3 Core Traits & Types
 
-- [ ] `Command` trait:
+- [x] `Command` trait:
   ```rust
   pub trait Command: Send + Sync {
       fn name(&self) -> &'static str;
@@ -59,12 +59,12 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
       fn keys(&self, args: &[Bytes]) -> Vec<&[u8]>;
   }
   ```
-- [ ] `Arity` enum (Fixed, AtLeast, Range)
-- [ ] `CommandFlags` bitflags (WRITE, READONLY, FAST, MULTI_KEY, BLOCKING, PUBSUB, SCRIPT)
-- [ ] `Store` trait (get, set, delete, contains, key_type, len, memory_used, scan)
-- [ ] `HashMapStore` default implementation using `griddle::HashMap`
-- [ ] `Value` enum in `crate::types` (String variant only for Phase 1)
-- [ ] `StringValue` struct (avoids conflict with `std::String`):
+- [x] `Arity` enum (Fixed, AtLeast, Range)
+- [x] `CommandFlags` bitflags (WRITE, READONLY, FAST, MULTI_KEY, BLOCKING, PUBSUB, SCRIPT)
+- [x] `Store` trait (get, set, delete, contains, key_type, len, memory_used, scan)
+- [x] `HashMapStore` default implementation using `griddle::HashMap`
+- [x] `Value` enum in `crate::types` (String variant only for Phase 1)
+- [x] `StringValue` struct (avoids conflict with `std::String`):
   ```rust
   pub struct StringValue {
       data: StringData,
@@ -74,52 +74,52 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
       Integer(i64),
   }
   ```
-- [ ] `KeyMetadata` struct (expires_at, last_access, lfu_counter, memory_size)
-- [ ] `CommandContext` struct
-- [ ] `CommandError` enum with RESP error mappings
-- [ ] Command registry (HashMap<&'static str, Arc<dyn Command>>)
+- [x] `KeyMetadata` struct (expires_at, last_access, lfu_counter, memory_size)
+- [x] `CommandContext` struct
+- [x] `CommandError` enum with RESP error mappings
+- [x] Command registry (HashMap<&'static str, Arc<dyn Command>>)
 
 ### 1.4 Shard Infrastructure
 
-- [ ] `ShardWorker` struct:
-  - [ ] Local `Store` instance
-  - [ ] `mpsc::Receiver<ShardMessage>` for cross-shard requests
-  - [ ] `mpsc::Receiver<NewConnection>` for new connections
-  - [ ] shard_id
-- [ ] `ShardMessage` enum:
-  - [ ] Execute { command, response_tx }
-  - [ ] Shutdown
-  - [ ] ScatterRequest (placeholder)
-- [ ] `NewConnection` struct (socket, addr, conn_id)
-- [ ] Key hashing: `shard_for_key(key, num_shards)` with hash tag support
-- [ ] Channel topology: `Arc<Vec<mpsc::Sender<ShardMessage>>>`
-- [ ] Shard worker event loop with `tokio::select!`
+- [x] `ShardWorker` struct:
+  - [x] Local `Store` instance
+  - [x] `mpsc::Receiver<ShardMessage>` for cross-shard requests
+  - [x] `mpsc::Receiver<NewConnection>` for new connections
+  - [x] shard_id
+- [x] `ShardMessage` enum:
+  - [x] Execute { command, response_tx }
+  - [x] Shutdown
+  - [x] ScatterRequest (placeholder)
+- [x] `NewConnection` struct (socket, addr, conn_id)
+- [x] Key hashing: `shard_for_key(key, num_shards)` with hash tag support
+- [x] Channel topology: `Arc<Vec<mpsc::Sender<ShardMessage>>>`
+- [x] Shard worker event loop with `tokio::select!`
 
 ### 1.5 Connection Management
 
-- [ ] `ConnectionState` struct:
-  - [ ] id, addr, created_at
-  - [ ] auth: AuthState (placeholder - always authenticated)
-  - [ ] protocol_version: ProtocolVersion
-  - [ ] tx_queue: Option<Vec<ParsedCommand>> (placeholder)
-  - [ ] subscriptions, patterns, pubsub_mode (placeholders)
-  - [ ] blocked: Option<BlockedState> (placeholder)
-- [ ] `ConnectionAssigner` trait
-- [ ] `RoundRobinAssigner` implementation
-- [ ] Connection loop:
-  - [ ] Read frame via Tokio codec
-  - [ ] Parse to ParsedCommand
-  - [ ] Auth check (noop - always pass)
-  - [ ] Command lookup
-  - [ ] Arity validation
-  - [ ] Route and execute
-  - [ ] Encode and send response
+- [x] `ConnectionState` struct:
+  - [x] id, addr, created_at
+  - [x] auth: AuthState (placeholder - always authenticated)
+  - [x] protocol_version: ProtocolVersion
+  - [x] tx_queue: Option<Vec<ParsedCommand>> (placeholder)
+  - [x] subscriptions, patterns, pubsub_mode (placeholders)
+  - [x] blocked: Option<BlockedState> (placeholder)
+- [x] `ConnectionAssigner` trait
+- [x] `RoundRobinAssigner` implementation
+- [x] Connection loop:
+  - [x] Read frame via Tokio codec
+  - [x] Parse to ParsedCommand
+  - [x] Auth check (noop - always pass)
+  - [x] Command lookup
+  - [x] Arity validation
+  - [x] Route and execute
+  - [x] Encode and send response
 
 ### 1.6 Configuration
 
 Full layered configuration from Phase 1 (see [CONFIGURATION.md](CONFIGURATION.md) for details):
 
-- [ ] `Config` struct with serde derive:
+- [x] `Config` struct with serde derive:
   ```rust
   #[derive(Debug, Deserialize)]
   pub struct Config {
@@ -128,7 +128,7 @@ Full layered configuration from Phase 1 (see [CONFIGURATION.md](CONFIGURATION.md
       // Other sections as placeholders with defaults
   }
   ```
-- [ ] Configuration loading via Figment (priority: CLI > env > TOML > defaults):
+- [x] Configuration loading via Figment (priority: CLI > env > TOML > defaults):
   ```rust
   Figment::new()
       .merge(Serialized::defaults(Config::default()))
@@ -136,89 +136,89 @@ Full layered configuration from Phase 1 (see [CONFIGURATION.md](CONFIGURATION.md
       .merge(Env::prefixed("FROGDB_").split("__"))
       .merge(Serialized::globals(cli_overrides))
   ```
-- [ ] CLI arguments via clap:
-  - [ ] `--config <FILE>` - Path to TOML config file
-  - [ ] `--bind <ADDR>` - Override bind address
-  - [ ] `--port <PORT>` - Override listen port
-  - [ ] `--shards <N>` - Override number of shards
-  - [ ] `--log-level <LEVEL>` - Override log level
-  - [ ] `--log-format <FORMAT>` - Override log format (pretty/json)
-- [ ] Default `frogdb.toml` generation on first run (optional, with `--generate-config`)
-- [ ] Config validation at startup (fail fast on invalid values)
+- [x] CLI arguments via clap:
+  - [x] `--config <FILE>` - Path to TOML config file
+  - [x] `--bind <ADDR>` - Override bind address
+  - [x] `--port <PORT>` - Override listen port
+  - [x] `--shards <N>` - Override number of shards
+  - [x] `--log-level <LEVEL>` - Override log level
+  - [x] `--log-format <FORMAT>` - Override log format (pretty/json)
+- [x] Default `frogdb.toml` generation on first run (optional, with `--generate-config`)
+- [x] Config validation at startup (fail fast on invalid values)
 
 ### 1.7 Server & Acceptor
 
-- [ ] Acceptor task:
-  - [ ] TCP listener
-  - [ ] maxclients check (placeholder)
-  - [ ] Round-robin shard assignment
-  - [ ] Send NewConnection to shard
-- [ ] Server startup:
-  - [ ] Load configuration via Figment (TOML + env + CLI)
-  - [ ] Initialize logging with configured format and level
-  - [ ] Spawn shard workers (configurable, default: num_cpus)
-  - [ ] Start acceptor
-  - [ ] Log ready message with bound address
-- [ ] Graceful shutdown (SIGTERM/SIGINT)
+- [x] Acceptor task:
+  - [x] TCP listener
+  - [x] maxclients check (placeholder)
+  - [x] Round-robin shard assignment
+  - [x] Send NewConnection to shard
+- [x] Server startup:
+  - [x] Load configuration via Figment (TOML + env + CLI)
+  - [x] Initialize logging with configured format and level
+  - [x] Spawn shard workers (configurable, default: num_cpus)
+  - [x] Start acceptor
+  - [x] Log ready message with bound address
+- [x] Graceful shutdown (SIGTERM/SIGINT)
 
 ### 1.8 Routing
 
-- [ ] `route_and_execute` function:
-  - [ ] Extract keys via `command.keys(args)`
-  - [ ] Keyless commands: execute locally
-  - [ ] Single-key: route to owner shard
-  - [ ] Multi-key: placeholder (error or single-shard only)
-- [ ] `execute_local` function
-- [ ] `execute_remote` function (send via channel, await oneshot response)
+- [x] `route_and_execute` function:
+  - [x] Extract keys via `command.keys(args)`
+  - [x] Keyless commands: execute locally
+  - [x] Single-key: route to owner shard
+  - [x] Multi-key: placeholder (error or single-shard only)
+- [x] `execute_local` function
+- [x] `execute_remote` function (send via channel, await oneshot response)
 
 ### 1.9 Initial Commands
 
-- [ ] `PING` (keyless, returns PONG or echoes argument)
-- [ ] `ECHO` (keyless)
-- [ ] `QUIT` (close connection)
-- [ ] `COMMAND` / `COMMAND DOCS` (placeholder - return empty)
-- [ ] `SET` (key value, no options yet)
-- [ ] `GET`
-- [ ] `DEL` (single key)
-- [ ] `EXISTS` (single key)
+- [x] `PING` (keyless, returns PONG or echoes argument)
+- [x] `ECHO` (keyless)
+- [x] `QUIT` (close connection)
+- [x] `COMMAND` / `COMMAND DOCS` (placeholder - return empty)
+- [x] `SET` (key value, no options yet)
+- [x] `GET`
+- [x] `DEL` (single key)
+- [x] `EXISTS` (single key)
 
 ### 1.10 Noop Abstractions (Critical for Future)
 
 These must exist as traits/stubs to avoid refactoring:
 
 **Persistence & Replication:**
-- [ ] `WalWriter` trait with noop implementation
-- [ ] `ReplicationConfig` enum (Standalone/Primary/Replica)
-- [ ] `ReplicationTracker` trait with noop implementation (for sync replication ACKs)
-- [ ] Sequence number assignment hook in command flow (returns 0 for noop)
+- [x] `WalWriter` trait with noop implementation
+- [x] `ReplicationConfig` enum (Standalone/Primary/Replica)
+- [x] `ReplicationTracker` trait with noop implementation (for sync replication ACKs)
+- [x] Sequence number assignment hook in command flow (returns 0 for noop)
 
 **Security:**
-- [ ] `AclChecker` trait with `AlwaysAllow` implementation
+- [x] `AclChecker` trait with `AlwaysAllow` implementation
 
 **Expiry:**
-- [ ] `ExpiryIndex` struct (empty, no-op methods)
+- [x] `ExpiryIndex` struct (empty, no-op methods)
 
 **Observability (OpenTelemetry-ready):**
-- [ ] `MetricsRecorder` trait with noop implementation:
+- [x] `MetricsRecorder` trait with noop implementation:
   - `increment_counter(name, labels)`
   - `record_histogram(name, value, labels)`
   - `set_gauge(name, value, labels)`
-- [ ] `Tracer` trait with noop implementation:
+- [x] `Tracer` trait with noop implementation:
   - `start_span(name) -> Span`
   - `Span::set_attribute(key, value)`
   - `Span::end()`
-- [ ] Structured logging setup with `tracing` crate (this IS implemented, not noop):
-  - [ ] Configurable format via `logging.format` config:
+- [x] Structured logging setup with `tracing` crate (this IS implemented, not noop):
+  - [x] Configurable format via `logging.format` config:
     - `pretty` - Human-readable, colored output for development
     - `json` - Machine-parseable JSON lines for production
-  - [ ] Configurable level via `logging.level` config (trace/debug/info/warn/error)
-  - [ ] Log subscriber initialization based on config
+  - [x] Configurable level via `logging.level` config (trace/debug/info/warn/error)
+  - [x] Log subscriber initialization based on config
 
 ### 1.11 Testing
 
 **Integration Tests** (tests/ directory):
 
-- [ ] `TestServer` helper:
+- [x] `TestServer` helper:
   ```rust
   struct TestServer {
       addr: SocketAddr,
@@ -232,37 +232,37 @@ These must exist as traits/stubs to avoid refactoring:
       async fn connection(&self) -> redis::aio::Connection;
   }
   ```
-- [ ] Integration test: connect, SET foo bar, GET foo, assert "bar"
-- [ ] Test: PING returns PONG
-- [ ] Test: unknown command returns error
-- [ ] Test: GET nonexistent returns nil
-- [ ] Test: wrong arity returns error
+- [x] Integration test: connect, SET foo bar, GET foo, assert "bar"
+- [x] Test: PING returns PONG
+- [x] Test: unknown command returns error
+- [x] Test: GET nonexistent returns nil
+- [x] Test: wrong arity returns error
 
 **Unit Tests** (inline #[cfg(test)] modules):
 
-- [ ] Store trait implementation tests:
-  - [ ] HashMapStore get/set/delete operations
-  - [ ] Memory accounting accuracy
-  - [ ] Key existence checks
-- [ ] Command trait tests:
-  - [ ] Arity validation (Fixed, AtLeast, Range)
-  - [ ] CommandFlags bitflag operations
-- [ ] Routing tests:
-  - [ ] `shard_for_key()` hash distribution
-  - [ ] Hash tag extraction `{...}` handling
-- [ ] Configuration tests:
-  - [ ] Config default values
-  - [ ] Figment layering priority (CLI > env > TOML > defaults)
-  - [ ] Invalid config rejection
-- [ ] Protocol tests:
-  - [ ] ParsedCommand construction
-  - [ ] Response encoding for each variant
+- [x] Store trait implementation tests:
+  - [x] HashMapStore get/set/delete operations
+  - [x] Memory accounting accuracy
+  - [x] Key existence checks
+- [x] Command trait tests:
+  - [x] Arity validation (Fixed, AtLeast, Range)
+  - [x] CommandFlags bitflag operations
+- [x] Routing tests:
+  - [x] `shard_for_key()` hash distribution
+  - [x] Hash tag extraction `{...}` handling
+- [x] Configuration tests:
+  - [x] Config default values
+  - [x] Figment layering priority (CLI > env > TOML > defaults)
+  - [x] Invalid config rejection
+- [x] Protocol tests:
+  - [x] ParsedCommand construction
+  - [x] Response encoding for each variant
 
 ### 1.12 Documentation
 
-- [ ] Update INDEX.md roadmap section to link here
-- [ ] Add inline documentation to public types
-- [ ] README with build/run instructions
+- [x] Update INDEX.md roadmap section to link here
+- [x] Add inline documentation to public types
+- [x] README with build/run instructions
 
 ---
 
