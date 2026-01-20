@@ -625,13 +625,13 @@ The following optimizations are deferred to a future phase:
 
 ### 7.1 Transactions
 
-- [ ] `MULTI` - start transaction
-- [ ] Queue commands (return QUEUED)
-- [ ] `EXEC` - execute atomically (same-shard requirement)
-- [ ] `DISCARD` - abort transaction
-- [ ] `WATCH` - optimistic locking
-- [ ] `UNWATCH`
-- [ ] Key versioning for WATCH detection
+- [x] `MULTI` - start transaction
+- [x] Queue commands (return QUEUED)
+- [x] `EXEC` - execute atomically (same-shard requirement)
+- [x] `DISCARD` - abort transaction
+- [x] `WATCH` - optimistic locking
+- [x] `UNWATCH`
+- [x] Key versioning for WATCH detection (per-shard)
 
 ### 7.2 Pub/Sub - Broadcast
 
@@ -655,8 +655,8 @@ The following optimizations are deferred to a future phase:
 
 ### 7.5 Testing
 
-- [ ] Test MULTI/EXEC flow
-- [ ] Test WATCH conflict detection
+- [x] Test MULTI/EXEC flow
+- [x] Test WATCH conflict detection
 - [ ] Test broadcast pub/sub
 - [ ] Test sharded pub/sub
 - [ ] Test pattern subscriptions
