@@ -29,7 +29,8 @@
       "WebFetch(domain:docs.rs)",
       "Bash(cargo doc:*)",
       "Bash(cargo test:*)",
-      "Bash(timeout 2 cargo run:*)"
+      "Bash(timeout 2 cargo run:*)",
+      "Bash(redis-cli:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

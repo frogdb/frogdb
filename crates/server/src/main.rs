@@ -64,14 +64,7 @@ async fn main() -> Result<()> {
     // Initialize logging
     config.init_logging()?;
 
-    info!(
-        bind = %config.server.bind,
-        port = config.server.port,
-        shards = config.server.num_shards,
-        log_level = %config.logging.level,
-        log_format = %config.logging.format,
-        "Starting FrogDB server"
-    );
+    info!(config = %config.to_json(), "Starting FrogDB server");
 
     // Create and run server
     let server = Server::new(config).await?;

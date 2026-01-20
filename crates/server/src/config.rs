@@ -264,6 +264,11 @@ format = "pretty"
     pub fn bind_addr(&self) -> String {
         format!("{}:{}", self.server.bind, self.server.port)
     }
+
+    /// Serialize config to JSON for logging.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
+    }
 }
 
 #[cfg(test)]
