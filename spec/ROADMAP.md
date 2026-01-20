@@ -506,12 +506,12 @@ Implementation:
 
 ### 5.2 Value Serialization
 
-- [ ] Binary format:
+- [x] Binary format:
   ```
   [type: u8][flags: u8][expires_at: i64][lfu: u8][len: u32][data...]
   ```
-- [ ] Serialize/deserialize StringValue, SortedSet
-- [ ] (Future types added in later phases)
+- [x] Serialize/deserialize StringValue, SortedSet
+- [x] Serialize/deserialize Hash, List, Set (added in Phase 6)
 
 ### 5.3 WAL Integration
 
@@ -556,7 +556,7 @@ Implementation:
 
 ---
 
-## Phase 6: Hash, List, Set Types
+## Phase 6: Hash, List, Set Types ✓
 
 **Goal**: Remaining core data types.
 
@@ -564,49 +564,56 @@ Implementation:
 
 ### 6.1 Hash
 
-- [ ] `HashValue` in `crate::types` (HashMap<Bytes, Bytes>)
-- [ ] `HSET`, `HSETNX`, `HGET`, `HDEL`
-- [ ] `HMSET`, `HMGET`
-- [ ] `HGETALL`, `HKEYS`, `HVALS`
-- [ ] `HEXISTS`, `HLEN`
-- [ ] `HINCRBY`, `HINCRBYFLOAT`
-- [ ] `HSTRLEN`
-- [ ] `HSCAN`
-- [ ] `HRANDFIELD`
+- [x] `HashValue` in `crate::types` (HashMap<Bytes, Bytes>)
+- [x] `HSET`, `HSETNX`, `HGET`, `HDEL`
+- [x] `HMSET`, `HMGET`
+- [x] `HGETALL`, `HKEYS`, `HVALS`
+- [x] `HEXISTS`, `HLEN`
+- [x] `HINCRBY`, `HINCRBYFLOAT`
+- [x] `HSTRLEN`
+- [x] `HSCAN`
+- [x] `HRANDFIELD`
 
 ### 6.2 List
 
-- [ ] `List` in `crate::types` (VecDeque<Bytes>)
-- [ ] `LPUSH`, `RPUSH`, `LPUSHX`, `RPUSHX`
-- [ ] `LPOP`, `RPOP`, `LMPOP`
-- [ ] `LRANGE`, `LINDEX`, `LSET`
-- [ ] `LLEN`, `LPOS`
-- [ ] `LINSERT`
-- [ ] `LREM`, `LTRIM`
-- [ ] `LMOVE`, `LMPOP`
+- [x] `ListValue` in `crate::types` (VecDeque<Bytes>)
+- [x] `LPUSH`, `RPUSH`, `LPUSHX`, `RPUSHX`
+- [x] `LPOP`, `RPOP`, `LMPOP`
+- [x] `LRANGE`, `LINDEX`, `LSET`
+- [x] `LLEN`, `LPOS`
+- [x] `LINSERT`
+- [x] `LREM`, `LTRIM`
+- [x] `LMOVE`, `LMPOP`
 
 ### 6.3 Set
 
-- [ ] `SetValue` in `crate::types` (HashSet<Bytes>)
-- [ ] `SADD`, `SREM`
-- [ ] `SMEMBERS`, `SISMEMBER`, `SMISMEMBER`
-- [ ] `SCARD`
-- [ ] `SUNION`, `SINTER`, `SDIFF` (same-shard)
-- [ ] `SUNIONSTORE`, `SINTERSTORE`, `SDIFFSTORE`, `SINTERCARD`
-- [ ] `SRANDMEMBER`, `SPOP`
-- [ ] `SMOVE`
-- [ ] `SSCAN`
+- [x] `SetValue` in `crate::types` (HashSet<Bytes>)
+- [x] `SADD`, `SREM`
+- [x] `SMEMBERS`, `SISMEMBER`, `SMISMEMBER`
+- [x] `SCARD`
+- [x] `SUNION`, `SINTER`, `SDIFF` (same-shard)
+- [x] `SUNIONSTORE`, `SINTERSTORE`, `SDIFFSTORE`, `SINTERCARD`
+- [x] `SRANDMEMBER`, `SPOP`
+- [x] `SMOVE`
+- [x] `SSCAN`
 
 ### 6.4 Persistence
 
-- [ ] Serialization for Hash, List, Set
-- [ ] Recovery tests
+- [x] Serialization for Hash, List, Set
+- [x] Recovery tests
 
 ### 6.5 Testing
 
-- [ ] Comprehensive command tests
-- [ ] WRONGTYPE error tests
-- [ ] Persistence tests
+- [x] Comprehensive command tests
+- [x] WRONGTYPE error tests
+- [x] Persistence tests
+
+### 6.6 Deferred Optimizations
+
+The following optimizations are deferred to a future phase:
+- Ziplist/listpack encoding for small hashes (< 64 entries)
+- Intset encoding for small integer-only sets
+- Quicklist optimization for lists
 
 ---
 

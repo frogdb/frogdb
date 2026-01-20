@@ -221,7 +221,7 @@ impl Command for ZaddCommand {
 
         // Parse score-member pairs
         let remaining = &args[i..];
-        if remaining.len() % 2 != 0 || remaining.is_empty() {
+        if !remaining.len().is_multiple_of(2) || remaining.is_empty() {
             return Err(CommandError::SyntaxError);
         }
 
@@ -1687,7 +1687,7 @@ impl Command for ZunionCommand {
                     let weighted_score = score * weights[i];
                     result
                         .entry(member.clone())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(weighted_score);
                 }
             }
@@ -1791,7 +1791,7 @@ impl Command for ZunionstoreCommand {
                     let weighted_score = score * weights[i];
                     result
                         .entry(member.clone())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(weighted_score);
                 }
             }

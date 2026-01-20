@@ -33,6 +33,6 @@ pub use shard::{
 };
 pub use store::{HashMapStore, Store};
 pub use types::{
-    Expiry, IncrementError, KeyMetadata, KeyType, LexBound, ScoreBound, SetCondition, SetOptions,
-    SetResult, SortedSetValue, StringValue, Value, ZAddResult,
+    Expiry, HashValue, IncrementError, KeyMetadata, KeyType, LexBound, ListValue, ScoreBound,
+    SetCondition, SetOptions, SetResult, SetValue, SortedSetValue, StringValue, Value, ZAddResult,
 };

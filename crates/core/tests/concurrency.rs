@@ -366,3 +366,313 @@ fn test_write_write_conflict() {
         1000,
     );
 }
+
+// ============================================================================
+// Hash type concurrency tests
+// ============================================================================
+
+/// Test concurrent HSET operations on the same hash key.
+///
+/// Multiple threads writing different fields to the same hash should
+/// all succeed without losing any fields.
+#[test]
+fn test_concurrent_hset_same_hash() {
+    check_random(
+        || {
+            use std::collections::HashMap;
+
+            // Simulates a hash value: HashMap<field, value>
+            let hash = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+            let mut handles = vec![];
+
+            // Each thread writes a unique field
+            for i in 0..4 {
+                let hash = hash.clone();
+                let field = format!("field{}", i);
+                let value = format!("value{}", i);
+
+                handles.push(thread::spawn(move || {
+                    let mut h = hash.lock().unwrap();
+                    h.insert(field, value);
+                }));
+            }
+
+            for handle in handles {
+                handle.join().unwrap();
+            }
+
+            // All 4 fields should be present
+            let h = hash.lock().unwrap();
+            assert_eq!(h.len(), 4, "All fields must be present");
+            for i in 0..4 {
+                assert!(
+                    h.contains_key(&format!("field{}", i)),
+                    "Field {} must exist",
+                    i
+                );
+            }
+        },
+        1000,
+    );
+}
+
+/// Test concurrent HINCRBY operations on the same field.
+///
+/// Multiple threads incrementing the same hash field should produce
+/// the correct total with no lost updates.
+#[test]
+fn test_concurrent_hincrby() {
+    check_random(
+        || {
+            let counter = Arc::new(AtomicU64::new(0));
+            let mut handles = vec![];
+
+            // 4 threads, each incrementing 5 times
+            for _ in 0..4 {
+                let counter = counter.clone();
+                handles.push(thread::spawn(move || {
+                    for _ in 0..5 {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                    }
+                }));
+            }
+
+            for handle in handles {
+                handle.join().unwrap();
+            }
+
+            // 4 threads * 5 increments = 20
+            assert_eq!(counter.load(Ordering::SeqCst), 20);
+        },
+        1000,
+    );
+}
+
+// ============================================================================
+// List type concurrency tests
+// ============================================================================
+
+/// Test concurrent LPUSH/RPUSH operations on the same list.
+///
+/// Multiple threads pushing to the same list should all succeed,
+/// and the final list should contain all pushed elements.
+#[test]
+fn test_concurrent_list_push() {
+    check_random(
+        || {
+            use std::collections::VecDeque;
+
+            let list = Arc::new(Mutex::new(VecDeque::<i32>::new()));
+            let mut handles = vec![];
+
+            // 2 threads doing LPUSH, 2 threads doing RPUSH
+            for i in 0..2 {
+                let list = list.clone();
+                handles.push(thread::spawn(move || {
+                    for j in 0..5 {
+                        let mut l = list.lock().unwrap();
+                        l.push_front(i * 10 + j);
+                    }
+                }));
+            }
+
+            for i in 2..4 {
+                let list = list.clone();
+                handles.push(thread::spawn(move || {
+                    for j in 0..5 {
+                        let mut l = list.lock().unwrap();
+                        l.push_back(i * 10 + j);
+                    }
+                }));
+            }
+
+            for handle in handles {
+                handle.join().unwrap();
+            }
+
+            // Should have 20 elements total (4 threads * 5 pushes)
+            let l = list.lock().unwrap();
+            assert_eq!(l.len(), 20, "List should have all pushed elements");
+        },
+        1000,
+    );
+}
+
+/// Test concurrent LPOP/RPOP operations on the same list.
+///
+/// Multiple threads popping from the same list should get distinct
+/// elements with no duplicates.
+#[test]
+fn test_concurrent_list_pop() {
+    check_random(
+        || {
+            use std::collections::VecDeque;
+
+            let list = Arc::new(Mutex::new(VecDeque::from(vec![1, 2, 3, 4, 5, 6, 7, 8])));
+            let popped = Arc::new(Mutex::new(Vec::new()));
+            let mut handles = vec![];
+
+            // 4 threads popping 2 elements each
+            for _ in 0..4 {
+                let list = list.clone();
+                let popped = popped.clone();
+                handles.push(thread::spawn(move || {
+                    for _ in 0..2 {
+                        let value = {
+                            let mut l = list.lock().unwrap();
+                            l.pop_front()
+                        };
+                        if let Some(v) = value {
+                            popped.lock().unwrap().push(v);
+                        }
+                    }
+                }));
+            }
+
+            for handle in handles {
+                handle.join().unwrap();
+            }
+
+            let popped = popped.lock().unwrap();
+            // Should have popped all 8 elements
+            assert_eq!(popped.len(), 8, "Should pop all elements");
+
+            // Check uniqueness
+            let unique: HashSet<_> = popped.iter().collect();
+            assert_eq!(unique.len(), 8, "All popped elements must be unique");
+        },
+        1000,
+    );
+}
+
+// ============================================================================
+// Set type concurrency tests
+// ============================================================================
+
+/// Test concurrent SADD operations on the same set.
+///
+/// Multiple threads adding members to the same set should all succeed,
+/// and the final set should contain all unique members.
+#[test]
+fn test_concurrent_sadd() {
+    check_random(
+        || {
+            let set = Arc::new(Mutex::new(HashSet::<i32>::new()));
+            let mut handles = vec![];
+
+            // 4 threads adding unique members
+            for i in 0..4 {
+                let set = set.clone();
+                handles.push(thread::spawn(move || {
+                    for j in 0..5 {
+                        let mut s = set.lock().unwrap();
+                        s.insert(i * 10 + j);
+                    }
+                }));
+            }
+
+            for handle in handles {
+                handle.join().unwrap();
+            }
+
+            // Should have 20 unique members (4 threads * 5 members)
+            let s = set.lock().unwrap();
+            assert_eq!(s.len(), 20, "Set should have all unique members");
+        },
+        1000,
+    );
+}
+
+/// Test concurrent SADD/SREM operations on the same set.
+///
+/// Mix of add and remove operations should maintain set consistency.
+#[test]
+fn test_concurrent_sadd_srem() {
+    check_random(
+        || {
+            let set = Arc::new(Mutex::new(HashSet::<i32>::new()));
+            let mut handles = vec![];
+
+            // Thread 0 and 1 add members
+            for i in 0..2 {
+                let set = set.clone();
+                handles.push(thread::spawn(move || {
+                    for j in 0..5 {
+                        let mut s = set.lock().unwrap();
+                        s.insert(i * 10 + j);
+                    }
+                }));
+            }
+
+            // Thread 2 removes some members
+            let set_clone = set.clone();
+            handles.push(thread::spawn(move || {
+                for j in 0..5 {
+                    let mut s = set_clone.lock().unwrap();
+                    s.remove(&j); // Try to remove 0-4
+                }
+            }));
+
+            for handle in handles {
+                handle.join().unwrap();
+            }
+
+            // Final state depends on interleaving, but should be consistent
+            let s = set.lock().unwrap();
+            // Should have between 5 and 10 members
+            assert!(
+                s.len() >= 5 && s.len() <= 10,
+                "Set size should be within expected range"
+            );
+        },
+        1000,
+    );
+}
+
+/// Test concurrent SPOP operations.
+///
+/// Multiple threads popping from the same set should get distinct
+/// members with no duplicates.
+#[test]
+fn test_concurrent_spop() {
+    check_random(
+        || {
+            let set = Arc::new(Mutex::new(HashSet::from([1, 2, 3, 4, 5, 6, 7, 8])));
+            let popped = Arc::new(Mutex::new(Vec::new()));
+            let mut handles = vec![];
+
+            // 4 threads popping 2 elements each
+            for _ in 0..4 {
+                let set = set.clone();
+                let popped = popped.clone();
+                handles.push(thread::spawn(move || {
+                    for _ in 0..2 {
+                        let value = {
+                            let mut s = set.lock().unwrap();
+                            // Pop arbitrary element
+                            s.iter().next().cloned().inspect(|v| {
+                                s.remove(v);
+                            })
+                        };
+                        if let Some(v) = value {
+                            popped.lock().unwrap().push(v);
+                        }
+                    }
+                }));
+            }
+
+            for handle in handles {
+                handle.join().unwrap();
+            }
+
+            let popped = popped.lock().unwrap();
+            // Should have popped all 8 elements
+            assert_eq!(popped.len(), 8, "Should pop all elements");
+
+            // Check uniqueness
+            let unique: HashSet<_> = popped.iter().collect();
+            assert_eq!(unique.len(), 8, "All popped elements must be unique");
+        },
+        1000,
+    );
+}

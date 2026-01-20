@@ -363,6 +363,7 @@ dependencies = [
  "griddle",
  "ordered-float",
  "proptest",
+ "rand 0.8.5",
  "rocksdb",
  "shuttle",
  "tempfile",

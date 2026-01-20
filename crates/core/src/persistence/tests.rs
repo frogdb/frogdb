@@ -4,7 +4,7 @@
 mod integration {
     use crate::persistence::*;
     use crate::store::Store;
-    use crate::types::{KeyMetadata, SortedSetValue, Value};
+    use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, Value};
     use bytes::Bytes;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -274,5 +274,329 @@ mod integration {
         assert_eq!(zset.get_score(b"zero"), Some(0.0));
         assert_eq!(zset.get_score(b"small"), Some(1e-300));
         assert_eq!(zset.get_score(b"large"), Some(1e300));
+    }
+
+    // ========================================================================
+    // Hash type persistence tests
+    // ========================================================================
+
+    #[test]
+    fn test_hash_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut hash = HashValue::new();
+        hash.set(Bytes::from("field1"), Bytes::from("value1"));
+        hash.set(Bytes::from("field2"), Bytes::from("value2"));
+        hash.set(Bytes::from("field3"), Bytes::from("value3"));
+
+        let value = Value::Hash(hash);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"myhash", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"myhash").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let hash = recovered.as_hash().unwrap();
+        assert_eq!(hash.len(), 3);
+        assert_eq!(hash.get(b"field1"), Some(&Bytes::from("value1")));
+        assert_eq!(hash.get(b"field2"), Some(&Bytes::from("value2")));
+        assert_eq!(hash.get(b"field3"), Some(&Bytes::from("value3")));
+    }
+
+    #[test]
+    fn test_hash_empty() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let hash = HashValue::new();
+        let value = Value::Hash(hash);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"empty_hash", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"empty_hash").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let hash = recovered.as_hash().unwrap();
+        assert_eq!(hash.len(), 0);
+        assert!(hash.is_empty());
+    }
+
+    #[test]
+    fn test_hash_with_binary_data() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut hash = HashValue::new();
+        // Field with binary data including null bytes
+        let binary_field: Vec<u8> = (0..=255).collect();
+        let binary_value: Vec<u8> = (0..=255).rev().collect();
+        hash.set(Bytes::from(binary_field.clone()), Bytes::from(binary_value.clone()));
+
+        let value = Value::Hash(hash);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"binary_hash", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"binary_hash").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let hash = recovered.as_hash().unwrap();
+        assert_eq!(hash.get(&binary_field[..]), Some(&Bytes::from(binary_value)));
+    }
+
+    // ========================================================================
+    // List type persistence tests
+    // ========================================================================
+
+    #[test]
+    fn test_list_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut list = ListValue::new();
+        list.push_back(Bytes::from("first"));
+        list.push_back(Bytes::from("second"));
+        list.push_back(Bytes::from("third"));
+
+        let value = Value::List(list);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"mylist", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"mylist").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let list = recovered.as_list().unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list.get(0), Some(&Bytes::from("first")));
+        assert_eq!(list.get(1), Some(&Bytes::from("second")));
+        assert_eq!(list.get(2), Some(&Bytes::from("third")));
+    }
+
+    #[test]
+    fn test_list_empty() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let list = ListValue::new();
+        let value = Value::List(list);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"empty_list", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"empty_list").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let list = recovered.as_list().unwrap();
+        assert_eq!(list.len(), 0);
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_large_list_persistence() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut list = ListValue::new();
+        for i in 0..1000 {
+            list.push_back(Bytes::from(format!("item_{:05}", i)));
+        }
+
+        let value = Value::List(list);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"large_list", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"large_list").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let list = recovered.as_list().unwrap();
+        assert_eq!(list.len(), 1000);
+        assert_eq!(list.get(0), Some(&Bytes::from("item_00000")));
+        assert_eq!(list.get(500), Some(&Bytes::from("item_00500")));
+        assert_eq!(list.get(999), Some(&Bytes::from("item_00999")));
+    }
+
+    // ========================================================================
+    // Set type persistence tests
+    // ========================================================================
+
+    #[test]
+    fn test_set_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut set = SetValue::new();
+        set.add(Bytes::from("member1"));
+        set.add(Bytes::from("member2"));
+        set.add(Bytes::from("member3"));
+
+        let value = Value::Set(set);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"myset", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"myset").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let set = recovered.as_set().unwrap();
+        assert_eq!(set.len(), 3);
+        assert!(set.contains(b"member1"));
+        assert!(set.contains(b"member2"));
+        assert!(set.contains(b"member3"));
+    }
+
+    #[test]
+    fn test_set_empty() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let set = SetValue::new();
+        let value = Value::Set(set);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"empty_set", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"empty_set").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let set = recovered.as_set().unwrap();
+        assert_eq!(set.len(), 0);
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn test_large_set_persistence() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut set = SetValue::new();
+        for i in 0..1000 {
+            set.add(Bytes::from(format!("member_{:05}", i)));
+        }
+
+        let value = Value::Set(set);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"large_set", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"large_set").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let set = recovered.as_set().unwrap();
+        assert_eq!(set.len(), 1000);
+        assert!(set.contains(b"member_00000"));
+        assert!(set.contains(b"member_00500"));
+        assert!(set.contains(b"member_00999"));
+    }
+
+    // ========================================================================
+    // Mixed type recovery tests
+    // ========================================================================
+
+    #[test]
+    fn test_mixed_types_recovery() {
+        let tmp = TempDir::new().unwrap();
+
+        // Phase 1: Write different types
+        {
+            let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+
+            // String
+            let str_value = Value::string("hello");
+            rocks
+                .put(0, b"str_key", &serialize(&str_value, &KeyMetadata::new(5)))
+                .unwrap();
+
+            // Hash
+            let mut hash = HashValue::new();
+            hash.set(Bytes::from("f1"), Bytes::from("v1"));
+            let hash_value = Value::Hash(hash);
+            rocks
+                .put(0, b"hash_key", &serialize(&hash_value, &KeyMetadata::new(hash_value.memory_size())))
+                .unwrap();
+
+            // List
+            let mut list = ListValue::new();
+            list.push_back(Bytes::from("a"));
+            list.push_back(Bytes::from("b"));
+            let list_value = Value::List(list);
+            rocks
+                .put(1, b"list_key", &serialize(&list_value, &KeyMetadata::new(list_value.memory_size())))
+                .unwrap();
+
+            // Set
+            let mut set = SetValue::new();
+            set.add(Bytes::from("x"));
+            set.add(Bytes::from("y"));
+            let set_value = Value::Set(set);
+            rocks
+                .put(1, b"set_key", &serialize(&set_value, &KeyMetadata::new(set_value.memory_size())))
+                .unwrap();
+
+            // Sorted set
+            let mut zset = SortedSetValue::new();
+            zset.add(Bytes::from("alice"), 100.0);
+            let zset_value = Value::SortedSet(zset);
+            rocks
+                .put(0, b"zset_key", &serialize(&zset_value, &KeyMetadata::new(zset_value.memory_size())))
+                .unwrap();
+
+            rocks.flush().unwrap();
+        }
+
+        // Phase 2: Recover and verify all types
+        {
+            let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+            let (stores, stats) = recover_all_shards(&rocks).unwrap();
+
+            assert_eq!(stats.keys_loaded, 5);
+
+            // Verify string
+            let value = stores[0].0.get(b"str_key").unwrap();
+            assert_eq!(value.as_string().unwrap().as_bytes().as_ref(), b"hello");
+
+            // Verify hash
+            let value = stores[0].0.get(b"hash_key").unwrap();
+            let hash = value.as_hash().unwrap();
+            assert_eq!(hash.get(b"f1"), Some(&Bytes::from("v1")));
+
+            // Verify list
+            let value = stores[1].0.get(b"list_key").unwrap();
+            let list = value.as_list().unwrap();
+            assert_eq!(list.len(), 2);
+
+            // Verify set
+            let value = stores[1].0.get(b"set_key").unwrap();
+            let set = value.as_set().unwrap();
+            assert!(set.contains(b"x"));
+            assert!(set.contains(b"y"));
+
+            // Verify sorted set
+            let value = stores[0].0.get(b"zset_key").unwrap();
+            let zset = value.as_sorted_set().unwrap();
+            assert_eq!(zset.get_score(b"alice"), Some(100.0));
+        }
     }
 }

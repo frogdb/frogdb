@@ -109,7 +109,7 @@ impl RocksWalWriter {
         let mut state = self.pending_batch.lock().await;
         self.rocks
             .batch_delete(&mut state.batch, self.shard_id, key)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
 
         // Estimate delete size (key + overhead)
         state.size += key.len() + 32;
@@ -126,7 +126,7 @@ impl RocksWalWriter {
         let mut state = self.pending_batch.lock().await;
         self.rocks
             .batch_put(&mut state.batch, self.shard_id, key, value)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
 
         state.size += key.len() + value.len() + 32; // Add overhead
 
@@ -171,7 +171,7 @@ impl RocksWalWriter {
 
         self.rocks
             .write_batch_opt(batch, &write_opts)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
 
         Ok(())
     }
@@ -207,7 +207,7 @@ impl WalWriter for RocksWalWriter {
                 let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
 
                 if let Ok(rt) = rt {
-                    let _ = rt.block_on(async {
+                    rt.block_on(async {
                         let mut state = self.pending_batch.lock().await;
                         let _ = self
                             .rocks
@@ -231,7 +231,7 @@ impl WalWriter for RocksWalWriter {
                 let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
 
                 if let Ok(rt) = rt {
-                    let _ = rt.block_on(async {
+                    rt.block_on(async {
                         let mut state = self.pending_batch.lock().await;
                         let _ = self
                             .rocks
@@ -247,7 +247,7 @@ impl WalWriter for RocksWalWriter {
                 let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
 
                 if let Ok(rt) = rt {
-                    let _ = rt.block_on(async {
+                    rt.block_on(async {
                         let mut state = self.pending_batch.lock().await;
                         let _ = self.rocks.batch_delete(&mut state.batch, self.shard_id, key);
                         state.size += key.len() + 32;

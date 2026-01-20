@@ -91,7 +91,7 @@ impl ConnectionHandler {
         allow_cross_slot: bool,
         scatter_gather_timeout_ms: u64,
     ) -> Self {
-        let framed = Framed::new(socket, Resp2::default());
+        let framed = Framed::new(socket, Resp2);
         let state = ConnectionState::new(conn_id, addr);
 
         Self {
