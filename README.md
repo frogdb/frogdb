@@ -91,11 +91,25 @@ cargo test -p frogdb-core --features shuttle --test concurrency test_read_your_w
 ```
 
 The concurrency tests cover:
+
 - Connection ID uniqueness under concurrent access
 - Round-robin shard assignment correctness
 - Read-your-writes consistency
 - Command ordering guarantees
 - Concurrent increment operations
+
+### Linting
+
+```bash
+# Run clippy on all targets (library, binaries, tests)
+cargo clippy --all-targets
+
+# Treat warnings as errors (useful for CI)
+cargo clippy --all-targets -- -D warnings
+
+# Run with all features enabled
+cargo clippy --all-targets --all-features
+```
 
 ## Configuration
 
@@ -148,34 +162,4 @@ redis-cli -p 6379 SET foo bar    # OK
 redis-cli -p 6379 GET foo        # "bar"
 redis-cli -p 6379 DEL foo        # (integer) 1
 redis-cli -p 6379 EXISTS foo     # (integer) 0
-```
-
-## Phase 1 Status
-
-Phase 1 implements the architectural skeleton with basic commands:
-
-- [x] PING / ECHO / QUIT
-- [x] GET / SET
-- [x] DEL / EXISTS (single key)
-- [x] COMMAND (placeholder)
-
-## Architecture
-
-```
-frogdb/
-├── crates/
-│   ├── protocol/     # RESP2 wire protocol (frogdb-protocol)
-│   ├── core/         # Data structures & commands (frogdb-core)
-│   └── server/       # Main binary (frogdb-server)
-└── tests/            # Integration tests
-```
-
-### Hash Tags
-
-Use hash tags to colocate related keys on the same shard:
-
-```bash
-SET {user:1}:profile "..."
-SET {user:1}:settings "..."
-# Both keys hash to the same shard based on "user:1"
 ```
