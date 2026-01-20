@@ -16,7 +16,7 @@ mod integration {
         let rocks = Arc::new(RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap());
 
         // Write various types of data
-        let test_data = vec![
+        let test_data = [
             (b"string_raw".to_vec(), Value::string("hello world")),
             (
                 b"string_int".to_vec(),

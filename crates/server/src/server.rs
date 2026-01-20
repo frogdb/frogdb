@@ -37,6 +37,13 @@ pub fn next_txid() -> u64 {
     NEXT_TXID.fetch_add(1, Ordering::SeqCst)
 }
 
+/// Result type for persistence initialization.
+type PersistenceInitResult = (
+    Arc<RocksStore>,
+    Vec<(frogdb_core::HashMapStore, frogdb_core::ExpiryIndex)>,
+    Option<tokio::task::JoinHandle<()>>,
+);
+
 /// FrogDB server.
 pub struct Server {
     /// Server configuration.
@@ -193,11 +200,7 @@ impl Server {
     fn init_persistence(
         config: &PersistenceConfig,
         num_shards: usize,
-    ) -> Result<(
-        Arc<RocksStore>,
-        Vec<(frogdb_core::HashMapStore, frogdb_core::ExpiryIndex)>,
-        Option<tokio::task::JoinHandle<()>>,
-    )> {
+    ) -> Result<PersistenceInitResult> {
         use std::fs;
 
         info!(
