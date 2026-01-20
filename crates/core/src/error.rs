@@ -42,6 +42,11 @@ pub enum CommandError {
     #[error("CROSSSLOT Keys in request don't hash to the same slot")]
     CrossSlot,
 
+    // === Key State Errors ===
+    /// Target key already exists (for RESTORE without REPLACE).
+    #[error("BUSYKEY Target key name already exists")]
+    BusyKey,
+
     // === System Errors ===
     /// Out of memory.
     #[error("OOM command not allowed when used memory > 'maxmemory'")]
@@ -79,6 +84,7 @@ impl CommandError {
             Self::CrossSlot => {
                 Bytes::from_static(b"CROSSSLOT Keys in request don't hash to the same slot")
             }
+            Self::BusyKey => Bytes::from_static(b"BUSYKEY Target key name already exists"),
             Self::OutOfMemory => {
                 Bytes::from_static(b"OOM command not allowed when used memory > 'maxmemory'")
             }

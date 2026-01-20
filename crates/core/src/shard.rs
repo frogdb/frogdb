@@ -8,6 +8,9 @@ use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::command::CommandContext;
+use crate::persistence::{
+    NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
+};
 use crate::registry::CommandRegistry;
 use crate::store::{HashMapStore, Store};
 
@@ -164,10 +167,19 @@ pub struct ShardWorker {
 
     /// Command registry.
     pub registry: Arc<CommandRegistry>,
+
+    /// Optional RocksDB store for persistence.
+    pub rocks_store: Option<Arc<RocksStore>>,
+
+    /// WAL writer for this shard.
+    pub wal_writer: Option<RocksWalWriter>,
+
+    /// Snapshot coordinator for BGSAVE.
+    pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
 }
 
 impl ShardWorker {
-    /// Create a new shard worker.
+    /// Create a new shard worker without persistence.
     pub fn new(
         shard_id: usize,
         num_shards: usize,
@@ -184,7 +196,43 @@ impl ShardWorker {
             new_conn_rx,
             shard_senders,
             registry,
+            rocks_store: None,
+            wal_writer: None,
+            snapshot_coordinator: Arc::new(NoopSnapshotCoordinator::new()),
         }
+    }
+
+    /// Create a new shard worker with persistence.
+    pub fn with_persistence(
+        shard_id: usize,
+        num_shards: usize,
+        store: HashMapStore,
+        message_rx: mpsc::Receiver<ShardMessage>,
+        new_conn_rx: mpsc::Receiver<NewConnection>,
+        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        registry: Arc<CommandRegistry>,
+        rocks_store: Arc<RocksStore>,
+        wal_config: WalConfig,
+        snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+    ) -> Self {
+        let wal_writer = RocksWalWriter::new(rocks_store.clone(), shard_id, wal_config);
+        Self {
+            shard_id,
+            num_shards,
+            store,
+            message_rx,
+            new_conn_rx,
+            shard_senders,
+            registry,
+            rocks_store: Some(rocks_store),
+            wal_writer: Some(wal_writer),
+            snapshot_coordinator,
+        }
+    }
+
+    /// Get the snapshot coordinator.
+    pub fn snapshot_coordinator(&self) -> &Arc<dyn SnapshotCoordinator> {
+        &self.snapshot_coordinator
     }
 
     /// Run the shard worker event loop.
@@ -209,11 +257,17 @@ impl ShardWorker {
                             let _ = response_tx.send(response);
                         }
                         ShardMessage::ScatterRequest { request_id: _, keys, operation, response_tx } => {
-                            let result = self.execute_scatter_part(&keys, &operation);
+                            let result = self.execute_scatter_part(&keys, &operation).await;
                             let _ = response_tx.send(result);
                         }
                         ShardMessage::Shutdown => {
                             tracing::info!(shard_id = self.shard_id, "Shard worker shutting down");
+                            // Flush WAL before shutdown
+                            if let Some(ref wal) = self.wal_writer {
+                                if let Err(e) = wal.flush_async().await {
+                                    tracing::error!(shard_id = self.shard_id, error = %e, "Failed to flush WAL on shutdown");
+                                }
+                            }
                             break;
                         }
                     }
@@ -225,6 +279,13 @@ impl ShardWorker {
                 }
 
                 else => break,
+            }
+        }
+
+        // Final WAL flush
+        if let Some(ref wal) = self.wal_writer {
+            if let Err(e) = wal.flush_async().await {
+                tracing::error!(shard_id = self.shard_id, error = %e, "Failed to flush WAL on exit");
             }
         }
     }
@@ -318,8 +379,8 @@ impl ShardWorker {
     }
 
     /// Execute part of a scatter-gather operation.
-    fn execute_scatter_part(&mut self, keys: &[Bytes], operation: &ScatterOp) -> PartialResult {
-        use crate::types::Value;
+    async fn execute_scatter_part(&mut self, keys: &[Bytes], operation: &ScatterOp) -> PartialResult {
+        use crate::types::{KeyMetadata, Value};
 
         let results = match operation {
             ScatterOp::MGet => {
@@ -340,22 +401,40 @@ impl ShardWorker {
                     .collect()
             }
             ScatterOp::MSet { pairs } => {
-                // For MSET, keys and pairs should align
-                pairs
-                    .iter()
-                    .map(|(key, value)| {
-                        self.store.set(key.clone(), Value::string(value.clone()));
-                        (key.clone(), Response::ok())
-                    })
-                    .collect()
+                let mut results = Vec::with_capacity(pairs.len());
+                for (key, value) in pairs {
+                    let val = Value::string(value.clone());
+                    self.store.set(key.clone(), val.clone());
+
+                    // Persist to WAL if enabled
+                    if let Some(ref wal) = self.wal_writer {
+                        let metadata = KeyMetadata::new(val.memory_size());
+                        if let Err(e) = wal.write_set(key, &val, &metadata).await {
+                            tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist MSET");
+                        }
+                    }
+
+                    results.push((key.clone(), Response::ok()));
+                }
+                results
             }
             ScatterOp::Del | ScatterOp::Unlink => {
-                keys.iter()
-                    .map(|key| {
-                        let deleted = self.store.delete(key);
-                        (key.clone(), Response::Integer(if deleted { 1 } else { 0 }))
-                    })
-                    .collect()
+                let mut results = Vec::with_capacity(keys.len());
+                for key in keys {
+                    let deleted = self.store.delete(key);
+
+                    // Persist delete to WAL if enabled
+                    if deleted {
+                        if let Some(ref wal) = self.wal_writer {
+                            if let Err(e) = wal.write_delete(key).await {
+                                tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist DEL");
+                            }
+                        }
+                    }
+
+                    results.push((key.clone(), Response::Integer(if deleted { 1 } else { 0 })));
+                }
+                results
             }
             ScatterOp::Exists => {
                 keys.iter()

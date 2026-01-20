@@ -35,6 +35,12 @@ pub trait WalWriter: Send + Sync {
 pub enum WalOperation {
     /// SET key value
     Set { key: Bytes, value: Bytes },
+    /// SET key value with expiry
+    SetWithExpiry {
+        key: Bytes,
+        value: Bytes,
+        expires_at: Instant,
+    },
     /// DEL key
     Delete { key: Bytes },
     /// Expire a key

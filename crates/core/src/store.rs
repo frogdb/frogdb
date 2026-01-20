@@ -140,6 +140,35 @@ impl HashMapStore {
         }
     }
 
+    /// Create a store with a pre-allocated expiry index.
+    ///
+    /// Used during recovery when we have a pre-built expiry index.
+    pub fn with_expiry_index(expiry_index: ExpiryIndex) -> Self {
+        Self {
+            data: HashMap::new(),
+            expiry_index,
+            memory_used: 0,
+        }
+    }
+
+    /// Restore an entry during recovery.
+    ///
+    /// This bypasses the normal set path to directly insert a key with
+    /// its full metadata. The expiry index should be updated separately
+    /// or use `with_expiry_index` to provide a pre-built index.
+    pub fn restore_entry(&mut self, key: Bytes, value: Value, metadata: KeyMetadata) {
+        let size = Self::entry_memory_size(&key, &value);
+        self.memory_used += size;
+
+        // Update expiry index if key has expiry
+        if let Some(expires_at) = metadata.expires_at {
+            self.expiry_index.set(key.clone(), expires_at);
+        }
+
+        let entry = Entry { value, metadata };
+        self.data.insert(key, entry);
+    }
+
     /// Calculate memory size for an entry.
     fn entry_memory_size(key: &[u8], value: &Value) -> usize {
         key.len()

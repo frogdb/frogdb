@@ -31,3 +31,6 @@ onyx/.env
 # bun
 node_modules/
 dist/
+
+# RocksDB data directories (created during testing/development)
+frogdb-data/

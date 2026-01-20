@@ -6,6 +6,7 @@
 pub mod command;
 pub mod error;
 pub mod noop;
+pub mod persistence;
 pub mod registry;
 pub mod shard;
 pub mod store;
@@ -18,6 +19,12 @@ pub use noop::{
     AclChecker, AclResult, AlwaysAllowAcl, ExpiryIndex, MetricsRecorder, NoopMetricsRecorder,
     NoopReplicationTracker, NoopTracer, NoopWalWriter, ReplicationConfig, ReplicationTracker,
     Tracer, WalOperation, WalWriter,
+};
+pub use persistence::{
+    deserialize, recover_all_shards, recover_shard, serialize, spawn_periodic_sync, CompressionType,
+    DurabilityMode, NoopSnapshotCoordinator, OnWriteHook, RecoveryStats, RocksConfig, RocksStore,
+    RocksWalWriter, SerializationError, SnapshotCoordinator, SnapshotHandle, SnapshotMetadata,
+    WalConfig, HEADER_SIZE,
 };
 pub use registry::CommandRegistry;
 pub use shard::{

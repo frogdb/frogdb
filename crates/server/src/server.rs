@@ -1,15 +1,19 @@
 //! Main server implementation.
 
 use anyhow::Result;
+use frogdb_core::persistence::{
+    recover_all_shards, spawn_periodic_sync, CompressionType, DurabilityMode, NoopSnapshotCoordinator,
+    RocksConfig, RocksStore, SnapshotCoordinator, WalConfig,
+};
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
 use frogdb_core::{CommandRegistry, ShardMessage, ShardWorker};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::acceptor::Acceptor;
-use crate::config::Config;
+use crate::config::{Config, PersistenceConfig};
 
 /// Channel capacity for shard message queues.
 const SHARD_CHANNEL_CAPACITY: usize = 1024;
@@ -52,6 +56,15 @@ pub struct Server {
 
     /// Shard worker handles.
     shard_handles: Vec<tokio::task::JoinHandle<()>>,
+
+    /// Optional RocksDB store for persistence.
+    rocks_store: Option<Arc<RocksStore>>,
+
+    /// Optional periodic sync task handle.
+    periodic_sync_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Snapshot coordinator (shared across all shards).
+    snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
 }
 
 impl Server {
@@ -81,6 +94,21 @@ impl Server {
 
         info!(num_shards, "Initializing shards");
 
+        // Initialize persistence if enabled
+        let (rocks_store, recovered_stores, periodic_sync_handle) =
+            if config.persistence.enabled {
+                let (rocks, stores, sync_handle) =
+                    Self::init_persistence(&config.persistence, num_shards)?;
+                (Some(rocks), Some(stores), sync_handle)
+            } else {
+                info!("Persistence disabled");
+                (None, None, None)
+            };
+
+        // Create snapshot coordinator
+        let snapshot_coordinator: Arc<dyn SnapshotCoordinator> =
+            Arc::new(NoopSnapshotCoordinator::new());
+
         // Create channels for each shard
         let mut shard_senders = Vec::with_capacity(num_shards);
         let mut shard_receivers = Vec::with_capacity(num_shards);
@@ -101,20 +129,45 @@ impl Server {
 
         // Spawn shard workers
         let mut shard_handles = Vec::with_capacity(num_shards);
+        let wal_config = build_wal_config(&config.persistence);
+
+        // Convert recovered stores to an iterator if available
+        let mut recovered_iter = recovered_stores.map(|v| v.into_iter());
 
         for (shard_id, (msg_rx, conn_rx)) in shard_receivers
             .into_iter()
             .zip(new_conn_receivers.into_iter())
             .enumerate()
         {
-            let worker = ShardWorker::new(
-                shard_id,
-                num_shards,
-                msg_rx,
-                conn_rx,
-                shard_senders.clone(),
-                registry.clone(),
-            );
+            let worker = if let Some(ref rocks) = rocks_store {
+                // Get recovered store for this shard
+                let (store, _expiry_index) = recovered_iter
+                    .as_mut()
+                    .and_then(|iter| iter.next())
+                    .unwrap_or_default();
+
+                ShardWorker::with_persistence(
+                    shard_id,
+                    num_shards,
+                    store,
+                    msg_rx,
+                    conn_rx,
+                    shard_senders.clone(),
+                    registry.clone(),
+                    rocks.clone(),
+                    wal_config.clone(),
+                    snapshot_coordinator.clone(),
+                )
+            } else {
+                ShardWorker::new(
+                    shard_id,
+                    num_shards,
+                    msg_rx,
+                    conn_rx,
+                    shard_senders.clone(),
+                    registry.clone(),
+                )
+            };
 
             let handle = tokio::spawn(async move {
                 worker.run().await;
@@ -130,7 +183,78 @@ impl Server {
             shard_senders,
             new_conn_senders,
             shard_handles,
+            rocks_store,
+            periodic_sync_handle,
+            snapshot_coordinator,
         })
+    }
+
+    /// Initialize persistence layer.
+    fn init_persistence(
+        config: &PersistenceConfig,
+        num_shards: usize,
+    ) -> Result<(
+        Arc<RocksStore>,
+        Vec<(frogdb_core::HashMapStore, frogdb_core::ExpiryIndex)>,
+        Option<tokio::task::JoinHandle<()>>,
+    )> {
+        use std::fs;
+
+        info!(
+            data_dir = %config.data_dir.display(),
+            durability_mode = %config.durability_mode,
+            "Initializing persistence"
+        );
+
+        // Ensure data directory exists
+        fs::create_dir_all(&config.data_dir)?;
+
+        // Build RocksDB config
+        let rocks_config = RocksConfig {
+            write_buffer_size: config.write_buffer_size_mb * 1024 * 1024,
+            compression: parse_compression(&config.compression),
+            max_background_jobs: num_cpus::get() as i32,
+            create_if_missing: true,
+        };
+
+        // Open RocksDB
+        let rocks = Arc::new(RocksStore::open(
+            &config.data_dir,
+            num_shards,
+            &rocks_config,
+        )?);
+
+        // Recover data if database has existing data
+        let recovered = if rocks.has_data() {
+            info!("Recovering data from RocksDB...");
+            let (stores, stats) = recover_all_shards(&rocks)?;
+            info!(
+                keys_loaded = stats.keys_loaded,
+                keys_expired = stats.keys_expired_skipped,
+                bytes = stats.bytes_loaded,
+                duration_ms = stats.duration_ms,
+                "Recovery complete"
+            );
+            stores
+        } else {
+            info!("No existing data found, starting fresh");
+            (0..num_shards)
+                .map(|_| Default::default())
+                .collect()
+        };
+
+        // Start periodic sync if using periodic durability mode
+        let sync_handle = if config.durability_mode.to_lowercase() == "periodic" {
+            info!(
+                interval_ms = config.sync_interval_ms,
+                "Starting periodic WAL sync"
+            );
+            Some(spawn_periodic_sync(rocks.clone(), config.sync_interval_ms))
+        } else {
+            None
+        };
+
+        Ok((rocks, recovered, sync_handle))
     }
 
     /// Run the server.
@@ -171,12 +295,71 @@ impl Server {
             let _ = handle.await;
         }
 
+        // Stop periodic sync task if running
+        if let Some(handle) = self.periodic_sync_handle {
+            handle.abort();
+        }
+
+        // Final flush of RocksDB
+        if let Some(ref rocks) = self.rocks_store {
+            if let Err(e) = rocks.flush() {
+                error!(error = %e, "Failed to flush RocksDB on shutdown");
+            } else {
+                info!("RocksDB flushed successfully");
+            }
+        }
+
         // Abort acceptor
         acceptor_handle.abort();
 
         info!("Server shutdown complete");
 
         Ok(())
+    }
+
+    /// Get the snapshot coordinator.
+    pub fn snapshot_coordinator(&self) -> &Arc<dyn SnapshotCoordinator> {
+        &self.snapshot_coordinator
+    }
+}
+
+/// Parse compression type from config string.
+fn parse_compression(s: &str) -> CompressionType {
+    match s.to_lowercase().as_str() {
+        "none" => CompressionType::None,
+        "snappy" => CompressionType::Snappy,
+        "lz4" => CompressionType::Lz4,
+        "zstd" => CompressionType::Zstd,
+        _ => {
+            warn!(compression = %s, "Unknown compression type, using LZ4");
+            CompressionType::Lz4
+        }
+    }
+}
+
+/// Build WAL config from persistence config.
+fn build_wal_config(config: &PersistenceConfig) -> WalConfig {
+    let mode = match config.durability_mode.to_lowercase().as_str() {
+        "async" => DurabilityMode::Async,
+        "sync" => DurabilityMode::Sync,
+        "periodic" | _ => DurabilityMode::Periodic {
+            interval_ms: config.sync_interval_ms,
+        },
+    };
+
+    WalConfig {
+        mode,
+        batch_size_threshold: config.batch_size_threshold_kb * 1024,
+        batch_timeout_ms: config.batch_timeout_ms,
+    }
+}
+
+/// Helper module for CPU count.
+mod num_cpus {
+    pub fn get() -> usize {
+        std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(1)
     }
 }
 
@@ -304,6 +487,12 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::sorted_set::ZremrangebyrankCommand);
     registry.register(crate::commands::sorted_set::ZremrangebyscoreCommand);
     registry.register(crate::commands::sorted_set::ZremrangebylexCommand);
+
+    // Persistence commands
+    registry.register(crate::commands::persistence::BgsaveCommand);
+    registry.register(crate::commands::persistence::LastsaveCommand);
+    registry.register(crate::commands::persistence::DumpCommand);
+    registry.register(crate::commands::persistence::RestoreCommand);
 }
 
 // Commands module

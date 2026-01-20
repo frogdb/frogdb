@@ -6,7 +6,7 @@ use figment::{
     Figment,
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Main configuration struct.
@@ -19,6 +19,10 @@ pub struct Config {
     /// Logging configuration.
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    /// Persistence configuration.
+    #[serde(default)]
+    pub persistence: PersistenceConfig,
 }
 
 /// Server-specific configuration.
@@ -59,6 +63,42 @@ pub struct LoggingConfig {
     pub format: String,
 }
 
+/// Persistence configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PersistenceConfig {
+    /// Whether persistence is enabled.
+    #[serde(default = "default_persistence_enabled")]
+    pub enabled: bool,
+
+    /// Directory for data files.
+    #[serde(default = "default_data_dir")]
+    pub data_dir: PathBuf,
+
+    /// Durability mode: "async", "periodic", or "sync".
+    #[serde(default = "default_durability_mode")]
+    pub durability_mode: String,
+
+    /// Sync interval in milliseconds (for periodic mode).
+    #[serde(default = "default_sync_interval_ms")]
+    pub sync_interval_ms: u64,
+
+    /// RocksDB write buffer size in MB.
+    #[serde(default = "default_write_buffer_size_mb")]
+    pub write_buffer_size_mb: usize,
+
+    /// Compression type: "none", "snappy", "lz4", "zstd".
+    #[serde(default = "default_compression")]
+    pub compression: String,
+
+    /// Batch size threshold in KB before flushing.
+    #[serde(default = "default_batch_size_threshold_kb")]
+    pub batch_size_threshold_kb: usize,
+
+    /// Batch timeout in milliseconds before flushing.
+    #[serde(default = "default_batch_timeout_ms")]
+    pub batch_timeout_ms: u64,
+}
+
 fn default_bind() -> String {
     "127.0.0.1".to_string()
 }
@@ -87,6 +127,38 @@ fn default_log_format() -> String {
     "pretty".to_string()
 }
 
+fn default_persistence_enabled() -> bool {
+    true
+}
+
+fn default_data_dir() -> PathBuf {
+    PathBuf::from("./frogdb-data")
+}
+
+fn default_durability_mode() -> String {
+    "periodic".to_string()
+}
+
+fn default_sync_interval_ms() -> u64 {
+    1000
+}
+
+fn default_write_buffer_size_mb() -> usize {
+    64
+}
+
+fn default_compression() -> String {
+    "lz4".to_string()
+}
+
+fn default_batch_size_threshold_kb() -> usize {
+    4096 // 4MB
+}
+
+fn default_batch_timeout_ms() -> u64 {
+    10
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -108,11 +180,27 @@ impl Default for LoggingConfig {
     }
 }
 
+impl Default for PersistenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_persistence_enabled(),
+            data_dir: default_data_dir(),
+            durability_mode: default_durability_mode(),
+            sync_interval_ms: default_sync_interval_ms(),
+            write_buffer_size_mb: default_write_buffer_size_mb(),
+            compression: default_compression(),
+            batch_size_threshold_kb: default_batch_size_threshold_kb(),
+            batch_timeout_ms: default_batch_timeout_ms(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
+            persistence: PersistenceConfig::default(),
         }
     }
 }
@@ -284,6 +372,31 @@ level = "info"
 
 # Log format (pretty, json)
 format = "pretty"
+
+[persistence]
+# Whether persistence is enabled
+enabled = true
+
+# Directory for data files
+data_dir = "./frogdb-data"
+
+# Durability mode: "async" (no fsync), "periodic" (fsync at interval), "sync" (fsync every write)
+durability_mode = "periodic"
+
+# Sync interval in milliseconds (for periodic mode)
+sync_interval_ms = 1000
+
+# RocksDB write buffer size in MB
+write_buffer_size_mb = 64
+
+# Compression type: "none", "snappy", "lz4", "zstd"
+compression = "lz4"
+
+# Batch size threshold in KB before flushing
+batch_size_threshold_kb = 4096
+
+# Batch timeout in milliseconds before flushing
+batch_timeout_ms = 10
 "#
         .to_string()
     }
@@ -311,6 +424,9 @@ mod tests {
         assert_eq!(config.server.num_shards, 1);
         assert_eq!(config.logging.level, "info");
         assert_eq!(config.logging.format, "pretty");
+        assert!(config.persistence.enabled);
+        assert_eq!(config.persistence.durability_mode, "periodic");
+        assert_eq!(config.persistence.sync_interval_ms, 1000);
     }
 
     #[test]
