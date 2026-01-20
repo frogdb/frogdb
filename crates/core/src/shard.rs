@@ -1,13 +1,14 @@
 //! Shard infrastructure for shared-nothing concurrency.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::{mpsc, oneshot};
 use xxhash_rust::xxh64::xxh64;
 
-use crate::command::{Command, CommandContext};
+use crate::command::CommandContext;
 use crate::registry::CommandRegistry;
 use crate::store::{HashMapStore, Store};
 
@@ -119,6 +120,9 @@ impl ShardWorker {
     pub async fn run(mut self) {
         tracing::info!(shard_id = self.shard_id, "Shard worker started");
 
+        // Active expiry runs every 100ms
+        let mut expiry_interval = tokio::time::interval(Duration::from_millis(100));
+
         loop {
             tokio::select! {
                 // Handle new connections
@@ -144,7 +148,45 @@ impl ShardWorker {
                     }
                 }
 
+                // Active expiry task
+                _ = expiry_interval.tick() => {
+                    self.run_active_expiry();
+                }
+
                 else => break,
+            }
+        }
+    }
+
+    /// Run active expiry with time budget.
+    ///
+    /// This method deletes expired keys up to a time budget to avoid
+    /// blocking the event loop for too long.
+    fn run_active_expiry(&mut self) {
+        let budget = Duration::from_millis(25);
+        let start = Instant::now();
+        let now = Instant::now();
+
+        // Get expired keys from the expiry index
+        if let Some(expiry_index) = self.store.expiry_index() {
+            let expired = expiry_index.get_expired(now);
+
+            for key in expired {
+                if start.elapsed() > budget {
+                    tracing::trace!(
+                        shard_id = self.shard_id,
+                        "Active expiry budget exhausted"
+                    );
+                    break;
+                }
+
+                // Delete the key
+                self.store.delete(&key);
+                tracing::trace!(
+                    shard_id = self.shard_id,
+                    key = %String::from_utf8_lossy(&key),
+                    "Active expiry deleted key"
+                );
             }
         }
     }
