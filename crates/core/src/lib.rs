@@ -9,6 +9,7 @@ pub mod noop;
 pub mod registry;
 pub mod shard;
 pub mod store;
+pub mod sync;
 pub mod types;
 
 pub use command::{Arity, Command, CommandContext, CommandFlags};
