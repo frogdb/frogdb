@@ -36,6 +36,8 @@ pub struct Acceptor {
     listener: TcpListener,
 
     /// New connection senders (one per shard).
+    /// Reserved for future use when connections are routed to shard workers.
+    #[allow(dead_code)]
     new_conn_senders: Vec<mpsc::Sender<NewConnection>>,
 
     /// Shard message senders.
@@ -46,6 +48,12 @@ pub struct Acceptor {
 
     /// Connection assigner.
     assigner: RoundRobinAssigner,
+
+    /// Allow cross-slot operations.
+    allow_cross_slot: bool,
+
+    /// Scatter-gather timeout in milliseconds.
+    scatter_gather_timeout_ms: u64,
 }
 
 impl Acceptor {
@@ -55,6 +63,8 @@ impl Acceptor {
         new_conn_senders: Vec<mpsc::Sender<NewConnection>>,
         shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
         registry: Arc<CommandRegistry>,
+        allow_cross_slot: bool,
+        scatter_gather_timeout_ms: u64,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -63,6 +73,8 @@ impl Acceptor {
             shard_senders,
             registry,
             assigner: RoundRobinAssigner::new(num_shards),
+            allow_cross_slot,
+            scatter_gather_timeout_ms,
         }
     }
 
@@ -88,6 +100,8 @@ impl Acceptor {
                     let registry = self.registry.clone();
                     let shard_senders = self.shard_senders.clone();
                     let num_shards = self.shard_senders.len();
+                    let allow_cross_slot = self.allow_cross_slot;
+                    let scatter_gather_timeout_ms = self.scatter_gather_timeout_ms;
 
                     tokio::spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -98,6 +112,8 @@ impl Acceptor {
                             num_shards,
                             registry,
                             shard_senders,
+                            allow_cross_slot,
+                            scatter_gather_timeout_ms,
                         );
 
                         if let Err(e) = handler.run().await {

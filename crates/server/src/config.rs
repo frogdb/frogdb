@@ -35,6 +35,16 @@ pub struct ServerConfig {
     /// Number of shards (0 = auto-detect CPU cores).
     #[serde(default = "default_num_shards")]
     pub num_shards: usize,
+
+    /// Allow cross-slot operations in standalone mode.
+    /// When enabled, multi-key commands like MGET/MSET can operate across different
+    /// hash slots using scatter-gather. MSETNX always requires same-slot.
+    #[serde(default = "default_allow_cross_slot_standalone")]
+    pub allow_cross_slot_standalone: bool,
+
+    /// Timeout for scatter-gather operations in milliseconds.
+    #[serde(default = "default_scatter_gather_timeout_ms")]
+    pub scatter_gather_timeout_ms: u64,
 }
 
 /// Logging configuration.
@@ -61,6 +71,14 @@ fn default_num_shards() -> usize {
     1 // Start with 1 shard as per the plan
 }
 
+fn default_allow_cross_slot_standalone() -> bool {
+    false
+}
+
+fn default_scatter_gather_timeout_ms() -> u64 {
+    5000
+}
+
 fn default_log_level() -> String {
     "info".to_string()
 }
@@ -75,6 +93,8 @@ impl Default for ServerConfig {
             bind: default_bind(),
             port: default_port(),
             num_shards: default_num_shards(),
+            allow_cross_slot_standalone: default_allow_cross_slot_standalone(),
+            scatter_gather_timeout_ms: default_scatter_gather_timeout_ms(),
         }
     }
 }
@@ -249,6 +269,14 @@ port = 6379
 
 # Number of shards (0 = auto-detect CPU cores)
 num_shards = 1
+
+# Allow cross-slot operations in standalone mode.
+# When enabled, multi-key commands like MGET/MSET can operate across different
+# hash slots using scatter-gather. MSETNX always requires same-slot for atomicity.
+allow_cross_slot_standalone = false
+
+# Timeout for scatter-gather operations in milliseconds.
+scatter_gather_timeout_ms = 5000
 
 [logging]
 # Log level (trace, debug, info, warn, error)

@@ -29,6 +29,15 @@ pub trait Command: Send + Sync {
     ///
     /// Returns empty slice for keyless commands (PING, INFO, etc.).
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]>;
+
+    /// Whether this command requires all keys to be in the same slot.
+    ///
+    /// When true, the command will return CROSSSLOT error even if
+    /// `allow_cross_slot_standalone` is enabled. This is used for
+    /// commands like MSETNX that require atomicity across all keys.
+    fn requires_same_slot(&self) -> bool {
+        false
+    }
 }
 
 /// Specifies the expected number of arguments for a command.

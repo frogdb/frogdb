@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::{mpsc, oneshot};
-use xxhash_rust::xxh64::xxh64;
 
 use crate::command::CommandContext;
 use crate::registry::CommandRegistry;
@@ -19,6 +18,8 @@ pub enum ShardMessage {
     Execute {
         command: ParsedCommand,
         conn_id: u64,
+        /// Transaction ID for VLL ordering (optional for single-shard operations).
+        txid: Option<u64>,
         response_tx: oneshot::Sender<Response>,
     },
 
@@ -37,12 +38,21 @@ pub enum ShardMessage {
 /// Operation type for scatter-gather.
 #[derive(Debug, Clone)]
 pub enum ScatterOp {
-    /// GET operation.
+    /// MGET operation - get multiple values.
     MGet,
+    /// MSET operation - set multiple key-value pairs.
+    MSet {
+        /// Key-value pairs where keys align with the keys field in ScatterRequest.
+        pairs: Vec<(Bytes, Bytes)>,
+    },
     /// DELETE operation.
     Del,
     /// EXISTS operation.
     Exists,
+    /// TOUCH operation.
+    Touch,
+    /// UNLINK operation (async delete, same as Del for now).
+    Unlink,
 }
 
 /// Result from a shard for scatter-gather operations.
@@ -50,6 +60,67 @@ pub enum ScatterOp {
 pub struct PartialResult {
     /// Results keyed by original key position.
     pub results: Vec<(Bytes, Response)>,
+}
+
+/// A pending operation in the VLL transaction queue.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct PendingOp {
+    /// Transaction ID.
+    pub txid: u64,
+    /// Keys involved in this operation.
+    pub keys: Vec<Bytes>,
+    /// The operation to execute.
+    pub operation: ScatterOp,
+}
+
+/// VLL (Very Lightweight Locking) transaction queue stub.
+///
+/// This is a foundation for future conflict detection and ordering.
+/// Currently serves as a placeholder for Phase 4 scatter-gather operations.
+#[derive(Debug, Default)]
+#[allow(dead_code)]
+pub struct TransactionQueue {
+    /// Pending operations indexed by transaction ID.
+    pending: std::collections::BTreeMap<u64, PendingOp>,
+    /// Maximum queue depth before blocking new transactions.
+    max_depth: usize,
+}
+
+#[allow(dead_code)]
+impl TransactionQueue {
+    /// Create a new transaction queue with the specified max depth.
+    pub fn new(max_depth: usize) -> Self {
+        Self {
+            pending: std::collections::BTreeMap::new(),
+            max_depth,
+        }
+    }
+
+    /// Check if the queue has capacity for a new transaction.
+    pub fn has_capacity(&self) -> bool {
+        self.pending.len() < self.max_depth
+    }
+
+    /// Add a pending operation to the queue.
+    pub fn enqueue(&mut self, op: PendingOp) {
+        self.pending.insert(op.txid, op);
+    }
+
+    /// Remove a completed operation from the queue.
+    pub fn dequeue(&mut self, txid: u64) -> Option<PendingOp> {
+        self.pending.remove(&txid)
+    }
+
+    /// Get the number of pending operations.
+    pub fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Check if the queue is empty.
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
 }
 
 /// New connection to be handled by a shard.
@@ -133,7 +204,7 @@ impl ShardWorker {
                 // Handle shard messages
                 Some(msg) = self.message_rx.recv() => {
                     match msg {
-                        ShardMessage::Execute { command, conn_id, response_tx } => {
+                        ShardMessage::Execute { command, conn_id, txid: _, response_tx } => {
                             let response = self.execute_command(&command, conn_id);
                             let _ = response_tx.send(response);
                         }
@@ -248,12 +319,13 @@ impl ShardWorker {
 
     /// Execute part of a scatter-gather operation.
     fn execute_scatter_part(&mut self, keys: &[Bytes], operation: &ScatterOp) -> PartialResult {
-        let results = keys
-            .iter()
-            .map(|key| {
-                let response = match operation {
-                    ScatterOp::MGet => {
-                        match self.store.get(key) {
+        use crate::types::Value;
+
+        let results = match operation {
+            ScatterOp::MGet => {
+                keys.iter()
+                    .map(|key| {
+                        let response = match self.store.get(key) {
                             Some(value) => {
                                 if let Some(sv) = value.as_string() {
                                     Response::bulk(sv.as_bytes())
@@ -262,20 +334,46 @@ impl ShardWorker {
                                 }
                             }
                             None => Response::null(),
-                        }
-                    }
-                    ScatterOp::Del => {
+                        };
+                        (key.clone(), response)
+                    })
+                    .collect()
+            }
+            ScatterOp::MSet { pairs } => {
+                // For MSET, keys and pairs should align
+                pairs
+                    .iter()
+                    .map(|(key, value)| {
+                        self.store.set(key.clone(), Value::string(value.clone()));
+                        (key.clone(), Response::ok())
+                    })
+                    .collect()
+            }
+            ScatterOp::Del | ScatterOp::Unlink => {
+                keys.iter()
+                    .map(|key| {
                         let deleted = self.store.delete(key);
-                        Response::Integer(if deleted { 1 } else { 0 })
-                    }
-                    ScatterOp::Exists => {
+                        (key.clone(), Response::Integer(if deleted { 1 } else { 0 }))
+                    })
+                    .collect()
+            }
+            ScatterOp::Exists => {
+                keys.iter()
+                    .map(|key| {
                         let exists = self.store.contains(key);
-                        Response::Integer(if exists { 1 } else { 0 })
-                    }
-                };
-                (key.clone(), response)
-            })
-            .collect();
+                        (key.clone(), Response::Integer(if exists { 1 } else { 0 }))
+                    })
+                    .collect()
+            }
+            ScatterOp::Touch => {
+                keys.iter()
+                    .map(|key| {
+                        let touched = self.store.touch(key);
+                        (key.clone(), Response::Integer(if touched { 1 } else { 0 }))
+                    })
+                    .collect()
+            }
+        };
 
         PartialResult { results }
     }
@@ -298,11 +396,23 @@ pub fn extract_hash_tag(key: &[u8]) -> Option<&[u8]> {
     }
 }
 
-/// Determine which shard owns a key.
+/// Number of Redis cluster hash slots.
+pub const REDIS_CLUSTER_SLOTS: usize = 16384;
+
+/// Determine which shard owns a key using Redis-compatible CRC16 hashing.
+///
+/// Uses the XMODEM variant of CRC16, same as Redis cluster.
+/// The slot is calculated as: CRC16(key) % 16384 % num_shards
 pub fn shard_for_key(key: &[u8], num_shards: usize) -> usize {
     let hash_key = extract_hash_tag(key).unwrap_or(key);
-    let hash = xxh64(hash_key, 0);
-    (hash as usize) % num_shards
+    let slot = crc16::State::<crc16::XMODEM>::calculate(hash_key) as usize % REDIS_CLUSTER_SLOTS;
+    slot % num_shards
+}
+
+/// Calculate the Redis cluster slot for a key (0-16383).
+pub fn slot_for_key(key: &[u8]) -> u16 {
+    let hash_key = extract_hash_tag(key).unwrap_or(key);
+    crc16::State::<crc16::XMODEM>::calculate(hash_key) % REDIS_CLUSTER_SLOTS as u16
 }
 
 #[cfg(test)]
@@ -357,5 +467,56 @@ mod tests {
         let key1 = b"{user:1}:profile";
         let key2 = b"{user:1}:settings";
         assert_eq!(shard_for_key(key1, 4), shard_for_key(key2, 4));
+    }
+
+    #[test]
+    fn test_slot_for_key_hash_tag_colocation() {
+        // Keys with same hash tag should map to the same slot
+        let key1 = b"{user:1}:profile";
+        let key2 = b"{user:1}:session";
+        let key3 = b"{user:1}:settings";
+
+        let slot1 = slot_for_key(key1);
+        let slot2 = slot_for_key(key2);
+        let slot3 = slot_for_key(key3);
+
+        assert_eq!(slot1, slot2);
+        assert_eq!(slot2, slot3);
+    }
+
+    #[test]
+    fn test_slot_for_key_range() {
+        // Slots should be in range 0-16383
+        for i in 0..1000 {
+            let key = format!("key:{}", i);
+            let slot = slot_for_key(key.as_bytes());
+            assert!(slot < REDIS_CLUSTER_SLOTS as u16);
+        }
+    }
+
+    #[test]
+    fn test_shard_distribution() {
+        // Test that keys distribute across shards
+        let num_shards = 4;
+        let mut shard_counts = vec![0usize; num_shards];
+
+        for i in 0..1000 {
+            let key = format!("key:{}", i);
+            let shard = shard_for_key(key.as_bytes(), num_shards);
+            shard_counts[shard] += 1;
+        }
+
+        // Each shard should have at least some keys (distribution check)
+        for count in &shard_counts {
+            assert!(*count > 0, "Shard has no keys assigned");
+        }
+    }
+
+    #[test]
+    fn test_crc16_known_values() {
+        // Test against known Redis CRC16 values
+        // "123456789" should hash to 0x31C3 (12739) using XMODEM
+        let crc = crc16::State::<crc16::XMODEM>::calculate(b"123456789");
+        assert_eq!(crc, 0x31C3);
     }
 }

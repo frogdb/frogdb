@@ -13,8 +13,8 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 3 (Sorted Sets) ✓
-**Next Milestone**: Phase 4 - Multi-Shard Operations
+**Phase**: 4 (Multi-Shard Operations) ✓
+**Next Milestone**: Phase 5 - Persistence
 
 ---
 
@@ -409,7 +409,7 @@ These must exist as traits/stubs to avoid refactoring:
 
 ---
 
-## Phase 4: Multi-Shard Operations
+## Phase 4: Multi-Shard Operations ✓
 
 **Goal**: Enable multiple shards with proper CROSSSLOT validation and all-shard scatter-gather.
 
@@ -417,42 +417,42 @@ These must exist as traits/stubs to avoid refactoring:
 
 ### 4.1 Multi-Shard Initialization
 
-- [ ] `num_shards` config option (default: available_parallelism)
-- [ ] Spawn N shard workers
-- [ ] Verify channel topology
+- [x] `num_shards` config option (default: available_parallelism)
+- [x] Spawn N shard workers
+- [x] Verify channel topology
 
 ### 4.2 Hash Tags & Slot Validation
 
-- [ ] `extract_hash_tag(key)` function
-- [ ] Hash slot calculation: `crc16(tag) % 16384`
-- [ ] Internal shard routing: `hash_slot % num_shards`
-- [ ] Same hash tag = same slot = same internal shard
-- [ ] Test: `{user:1}:profile` and `{user:1}:session` go to same shard
+- [x] `extract_hash_tag(key)` function
+- [x] Hash slot calculation: `crc16(tag) % 16384`
+- [x] Internal shard routing: `hash_slot % num_shards`
+- [x] Same hash tag = same slot = same internal shard
+- [x] Test: `{user:1}:profile` and `{user:1}:session` go to same shard
 
 ### 4.3 CROSSSLOT Validation
 
-- [ ] `allow_cross_slot_standalone` config option (default: `false`)
-- [ ] When disabled (default): validate multi-key commands, return `-CROSSSLOT` error (matches Redis Cluster)
-- [ ] When enabled: allow cross-shard operations via VLL (atomic for all operations including MSET)
-- [ ] Commands requiring same-slot by default: MGET, MSET, MSETNX, DEL (multi), EXISTS (multi)
-- [ ] Note: MSETNX always requires same-slot (atomic semantics require it)
-- [ ] Note: `allow_cross_slot_standalone` is only available in standalone mode, not cluster mode
+- [x] `allow_cross_slot_standalone` config option (default: `false`)
+- [x] When disabled (default): validate multi-key commands, return `-CROSSSLOT` error (matches Redis Cluster)
+- [x] When enabled: allow cross-shard operations via VLL (atomic for all operations including MSET)
+- [x] Commands requiring same-slot by default: MGET, MSET, MSETNX, DEL (multi), EXISTS (multi)
+- [x] Note: MSETNX always requires same-slot (atomic semantics require it)
+- [x] Note: `allow_cross_slot_standalone` is only available in standalone mode, not cluster mode
 
 ### 4.4 Multi-Key Commands
 
-- [ ] `MGET`:
+- [x] `MGET`:
   - Default: same-slot required
   - With `allow_cross_slot_standalone`: scatter-gather across shards (atomic read via VLL)
-- [ ] `MSET`:
+- [x] `MSET`:
   - Default: same-slot required (atomic)
   - With `allow_cross_slot_standalone`: atomic via VLL (all-or-nothing semantics)
-- [ ] `MSETNX` (always same-slot required - atomic semantics)
-- [ ] `DEL` multi-key:
+- [x] `MSETNX` (always same-slot required - atomic semantics)
+- [x] `DEL` multi-key:
   - Default: same-slot required
   - With config: atomic via VLL
-- [ ] `EXISTS` multi-key: same behavior as DEL
-- [ ] `TOUCH` multi-key: same behavior as DEL
-- [ ] `UNLINK` multi-key: same behavior as DEL
+- [x] `EXISTS` multi-key: same behavior as DEL
+- [x] `TOUCH` multi-key: same behavior as DEL
+- [x] `UNLINK` multi-key: same behavior as DEL
 
 ### 4.5 Scatter-Gather
 
@@ -466,28 +466,28 @@ Scatter-gather supports two modes:
 
 Implementation:
 
-- [ ] `ScatterRequest` message type
-- [ ] `execute_scatter_gather` function:
-  - [ ] All-shard mode: Send request to all N shards
-  - [ ] Key-targeted mode: Hash keys, send only to owning shards
-  - [ ] Await all responses
-  - [ ] Aggregate results (sum, merge, etc.)
-- [ ] Timeout handling (`scatter_gather_timeout_ms`)
-- [ ] VLL integration for key-targeted write operations (atomic semantics)
+- [x] `ScatterRequest` message type
+- [x] `execute_scatter_gather` function:
+  - [x] All-shard mode: Send request to all N shards
+  - [x] Key-targeted mode: Hash keys, send only to owning shards
+  - [x] Await all responses
+  - [x] Aggregate results (sum, merge, etc.)
+- [x] Timeout handling (`scatter_gather_timeout_ms`)
+- [x] VLL integration for key-targeted write operations (atomic semantics)
 
 ### 4.6 [VLL](VLL.md) Transaction Ordering (Foundation)
 
-- [ ] Global `AtomicU64` transaction ID counter
-- [ ] Include txid in Execute messages
-- [ ] Per-shard pending queue (for future use)
+- [x] Global `AtomicU64` transaction ID counter
+- [x] Include txid in Execute messages
+- [x] Per-shard pending queue (for future use)
 
 ### 4.7 Testing
 
-- [ ] Test MGET with hash tags (same slot, works)
-- [ ] Test MGET without hash tags (different slots, CROSSSLOT error)
-- [ ] Test hash tag colocation
-- [ ] Stress test: 100 concurrent clients, random keys
-- [ ] Test CROSSSLOT error for various multi-key commands
+- [x] Test MGET with hash tags (same slot, works)
+- [x] Test MGET without hash tags (different slots, CROSSSLOT error)
+- [x] Test hash tag colocation
+- [x] Stress test: 100 concurrent clients, random keys
+- [x] Test CROSSSLOT error for various multi-key commands
 
 ---
 
