@@ -19,7 +19,7 @@ use bytes::Bytes;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-use crate::types::{KeyMetadata, SortedSetValue, StringValue, Value};
+use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StringValue, Value};
 
 /// Size of the serialization header in bytes.
 pub const HEADER_SIZE: usize = 24;
@@ -30,6 +30,12 @@ const TYPE_STRING_RAW: u8 = 0;
 const TYPE_STRING_INT: u8 = 1;
 /// Marker for sorted set type.
 const TYPE_SORTED_SET: u8 = 2;
+/// Marker for hash type.
+const TYPE_HASH: u8 = 3;
+/// Marker for list type.
+const TYPE_LIST: u8 = 4;
+/// Marker for set type.
+const TYPE_SET: u8 = 5;
 
 /// Errors that can occur during deserialization.
 #[derive(Debug, Error)]
@@ -64,7 +70,7 @@ pub fn serialize(value: &Value, metadata: &KeyMetadata) -> Vec<u8> {
     // Expires at (8 bytes) - Unix timestamp in milliseconds, -1 for no expiry
     let expires_ms = metadata
         .expires_at
-        .map(|exp| instant_to_unix_ms(exp))
+        .map(instant_to_unix_ms)
         .unwrap_or(-1);
     result.extend_from_slice(&expires_ms.to_le_bytes());
 
@@ -138,6 +144,9 @@ fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
     match value {
         Value::String(sv) => serialize_string(sv),
         Value::SortedSet(zset) => serialize_sorted_set(zset),
+        Value::Hash(hash) => serialize_hash(hash),
+        Value::List(list) => serialize_list(list),
+        Value::Set(set) => serialize_set(set),
     }
 }
 
@@ -185,6 +194,77 @@ fn serialize_sorted_set(zset: &SortedSetValue) -> (u8, Vec<u8>) {
     (TYPE_SORTED_SET, payload)
 }
 
+/// Serialize a hash.
+fn serialize_hash(hash: &HashValue) -> (u8, Vec<u8>) {
+    let entries = hash.to_vec();
+    let len = entries.len() as u32;
+
+    // Calculate size: 4 (len) + sum of (4 (field_len) + field + 4 (value_len) + value)
+    let payload_size: usize =
+        4 + entries.iter().map(|(f, v)| 4 + f.len() + 4 + v.len()).sum::<usize>();
+
+    let mut payload = Vec::with_capacity(payload_size);
+
+    // Number of entries
+    payload.extend_from_slice(&len.to_le_bytes());
+
+    // Each entry: field_len (u32) + field + value_len (u32) + value
+    for (field, value) in entries {
+        payload.extend_from_slice(&(field.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&field);
+        payload.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&value);
+    }
+
+    (TYPE_HASH, payload)
+}
+
+/// Serialize a list.
+fn serialize_list(list: &ListValue) -> (u8, Vec<u8>) {
+    let entries = list.to_vec();
+    let len = entries.len() as u32;
+
+    // Calculate size: 4 (len) + sum of (4 (elem_len) + elem)
+    let payload_size: usize =
+        4 + entries.iter().map(|e| 4 + e.len()).sum::<usize>();
+
+    let mut payload = Vec::with_capacity(payload_size);
+
+    // Number of entries
+    payload.extend_from_slice(&len.to_le_bytes());
+
+    // Each entry: elem_len (u32) + elem
+    for elem in entries {
+        payload.extend_from_slice(&(elem.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&elem);
+    }
+
+    (TYPE_LIST, payload)
+}
+
+/// Serialize a set.
+fn serialize_set(set: &SetValue) -> (u8, Vec<u8>) {
+    let entries = set.to_vec();
+    let len = entries.len() as u32;
+
+    // Calculate size: 4 (len) + sum of (4 (member_len) + member)
+    let payload_size: usize =
+        4 + entries.iter().map(|m| 4 + m.len()).sum::<usize>();
+
+    let mut payload = Vec::with_capacity(payload_size);
+
+    // Number of entries
+    payload.extend_from_slice(&len.to_le_bytes());
+
+    // Each entry: member_len (u32) + member
+    for member in entries {
+        payload.extend_from_slice(&(member.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&member);
+    }
+
+    (TYPE_SET, payload)
+}
+
 /// Deserialize a value from its type byte and payload.
 fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, SerializationError> {
     match type_byte {
@@ -206,6 +286,18 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
         TYPE_SORTED_SET => {
             let zset = deserialize_sorted_set(payload)?;
             Ok(Value::SortedSet(zset))
+        }
+        TYPE_HASH => {
+            let hash = deserialize_hash(payload)?;
+            Ok(Value::Hash(hash))
+        }
+        TYPE_LIST => {
+            let list = deserialize_list(payload)?;
+            Ok(Value::List(list))
+        }
+        TYPE_SET => {
+            let set = deserialize_set(payload)?;
+            Ok(Value::Set(set))
         }
         _ => Err(SerializationError::UnknownType(type_byte)),
     }
@@ -255,6 +347,135 @@ fn deserialize_sorted_set(payload: &[u8]) -> Result<SortedSetValue, Serializatio
     }
 
     Ok(zset)
+}
+
+/// Deserialize a hash from payload.
+fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
+    if payload.len() < 4 {
+        return Err(SerializationError::InvalidPayload(
+            "Hash payload too short for length".to_string(),
+        ));
+    }
+
+    let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+    let mut offset = 4;
+    let mut hash = HashValue::new();
+
+    for _ in 0..len {
+        // Read field length (4 bytes)
+        if offset + 4 > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Hash payload truncated at field length".to_string(),
+            ));
+        }
+        let field_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+
+        // Read field bytes
+        if offset + field_len > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Hash payload truncated at field data".to_string(),
+            ));
+        }
+        let field = Bytes::copy_from_slice(&payload[offset..offset + field_len]);
+        offset += field_len;
+
+        // Read value length (4 bytes)
+        if offset + 4 > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Hash payload truncated at value length".to_string(),
+            ));
+        }
+        let value_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+
+        // Read value bytes
+        if offset + value_len > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Hash payload truncated at value data".to_string(),
+            ));
+        }
+        let value = Bytes::copy_from_slice(&payload[offset..offset + value_len]);
+        offset += value_len;
+
+        hash.set(field, value);
+    }
+
+    Ok(hash)
+}
+
+/// Deserialize a list from payload.
+fn deserialize_list(payload: &[u8]) -> Result<ListValue, SerializationError> {
+    if payload.len() < 4 {
+        return Err(SerializationError::InvalidPayload(
+            "List payload too short for length".to_string(),
+        ));
+    }
+
+    let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+    let mut offset = 4;
+    let mut list = ListValue::new();
+
+    for _ in 0..len {
+        // Read element length (4 bytes)
+        if offset + 4 > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "List payload truncated at element length".to_string(),
+            ));
+        }
+        let elem_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+
+        // Read element bytes
+        if offset + elem_len > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "List payload truncated at element data".to_string(),
+            ));
+        }
+        let elem = Bytes::copy_from_slice(&payload[offset..offset + elem_len]);
+        offset += elem_len;
+
+        list.push_back(elem);
+    }
+
+    Ok(list)
+}
+
+/// Deserialize a set from payload.
+fn deserialize_set(payload: &[u8]) -> Result<SetValue, SerializationError> {
+    if payload.len() < 4 {
+        return Err(SerializationError::InvalidPayload(
+            "Set payload too short for length".to_string(),
+        ));
+    }
+
+    let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+    let mut offset = 4;
+    let mut set = SetValue::new();
+
+    for _ in 0..len {
+        // Read member length (4 bytes)
+        if offset + 4 > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Set payload truncated at member length".to_string(),
+            ));
+        }
+        let member_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+
+        // Read member bytes
+        if offset + member_len > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Set payload truncated at member data".to_string(),
+            ));
+        }
+        let member = Bytes::copy_from_slice(&payload[offset..offset + member_len]);
+        offset += member_len;
+
+        set.add(member);
+    }
+
+    Ok(set)
 }
 
 /// Convert an Instant to Unix timestamp in milliseconds.

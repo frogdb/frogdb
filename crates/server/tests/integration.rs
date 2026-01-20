@@ -76,7 +76,7 @@ impl TestServer {
     /// Connect to the test server.
     async fn connect(&self) -> TestClient {
         let stream = TcpStream::connect(self.addr).await.unwrap();
-        let framed = Framed::new(stream, Resp2::default());
+        let framed = Framed::new(stream, Resp2);
         TestClient { framed }
     }
 
@@ -120,7 +120,7 @@ impl TestClient {
 fn frame_to_response(frame: BytesFrame) -> Response {
     match frame {
         BytesFrame::SimpleString(s) => Response::Simple(s),
-        BytesFrame::Error(e) => Response::Error(Bytes::from(e.into_inner())),
+        BytesFrame::Error(e) => Response::Error(e.into_inner()),
         BytesFrame::Integer(n) => Response::Integer(n),
         BytesFrame::BulkString(b) => Response::Bulk(Some(b)),
         BytesFrame::Null => Response::Bulk(None),
@@ -835,6 +835,703 @@ async fn test_type_command_zset() {
 
     let response = client.command(&["TYPE", "myzset"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("zset")));
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Hash tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_hset_hget() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // HSET single field
+    let response = client.command(&["HSET", "myhash", "field1", "value1"]).await;
+    assert_eq!(response, Response::Integer(1)); // 1 new field added
+
+    // HGET existing field
+    let response = client.command(&["HGET", "myhash", "field1"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("value1"))));
+
+    // HGET nonexistent field
+    let response = client.command(&["HGET", "myhash", "nonexistent"]).await;
+    assert_eq!(response, Response::Bulk(None));
+
+    // HSET multiple fields
+    let response = client
+        .command(&["HSET", "myhash", "field2", "value2", "field3", "value3"])
+        .await;
+    assert_eq!(response, Response::Integer(2)); // 2 new fields added
+
+    // Update existing field (returns 0)
+    let response = client.command(&["HSET", "myhash", "field1", "updated"]).await;
+    assert_eq!(response, Response::Integer(0)); // 0 new fields, 1 updated
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_hsetnx() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // HSETNX new field
+    let response = client
+        .command(&["HSETNX", "myhash", "field1", "value1"])
+        .await;
+    assert_eq!(response, Response::Integer(1));
+
+    // HSETNX existing field
+    let response = client
+        .command(&["HSETNX", "myhash", "field1", "value2"])
+        .await;
+    assert_eq!(response, Response::Integer(0));
+
+    // Verify original value unchanged
+    let response = client.command(&["HGET", "myhash", "field1"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("value1"))));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_hdel() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2", "f3", "v3"])
+        .await;
+
+    // HDEL existing fields
+    let response = client.command(&["HDEL", "myhash", "f1", "f2"]).await;
+    assert_eq!(response, Response::Integer(2));
+
+    // HDEL nonexistent
+    let response = client.command(&["HDEL", "myhash", "f1"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    // Verify f3 still exists
+    let response = client.command(&["HGET", "myhash", "f3"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("v3"))));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_hmget() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2"])
+        .await;
+
+    let response = client
+        .command(&["HMGET", "myhash", "f1", "nonexistent", "f2"])
+        .await;
+    assert_eq!(
+        response,
+        Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("v1"))),
+            Response::Bulk(None),
+            Response::Bulk(Some(Bytes::from("v2"))),
+        ])
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_hgetall() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "myhash", "f1", "v1"]).await;
+
+    let response = client.command(&["HGETALL", "myhash"]).await;
+    // Returns flat array: [field1, value1, field2, value2, ...]
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 2);
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    // HGETALL nonexistent key
+    let response = client.command(&["HGETALL", "nonexistent"]).await;
+    assert_eq!(response, Response::Array(vec![]));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_hlen_hexists() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // HLEN nonexistent
+    let response = client.command(&["HLEN", "myhash"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    client.command(&["HSET", "myhash", "f1", "v1", "f2", "v2"]).await;
+
+    // HLEN
+    let response = client.command(&["HLEN", "myhash"]).await;
+    assert_eq!(response, Response::Integer(2));
+
+    // HEXISTS
+    let response = client.command(&["HEXISTS", "myhash", "f1"]).await;
+    assert_eq!(response, Response::Integer(1));
+
+    let response = client.command(&["HEXISTS", "myhash", "nonexistent"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_hincrby() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // HINCRBY on nonexistent field (creates it)
+    let response = client.command(&["HINCRBY", "myhash", "counter", "5"]).await;
+    assert_eq!(response, Response::Integer(5));
+
+    // HINCRBY on existing field
+    let response = client.command(&["HINCRBY", "myhash", "counter", "3"]).await;
+    assert_eq!(response, Response::Integer(8));
+
+    // HINCRBY negative
+    let response = client
+        .command(&["HINCRBY", "myhash", "counter", "-2"])
+        .await;
+    assert_eq!(response, Response::Integer(6));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_hincrbyfloat() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["HINCRBYFLOAT", "myhash", "price", "10.5"])
+        .await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("10.5"))));
+
+    let response = client
+        .command(&["HINCRBYFLOAT", "myhash", "price", "0.5"])
+        .await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("11"))));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_type_command_hash() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "myhash", "f1", "v1"]).await;
+
+    let response = client.command(&["TYPE", "myhash"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("hash")));
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// List tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_lpush_rpush() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // LPUSH
+    let response = client.command(&["LPUSH", "mylist", "a"]).await;
+    assert_eq!(response, Response::Integer(1));
+
+    let response = client.command(&["LPUSH", "mylist", "b", "c"]).await;
+    assert_eq!(response, Response::Integer(3)); // c, b, a
+
+    // RPUSH
+    let response = client.command(&["RPUSH", "mylist", "d"]).await;
+    assert_eq!(response, Response::Integer(4)); // c, b, a, d
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lpop_rpop() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["RPUSH", "mylist", "a", "b", "c", "d"]).await;
+
+    // LPOP
+    let response = client.command(&["LPOP", "mylist"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("a"))));
+
+    // RPOP
+    let response = client.command(&["RPOP", "mylist"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("d"))));
+
+    // LPOP with count
+    let response = client.command(&["LPOP", "mylist", "2"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0], Response::Bulk(Some(Bytes::from("b"))));
+            assert_eq!(items[1], Response::Bulk(Some(Bytes::from("c"))));
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    // LPOP empty list
+    let response = client.command(&["LPOP", "mylist"]).await;
+    assert_eq!(response, Response::Bulk(None));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_llen() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // LLEN nonexistent
+    let response = client.command(&["LLEN", "mylist"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    client.command(&["RPUSH", "mylist", "a", "b", "c"]).await;
+
+    let response = client.command(&["LLEN", "mylist"]).await;
+    assert_eq!(response, Response::Integer(3));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lrange() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["RPUSH", "mylist", "a", "b", "c", "d", "e"]).await;
+
+    // Full range
+    let response = client.command(&["LRANGE", "mylist", "0", "-1"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 5);
+            assert_eq!(items[0], Response::Bulk(Some(Bytes::from("a"))));
+            assert_eq!(items[4], Response::Bulk(Some(Bytes::from("e"))));
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    // Partial range
+    let response = client.command(&["LRANGE", "mylist", "1", "3"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], Response::Bulk(Some(Bytes::from("b"))));
+            assert_eq!(items[2], Response::Bulk(Some(Bytes::from("d"))));
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    // Negative indices
+    let response = client.command(&["LRANGE", "mylist", "-3", "-1"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], Response::Bulk(Some(Bytes::from("c"))));
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lindex_lset() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["RPUSH", "mylist", "a", "b", "c"]).await;
+
+    // LINDEX
+    let response = client.command(&["LINDEX", "mylist", "1"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("b"))));
+
+    // LINDEX negative
+    let response = client.command(&["LINDEX", "mylist", "-1"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("c"))));
+
+    // LINDEX out of range
+    let response = client.command(&["LINDEX", "mylist", "100"]).await;
+    assert_eq!(response, Response::Bulk(None));
+
+    // LSET
+    let response = client.command(&["LSET", "mylist", "1", "updated"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    let response = client.command(&["LINDEX", "mylist", "1"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("updated"))));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ltrim() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["RPUSH", "mylist", "a", "b", "c", "d", "e"])
+        .await;
+
+    let response = client.command(&["LTRIM", "mylist", "1", "3"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    let response = client.command(&["LRANGE", "mylist", "0", "-1"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], Response::Bulk(Some(Bytes::from("b"))));
+            assert_eq!(items[2], Response::Bulk(Some(Bytes::from("d"))));
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_linsert() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["RPUSH", "mylist", "a", "c"]).await;
+
+    // LINSERT BEFORE
+    let response = client
+        .command(&["LINSERT", "mylist", "BEFORE", "c", "b"])
+        .await;
+    assert_eq!(response, Response::Integer(3));
+
+    let response = client.command(&["LRANGE", "mylist", "0", "-1"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[1], Response::Bulk(Some(Bytes::from("b"))));
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    // LINSERT AFTER
+    let response = client
+        .command(&["LINSERT", "mylist", "AFTER", "c", "d"])
+        .await;
+    assert_eq!(response, Response::Integer(4));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lrem() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["RPUSH", "mylist", "a", "b", "a", "c", "a"])
+        .await;
+
+    // LREM count > 0 (remove from head)
+    let response = client.command(&["LREM", "mylist", "2", "a"]).await;
+    assert_eq!(response, Response::Integer(2));
+
+    let response = client.command(&["LLEN", "mylist"]).await;
+    assert_eq!(response, Response::Integer(3)); // b, c, a
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_type_command_list() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["RPUSH", "mylist", "a"]).await;
+
+    let response = client.command(&["TYPE", "mylist"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("list")));
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Set tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_sadd_smembers() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // SADD
+    let response = client.command(&["SADD", "myset", "a", "b", "c"]).await;
+    assert_eq!(response, Response::Integer(3));
+
+    // SADD with duplicates
+    let response = client.command(&["SADD", "myset", "a", "d"]).await;
+    assert_eq!(response, Response::Integer(1)); // Only d was added
+
+    // SMEMBERS
+    let response = client.command(&["SMEMBERS", "myset"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 4);
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_srem() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SADD", "myset", "a", "b", "c"]).await;
+
+    let response = client.command(&["SREM", "myset", "a", "d"]).await;
+    assert_eq!(response, Response::Integer(1)); // Only a was removed
+
+    let response = client.command(&["SCARD", "myset"]).await;
+    assert_eq!(response, Response::Integer(2));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_sismember_smismember() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SADD", "myset", "a", "b"]).await;
+
+    // SISMEMBER
+    let response = client.command(&["SISMEMBER", "myset", "a"]).await;
+    assert_eq!(response, Response::Integer(1));
+
+    let response = client.command(&["SISMEMBER", "myset", "c"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    // SMISMEMBER
+    let response = client.command(&["SMISMEMBER", "myset", "a", "c", "b"]).await;
+    assert_eq!(
+        response,
+        Response::Array(vec![
+            Response::Integer(1),
+            Response::Integer(0),
+            Response::Integer(1),
+        ])
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_scard() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // SCARD nonexistent
+    let response = client.command(&["SCARD", "myset"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    client.command(&["SADD", "myset", "a", "b", "c"]).await;
+
+    let response = client.command(&["SCARD", "myset"]).await;
+    assert_eq!(response, Response::Integer(3));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_sunion() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SADD", "{set}1", "a", "b"]).await;
+    client.command(&["SADD", "{set}2", "b", "c"]).await;
+
+    let response = client.command(&["SUNION", "{set}1", "{set}2"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 3); // a, b, c
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_sinter() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SADD", "{set}1", "a", "b", "c"]).await;
+    client.command(&["SADD", "{set}2", "b", "c", "d"]).await;
+
+    let response = client.command(&["SINTER", "{set}1", "{set}2"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 2); // b, c
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_sdiff() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SADD", "{set}1", "a", "b", "c"]).await;
+    client.command(&["SADD", "{set}2", "b", "c", "d"]).await;
+
+    let response = client.command(&["SDIFF", "{set}1", "{set}2"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1); // a
+            assert_eq!(items[0], Response::Bulk(Some(Bytes::from("a"))));
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_sunionstore() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SADD", "{set}1", "a", "b"]).await;
+    client.command(&["SADD", "{set}2", "b", "c"]).await;
+
+    let response = client
+        .command(&["SUNIONSTORE", "{set}dest", "{set}1", "{set}2"])
+        .await;
+    assert_eq!(response, Response::Integer(3));
+
+    let response = client.command(&["SCARD", "{set}dest"]).await;
+    assert_eq!(response, Response::Integer(3));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_sinterstore() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SADD", "{set}1", "a", "b", "c"]).await;
+    client.command(&["SADD", "{set}2", "b", "c", "d"]).await;
+
+    let response = client
+        .command(&["SINTERSTORE", "{set}dest", "{set}1", "{set}2"])
+        .await;
+    assert_eq!(response, Response::Integer(2));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_spop() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SADD", "myset", "a", "b", "c"]).await;
+
+    // SPOP single
+    let response = client.command(&["SPOP", "myset"]).await;
+    match response {
+        Response::Bulk(Some(_)) => {}
+        _ => panic!("Expected bulk response"),
+    }
+
+    let response = client.command(&["SCARD", "myset"]).await;
+    assert_eq!(response, Response::Integer(2));
+
+    // SPOP with count
+    let response = client.command(&["SPOP", "myset", "2"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 2);
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_type_command_set() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SADD", "myset", "a"]).await;
+
+    let response = client.command(&["TYPE", "myset"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("set")));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_wrongtype_hash_list_set() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Create a hash
+    client.command(&["HSET", "myhash", "f1", "v1"]).await;
+
+    // Try list command on hash
+    let response = client.command(&["LPUSH", "myhash", "a"]).await;
+    assert!(matches!(response, Response::Error(e) if e.starts_with(b"WRONGTYPE")));
+
+    // Try set command on hash
+    let response = client.command(&["SADD", "myhash", "a"]).await;
+    assert!(matches!(response, Response::Error(e) if e.starts_with(b"WRONGTYPE")));
+
+    // Create a list
+    client.command(&["RPUSH", "mylist", "a"]).await;
+
+    // Try hash command on list
+    let response = client.command(&["HGET", "mylist", "f1"]).await;
+    assert!(matches!(response, Response::Error(e) if e.starts_with(b"WRONGTYPE")));
+
+    // Create a set
+    client.command(&["SADD", "myset", "a"]).await;
+
+    // Try hash command on set
+    let response = client.command(&["HGET", "myset", "f1"]).await;
+    assert!(matches!(response, Response::Error(e) if e.starts_with(b"WRONGTYPE")));
 
     server.shutdown().await;
 }

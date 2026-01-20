@@ -2,7 +2,8 @@
 
 use bytes::Bytes;
 use ordered_float::OrderedFloat;
-use std::collections::{BTreeMap, HashMap};
+use rand::seq::SliceRandom;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Value types stored in FrogDB.
@@ -12,10 +13,13 @@ pub enum Value {
     String(StringValue),
     /// Sorted set value.
     SortedSet(SortedSetValue),
+    /// Hash value.
+    Hash(HashValue),
+    /// List value.
+    List(ListValue),
+    /// Set value.
+    Set(SetValue),
     // Future types:
-    // List(ListValue),
-    // Set(SetValue),
-    // Hash(HashValue),
     // Stream(StreamValue),
 }
 
@@ -30,11 +34,29 @@ impl Value {
         Value::SortedSet(SortedSetValue::new())
     }
 
+    /// Create a hash value.
+    pub fn hash() -> Self {
+        Value::Hash(HashValue::new())
+    }
+
+    /// Create a list value.
+    pub fn list() -> Self {
+        Value::List(ListValue::new())
+    }
+
+    /// Create a set value.
+    pub fn set() -> Self {
+        Value::Set(SetValue::new())
+    }
+
     /// Get the key type.
     pub fn key_type(&self) -> KeyType {
         match self {
             Value::String(_) => KeyType::String,
             Value::SortedSet(_) => KeyType::SortedSet,
+            Value::Hash(_) => KeyType::Hash,
+            Value::List(_) => KeyType::List,
+            Value::Set(_) => KeyType::Set,
         }
     }
 
@@ -43,6 +65,9 @@ impl Value {
         match self {
             Value::String(s) => s.memory_size(),
             Value::SortedSet(z) => z.memory_size(),
+            Value::Hash(h) => h.memory_size(),
+            Value::List(l) => l.memory_size(),
+            Value::Set(s) => s.memory_size(),
         }
     }
 
@@ -74,6 +99,54 @@ impl Value {
     pub fn as_sorted_set_mut(&mut self) -> Option<&mut SortedSetValue> {
         match self {
             Value::SortedSet(z) => Some(z),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a hash value.
+    pub fn as_hash(&self) -> Option<&HashValue> {
+        match self {
+            Value::Hash(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a mutable hash value.
+    pub fn as_hash_mut(&mut self) -> Option<&mut HashValue> {
+        match self {
+            Value::Hash(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a list value.
+    pub fn as_list(&self) -> Option<&ListValue> {
+        match self {
+            Value::List(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a mutable list value.
+    pub fn as_list_mut(&mut self) -> Option<&mut ListValue> {
+        match self {
+            Value::List(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a set value.
+    pub fn as_set(&self) -> Option<&SetValue> {
+        match self {
+            Value::Set(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a mutable set value.
+    pub fn as_set_mut(&mut self) -> Option<&mut SetValue> {
+        match self {
+            Value::Set(s) => Some(s),
             _ => None,
         }
     }
@@ -706,7 +779,7 @@ impl SortedSetValue {
         };
 
         let end = if end < 0 {
-            (len + end).max(-1) as i64
+            (len + end).max(-1)
         } else {
             end.min(len - 1)
         };
@@ -740,7 +813,7 @@ impl SortedSetValue {
         };
 
         let end = if end < 0 {
-            (len + end).max(-1) as i64
+            (len + end).max(-1)
         } else {
             end.min(len - 1)
         };
@@ -991,8 +1064,8 @@ impl SortedSetValue {
         // HashMap overhead + entries
         let members_size: usize = self
             .members
-            .iter()
-            .map(|(k, _)| k.len() + std::mem::size_of::<f64>() + 32) // 32 for HashMap node overhead
+            .keys()
+            .map(|k| k.len() + std::mem::size_of::<f64>() + 32) // 32 for HashMap node overhead
             .sum();
 
         // BTreeMap overhead + entries
@@ -1018,6 +1091,680 @@ impl SortedSetValue {
             .iter()
             .map(|((score, member), _)| (member.clone(), score.0))
             .collect()
+    }
+}
+
+// ============================================================================
+// Hash Type
+// ============================================================================
+
+/// Hash value - a mapping from field names to values.
+#[derive(Debug, Clone)]
+pub struct HashValue {
+    data: HashMap<Bytes, Bytes>,
+}
+
+impl Default for HashValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HashValue {
+    /// Create a new empty hash.
+    pub fn new() -> Self {
+        Self {
+            data: HashMap::new(),
+        }
+    }
+
+    /// Get the number of fields.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Check if the hash is empty.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Set a field value.
+    ///
+    /// Returns true if the field is new, false if it was updated.
+    pub fn set(&mut self, field: Bytes, value: Bytes) -> bool {
+        self.data.insert(field, value).is_none()
+    }
+
+    /// Set a field value only if it doesn't exist.
+    ///
+    /// Returns true if the field was set, false if it already existed.
+    pub fn set_nx(&mut self, field: Bytes, value: Bytes) -> bool {
+        use std::collections::hash_map::Entry;
+        if let Entry::Vacant(e) = self.data.entry(field) {
+            e.insert(value);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get a field value.
+    pub fn get(&self, field: &[u8]) -> Option<&Bytes> {
+        self.data.get(field)
+    }
+
+    /// Remove a field.
+    ///
+    /// Returns true if the field existed.
+    pub fn remove(&mut self, field: &[u8]) -> bool {
+        self.data.remove(field).is_some()
+    }
+
+    /// Check if a field exists.
+    pub fn contains(&self, field: &[u8]) -> bool {
+        self.data.contains_key(field)
+    }
+
+    /// Get all field names.
+    pub fn keys(&self) -> impl Iterator<Item = &Bytes> {
+        self.data.keys()
+    }
+
+    /// Get all values.
+    pub fn values(&self) -> impl Iterator<Item = &Bytes> {
+        self.data.values()
+    }
+
+    /// Iterate over all field-value pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&Bytes, &Bytes)> {
+        self.data.iter()
+    }
+
+    /// Increment an integer field by delta.
+    ///
+    /// If the field doesn't exist, it's created with the delta value.
+    /// Returns the new value or an error if the field is not a valid integer.
+    pub fn incr_by(&mut self, field: Bytes, delta: i64) -> Result<i64, IncrementError> {
+        let current = if let Some(val) = self.data.get(&field) {
+            std::str::from_utf8(val)
+                .ok()
+                .and_then(|s| s.parse::<i64>().ok())
+                .ok_or(IncrementError::NotInteger)?
+        } else {
+            0
+        };
+
+        let new_val = current
+            .checked_add(delta)
+            .ok_or(IncrementError::Overflow)?;
+        self.data.insert(field, Bytes::from(new_val.to_string()));
+        Ok(new_val)
+    }
+
+    /// Increment a float field by delta.
+    ///
+    /// If the field doesn't exist, it's created with the delta value.
+    /// Returns the new value or an error if the field is not a valid float.
+    pub fn incr_by_float(&mut self, field: Bytes, delta: f64) -> Result<f64, IncrementError> {
+        let current = if let Some(val) = self.data.get(&field) {
+            std::str::from_utf8(val)
+                .ok()
+                .and_then(|s| s.parse::<f64>().ok())
+                .ok_or(IncrementError::NotFloat)?
+        } else {
+            0.0
+        };
+
+        let new_val = current + delta;
+
+        if new_val.is_infinite() || new_val.is_nan() {
+            return Err(IncrementError::Overflow);
+        }
+
+        self.data.insert(field, Bytes::from(format_float(new_val)));
+        Ok(new_val)
+    }
+
+    /// Get random fields from the hash.
+    ///
+    /// If count > 0: return up to count unique fields
+    /// If count < 0: return |count| fields, allowing duplicates
+    pub fn random_fields(&self, count: i64, with_values: bool) -> Vec<(Bytes, Option<Bytes>)> {
+        if self.is_empty() || count == 0 {
+            return vec![];
+        }
+
+        let entries: Vec<_> = self.data.iter().collect();
+        let mut rng = rand::thread_rng();
+
+        if count > 0 {
+            // Unique fields
+            let count = (count as usize).min(entries.len());
+            let mut indices: Vec<usize> = (0..entries.len()).collect();
+            indices.shuffle(&mut rng);
+            indices
+                .into_iter()
+                .take(count)
+                .map(|i| {
+                    let (k, v) = entries[i];
+                    (k.clone(), if with_values { Some(v.clone()) } else { None })
+                })
+                .collect()
+        } else {
+            // Allow duplicates
+            let count = (-count) as usize;
+            let mut result = Vec::with_capacity(count);
+            for _ in 0..count {
+                let idx = rand::random::<usize>() % entries.len();
+                let (k, v) = entries[idx];
+                result.push((k.clone(), if with_values { Some(v.clone()) } else { None }));
+            }
+            result
+        }
+    }
+
+    /// Calculate approximate memory size.
+    pub fn memory_size(&self) -> usize {
+        let base_size = std::mem::size_of::<Self>();
+        let entries_size: usize = self
+            .data
+            .iter()
+            .map(|(k, v)| k.len() + v.len() + 32) // 32 for HashMap node overhead
+            .sum();
+        base_size + entries_size
+    }
+
+    /// Get all field-value pairs as a vec for serialization.
+    pub fn to_vec(&self) -> Vec<(Bytes, Bytes)> {
+        self.data
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+}
+
+// ============================================================================
+// Set Type
+// ============================================================================
+
+/// Set value - an unordered collection of unique members.
+#[derive(Debug, Clone)]
+pub struct SetValue {
+    data: HashSet<Bytes>,
+}
+
+impl Default for SetValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SetValue {
+    /// Create a new empty set.
+    pub fn new() -> Self {
+        Self {
+            data: HashSet::new(),
+        }
+    }
+
+    /// Get the number of members.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Check if the set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Add a member to the set.
+    ///
+    /// Returns true if the member was new, false if it already existed.
+    pub fn add(&mut self, member: Bytes) -> bool {
+        self.data.insert(member)
+    }
+
+    /// Remove a member from the set.
+    ///
+    /// Returns true if the member existed.
+    pub fn remove(&mut self, member: &[u8]) -> bool {
+        self.data.remove(member)
+    }
+
+    /// Check if a member exists.
+    pub fn contains(&self, member: &[u8]) -> bool {
+        self.data.contains(member)
+    }
+
+    /// Get all members.
+    pub fn members(&self) -> impl Iterator<Item = &Bytes> {
+        self.data.iter()
+    }
+
+    /// Compute the union of this set with others.
+    pub fn union<'a>(&'a self, others: impl Iterator<Item = &'a SetValue>) -> SetValue {
+        let mut result = self.data.clone();
+        for other in others {
+            for member in &other.data {
+                result.insert(member.clone());
+            }
+        }
+        SetValue { data: result }
+    }
+
+    /// Compute the intersection of this set with others.
+    pub fn intersection<'a>(&'a self, others: impl Iterator<Item = &'a SetValue>) -> SetValue {
+        let mut result = self.data.clone();
+        for other in others {
+            result.retain(|m| other.data.contains(m));
+        }
+        SetValue { data: result }
+    }
+
+    /// Compute the difference of this set minus others.
+    pub fn difference<'a>(&'a self, others: impl Iterator<Item = &'a SetValue>) -> SetValue {
+        let mut result = self.data.clone();
+        for other in others {
+            for member in &other.data {
+                result.remove(member);
+            }
+        }
+        SetValue { data: result }
+    }
+
+    /// Pop a random member from the set.
+    ///
+    /// Returns None if the set is empty.
+    pub fn pop(&mut self) -> Option<Bytes> {
+        if self.is_empty() {
+            return None;
+        }
+
+        // Get random member
+        let members: Vec<_> = self.data.iter().cloned().collect();
+        let idx = rand::random::<usize>() % members.len();
+        let member = members[idx].clone();
+        self.data.remove(&member);
+        Some(member)
+    }
+
+    /// Pop multiple random members from the set.
+    pub fn pop_many(&mut self, count: usize) -> Vec<Bytes> {
+        let count = count.min(self.len());
+        let mut result = Vec::with_capacity(count);
+        for _ in 0..count {
+            if let Some(member) = self.pop() {
+                result.push(member);
+            } else {
+                break;
+            }
+        }
+        result
+    }
+
+    /// Get random members without removing them.
+    ///
+    /// If count > 0: return up to count unique members
+    /// If count < 0: return |count| members, allowing duplicates
+    pub fn random_members(&self, count: i64) -> Vec<Bytes> {
+        if self.is_empty() || count == 0 {
+            return vec![];
+        }
+
+        let members: Vec<_> = self.data.iter().cloned().collect();
+        let mut rng = rand::thread_rng();
+
+        if count > 0 {
+            // Unique members
+            let count = (count as usize).min(members.len());
+            let mut shuffled = members;
+            shuffled.shuffle(&mut rng);
+            shuffled.into_iter().take(count).collect()
+        } else {
+            // Allow duplicates
+            let count = (-count) as usize;
+            let mut result = Vec::with_capacity(count);
+            for _ in 0..count {
+                let idx = rand::random::<usize>() % members.len();
+                result.push(members[idx].clone());
+            }
+            result
+        }
+    }
+
+    /// Calculate approximate memory size.
+    pub fn memory_size(&self) -> usize {
+        let base_size = std::mem::size_of::<Self>();
+        let entries_size: usize = self
+            .data
+            .iter()
+            .map(|m| m.len() + 24) // 24 for HashSet node overhead
+            .sum();
+        base_size + entries_size
+    }
+
+    /// Get all members as a vec for serialization.
+    pub fn to_vec(&self) -> Vec<Bytes> {
+        self.data.iter().cloned().collect()
+    }
+}
+
+// ============================================================================
+// List Type
+// ============================================================================
+
+/// List value - a doubly-linked list of values.
+#[derive(Debug, Clone)]
+pub struct ListValue {
+    data: VecDeque<Bytes>,
+}
+
+impl Default for ListValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ListValue {
+    /// Create a new empty list.
+    pub fn new() -> Self {
+        Self {
+            data: VecDeque::new(),
+        }
+    }
+
+    /// Get the number of elements.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Check if the list is empty.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Push an element to the front (left).
+    pub fn push_front(&mut self, value: Bytes) {
+        self.data.push_front(value);
+    }
+
+    /// Push an element to the back (right).
+    pub fn push_back(&mut self, value: Bytes) {
+        self.data.push_back(value);
+    }
+
+    /// Pop an element from the front (left).
+    pub fn pop_front(&mut self) -> Option<Bytes> {
+        self.data.pop_front()
+    }
+
+    /// Pop an element from the back (right).
+    pub fn pop_back(&mut self) -> Option<Bytes> {
+        self.data.pop_back()
+    }
+
+    /// Normalize a Redis index (supports negative indices).
+    fn normalize_index(&self, index: i64) -> Option<usize> {
+        let len = self.len() as i64;
+        if len == 0 {
+            return None;
+        }
+        let normalized = if index < 0 { len + index } else { index };
+        if normalized < 0 || normalized >= len {
+            None
+        } else {
+            Some(normalized as usize)
+        }
+    }
+
+    /// Get an element by index (supports negative indices).
+    pub fn get(&self, index: i64) -> Option<&Bytes> {
+        self.normalize_index(index)
+            .and_then(|i| self.data.get(i))
+    }
+
+    /// Set an element by index (supports negative indices).
+    ///
+    /// Returns true if the index was valid and the element was set.
+    pub fn set(&mut self, index: i64, value: Bytes) -> bool {
+        if let Some(i) = self.normalize_index(index) {
+            if let Some(elem) = self.data.get_mut(i) {
+                *elem = value;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get a range of elements (inclusive, supports negative indices).
+    pub fn range(&self, start: i64, end: i64) -> Vec<Bytes> {
+        let len = self.len() as i64;
+        if len == 0 {
+            return vec![];
+        }
+
+        // Convert negative indices
+        let start = if start < 0 {
+            (len + start).max(0) as usize
+        } else {
+            start.min(len) as usize
+        };
+
+        let end = if end < 0 {
+            (len + end).max(-1)
+        } else {
+            end.min(len - 1)
+        };
+
+        if end < 0 || start > end as usize {
+            return vec![];
+        }
+
+        let end = end as usize;
+
+        self.data
+            .iter()
+            .skip(start)
+            .take(end - start + 1)
+            .cloned()
+            .collect()
+    }
+
+    /// Trim the list to only contain elements in the specified range.
+    pub fn trim(&mut self, start: i64, end: i64) {
+        let len = self.len() as i64;
+        if len == 0 {
+            return;
+        }
+
+        // Convert negative indices
+        let start = if start < 0 {
+            (len + start).max(0) as usize
+        } else {
+            start.min(len) as usize
+        };
+
+        let end = if end < 0 {
+            (len + end).max(-1)
+        } else {
+            end.min(len - 1)
+        };
+
+        if end < 0 || start > end as usize {
+            // Empty range - clear the list
+            self.data.clear();
+            return;
+        }
+
+        let end = end as usize;
+
+        // Keep only elements in range [start, end]
+        let new_data: VecDeque<_> = self.data
+            .iter()
+            .skip(start)
+            .take(end - start + 1)
+            .cloned()
+            .collect();
+        self.data = new_data;
+    }
+
+    /// Find the position of an element.
+    ///
+    /// Returns the first position where element is found, or None.
+    /// `rank`: how many matches to skip (0 = first, 1 = second, etc.)
+    /// `count`: maximum number of positions to return
+    /// `maxlen`: maximum number of elements to scan
+    pub fn position(
+        &self,
+        element: &[u8],
+        rank: i64,
+        count: usize,
+        maxlen: Option<usize>,
+    ) -> Vec<usize> {
+        let maxlen = maxlen.unwrap_or(self.len());
+
+        if rank >= 0 {
+            // Forward scan
+            let rank = rank as usize;
+            let mut matches = 0;
+            let mut positions = Vec::new();
+
+            for (i, item) in self.data.iter().enumerate().take(maxlen) {
+                if item.as_ref() == element {
+                    if matches >= rank {
+                        positions.push(i);
+                        if positions.len() >= count {
+                            break;
+                        }
+                    }
+                    matches += 1;
+                }
+            }
+            positions
+        } else {
+            // Backward scan
+            let rank = (-rank - 1) as usize;
+            let mut matches = 0;
+            let mut positions = Vec::new();
+            let scan_start = if maxlen < self.len() {
+                self.len() - maxlen
+            } else {
+                0
+            };
+
+            for (i, item) in self.data.iter().enumerate().rev() {
+                if i < scan_start {
+                    break;
+                }
+                if item.as_ref() == element {
+                    if matches >= rank {
+                        positions.push(i);
+                        if positions.len() >= count {
+                            break;
+                        }
+                    }
+                    matches += 1;
+                }
+            }
+            positions
+        }
+    }
+
+    /// Insert an element before or after a pivot element.
+    ///
+    /// Returns the new length of the list, -1 if pivot not found, 0 if list is empty.
+    pub fn insert(&mut self, before: bool, pivot: &[u8], element: Bytes) -> i64 {
+        if self.is_empty() {
+            return 0;
+        }
+
+        // Find pivot position
+        let pos = self.data.iter().position(|e| e.as_ref() == pivot);
+
+        match pos {
+            Some(i) => {
+                let insert_pos = if before { i } else { i + 1 };
+                self.data.insert(insert_pos, element);
+                self.len() as i64
+            }
+            None => -1,
+        }
+    }
+
+    /// Remove elements equal to value.
+    ///
+    /// `count` determines direction and number:
+    /// - count > 0: Remove first count occurrences (head to tail)
+    /// - count < 0: Remove first |count| occurrences (tail to head)
+    /// - count = 0: Remove all occurrences
+    ///
+    /// Returns the number of elements removed.
+    pub fn remove(&mut self, count: i64, element: &[u8]) -> usize {
+        if self.is_empty() {
+            return 0;
+        }
+
+        let mut removed = 0;
+
+        if count == 0 {
+            // Remove all
+            let original_len = self.len();
+            self.data.retain(|e| e.as_ref() != element);
+            removed = original_len - self.len();
+        } else if count > 0 {
+            // Remove from head
+            let max_remove = count as usize;
+            let mut new_data = VecDeque::with_capacity(self.len());
+            for item in self.data.drain(..) {
+                if removed < max_remove && item.as_ref() == element {
+                    removed += 1;
+                } else {
+                    new_data.push_back(item);
+                }
+            }
+            self.data = new_data;
+        } else {
+            // Remove from tail
+            let max_remove = (-count) as usize;
+            let mut indices_to_remove = Vec::new();
+            for (i, item) in self.data.iter().enumerate().rev() {
+                if item.as_ref() == element {
+                    indices_to_remove.push(i);
+                    if indices_to_remove.len() >= max_remove {
+                        break;
+                    }
+                }
+            }
+            // Sort indices in descending order to remove from end first
+            indices_to_remove.sort_by(|a, b| b.cmp(a));
+            for i in indices_to_remove {
+                self.data.remove(i);
+                removed += 1;
+            }
+        }
+
+        removed
+    }
+
+    /// Calculate approximate memory size.
+    pub fn memory_size(&self) -> usize {
+        let base_size = std::mem::size_of::<Self>();
+        let entries_size: usize = self
+            .data
+            .iter()
+            .map(|e| e.len() + 8) // 8 for VecDeque node overhead
+            .sum();
+        base_size + entries_size
+    }
+
+    /// Get all elements as a vec for serialization.
+    pub fn to_vec(&self) -> Vec<Bytes> {
+        self.data.iter().cloned().collect()
+    }
+
+    /// Iterate over all elements.
+    pub fn iter(&self) -> impl Iterator<Item = &Bytes> {
+        self.data.iter()
     }
 }
 
@@ -1149,8 +1896,8 @@ mod tests {
         let sv_int = StringValue::from_integer(42);
         assert_eq!(sv_int.as_float(), Some(42.0));
 
-        let sv_float = StringValue::new("3.14159");
-        assert!((sv_float.as_float().unwrap() - 3.14159).abs() < 0.0001);
+        let sv_float = StringValue::new("1.2345");
+        assert!((sv_float.as_float().unwrap() - 1.2345).abs() < 0.0001);
 
         let sv_invalid = StringValue::new("not a float");
         assert!(sv_invalid.as_float().is_none());

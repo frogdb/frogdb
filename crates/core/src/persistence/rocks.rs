@@ -162,7 +162,7 @@ impl RocksStore {
         let cf_name = format!("shard_{}", shard_id);
         self.db
             .cf_handle(&cf_name)
-            .ok_or_else(|| RocksError::ColumnFamilyNotFound(cf_name))
+            .ok_or(RocksError::ColumnFamilyNotFound(cf_name))
     }
 
     /// Put a key-value pair into a shard.

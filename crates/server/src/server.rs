@@ -342,7 +342,7 @@ fn build_wal_config(config: &PersistenceConfig) -> WalConfig {
     let mode = match config.durability_mode.to_lowercase().as_str() {
         "async" => DurabilityMode::Async,
         "sync" => DurabilityMode::Sync,
-        "periodic" | _ => DurabilityMode::Periodic {
+        _ => DurabilityMode::Periodic {
             interval_ms: config.sync_interval_ms,
         },
     };
@@ -493,6 +493,61 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::persistence::LastsaveCommand);
     registry.register(crate::commands::persistence::DumpCommand);
     registry.register(crate::commands::persistence::RestoreCommand);
+
+    // Hash commands
+    registry.register(crate::commands::hash::HsetCommand);
+    registry.register(crate::commands::hash::HsetnxCommand);
+    registry.register(crate::commands::hash::HgetCommand);
+    registry.register(crate::commands::hash::HdelCommand);
+    registry.register(crate::commands::hash::HmsetCommand);
+    registry.register(crate::commands::hash::HmgetCommand);
+    registry.register(crate::commands::hash::HgetallCommand);
+    registry.register(crate::commands::hash::HkeysCommand);
+    registry.register(crate::commands::hash::HvalsCommand);
+    registry.register(crate::commands::hash::HexistsCommand);
+    registry.register(crate::commands::hash::HlenCommand);
+    registry.register(crate::commands::hash::HincrbyCommand);
+    registry.register(crate::commands::hash::HincrbyfloatCommand);
+    registry.register(crate::commands::hash::HstrlenCommand);
+    registry.register(crate::commands::hash::HscanCommand);
+    registry.register(crate::commands::hash::HrandfieldCommand);
+
+    // Set commands
+    registry.register(crate::commands::set::SaddCommand);
+    registry.register(crate::commands::set::SremCommand);
+    registry.register(crate::commands::set::SmembersCommand);
+    registry.register(crate::commands::set::SismemberCommand);
+    registry.register(crate::commands::set::SmismemberCommand);
+    registry.register(crate::commands::set::ScardCommand);
+    registry.register(crate::commands::set::SunionCommand);
+    registry.register(crate::commands::set::SinterCommand);
+    registry.register(crate::commands::set::SdiffCommand);
+    registry.register(crate::commands::set::SunionstoreCommand);
+    registry.register(crate::commands::set::SinterstoreCommand);
+    registry.register(crate::commands::set::SdiffstoreCommand);
+    registry.register(crate::commands::set::SintercardCommand);
+    registry.register(crate::commands::set::SrandmemberCommand);
+    registry.register(crate::commands::set::SpopCommand);
+    registry.register(crate::commands::set::SmoveCommand);
+    registry.register(crate::commands::set::SscanCommand);
+
+    // List commands
+    registry.register(crate::commands::list::LpushCommand);
+    registry.register(crate::commands::list::RpushCommand);
+    registry.register(crate::commands::list::LpushxCommand);
+    registry.register(crate::commands::list::RpushxCommand);
+    registry.register(crate::commands::list::LpopCommand);
+    registry.register(crate::commands::list::RpopCommand);
+    registry.register(crate::commands::list::LlenCommand);
+    registry.register(crate::commands::list::LrangeCommand);
+    registry.register(crate::commands::list::LindexCommand);
+    registry.register(crate::commands::list::LsetCommand);
+    registry.register(crate::commands::list::LinsertCommand);
+    registry.register(crate::commands::list::LremCommand);
+    registry.register(crate::commands::list::LtrimCommand);
+    registry.register(crate::commands::list::LposCommand);
+    registry.register(crate::commands::list::LmoveCommand);
+    registry.register(crate::commands::list::LmpopCommand);
 }
 
 // Commands module

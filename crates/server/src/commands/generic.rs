@@ -316,6 +316,30 @@ impl Command for ObjectCommand {
                                     "skiplist"
                                 }
                             }
+                            Value::Hash(hash) => {
+                                // Redis uses listpack for small hashes, hashtable for larger ones
+                                if hash.len() <= 64 {
+                                    "listpack"
+                                } else {
+                                    "hashtable"
+                                }
+                            }
+                            Value::List(list) => {
+                                // Redis uses quicklist (linked list of listpacks)
+                                if list.len() <= 64 {
+                                    "listpack"
+                                } else {
+                                    "quicklist"
+                                }
+                            }
+                            Value::Set(set) => {
+                                // Redis uses intset for small integer sets, listpack for small sets
+                                if set.len() <= 64 {
+                                    "listpack"
+                                } else {
+                                    "hashtable"
+                                }
+                            }
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }
@@ -439,6 +463,27 @@ impl Command for DebugCommand {
                                     "listpack"
                                 } else {
                                     "skiplist"
+                                }
+                            }
+                            Value::Hash(hash) => {
+                                if hash.len() <= 64 {
+                                    "listpack"
+                                } else {
+                                    "hashtable"
+                                }
+                            }
+                            Value::List(list) => {
+                                if list.len() <= 64 {
+                                    "listpack"
+                                } else {
+                                    "quicklist"
+                                }
+                            }
+                            Value::Set(set) => {
+                                if set.len() <= 64 {
+                                    "listpack"
+                                } else {
+                                    "hashtable"
                                 }
                             }
                         };

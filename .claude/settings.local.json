@@ -30,7 +30,8 @@
       "Bash(cargo doc:*)",
       "Bash(cargo test:*)",
       "Bash(timeout 2 cargo run:*)",
-      "Bash(redis-cli:*)"
+      "Bash(redis-cli:*)",
+      "Bash(cargo clippy:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

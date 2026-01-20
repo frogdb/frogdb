@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Main configuration struct.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Config {
     /// Server configuration.
     #[serde(default)]
@@ -195,15 +195,6 @@ impl Default for PersistenceConfig {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            logging: LoggingConfig::default(),
-            persistence: PersistenceConfig::default(),
-        }
-    }
-}
 
 impl Config {
     /// Load configuration from multiple sources.

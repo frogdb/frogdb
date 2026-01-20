@@ -19,6 +19,7 @@ xxhash-rust.workspace = true
 crc16.workspace = true
 tokio.workspace = true
 ordered-float.workspace = true
+rand.workspace = true
 shuttle = { workspace = true, optional = true }
 rocksdb.workspace = true
 
