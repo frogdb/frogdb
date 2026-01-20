@@ -1,0 +1,30 @@
+[package]
+name = "frogdb-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FrogDB server binary"
+
+[[bin]]
+name = "frogdb-server"
+path = "src/main.rs"
+
+[dependencies]
+frogdb-protocol.workspace = true
+frogdb-core.workspace = true
+bytes.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+redis-protocol.workspace = true
+figment.workspace = true
+serde.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+futures.workspace = true

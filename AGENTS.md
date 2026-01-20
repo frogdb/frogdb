@@ -9,6 +9,8 @@
 - Despite the initial small subset of functionality, we do _not_ want to make design decisions that will result in significant rewrites later.
 - When we know a feature will be needed later we should plan on integrating it as a noop at first. This way we don't have to make large, complicated and costly changes later. Create good abstractions where these more advanced features will be used and leave them as noop integrations that follow the simple path. We will implement the abstractions later.
 - Follow idiomatic Rust patterns and use best practices
+- update the state of tasks in ROADMAP.md as they are completed.
+- if making changes to the design or architecture during the implementation, update the relevant specs in the spec/ directory with the change.
 
 ## Specs/Docs
 
