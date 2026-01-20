@@ -20,7 +20,10 @@ pub use noop::{
     Tracer, WalOperation, WalWriter,
 };
 pub use registry::CommandRegistry;
-pub use shard::{shard_for_key, ShardMessage, ShardWorker};
+pub use shard::{
+    shard_for_key, slot_for_key, PartialResult, ScatterOp, ShardMessage, ShardWorker,
+    REDIS_CLUSTER_SLOTS,
+};
 pub use store::{HashMapStore, Store};
 pub use types::{
     Expiry, IncrementError, KeyMetadata, KeyType, LexBound, ScoreBound, SetCondition, SetOptions,

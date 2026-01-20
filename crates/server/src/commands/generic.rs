@@ -210,12 +210,13 @@ impl Command for TouchCommand {
         ctx: &mut CommandContext,
         args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // For Phase 2, only support single key (multi-key needs scatter-gather)
-        if args.len() > 1 {
-            return Err(CommandError::CrossSlot);
+        // Multi-key TOUCH: count how many keys were touched
+        let mut touched = 0i64;
+        for key in args {
+            if ctx.store.touch(key) {
+                touched += 1;
+            }
         }
-
-        let touched = if ctx.store.touch(&args[0]) { 1 } else { 0 };
         Ok(Response::Integer(touched))
     }
 
@@ -248,12 +249,14 @@ impl Command for UnlinkCommand {
         ctx: &mut CommandContext,
         args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // For Phase 2, only support single key
-        if args.len() > 1 {
-            return Err(CommandError::CrossSlot);
+        // Multi-key UNLINK: delete all keys and return count
+        // Currently synchronous, async deletion can be added later
+        let mut deleted = 0i64;
+        for key in args {
+            if ctx.store.delete(key) {
+                deleted += 1;
+            }
         }
-
-        let deleted = if ctx.store.delete(&args[0]) { 1 } else { 0 };
         Ok(Response::Integer(deleted))
     }
 

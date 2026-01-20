@@ -1,20 +1,24 @@
 //! Connection handling.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use bytes::Bytes;
-use redis_protocol::bytes_utils::Str;
-use frogdb_core::{shard_for_key, CommandRegistry, ShardMessage};
+use frogdb_core::{shard_for_key, CommandRegistry, PartialResult, ScatterOp, ShardMessage};
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use futures::{SinkExt, StreamExt};
+use redis_protocol::bytes_utils::Str;
 use redis_protocol::codec::Resp2;
 use redis_protocol::resp2::types::BytesFrame;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Framed;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
+
+use crate::server::next_txid;
 
 /// Connection state.
 #[allow(dead_code)]
@@ -66,6 +70,12 @@ pub struct ConnectionHandler {
 
     /// Shard message senders.
     shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+
+    /// Allow cross-slot operations (scatter-gather).
+    allow_cross_slot: bool,
+
+    /// Timeout for scatter-gather operations.
+    scatter_gather_timeout: Duration,
 }
 
 impl ConnectionHandler {
@@ -78,6 +88,8 @@ impl ConnectionHandler {
         num_shards: usize,
         registry: Arc<CommandRegistry>,
         shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        allow_cross_slot: bool,
+        scatter_gather_timeout_ms: u64,
     ) -> Self {
         let framed = Framed::new(socket, Resp2::default());
         let state = ConnectionState::new(conn_id, addr);
@@ -89,6 +101,8 @@ impl ConnectionHandler {
             num_shards,
             registry,
             shard_senders,
+            allow_cross_slot,
+            scatter_gather_timeout: Duration::from_millis(scatter_gather_timeout_ms),
         }
     }
 
@@ -195,16 +209,169 @@ impl ConnectionHandler {
             return self.execute_on_shard(target_shard, cmd).await;
         }
 
-        // Multi-key command: validate same shard or return CROSSSLOT
+        // Multi-key command: check if all keys are on the same shard
         let first_shard = shard_for_key(keys[0], self.num_shards);
-        for key in &keys[1..] {
-            if shard_for_key(key, self.num_shards) != first_shard {
-                return Response::error("CROSSSLOT Keys in request don't hash to the same slot");
+        let all_same_shard = keys[1..].iter().all(|key| {
+            shard_for_key(key, self.num_shards) == first_shard
+        });
+
+        if all_same_shard {
+            // All keys on same shard - execute directly
+            return self.execute_on_shard(first_shard, cmd).await;
+        }
+
+        // Keys span multiple shards
+        // Check if command requires same slot (like MSETNX)
+        if handler.requires_same_slot() {
+            return Response::error("CROSSSLOT Keys in request don't hash to the same slot");
+        }
+
+        // Check if cross-slot is allowed
+        if !self.allow_cross_slot {
+            return Response::error("CROSSSLOT Keys in request don't hash to the same slot");
+        }
+
+        // Determine the scatter operation based on command name
+        let scatter_op = match cmd_name_str.as_ref() {
+            "MGET" => Some(ScatterOp::MGet),
+            "MSET" => {
+                // Build pairs from args
+                let pairs: Vec<(Bytes, Bytes)> = cmd.args
+                    .chunks(2)
+                    .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
+                    .collect();
+                Some(ScatterOp::MSet { pairs })
+            }
+            "DEL" => Some(ScatterOp::Del),
+            "EXISTS" => Some(ScatterOp::Exists),
+            "TOUCH" => Some(ScatterOp::Touch),
+            "UNLINK" => Some(ScatterOp::Unlink),
+            _ => None,
+        };
+
+        match scatter_op {
+            Some(op) => self.execute_scatter_gather(&keys, &cmd.args, op).await,
+            None => {
+                // Command doesn't support scatter-gather
+                Response::error("CROSSSLOT Keys in request don't hash to the same slot")
+            }
+        }
+    }
+
+    /// Execute a scatter-gather operation across multiple shards.
+    async fn execute_scatter_gather(
+        &self,
+        keys: &[&[u8]],
+        _args: &[Bytes],
+        operation: ScatterOp,
+    ) -> Response {
+        // Group keys by shard
+        let mut shard_keys: HashMap<usize, Vec<Bytes>> = HashMap::new();
+        let mut key_order: Vec<(usize, Bytes)> = Vec::new(); // (shard_id, key)
+
+        for key in keys {
+            let shard_id = shard_for_key(key, self.num_shards);
+            let key_bytes = Bytes::copy_from_slice(key);
+            shard_keys.entry(shard_id).or_default().push(key_bytes.clone());
+            key_order.push((shard_id, key_bytes));
+        }
+
+        // For MSET, we need to distribute pairs to shards
+        let shard_operations: HashMap<usize, ScatterOp> = match &operation {
+            ScatterOp::MSet { pairs } => {
+                let mut shard_pairs: HashMap<usize, Vec<(Bytes, Bytes)>> = HashMap::new();
+                for (key, value) in pairs {
+                    let shard_id = shard_for_key(key, self.num_shards);
+                    shard_pairs.entry(shard_id).or_default().push((key.clone(), value.clone()));
+                }
+                shard_pairs.into_iter()
+                    .map(|(shard_id, pairs)| (shard_id, ScatterOp::MSet { pairs }))
+                    .collect()
+            }
+            _ => {
+                // For other operations, use the same operation for all shards
+                shard_keys.keys().map(|&shard_id| (shard_id, operation.clone())).collect()
+            }
+        };
+
+        let txid = next_txid();
+
+        // Send ScatterRequest to each shard
+        let mut handles: Vec<(usize, oneshot::Receiver<PartialResult>)> = Vec::new();
+
+        for (shard_id, keys) in &shard_keys {
+            let (tx, rx) = oneshot::channel();
+            let shard_op = shard_operations.get(shard_id).cloned().unwrap_or_else(|| operation.clone());
+
+            let msg = ShardMessage::ScatterRequest {
+                request_id: txid,
+                keys: keys.clone(),
+                operation: shard_op,
+                response_tx: tx,
+            };
+
+            if self.shard_senders[*shard_id].send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((*shard_id, rx));
+        }
+
+        // Await all responses with timeout
+        let mut shard_results: HashMap<usize, HashMap<Bytes, Response>> = HashMap::new();
+
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    let results: HashMap<Bytes, Response> = partial.results.into_iter().collect();
+                    shard_results.insert(shard_id, results);
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped scatter-gather request");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "Scatter-gather timeout");
+                    return Response::error("ERR scatter-gather timeout");
+                }
             }
         }
 
-        // All keys on same shard
-        self.execute_on_shard(first_shard, cmd).await
+        // Merge results based on operation type
+        match &operation {
+            ScatterOp::MGet => {
+                // Return array in original key order
+                let results: Vec<Response> = key_order
+                    .iter()
+                    .map(|(shard_id, key)| {
+                        shard_results
+                            .get(shard_id)
+                            .and_then(|m| m.get(key))
+                            .cloned()
+                            .unwrap_or(Response::null())
+                    })
+                    .collect();
+                Response::Array(results)
+            }
+            ScatterOp::MSet { .. } => {
+                // MSET always returns OK
+                Response::ok()
+            }
+            ScatterOp::Del | ScatterOp::Unlink | ScatterOp::Exists | ScatterOp::Touch => {
+                // Sum the counts
+                let total: i64 = shard_results
+                    .values()
+                    .flat_map(|m| m.values())
+                    .filter_map(|r| {
+                        if let Response::Integer(n) = r {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .sum();
+                Response::Integer(total)
+            }
+        }
     }
 
     /// Execute command on a specific shard.
@@ -214,6 +381,7 @@ impl ConnectionHandler {
         let msg = ShardMessage::Execute {
             command: cmd.clone(),
             conn_id: self.state.id,
+            txid: None, // Single-shard operations don't need txid
             response_tx,
         };
 

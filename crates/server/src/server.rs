@@ -20,9 +20,17 @@ const NEW_CONN_CHANNEL_CAPACITY: usize = 256;
 /// Global connection ID counter.
 static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Global transaction ID counter for VLL (Very Lightweight Locking).
+static NEXT_TXID: AtomicU64 = AtomicU64::new(1);
+
 /// Generate a unique connection ID.
 pub fn next_conn_id() -> u64 {
     NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Generate a unique transaction ID for scatter-gather operations.
+pub fn next_txid() -> u64 {
+    NEXT_TXID.fetch_add(1, Ordering::SeqCst)
 }
 
 /// FrogDB server.
@@ -132,6 +140,8 @@ impl Server {
             self.new_conn_senders,
             self.shard_senders.clone(),
             self.registry.clone(),
+            self.config.server.allow_cross_slot_standalone,
+            self.config.server.scatter_gather_timeout_ms,
         );
 
         // Spawn acceptor task
@@ -226,6 +236,11 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::string::IncrbyCommand);
     registry.register(crate::commands::string::DecrbyCommand);
     registry.register(crate::commands::string::IncrbyfloatCommand);
+
+    // Multi-key string commands
+    registry.register(crate::commands::string::MgetCommand);
+    registry.register(crate::commands::string::MsetCommand);
+    registry.register(crate::commands::string::MsetnxCommand);
 
     // TTL/Expiry commands
     registry.register(crate::commands::expiry::ExpireCommand);
@@ -623,14 +638,15 @@ pub mod commands {
             ctx: &mut CommandContext,
             args: &[Bytes],
         ) -> Result<Response, CommandError> {
-            // For Phase 1, only support single key
-            // Multi-key DEL requires scatter-gather
-            if args.len() > 1 {
-                return Err(CommandError::CrossSlot);
+            // Multi-key DEL: delete all keys and return count
+            // Cross-shard routing is handled by connection handler
+            let mut deleted = 0i64;
+            for key in args {
+                if ctx.store.delete(key) {
+                    deleted += 1;
+                }
             }
-
-            let deleted = ctx.store.delete(&args[0]);
-            Ok(Response::Integer(if deleted { 1 } else { 0 }))
+            Ok(Response::Integer(deleted))
         }
 
         fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -659,13 +675,15 @@ pub mod commands {
             ctx: &mut CommandContext,
             args: &[Bytes],
         ) -> Result<Response, CommandError> {
-            // For Phase 1, only support single key
-            if args.len() > 1 {
-                return Err(CommandError::CrossSlot);
+            // Multi-key EXISTS: count how many keys exist
+            // Note: Redis counts duplicates (EXISTS key key returns 2 if key exists)
+            let mut count = 0i64;
+            for key in args {
+                if ctx.store.contains(key) {
+                    count += 1;
+                }
             }
-
-            let exists = ctx.store.contains(&args[0]);
-            Ok(Response::Integer(if exists { 1 } else { 0 }))
+            Ok(Response::Integer(count))
         }
 
         fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

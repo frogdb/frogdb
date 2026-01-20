@@ -16,6 +16,7 @@ bitflags.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 xxhash-rust.workspace = true
+crc16.workspace = true
 tokio.workspace = true
 ordered-float.workspace = true
 shuttle = { workspace = true, optional = true }

@@ -844,3 +844,139 @@ fn format_float(f: f64) -> String {
     let s = s.trim_end_matches('.');
     s.to_string()
 }
+
+// ============================================================================
+// MGET - Get multiple values
+// ============================================================================
+
+pub struct MgetCommand;
+
+impl Command for MgetCommand {
+    fn name(&self) -> &'static str {
+        "MGET"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(1)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY | CommandFlags::FAST
+    }
+
+    fn execute(
+        &self,
+        ctx: &mut CommandContext,
+        args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        // Single-shard execution (multi-shard handled by connection routing)
+        let results: Vec<Response> = args
+            .iter()
+            .map(|key| match ctx.store.get_with_expiry_check(key) {
+                Some(value) => value
+                    .as_string()
+                    .map(|sv| Response::bulk(sv.as_bytes()))
+                    .unwrap_or(Response::null()),
+                None => Response::null(),
+            })
+            .collect();
+        Ok(Response::Array(results))
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        args.iter().map(|a| a.as_ref()).collect()
+    }
+}
+
+// ============================================================================
+// MSET - Set multiple key-value pairs
+// ============================================================================
+
+pub struct MsetCommand;
+
+impl Command for MsetCommand {
+    fn name(&self) -> &'static str {
+        "MSET"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn execute(
+        &self,
+        ctx: &mut CommandContext,
+        args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        if args.len() % 2 != 0 {
+            return Err(CommandError::WrongArity { command: "MSET" });
+        }
+
+        for pair in args.chunks(2) {
+            ctx.store.set(pair[0].clone(), Value::string(pair[1].clone()));
+        }
+
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        args.iter().step_by(2).map(|a| a.as_ref()).collect()
+    }
+}
+
+// ============================================================================
+// MSETNX - Set multiple key-value pairs only if none exist
+// ============================================================================
+
+pub struct MsetnxCommand;
+
+impl Command for MsetnxCommand {
+    fn name(&self) -> &'static str {
+        "MSETNX"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn execute(
+        &self,
+        ctx: &mut CommandContext,
+        args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        if args.len() % 2 != 0 {
+            return Err(CommandError::WrongArity { command: "MSETNX" });
+        }
+
+        // Check if any key already exists
+        for pair in args.chunks(2) {
+            if ctx.store.contains(&pair[0]) {
+                return Ok(Response::Integer(0));
+            }
+        }
+
+        // None exist, set all
+        for pair in args.chunks(2) {
+            ctx.store.set(pair[0].clone(), Value::string(pair[1].clone()));
+        }
+
+        Ok(Response::Integer(1))
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        args.iter().step_by(2).map(|a| a.as_ref()).collect()
+    }
+
+    /// MSETNX always requires same-slot for atomicity, even with allow_cross_slot_standalone.
+    fn requires_same_slot(&self) -> bool {
+        true
+    }
+}
