@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/core",
+    "crates/server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "BSL-1.1"
+authors = ["Nathan Jordan"]
+repository = "https://github.com/nathanjordan/frogdb"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "signal", "io-util", "time"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
+
+# Protocol
+bytes = "1"
+redis-protocol = { version = "5", features = ["bytes", "codec"] }
+
+# Data structures
+griddle = "0.5"
+bitflags = "2"
+
+# Configuration
+figment = { version = "0.10", features = ["toml", "env"] }
+serde = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+
+# Logging/Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Hashing
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+
+# Internal crates
+frogdb-protocol = { path = "crates/protocol" }
+frogdb-core = { path = "crates/core" }
+
+[profile.release]
+lto = true
+codegen-units = 1

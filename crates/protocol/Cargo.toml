@@ -1,0 +1,16 @@
+[package]
+name = "frogdb-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RESP2/RESP3 wire protocol handling for FrogDB"
+
+[dependencies]
+bytes.workspace = true
+redis-protocol.workspace = true
+tokio-util.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

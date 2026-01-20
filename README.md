@@ -36,3 +36,124 @@ To manage FrogDB in cluster mode you can use a Kubernetes operator, TKTK.
 ## Design Spec
 
 Root document located in `spec/INDEX.md`. Supplemental documents describing various parts of the system are located within the `spec/` directory.
+
+## Building & Running
+
+### Prerequisites
+
+- Rust 1.75+ (2024 edition)
+
+### Build
+
+```bash
+cargo build --release
+```
+
+### Run
+
+```bash
+# Start with defaults (127.0.0.1:6379, 1 shard)
+cargo run --release --bin frogdb-server
+
+# With options
+cargo run --release --bin frogdb-server -- --port 6380 --shards auto --log-level debug
+
+# Generate default config file
+cargo run --release --bin frogdb-server -- --generate-config > frogdb.toml
+```
+
+### Test
+
+```bash
+# Unit tests
+cargo test
+
+# Integration tests
+cargo test --test integration
+
+# All tests
+cargo test --all
+```
+
+## Configuration
+
+FrogDB uses a layered configuration system (highest priority first):
+
+1. CLI arguments (`--port 6379`)
+2. Environment variables (`FROGDB_SERVER__PORT=6379`)
+3. TOML config file (`frogdb.toml`)
+4. Built-in defaults
+
+### Example Configuration (frogdb.toml)
+
+```toml
+[server]
+bind = "127.0.0.1"
+port = 6379
+num_shards = 1  # 0 = auto-detect CPU cores
+
+[logging]
+level = "info"   # trace, debug, info, warn, error
+format = "pretty" # pretty, json
+```
+
+### CLI Arguments
+
+```
+frogdb-server [OPTIONS]
+
+Options:
+  -c, --config <FILE>     Configuration file path
+  -b, --bind <ADDR>       Bind address
+  -p, --port <PORT>       Listen port
+  -s, --shards <N>        Number of shards (or "auto")
+  -l, --log-level <LEVEL> Log level
+      --log-format <FMT>  Log format (pretty/json)
+      --generate-config   Print default config and exit
+  -h, --help              Print help
+  -V, --version           Print version
+```
+
+## Usage with Redis CLI
+
+```bash
+# Start the server
+cargo run --release --bin frogdb-server
+
+# In another terminal, use redis-cli
+redis-cli -p 6379 PING           # PONG
+redis-cli -p 6379 SET foo bar    # OK
+redis-cli -p 6379 GET foo        # "bar"
+redis-cli -p 6379 DEL foo        # (integer) 1
+redis-cli -p 6379 EXISTS foo     # (integer) 0
+```
+
+## Phase 1 Status
+
+Phase 1 implements the architectural skeleton with basic commands:
+
+- [x] PING / ECHO / QUIT
+- [x] GET / SET
+- [x] DEL / EXISTS (single key)
+- [x] COMMAND (placeholder)
+
+## Architecture
+
+```
+frogdb/
+├── crates/
+│   ├── protocol/     # RESP2 wire protocol (frogdb-protocol)
+│   ├── core/         # Data structures & commands (frogdb-core)
+│   └── server/       # Main binary (frogdb-server)
+└── tests/            # Integration tests
+```
+
+### Hash Tags
+
+Use hash tags to colocate related keys on the same shard:
+
+```bash
+SET {user:1}:profile "..."
+SET {user:1}:settings "..."
+# Both keys hash to the same shard based on "user:1"
+```

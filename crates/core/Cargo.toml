@@ -1,0 +1,19 @@
+[package]
+name = "frogdb-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core data structures, commands, and storage for FrogDB"
+
+[dependencies]
+frogdb-protocol.workspace = true
+bytes.workspace = true
+griddle.workspace = true
+bitflags.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+xxhash-rust.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
