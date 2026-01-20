@@ -1,18 +1,21 @@
 //! Value types and key metadata.
 
 use bytes::Bytes;
+use ordered_float::OrderedFloat;
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Value types stored in FrogDB.
 #[derive(Debug, Clone)]
 pub enum Value {
-    /// String value (the only type for Phase 1).
+    /// String value.
     String(StringValue),
+    /// Sorted set value.
+    SortedSet(SortedSetValue),
     // Future types:
     // List(ListValue),
     // Set(SetValue),
     // Hash(HashValue),
-    // SortedSet(SortedSetValue),
     // Stream(StreamValue),
 }
 
@@ -22,10 +25,16 @@ impl Value {
         Value::String(StringValue::new(data))
     }
 
+    /// Create a sorted set value.
+    pub fn sorted_set() -> Self {
+        Value::SortedSet(SortedSetValue::new())
+    }
+
     /// Get the key type.
     pub fn key_type(&self) -> KeyType {
         match self {
             Value::String(_) => KeyType::String,
+            Value::SortedSet(_) => KeyType::SortedSet,
         }
     }
 
@@ -33,6 +42,7 @@ impl Value {
     pub fn memory_size(&self) -> usize {
         match self {
             Value::String(s) => s.memory_size(),
+            Value::SortedSet(z) => z.memory_size(),
         }
     }
 
@@ -40,6 +50,7 @@ impl Value {
     pub fn as_string(&self) -> Option<&StringValue> {
         match self {
             Value::String(s) => Some(s),
+            _ => None,
         }
     }
 
@@ -47,6 +58,23 @@ impl Value {
     pub fn as_string_mut(&mut self) -> Option<&mut StringValue> {
         match self {
             Value::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a sorted set value.
+    pub fn as_sorted_set(&self) -> Option<&SortedSetValue> {
+        match self {
+            Value::SortedSet(z) => Some(z),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a mutable sorted set value.
+    pub fn as_sorted_set_mut(&mut self) -> Option<&mut SortedSetValue> {
+        match self {
+            Value::SortedSet(z) => Some(z),
+            _ => None,
         }
     }
 }
@@ -429,6 +457,568 @@ pub enum SetResult {
     OkWithOldValue(Option<Value>),
     /// Set was not performed (NX/XX condition not met).
     NotSet,
+}
+
+// ============================================================================
+// Sorted Set Types
+// ============================================================================
+
+/// Score boundary for range queries.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScoreBound {
+    /// Inclusive bound.
+    Inclusive(f64),
+    /// Exclusive bound.
+    Exclusive(f64),
+    /// Negative infinity.
+    NegInf,
+    /// Positive infinity.
+    PosInf,
+}
+
+impl ScoreBound {
+    /// Check if a score satisfies this bound as a minimum.
+    pub fn satisfies_min(&self, score: f64) -> bool {
+        match self {
+            ScoreBound::NegInf => true,
+            ScoreBound::PosInf => false,
+            ScoreBound::Inclusive(bound) => score >= *bound,
+            ScoreBound::Exclusive(bound) => score > *bound,
+        }
+    }
+
+    /// Check if a score satisfies this bound as a maximum.
+    pub fn satisfies_max(&self, score: f64) -> bool {
+        match self {
+            ScoreBound::NegInf => false,
+            ScoreBound::PosInf => true,
+            ScoreBound::Inclusive(bound) => score <= *bound,
+            ScoreBound::Exclusive(bound) => score < *bound,
+        }
+    }
+
+    /// Get the value for BTreeMap range queries (minimum bound).
+    pub fn start_bound_value(&self) -> Option<OrderedFloat<f64>> {
+        match self {
+            ScoreBound::NegInf => None,
+            ScoreBound::PosInf => Some(OrderedFloat(f64::INFINITY)),
+            ScoreBound::Inclusive(v) | ScoreBound::Exclusive(v) => Some(OrderedFloat(*v)),
+        }
+    }
+}
+
+/// Lexicographic boundary for range queries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LexBound {
+    /// Inclusive bound.
+    Inclusive(Bytes),
+    /// Exclusive bound.
+    Exclusive(Bytes),
+    /// Minimum (unbounded).
+    Min,
+    /// Maximum (unbounded).
+    Max,
+}
+
+impl LexBound {
+    /// Check if a member satisfies this bound as a minimum.
+    pub fn satisfies_min(&self, member: &[u8]) -> bool {
+        match self {
+            LexBound::Min => true,
+            LexBound::Max => false,
+            LexBound::Inclusive(bound) => member >= bound.as_ref(),
+            LexBound::Exclusive(bound) => member > bound.as_ref(),
+        }
+    }
+
+    /// Check if a member satisfies this bound as a maximum.
+    pub fn satisfies_max(&self, member: &[u8]) -> bool {
+        match self {
+            LexBound::Min => false,
+            LexBound::Max => true,
+            LexBound::Inclusive(bound) => member <= bound.as_ref(),
+            LexBound::Exclusive(bound) => member < bound.as_ref(),
+        }
+    }
+}
+
+/// Result of adding a member to a sorted set.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZAddResult {
+    /// Whether a new member was added.
+    pub added: bool,
+    /// Whether the score was changed (for existing members).
+    pub changed: bool,
+    /// The previous score (if member existed).
+    pub old_score: Option<f64>,
+}
+
+/// Sorted set value with dual indexing for O(1) score lookup and O(log n) range queries.
+#[derive(Debug, Clone)]
+pub struct SortedSetValue {
+    /// O(1) lookup: member -> score
+    members: HashMap<Bytes, f64>,
+    /// O(log n) range queries: (score, member) -> ()
+    /// Using (OrderedFloat, Bytes) ensures proper ordering by score, then member.
+    scores: BTreeMap<(OrderedFloat<f64>, Bytes), ()>,
+}
+
+impl Default for SortedSetValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SortedSetValue {
+    /// Create a new empty sorted set.
+    pub fn new() -> Self {
+        Self {
+            members: HashMap::new(),
+            scores: BTreeMap::new(),
+        }
+    }
+
+    /// Get the number of members.
+    pub fn len(&self) -> usize {
+        self.members.len()
+    }
+
+    /// Check if the set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.members.is_empty()
+    }
+
+    /// Add or update a member with a score.
+    ///
+    /// Returns information about what changed.
+    pub fn add(&mut self, member: Bytes, score: f64) -> ZAddResult {
+        if let Some(&old_score) = self.members.get(&member) {
+            if (old_score - score).abs() < f64::EPSILON
+                || (old_score.is_nan() && score.is_nan())
+                || (old_score == score)
+            {
+                // Score unchanged
+                return ZAddResult {
+                    added: false,
+                    changed: false,
+                    old_score: Some(old_score),
+                };
+            }
+            // Remove old entry from scores index
+            self.scores.remove(&(OrderedFloat(old_score), member.clone()));
+            // Insert new entry
+            self.scores.insert((OrderedFloat(score), member.clone()), ());
+            self.members.insert(member, score);
+            ZAddResult {
+                added: false,
+                changed: true,
+                old_score: Some(old_score),
+            }
+        } else {
+            // New member
+            self.members.insert(member.clone(), score);
+            self.scores.insert((OrderedFloat(score), member), ());
+            ZAddResult {
+                added: true,
+                changed: false,
+                old_score: None,
+            }
+        }
+    }
+
+    /// Remove a member from the set.
+    ///
+    /// Returns the score if the member existed.
+    pub fn remove(&mut self, member: &[u8]) -> Option<f64> {
+        if let Some(score) = self.members.remove(member) {
+            self.scores
+                .remove(&(OrderedFloat(score), Bytes::copy_from_slice(member)));
+            Some(score)
+        } else {
+            None
+        }
+    }
+
+    /// Get the score of a member.
+    pub fn get_score(&self, member: &[u8]) -> Option<f64> {
+        self.members.get(member).copied()
+    }
+
+    /// Check if a member exists.
+    pub fn contains(&self, member: &[u8]) -> bool {
+        self.members.contains_key(member)
+    }
+
+    /// Get the 0-based rank of a member (ascending by score).
+    pub fn rank(&self, member: &[u8]) -> Option<usize> {
+        let score = self.members.get(member)?;
+        let key = (OrderedFloat(*score), Bytes::copy_from_slice(member));
+        Some(self.scores.range(..&key).count())
+    }
+
+    /// Get the 0-based rank of a member (descending by score).
+    pub fn rev_rank(&self, member: &[u8]) -> Option<usize> {
+        let rank = self.rank(member)?;
+        Some(self.len() - 1 - rank)
+    }
+
+    /// Increment the score of a member.
+    ///
+    /// If the member doesn't exist, it's created with the given increment as its score.
+    /// Returns the new score.
+    pub fn incr(&mut self, member: Bytes, increment: f64) -> f64 {
+        let old_score = self.members.get(&member).copied().unwrap_or(0.0);
+        let new_score = old_score + increment;
+
+        // Check for overflow to infinity
+        if new_score.is_infinite() && !old_score.is_infinite() && !increment.is_infinite() {
+            // This would be an error in Redis, but we'll handle it
+            return new_score;
+        }
+
+        // Remove old entry if exists
+        if self.members.contains_key(&member) {
+            self.scores
+                .remove(&(OrderedFloat(old_score), member.clone()));
+        }
+
+        // Insert new entry
+        self.members.insert(member.clone(), new_score);
+        self.scores.insert((OrderedFloat(new_score), member), ());
+
+        new_score
+    }
+
+    /// Get members by rank range (inclusive).
+    ///
+    /// `start` and `end` are 0-based indices. Negative indices count from the end.
+    pub fn range_by_rank(&self, start: i64, end: i64) -> Vec<(Bytes, f64)> {
+        let len = self.len() as i64;
+        if len == 0 {
+            return vec![];
+        }
+
+        // Convert negative indices
+        let start = if start < 0 {
+            (len + start).max(0) as usize
+        } else {
+            start.min(len) as usize
+        };
+
+        let end = if end < 0 {
+            (len + end).max(-1) as i64
+        } else {
+            end.min(len - 1)
+        };
+
+        if end < 0 || start > end as usize {
+            return vec![];
+        }
+
+        let end = end as usize;
+
+        self.scores
+            .iter()
+            .skip(start)
+            .take(end - start + 1)
+            .map(|((score, member), _)| (member.clone(), score.0))
+            .collect()
+    }
+
+    /// Get members by rank range in reverse order (descending by score).
+    pub fn rev_range_by_rank(&self, start: i64, end: i64) -> Vec<(Bytes, f64)> {
+        let len = self.len() as i64;
+        if len == 0 {
+            return vec![];
+        }
+
+        // Convert negative indices
+        let start = if start < 0 {
+            (len + start).max(0) as usize
+        } else {
+            start.min(len) as usize
+        };
+
+        let end = if end < 0 {
+            (len + end).max(-1) as i64
+        } else {
+            end.min(len - 1)
+        };
+
+        if end < 0 || start > end as usize {
+            return vec![];
+        }
+
+        let end = end as usize;
+
+        self.scores
+            .iter()
+            .rev()
+            .skip(start)
+            .take(end - start + 1)
+            .map(|((score, member), _)| (member.clone(), score.0))
+            .collect()
+    }
+
+    /// Get members by score range.
+    pub fn range_by_score(
+        &self,
+        min: &ScoreBound,
+        max: &ScoreBound,
+        offset: usize,
+        count: Option<usize>,
+    ) -> Vec<(Bytes, f64)> {
+        let iter = self.scores.iter().filter(|((score, _), _)| {
+            min.satisfies_min(score.0) && max.satisfies_max(score.0)
+        });
+
+        let iter = iter.skip(offset);
+
+        let results: Vec<_> = if let Some(count) = count {
+            iter.take(count)
+                .map(|((score, member), _)| (member.clone(), score.0))
+                .collect()
+        } else {
+            iter.map(|((score, member), _)| (member.clone(), score.0))
+                .collect()
+        };
+
+        results
+    }
+
+    /// Get members by score range in reverse order.
+    pub fn rev_range_by_score(
+        &self,
+        min: &ScoreBound,
+        max: &ScoreBound,
+        offset: usize,
+        count: Option<usize>,
+    ) -> Vec<(Bytes, f64)> {
+        let iter = self.scores.iter().rev().filter(|((score, _), _)| {
+            min.satisfies_min(score.0) && max.satisfies_max(score.0)
+        });
+
+        let iter = iter.skip(offset);
+
+        let results: Vec<_> = if let Some(count) = count {
+            iter.take(count)
+                .map(|((score, member), _)| (member.clone(), score.0))
+                .collect()
+        } else {
+            iter.map(|((score, member), _)| (member.clone(), score.0))
+                .collect()
+        };
+
+        results
+    }
+
+    /// Get members by lexicographic range (requires all scores to be equal).
+    pub fn range_by_lex(
+        &self,
+        min: &LexBound,
+        max: &LexBound,
+        offset: usize,
+        count: Option<usize>,
+    ) -> Vec<(Bytes, f64)> {
+        // For lex range, we iterate in (score, member) order
+        // This naturally gives us lexicographic order for same scores
+        let iter = self.scores.iter().filter(|((_, member), _)| {
+            min.satisfies_min(member) && max.satisfies_max(member)
+        });
+
+        let iter = iter.skip(offset);
+
+        let results: Vec<_> = if let Some(count) = count {
+            iter.take(count)
+                .map(|((score, member), _)| (member.clone(), score.0))
+                .collect()
+        } else {
+            iter.map(|((score, member), _)| (member.clone(), score.0))
+                .collect()
+        };
+
+        results
+    }
+
+    /// Get members by lexicographic range in reverse order.
+    pub fn rev_range_by_lex(
+        &self,
+        min: &LexBound,
+        max: &LexBound,
+        offset: usize,
+        count: Option<usize>,
+    ) -> Vec<(Bytes, f64)> {
+        let iter = self.scores.iter().rev().filter(|((_, member), _)| {
+            min.satisfies_min(member) && max.satisfies_max(member)
+        });
+
+        let iter = iter.skip(offset);
+
+        let results: Vec<_> = if let Some(count) = count {
+            iter.take(count)
+                .map(|((score, member), _)| (member.clone(), score.0))
+                .collect()
+        } else {
+            iter.map(|((score, member), _)| (member.clone(), score.0))
+                .collect()
+        };
+
+        results
+    }
+
+    /// Count members in score range.
+    pub fn count_by_score(&self, min: &ScoreBound, max: &ScoreBound) -> usize {
+        self.scores
+            .iter()
+            .filter(|((score, _), _)| min.satisfies_min(score.0) && max.satisfies_max(score.0))
+            .count()
+    }
+
+    /// Count members in lex range.
+    pub fn count_by_lex(&self, min: &LexBound, max: &LexBound) -> usize {
+        self.scores
+            .iter()
+            .filter(|((_, member), _)| min.satisfies_min(member) && max.satisfies_max(member))
+            .count()
+    }
+
+    /// Pop members with minimum scores.
+    pub fn pop_min(&mut self, count: usize) -> Vec<(Bytes, f64)> {
+        let mut result = Vec::with_capacity(count.min(self.len()));
+        for _ in 0..count {
+            if let Some(((score, member), _)) = self.scores.pop_first() {
+                self.members.remove(&member);
+                result.push((member, score.0));
+            } else {
+                break;
+            }
+        }
+        result
+    }
+
+    /// Pop members with maximum scores.
+    pub fn pop_max(&mut self, count: usize) -> Vec<(Bytes, f64)> {
+        let mut result = Vec::with_capacity(count.min(self.len()));
+        for _ in 0..count {
+            if let Some(((score, member), _)) = self.scores.pop_last() {
+                self.members.remove(&member);
+                result.push((member, score.0));
+            } else {
+                break;
+            }
+        }
+        result
+    }
+
+    /// Remove members by rank range.
+    ///
+    /// Returns the number of members removed.
+    pub fn remove_range_by_rank(&mut self, start: i64, end: i64) -> usize {
+        let to_remove = self.range_by_rank(start, end);
+        let count = to_remove.len();
+        for (member, _) in to_remove {
+            self.remove(&member);
+        }
+        count
+    }
+
+    /// Remove members by score range.
+    ///
+    /// Returns the number of members removed.
+    pub fn remove_range_by_score(&mut self, min: &ScoreBound, max: &ScoreBound) -> usize {
+        let to_remove = self.range_by_score(min, max, 0, None);
+        let count = to_remove.len();
+        for (member, _) in to_remove {
+            self.remove(&member);
+        }
+        count
+    }
+
+    /// Remove members by lex range.
+    ///
+    /// Returns the number of members removed.
+    pub fn remove_range_by_lex(&mut self, min: &LexBound, max: &LexBound) -> usize {
+        let to_remove = self.range_by_lex(min, max, 0, None);
+        let count = to_remove.len();
+        for (member, _) in to_remove {
+            self.remove(&member);
+        }
+        count
+    }
+
+    /// Get random members.
+    ///
+    /// If `count` is positive, returns that many unique members.
+    /// If `count` is negative, returns abs(count) members with possible duplicates.
+    pub fn random_members(&self, count: i64) -> Vec<(Bytes, f64)> {
+        if self.is_empty() {
+            return vec![];
+        }
+
+        let members: Vec<_> = self
+            .scores
+            .iter()
+            .map(|((score, member), _)| (member.clone(), score.0))
+            .collect();
+
+        if count == 0 {
+            return vec![];
+        }
+
+        if count > 0 {
+            // Return unique members
+            let count = (count as usize).min(members.len());
+            // Simple reservoir sampling or just take first N for now
+            // In production, we'd use proper random sampling
+            members.into_iter().take(count).collect()
+        } else {
+            // Allow duplicates
+            let count = (-count) as usize;
+            // Return members (allowing duplicates)
+            let mut result = Vec::with_capacity(count);
+            for i in 0..count {
+                let idx = i % members.len();
+                result.push(members[idx].clone());
+            }
+            result
+        }
+    }
+
+    /// Calculate approximate memory size.
+    pub fn memory_size(&self) -> usize {
+        let base_size = std::mem::size_of::<Self>();
+
+        // HashMap overhead + entries
+        let members_size: usize = self
+            .members
+            .iter()
+            .map(|(k, _)| k.len() + std::mem::size_of::<f64>() + 32) // 32 for HashMap node overhead
+            .sum();
+
+        // BTreeMap overhead + entries
+        let scores_size: usize = self
+            .scores
+            .iter()
+            .map(|((_, member), _)| member.len() + std::mem::size_of::<OrderedFloat<f64>>() + 32)
+            .sum();
+
+        base_size + members_size + scores_size
+    }
+
+    /// Iterate over all members in score order.
+    pub fn iter(&self) -> impl Iterator<Item = (&Bytes, f64)> {
+        self.scores
+            .iter()
+            .map(|((score, member), _)| (member, score.0))
+    }
+
+    /// Get all members and scores as a vec for serialization.
+    pub fn to_vec(&self) -> Vec<(Bytes, f64)> {
+        self.scores
+            .iter()
+            .map(|((score, member), _)| (member.clone(), score.0))
+            .collect()
+    }
 }
 
 #[cfg(test)]

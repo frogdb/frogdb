@@ -305,6 +305,14 @@ impl Command for ObjectCommand {
                                     "embstr"
                                 }
                             }
+                            Value::SortedSet(zset) => {
+                                // Redis uses listpack for small sets, skiplist for larger ones
+                                if zset.len() <= 128 {
+                                    "listpack"
+                                } else {
+                                    "skiplist"
+                                }
+                            }
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }
@@ -421,6 +429,13 @@ impl Command for DebugCommand {
                                     "int"
                                 } else {
                                     "embstr"
+                                }
+                            }
+                            Value::SortedSet(zset) => {
+                                if zset.len() <= 128 {
+                                    "listpack"
+                                } else {
+                                    "skiplist"
                                 }
                             }
                         };
