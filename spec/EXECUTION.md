@@ -401,25 +401,18 @@ fn validate_flags(flags: CommandFlags) -> Result<(), Error> {
 
 ## Arity Validation Details
 
-### Validation Timing
+### Validation Order (Canonical)
 
-Arity is validated **before authentication** for performance and security:
+FrogDB validates commands in this order (matching Redis):
 
-```
-Command Processing Order:
+1. **Parse** - Extract command name and args from RESP frame
+2. **Lookup** - Find command in registry (unknown → ERR unknown command)
+3. **Arity** - Check argument count (wrong → ERR wrong number of arguments)
+4. **Auth** - Check authentication state if required
+5. **ACL** - Check user permissions (Phase 10)
+6. **Execute** - Run command logic
 
-1. Parse RESP frame                    ← Protocol layer
-2. Extract command name                ← Lookup in registry
-3. Validate arity                      ← BEFORE auth check
-4. Check authentication               ← May reject command
-5. Check authorization (ACL)          ← May reject command
-6. Execute command                     ← Finally run
-
-Rationale:
-- Arity check is O(1) - cheap to run first
-- Prevents auth bypass via malformed commands
-- Consistent error messages regardless of auth state
-```
+Arity is checked BEFORE auth for performance (reject malformed commands early without auth overhead).
 
 **Error Response for Arity Failure:**
 

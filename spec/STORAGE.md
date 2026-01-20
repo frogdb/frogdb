@@ -80,7 +80,20 @@ pub enum Value {
     Set(SetValue),
     Stream(StreamValue),
 }
+
+/// Type identifier for TYPE command and WRONGTYPE errors
+pub enum KeyType {
+    None,       // Key doesn't exist
+    String,
+    List,
+    Set,
+    Hash,
+    SortedSet,
+    Stream,
+}
 ```
+
+**Note:** `StringValue` wraps `Bytes` with optional integer encoding for numeric operations (INCR, DECR, etc.). See [ROADMAP.md](ROADMAP.md) Phase 1.3 for the complete struct definition.
 
 See individual type documentation in [types/](types/) for data structure implementations and commands.
 
