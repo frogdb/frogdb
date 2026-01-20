@@ -203,6 +203,7 @@ impl ShardWorker {
     }
 
     /// Create a new shard worker with persistence.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_persistence(
         shard_id: usize,
         num_shards: usize,

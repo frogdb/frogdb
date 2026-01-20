@@ -5,8 +5,12 @@
 
 use frogdb_core::shard_for_key;
 
+/// Error returned when keys hash to different shards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShardMismatchError;
+
 /// Check if all keys hash to the same shard.
-pub fn validate_same_shard(keys: &[&[u8]], num_shards: usize) -> Result<usize, ()> {
+pub fn validate_same_shard(keys: &[&[u8]], num_shards: usize) -> Result<usize, ShardMismatchError> {
     if keys.is_empty() {
         return Ok(0); // No keys, any shard is fine
     }
@@ -15,7 +19,7 @@ pub fn validate_same_shard(keys: &[&[u8]], num_shards: usize) -> Result<usize, (
 
     for key in &keys[1..] {
         if shard_for_key(key, num_shards) != first_shard {
-            return Err(());
+            return Err(ShardMismatchError);
         }
     }
 
