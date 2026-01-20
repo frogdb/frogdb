@@ -10,6 +10,7 @@ use redis_protocol::codec::Resp2;
 use redis_protocol::resp2::types::BytesFrame;
 use std::net::SocketAddr;
 use std::time::Duration;
+use tempfile::TempDir;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -21,22 +22,28 @@ struct TestServer {
     addr: SocketAddr,
     shutdown_tx: oneshot::Sender<()>,
     handle: JoinHandle<()>,
+    #[allow(dead_code)]
+    temp_dir: TempDir, // Keep alive to prevent cleanup during test
 }
 
 impl TestServer {
     /// Start a new test server on an available port.
     async fn start() -> Self {
+        // Create a unique temp directory for this test's data
+        let temp_dir = TempDir::new().unwrap();
+
         // Find an available port
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
-        // Create config with the chosen port
+        // Create config with the chosen port and temp data dir
         let mut config = Config::default();
         config.server.bind = "127.0.0.1".to_string();
         config.server.port = addr.port();
         config.server.num_shards = 1;
         config.logging.level = "warn".to_string(); // Reduce noise during tests
+        config.persistence.data_dir = temp_dir.path().to_path_buf();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -62,6 +69,7 @@ impl TestServer {
             addr,
             shutdown_tx,
             handle,
+            temp_dir,
         }
     }
 

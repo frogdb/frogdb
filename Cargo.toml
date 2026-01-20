@@ -54,6 +54,10 @@ crc16 = "0.4"
 # Testing - Concurrency
 shuttle = { version = "0.8" }
 
+# Persistence
+rocksdb = { version = "0.22", features = ["multi-threaded-cf"] }
+tempfile = "3"
+
 # Internal crates
 frogdb-protocol = { path = "crates/protocol" }
 frogdb-core = { path = "crates/core" }

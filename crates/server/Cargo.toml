@@ -34,3 +34,4 @@ shuttle = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 futures.workspace = true
 shuttle.workspace = true
+tempfile.workspace = true
