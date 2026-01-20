@@ -34,6 +34,20 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<PartialResult>,
     },
 
+    /// Get the current shard version (for WATCH).
+    GetVersion {
+        response_tx: oneshot::Sender<u64>,
+    },
+
+    /// Execute a transaction atomically.
+    ExecTransaction {
+        commands: Vec<ParsedCommand>,
+        /// Watched keys: (key, version_at_watch_time).
+        watches: Vec<(Bytes, u64)>,
+        conn_id: u64,
+        response_tx: oneshot::Sender<TransactionResult>,
+    },
+
     /// Shutdown signal.
     Shutdown,
 }
@@ -63,6 +77,17 @@ pub enum ScatterOp {
 pub struct PartialResult {
     /// Results keyed by original key position.
     pub results: Vec<(Bytes, Response)>,
+}
+
+/// Result from executing a transaction.
+#[derive(Debug)]
+pub enum TransactionResult {
+    /// Transaction executed successfully.
+    Success(Vec<Response>),
+    /// Transaction aborted due to WATCH conflict.
+    WatchAborted,
+    /// Transaction failed with an error.
+    Error(String),
 }
 
 /// A pending operation in the VLL transaction queue.
@@ -176,6 +201,10 @@ pub struct ShardWorker {
 
     /// Snapshot coordinator for BGSAVE.
     pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+
+    /// Monotonically increasing version for WATCH detection.
+    /// Reset to 0 on server restart.
+    shard_version: u64,
 }
 
 impl ShardWorker {
@@ -199,6 +228,7 @@ impl ShardWorker {
             rocks_store: None,
             wal_writer: None,
             snapshot_coordinator: Arc::new(NoopSnapshotCoordinator::new()),
+            shard_version: 0,
         }
     }
 
@@ -228,12 +258,33 @@ impl ShardWorker {
             rocks_store: Some(rocks_store),
             wal_writer: Some(wal_writer),
             snapshot_coordinator,
+            shard_version: 0,
         }
     }
 
     /// Get the snapshot coordinator.
     pub fn snapshot_coordinator(&self) -> &Arc<dyn SnapshotCoordinator> {
         &self.snapshot_coordinator
+    }
+
+    /// Increment shard version (call on any write operation).
+    fn increment_version(&mut self) {
+        self.shard_version = self.shard_version.wrapping_add(1);
+    }
+
+    /// Get version for a key.
+    ///
+    /// Phase 1: Returns per-shard version (simple, some false positives).
+    /// Phase 2 (future): Can be changed to return per-key version.
+    fn get_key_version(&self, _key: &[u8]) -> u64 {
+        self.shard_version
+    }
+
+    /// Check if watched keys have changed since they were watched.
+    fn check_watches(&self, watches: &[(Bytes, u64)]) -> bool {
+        watches.iter().all(|(key, watched_ver)| {
+            self.get_key_version(key) == *watched_ver
+        })
     }
 
     /// Run the shard worker event loop.
@@ -259,6 +310,13 @@ impl ShardWorker {
                         }
                         ShardMessage::ScatterRequest { request_id: _, keys, operation, response_tx } => {
                             let result = self.execute_scatter_part(&keys, &operation).await;
+                            let _ = response_tx.send(result);
+                        }
+                        ShardMessage::GetVersion { response_tx } => {
+                            let _ = response_tx.send(self.shard_version);
+                        }
+                        ShardMessage::ExecTransaction { commands, watches, conn_id, response_tx } => {
+                            let result = self.execute_transaction(commands, &watches, conn_id);
                             let _ = response_tx.send(result);
                         }
                         ShardMessage::Shutdown => {
@@ -303,6 +361,7 @@ impl ShardWorker {
         // Get expired keys from the expiry index
         if let Some(expiry_index) = self.store.expiry_index() {
             let expired = expiry_index.get_expired(now);
+            let mut any_deleted = false;
 
             for key in expired {
                 if start.elapsed() > budget {
@@ -314,12 +373,19 @@ impl ShardWorker {
                 }
 
                 // Delete the key
-                self.store.delete(&key);
-                tracing::trace!(
-                    shard_id = self.shard_id,
-                    key = %String::from_utf8_lossy(&key),
-                    "Active expiry deleted key"
-                );
+                if self.store.delete(&key) {
+                    any_deleted = true;
+                    tracing::trace!(
+                        shard_id = self.shard_id,
+                        key = %String::from_utf8_lossy(&key),
+                        "Active expiry deleted key"
+                    );
+                }
+            }
+
+            // Increment version if any key was deleted by expiry
+            if any_deleted {
+                self.increment_version();
             }
         }
     }
@@ -373,10 +439,45 @@ impl ShardWorker {
         );
 
         // Execute
-        match handler.execute(&mut ctx, &command.args) {
+        let response = match handler.execute(&mut ctx, &command.args) {
             Ok(response) => response,
             Err(err) => err.to_response(),
+        };
+
+        // Increment version on write operations
+        if handler.flags().contains(crate::command::CommandFlags::WRITE) {
+            self.increment_version();
         }
+
+        response
+    }
+
+    /// Execute a transaction atomically.
+    ///
+    /// This method:
+    /// 1. Checks all watched keys' versions against their watched versions
+    /// 2. If any mismatch, returns WatchAborted (EXEC returns nil)
+    /// 3. Executes all queued commands in sequence
+    /// 4. Returns Success with all command results
+    fn execute_transaction(
+        &mut self,
+        commands: Vec<ParsedCommand>,
+        watches: &[(Bytes, u64)],
+        conn_id: u64,
+    ) -> TransactionResult {
+        // Check WATCH conditions
+        if !self.check_watches(watches) {
+            return TransactionResult::WatchAborted;
+        }
+
+        // Execute all commands
+        let mut results = Vec::with_capacity(commands.len());
+        for command in commands {
+            let response = self.execute_command(&command, conn_id);
+            results.push(response);
+        }
+
+        TransactionResult::Success(results)
     }
 
     /// Execute part of a scatter-gather operation.
@@ -417,15 +518,21 @@ impl ShardWorker {
 
                     results.push((key.clone(), Response::ok()));
                 }
+                // Increment version for MSET (write operation)
+                if !pairs.is_empty() {
+                    self.increment_version();
+                }
                 results
             }
             ScatterOp::Del | ScatterOp::Unlink => {
                 let mut results = Vec::with_capacity(keys.len());
+                let mut any_deleted = false;
                 for key in keys {
                     let deleted = self.store.delete(key);
 
                     // Persist delete to WAL if enabled
                     if deleted {
+                        any_deleted = true;
                         if let Some(ref wal) = self.wal_writer {
                             if let Err(e) = wal.write_delete(key).await {
                                 tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist DEL");
@@ -434,6 +541,10 @@ impl ShardWorker {
                     }
 
                     results.push((key.clone(), Response::Integer(if deleted { 1 } else { 0 })));
+                }
+                // Increment version for DEL/UNLINK if any key was deleted
+                if any_deleted {
+                    self.increment_version();
                 }
                 results
             }

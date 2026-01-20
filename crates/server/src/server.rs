@@ -551,6 +551,13 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::list::LposCommand);
     registry.register(crate::commands::list::LmoveCommand);
     registry.register(crate::commands::list::LmpopCommand);
+
+    // Transaction commands
+    registry.register(crate::commands::transaction::MultiCommand);
+    registry.register(crate::commands::transaction::ExecCommand);
+    registry.register(crate::commands::transaction::DiscardCommand);
+    registry.register(crate::commands::transaction::WatchCommand);
+    registry.register(crate::commands::transaction::UnwatchCommand);
 }
 
 // Commands module

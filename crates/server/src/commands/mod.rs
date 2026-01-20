@@ -11,6 +11,7 @@ pub mod persistence;
 pub mod set;
 pub mod sorted_set;
 pub mod string;
+pub mod transaction;
 
 pub use expiry::*;
 pub use generic::*;
@@ -20,3 +21,4 @@ pub use persistence::*;
 pub use set::*;
 pub use sorted_set::*;
 pub use string::*;
+pub use transaction::*;
