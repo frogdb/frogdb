@@ -17,8 +17,10 @@ thiserror.workspace = true
 tracing.workspace = true
 xxhash-rust.workspace = true
 tokio.workspace = true
+ordered-float.workspace = true
 shuttle = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
 shuttle.workspace = true
+proptest.workspace = true

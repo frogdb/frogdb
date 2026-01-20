@@ -449,7 +449,7 @@ mod tests {
         store.set(Bytes::from("key1"), Value::string("value1"));
         let value = store.get(b"key1").unwrap();
 
-        let Value::String(sv) = value;
+        let sv = value.as_string().expect("expected string value");
         assert_eq!(sv.as_bytes().as_ref(), b"value1");
     }
 

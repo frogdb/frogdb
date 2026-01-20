@@ -5,8 +5,10 @@
 
 pub mod expiry;
 pub mod generic;
+pub mod sorted_set;
 pub mod string;
 
 pub use expiry::*;
 pub use generic::*;
+pub use sorted_set::*;
 pub use string::*;

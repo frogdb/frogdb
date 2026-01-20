@@ -27,6 +27,10 @@ redis-protocol = { version = "5", features = ["bytes", "codec"] }
 # Data structures
 griddle = "0.5"
 bitflags = "2"
+ordered-float = "4"
+
+# Property-based testing
+proptest = "1"
 
 # Configuration
 figment = { version = "0.10", features = ["toml", "env"] }

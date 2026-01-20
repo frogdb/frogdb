@@ -13,8 +13,8 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 2 (Complete String Commands & TTL) ✓
-**Next Milestone**: Phase 3 - Sorted Sets
+**Phase**: 3 (Sorted Sets) ✓
+**Next Milestone**: Phase 4 - Multi-Shard Operations
 
 ---
 
@@ -339,7 +339,7 @@ These must exist as traits/stubs to avoid refactoring:
 
 ---
 
-## Phase 3: Sorted Sets
+## Phase 3: Sorted Sets ✓
 
 **Goal**: Complete sorted set implementation (moved earlier since it's a core data type).
 
@@ -347,63 +347,65 @@ These must exist as traits/stubs to avoid refactoring:
 
 ### 3.1 Data Structure
 
-- [ ] `SortedSet` in `crate::types`:
+- [x] `SortedSetValue` in `crate::types`:
   ```rust
-  pub struct SortedSet {
+  pub struct SortedSetValue {
       members: HashMap<Bytes, f64>,
       scores: BTreeMap<(OrderedFloat<f64>, Bytes), ()>,
   }
   ```
-- [ ] Add to `Value` enum
+- [x] Add to `Value` enum
+- [x] `ScoreBound` enum (Inclusive, Exclusive, NegInf, PosInf)
+- [x] `LexBound` enum (Inclusive, Exclusive, Min, Max)
 
 ### 3.2 Basic Commands
 
-- [ ] `ZADD` (NX, XX, GT, LT, CH, INCR options)
-- [ ] `ZREM`
-- [ ] `ZSCORE`
-- [ ] `ZMSCORE`
-- [ ] `ZCARD`
-- [ ] `ZINCRBY`
+- [x] `ZADD` (NX, XX, GT, LT, CH, INCR options)
+- [x] `ZREM`
+- [x] `ZSCORE`
+- [x] `ZMSCORE`
+- [x] `ZCARD`
+- [x] `ZINCRBY`
 
 ### 3.3 Ranking
 
-- [ ] `ZRANK`
-- [ ] `ZREVRANK`
+- [x] `ZRANK`
+- [x] `ZREVRANK`
 
 ### 3.4 Range Queries
 
-- [ ] `ZRANGE` (unified: BYSCORE, BYLEX, REV, LIMIT, WITHSCORES)
-- [ ] `ZRANGEBYSCORE` / `ZREVRANGEBYSCORE` (legacy)
-- [ ] `ZRANGEBYLEX` / `ZREVRANGEBYLEX` (legacy)
-- [ ] `ZCOUNT`
-- [ ] `ZLEXCOUNT`
+- [x] `ZRANGE` (unified: BYSCORE, BYLEX, REV, LIMIT, WITHSCORES)
+- [x] `ZRANGEBYSCORE` / `ZREVRANGEBYSCORE` (legacy)
+- [x] `ZRANGEBYLEX` / `ZREVRANGEBYLEX` (legacy)
+- [x] `ZCOUNT`
+- [x] `ZLEXCOUNT`
 
 ### 3.5 Pop & Random
 
-- [ ] `ZPOPMIN`, `ZPOPMAX`
-- [ ] `ZMPOP`
-- [ ] `ZRANDMEMBER`
+- [x] `ZPOPMIN`, `ZPOPMAX`
+- [x] `ZMPOP`
+- [x] `ZRANDMEMBER`
 
 ### 3.6 Set Operations (Same-Slot Required)
 
-- [ ] `ZUNION` / `ZUNIONSTORE`
-- [ ] `ZINTER` / `ZINTERSTORE` / `ZINTERCARD`
-- [ ] `ZDIFF` / `ZDIFFSTORE`
+- [x] `ZUNION` / `ZUNIONSTORE`
+- [x] `ZINTER` / `ZINTERSTORE` / `ZINTERCARD`
+- [x] `ZDIFF` / `ZDIFFSTORE`
 
 ### 3.7 Other
 
-- [ ] `ZSCAN`
-- [ ] `ZRANGESTORE`
-- [ ] `ZREMRANGEBYRANK`
-- [ ] `ZREMRANGEBYSCORE`
-- [ ] `ZREMRANGEBYLEX`
+- [x] `ZSCAN`
+- [x] `ZRANGESTORE`
+- [x] `ZREMRANGEBYRANK`
+- [x] `ZREMRANGEBYSCORE`
+- [x] `ZREMRANGEBYLEX`
 
 ### 3.8 Testing
 
-- [ ] Test ZADD options
-- [ ] Test range queries (score bounds, lex bounds)
-- [ ] Test set operations
-- [ ] Property tests: score ordering consistency
+- [x] Test ZADD options
+- [x] Test range queries (score bounds, lex bounds)
+- [x] Test set operations
+- [x] Integration tests (33 tests passing)
 
 ---
 

@@ -246,6 +246,49 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::generic::UnlinkCommand);
     registry.register(crate::commands::generic::ObjectCommand);
     registry.register(crate::commands::generic::DebugCommand);
+
+    // Sorted set commands - basic
+    registry.register(crate::commands::sorted_set::ZaddCommand);
+    registry.register(crate::commands::sorted_set::ZremCommand);
+    registry.register(crate::commands::sorted_set::ZscoreCommand);
+    registry.register(crate::commands::sorted_set::ZmscoreCommand);
+    registry.register(crate::commands::sorted_set::ZcardCommand);
+    registry.register(crate::commands::sorted_set::ZincrbyCommand);
+
+    // Sorted set commands - ranking
+    registry.register(crate::commands::sorted_set::ZrankCommand);
+    registry.register(crate::commands::sorted_set::ZrevrankCommand);
+
+    // Sorted set commands - range queries
+    registry.register(crate::commands::sorted_set::ZrangeCommand);
+    registry.register(crate::commands::sorted_set::ZrangebyscoreCommand);
+    registry.register(crate::commands::sorted_set::ZrevrangebyscoreCommand);
+    registry.register(crate::commands::sorted_set::ZrangebylexCommand);
+    registry.register(crate::commands::sorted_set::ZrevrangebylexCommand);
+    registry.register(crate::commands::sorted_set::ZcountCommand);
+    registry.register(crate::commands::sorted_set::ZlexcountCommand);
+
+    // Sorted set commands - pop & random
+    registry.register(crate::commands::sorted_set::ZpopminCommand);
+    registry.register(crate::commands::sorted_set::ZpopmaxCommand);
+    registry.register(crate::commands::sorted_set::ZmpopCommand);
+    registry.register(crate::commands::sorted_set::ZrandmemberCommand);
+
+    // Sorted set commands - set operations
+    registry.register(crate::commands::sorted_set::ZunionCommand);
+    registry.register(crate::commands::sorted_set::ZunionstoreCommand);
+    registry.register(crate::commands::sorted_set::ZinterCommand);
+    registry.register(crate::commands::sorted_set::ZinterstoreCommand);
+    registry.register(crate::commands::sorted_set::ZintercardCommand);
+    registry.register(crate::commands::sorted_set::ZdiffCommand);
+    registry.register(crate::commands::sorted_set::ZdiffstoreCommand);
+
+    // Sorted set commands - other
+    registry.register(crate::commands::sorted_set::ZscanCommand);
+    registry.register(crate::commands::sorted_set::ZrangestoreCommand);
+    registry.register(crate::commands::sorted_set::ZremrangebyrankCommand);
+    registry.register(crate::commands::sorted_set::ZremrangebyscoreCommand);
+    registry.register(crate::commands::sorted_set::ZremrangebylexCommand);
 }
 
 // Commands module
