@@ -1,9 +1,7 @@
 //! Main server implementation.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-
 use anyhow::Result;
+use frogdb_core::sync::{Arc, AtomicU64, Ordering};
 use frogdb_core::{CommandRegistry, ShardMessage, ShardWorker};
 use tokio::net::TcpListener;
 use tokio::signal;

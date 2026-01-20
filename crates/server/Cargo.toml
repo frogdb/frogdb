@@ -9,6 +9,9 @@ description = "FrogDB server binary"
 name = "frogdb-server"
 path = "src/main.rs"
 
+[features]
+shuttle = ["dep:shuttle", "frogdb-core/shuttle"]
+
 [dependencies]
 frogdb-protocol.workspace = true
 frogdb-core.workspace = true
@@ -25,7 +28,9 @@ tracing-subscriber.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 futures.workspace = true
+shuttle = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 futures.workspace = true
+shuttle.workspace = true

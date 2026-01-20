@@ -1,9 +1,7 @@
 //! TCP connection acceptor.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-
 use anyhow::Result;
+use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use frogdb_core::{shard::NewConnection, CommandRegistry, ShardMessage};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;

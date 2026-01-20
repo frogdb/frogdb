@@ -46,6 +46,9 @@ anyhow = "1"
 # Hashing
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
+# Testing - Concurrency
+shuttle = { version = "0.8" }
+
 # Internal crates
 frogdb-protocol = { path = "crates/protocol" }
 frogdb-core = { path = "crates/core" }

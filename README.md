@@ -65,15 +65,37 @@ cargo run --release --bin frogdb-server -- --generate-config > frogdb.toml
 ### Test
 
 ```bash
-# Unit tests
+# Unit tests (all crates)
 cargo test
 
-# Integration tests
+# Concurrency tests (using Shuttle for deterministic testing)
+cargo test -p frogdb-core --features shuttle --test concurrency
+
+# Integration tests (uses dynamic port allocation)
 cargo test --test integration
 
 # All tests
 cargo test --all
 ```
+
+#### Concurrency Testing
+
+FrogDB uses [Shuttle](https://github.com/awslabs/shuttle) for deterministic concurrency testing. Shuttle tests run concurrent code under a randomized scheduler to catch race conditions and ordering bugs.
+
+```bash
+# Run all shuttle concurrency tests (1000 iterations each)
+cargo test -p frogdb-core --features shuttle --test concurrency
+
+# Run a specific concurrency test
+cargo test -p frogdb-core --features shuttle --test concurrency test_read_your_writes
+```
+
+The concurrency tests cover:
+- Connection ID uniqueness under concurrent access
+- Round-robin shard assignment correctness
+- Read-your-writes consistency
+- Command ordering guarantees
+- Concurrent increment operations
 
 ## Configuration
 
