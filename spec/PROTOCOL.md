@@ -27,6 +27,14 @@ pub struct ParsedCommand {
     pub args: Vec<Bytes>,
 }
 
+/// Errors during RESP parsing
+pub enum ProtocolError {
+    EmptyCommand,
+    ExpectedArray,
+    InvalidFrame,
+    Incomplete,
+}
+
 impl TryFrom<BytesFrame> for ParsedCommand {
     type Error = ProtocolError;
 

@@ -4,6 +4,8 @@ This document describes FrogDB's software architecture: how components connect, 
 
 **Scope**: Phase 1 implementation with future components as NOOP stubs (log + passthrough).
 
+> **Reading These Specs:** This document describes FrogDB's complete architecture. For what to implement in each phase, see [ROADMAP.md](ROADMAP.md). Features marked as "NOOP" or "future" are documented for reference but not yet implemented.
+
 ---
 
 ## Table of Contents
@@ -50,6 +52,17 @@ Shard workers communicate via `mpsc` channels:
 - `NewConnection` for connection assignment from the acceptor
 
 This eliminates lock contention and simplifies reasoning about concurrency.
+
+### Channel Configuration
+
+Shard channels are bounded to provide backpressure:
+
+```rust
+const SHARD_CHANNEL_CAPACITY: usize = 1024;
+let (tx, rx) = mpsc::channel::<ShardMessage>(SHARD_CHANNEL_CAPACITY);
+```
+
+When a channel fills, the sending connection blocks until space is available. This propagates backpressure to clients and prevents memory exhaustion. See [CONCURRENCY.md](CONCURRENCY.md) for details.
 
 ### Pin-Based Connections
 
@@ -199,6 +212,40 @@ sequenceDiagram
 ```
 
 Commands execute with access to `CommandContext`, which provides store access, connection state, and shard routing. See [EXECUTION.md](EXECUTION.md#commandcontext-definition) for the complete definition.
+
+### CommandContext (Phase 1)
+
+Commands execute with this context:
+
+```rust
+pub struct CommandContext<'a> {
+    /// Mutable access to shard's store
+    pub store: &'a mut dyn Store,
+    /// Connection state (auth, subscriptions, blocked)
+    pub conn_state: &'a mut ConnectionState,
+    /// Channel senders to other shards (for forwarding)
+    pub shard_senders: &'a [mpsc::Sender<ShardMessage>],
+    /// This shard's ID (0 to num_shards-1)
+    pub shard_id: usize,
+    /// Total number of shards
+    pub num_shards: usize,
+    /// Current timestamp (for TTL operations)
+    pub now: Instant,
+    /// WAL writer (NOOP in Phase 1)
+    pub wal: &'a mut dyn WalWriter,
+}
+```
+
+Note: `replication_tracker` field is added in Phase 14.
+
+### ACL Integration
+
+The sequence diagram shows "R->>ACL: Check permission". This is implemented via the `AclChecker` trait:
+
+- Phase 1 uses `AlwaysAllowAcl` (NOOP that logs and returns Allowed)
+- Phase 10 implements full ACL enforcement
+
+`ConnectionState.auth` tracks authentication (AUTH command). `AclChecker` handles authorization (permissions). These are separate concerns.
 
 ### Shard Architecture
 
@@ -539,6 +586,25 @@ pub enum WalOperation {
     Expire(u64),
 }
 ```
+
+#### PersistenceError Enum
+
+```rust
+/// Errors from persistence operations
+#[derive(Debug)]
+pub enum PersistenceError {
+    /// I/O error during write
+    Io(std::io::Error),
+    /// Serialization error
+    Serialization(String),
+    /// Storage backend error (RocksDB, etc.)
+    Backend(String),
+    /// Operation timed out
+    Timeout,
+}
+```
+
+Phase 1 NOOP implementations always return `Ok(())`, but this enum is defined for future use.
 
 #### SnapshotManager Trait
 
