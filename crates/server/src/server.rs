@@ -197,22 +197,64 @@ async fn shutdown_signal() {
 
 /// Register all built-in commands.
 pub fn register_commands(registry: &mut CommandRegistry) {
-    use crate::commands::*;
+    // Connection commands
+    registry.register(commands::PingCommand);
+    registry.register(commands::EchoCommand);
+    registry.register(commands::QuitCommand);
+    registry.register(commands::CommandCommand);
 
-    registry.register(PingCommand);
-    registry.register(EchoCommand);
-    registry.register(QuitCommand);
-    registry.register(CommandCommand);
-    registry.register(GetCommand);
-    registry.register(SetCommand);
-    registry.register(DelCommand);
-    registry.register(ExistsCommand);
+    // String commands (basic)
+    registry.register(commands::GetCommand);
+    registry.register(commands::SetCommand);
+    registry.register(commands::DelCommand);
+    registry.register(commands::ExistsCommand);
+
+    // String commands (extended)
+    registry.register(crate::commands::string::SetnxCommand);
+    registry.register(crate::commands::string::SetexCommand);
+    registry.register(crate::commands::string::PsetexCommand);
+    registry.register(crate::commands::string::AppendCommand);
+    registry.register(crate::commands::string::StrlenCommand);
+    registry.register(crate::commands::string::GetrangeCommand);
+    registry.register(crate::commands::string::SetrangeCommand);
+    registry.register(crate::commands::string::GetdelCommand);
+    registry.register(crate::commands::string::GetexCommand);
+
+    // Numeric commands
+    registry.register(crate::commands::string::IncrCommand);
+    registry.register(crate::commands::string::DecrCommand);
+    registry.register(crate::commands::string::IncrbyCommand);
+    registry.register(crate::commands::string::DecrbyCommand);
+    registry.register(crate::commands::string::IncrbyfloatCommand);
+
+    // TTL/Expiry commands
+    registry.register(crate::commands::expiry::ExpireCommand);
+    registry.register(crate::commands::expiry::PexpireCommand);
+    registry.register(crate::commands::expiry::ExpireatCommand);
+    registry.register(crate::commands::expiry::PexpireatCommand);
+    registry.register(crate::commands::expiry::TtlCommand);
+    registry.register(crate::commands::expiry::PttlCommand);
+    registry.register(crate::commands::expiry::PersistCommand);
+    registry.register(crate::commands::expiry::ExpiretimeCommand);
+    registry.register(crate::commands::expiry::PexpiretimeCommand);
+
+    // Generic commands
+    registry.register(crate::commands::generic::TypeCommand);
+    registry.register(crate::commands::generic::RenameCommand);
+    registry.register(crate::commands::generic::RenamenxCommand);
+    registry.register(crate::commands::generic::TouchCommand);
+    registry.register(crate::commands::generic::UnlinkCommand);
+    registry.register(crate::commands::generic::ObjectCommand);
+    registry.register(crate::commands::generic::DebugCommand);
 }
 
 // Commands module
 pub mod commands {
     use bytes::Bytes;
-    use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+    use frogdb_core::{
+        Arity, Command, CommandContext, CommandError, CommandFlags, Expiry, SetCondition,
+        SetOptions, SetResult, Value,
+    };
     use frogdb_protocol::Response;
 
     /// PING command.
@@ -359,7 +401,7 @@ pub mod commands {
         ) -> Result<Response, CommandError> {
             let key = &args[0];
 
-            match ctx.store.get(key) {
+            match ctx.store.get_with_expiry_check(key) {
                 Some(value) => {
                     if let Some(sv) = value.as_string() {
                         Ok(Response::bulk(sv.as_bytes()))
@@ -380,7 +422,7 @@ pub mod commands {
         }
     }
 
-    /// SET command.
+    /// SET command with full option support.
     pub struct SetCommand;
 
     impl Command for SetCommand {
@@ -404,10 +446,100 @@ pub mod commands {
             let key = args[0].clone();
             let value = args[1].clone();
 
-            // For Phase 1, ignore options (EX, PX, NX, XX, etc.)
-            ctx.store.set(key, frogdb_core::Value::string(value));
+            // Parse options
+            let mut opts = SetOptions::default();
+            let mut i = 2;
 
-            Ok(Response::ok())
+            while i < args.len() {
+                let opt = args[i].to_ascii_uppercase();
+                match opt.as_slice() {
+                    b"NX" => {
+                        if opts.condition != SetCondition::Always {
+                            return Err(CommandError::SyntaxError);
+                        }
+                        opts.condition = SetCondition::NX;
+                    }
+                    b"XX" => {
+                        if opts.condition != SetCondition::Always {
+                            return Err(CommandError::SyntaxError);
+                        }
+                        opts.condition = SetCondition::XX;
+                    }
+                    b"GET" => {
+                        opts.return_old = true;
+                    }
+                    b"KEEPTTL" => {
+                        opts.keep_ttl = true;
+                    }
+                    b"EX" => {
+                        i += 1;
+                        if i >= args.len() {
+                            return Err(CommandError::SyntaxError);
+                        }
+                        let secs = parse_u64(&args[i])?;
+                        if secs == 0 {
+                            return Err(CommandError::InvalidArgument {
+                                message: "invalid expire time in 'set' command".to_string(),
+                            });
+                        }
+                        opts.expiry = Some(Expiry::Ex(secs));
+                    }
+                    b"PX" => {
+                        i += 1;
+                        if i >= args.len() {
+                            return Err(CommandError::SyntaxError);
+                        }
+                        let ms = parse_u64(&args[i])?;
+                        if ms == 0 {
+                            return Err(CommandError::InvalidArgument {
+                                message: "invalid expire time in 'set' command".to_string(),
+                            });
+                        }
+                        opts.expiry = Some(Expiry::Px(ms));
+                    }
+                    b"EXAT" => {
+                        i += 1;
+                        if i >= args.len() {
+                            return Err(CommandError::SyntaxError);
+                        }
+                        let ts = parse_u64(&args[i])?;
+                        opts.expiry = Some(Expiry::ExAt(ts));
+                    }
+                    b"PXAT" => {
+                        i += 1;
+                        if i >= args.len() {
+                            return Err(CommandError::SyntaxError);
+                        }
+                        let ts = parse_u64(&args[i])?;
+                        opts.expiry = Some(Expiry::PxAt(ts));
+                    }
+                    _ => return Err(CommandError::SyntaxError),
+                }
+                i += 1;
+            }
+
+            // Check for conflicting options
+            if opts.keep_ttl && opts.expiry.is_some() {
+                return Err(CommandError::SyntaxError);
+            }
+
+            match ctx.store.set_with_options(key, Value::string(value), opts) {
+                SetResult::Ok => Ok(Response::ok()),
+                SetResult::OkWithOldValue(old) => {
+                    match old {
+                        Some(v) => {
+                            if let Some(sv) = v.as_string() {
+                                Ok(Response::bulk(sv.as_bytes()))
+                            } else {
+                                // Old value was wrong type but we replaced it anyway
+                                Ok(Response::null())
+                            }
+                        }
+                        None => Ok(Response::null()),
+                    }
+                }
+                SetResult::NotSet => Ok(Response::null()),
+            }
         }
 
         fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -417,6 +549,14 @@ pub mod commands {
                 vec![&args[0]]
             }
         }
+    }
+
+    /// Parse a string as u64.
+    fn parse_u64(arg: &[u8]) -> Result<u64, CommandError> {
+        std::str::from_utf8(arg)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .ok_or(CommandError::NotInteger)
     }
 
     /// DEL command.

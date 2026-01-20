@@ -22,4 +22,7 @@ pub use noop::{
 pub use registry::CommandRegistry;
 pub use shard::{shard_for_key, ShardMessage, ShardWorker};
 pub use store::{HashMapStore, Store};
-pub use types::{KeyMetadata, KeyType, StringValue, Value};
+pub use types::{
+    Expiry, IncrementError, KeyMetadata, KeyType, SetCondition, SetOptions, SetResult, StringValue,
+    Value,
+};

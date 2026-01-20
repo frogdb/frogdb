@@ -13,8 +13,8 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 1 (Foundation) ✓
-**Next Milestone**: Phase 2 - Complete String Commands & TTL
+**Phase**: 2 (Complete String Commands & TTL) ✓
+**Next Milestone**: Phase 3 - Sorted Sets
 
 ---
 
@@ -274,67 +274,67 @@ These must exist as traits/stubs to avoid refactoring:
 
 ### 2.1 Integer Encoding
 
-- [ ] Implement `StringValue::as_integer()` -> Option<i64>
-- [ ] Auto-detect integer on SET
-- [ ] Maintain encoding through operations
+- [x] Implement `StringValue::as_integer()` -> Option<i64>
+- [x] Auto-detect integer on SET
+- [x] Maintain encoding through operations
 
 ### 2.2 String Commands
 
-- [ ] `SET` options: EX, PX, EXAT, PXAT, NX, XX, KEEPTTL, GET, IFEQ, IFGT
-- [ ] `SETNX`
-- [ ] `SETEX`, `PSETEX`
-- [ ] `APPEND`
-- [ ] `STRLEN`
-- [ ] `INCR`, `DECR`
-- [ ] `INCRBY`, `DECRBY`
-- [ ] `INCRBYFLOAT`
-- [ ] `GETRANGE` (substring)
-- [ ] `SETRANGE`
-- [ ] `GETDEL`
-- [ ] `GETEX`
+- [x] `SET` options: EX, PX, EXAT, PXAT, NX, XX, KEEPTTL, GET, IFEQ, IFGT
+- [x] `SETNX`
+- [x] `SETEX`, `PSETEX`
+- [x] `APPEND`
+- [x] `STRLEN`
+- [x] `INCR`, `DECR`
+- [x] `INCRBY`, `DECRBY`
+- [x] `INCRBYFLOAT`
+- [x] `GETRANGE` (substring)
+- [x] `SETRANGE`
+- [x] `GETDEL`
+- [x] `GETEX`
 
 ### 2.3 Key Expiration
 
-- [ ] Implement `ExpiryIndex`:
+- [x] Implement `ExpiryIndex`:
   ```rust
   pub struct ExpiryIndex {
       by_time: BTreeMap<(Instant, Bytes), ()>,
       by_key: HashMap<Bytes, Instant>,
   }
   ```
-- [ ] Lazy expiry: check TTL on every read, delete if expired
-- [ ] `EXPIRE`, `PEXPIRE`
-- [ ] `EXPIREAT`, `PEXPIREAT`
-- [ ] `TTL`, `PTTL`
-- [ ] `PERSIST`
-- [ ] `EXPIRETIME`, `PEXPIRETIME`
+- [x] Lazy expiry: check TTL on every read, delete if expired
+- [x] `EXPIRE`, `PEXPIRE`
+- [x] `EXPIREAT`, `PEXPIREAT`
+- [x] `TTL`, `PTTL`
+- [x] `PERSIST`
+- [x] `EXPIRETIME`, `PEXPIRETIME`
 
 ### 2.4 Active Expiry
 
-- [ ] Background task per shard (~10Hz)
-- [ ] Sample keys from ExpiryIndex
-- [ ] Time-budgeted deletion (25ms default)
+- [x] Background task per shard (~10Hz)
+- [x] Sample keys from ExpiryIndex
+- [x] Time-budgeted deletion (25ms default)
 - [ ] Metrics: expired_keys counter
 
 ### 2.5 Generic Commands
 
-- [ ] `TYPE`
-- [ ] `RENAME` (same-shard only, CROSSSLOT error otherwise)
-- [ ] `RENAMENX`
-- [ ] `TOUCH`
-- [ ] `UNLINK` (async delete)
-- [ ] `OBJECT ENCODING`
-- [ ] `OBJECT FREQ`
-- [ ] `OBJECT IDLETIME`
-- [ ] `DEBUG OBJECT` (basic)
+- [x] `TYPE`
+- [x] `RENAME` (same-shard only, CROSSSLOT error otherwise)
+- [x] `RENAMENX`
+- [x] `TOUCH`
+- [x] `UNLINK` (async delete)
+- [x] `OBJECT ENCODING`
+- [x] `OBJECT FREQ`
+- [x] `OBJECT IDLETIME`
+- [x] `DEBUG OBJECT` (basic)
 
 ### 2.6 Testing
 
-- [ ] Test all SET options
-- [ ] Test INCR overflow (return error, not wrap)
-- [ ] Test INCR on non-integer string (error)
-- [ ] Test TTL expiration (lazy)
-- [ ] Test RENAME same-shard requirement
+- [x] Test all SET options
+- [x] Test INCR overflow (return error, not wrap)
+- [x] Test INCR on non-integer string (error)
+- [x] Test TTL expiration (lazy)
+- [x] Test RENAME same-shard requirement
 - [ ] Property tests: INCR/DECR roundtrip
 
 ---
