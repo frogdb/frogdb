@@ -130,15 +130,15 @@ impl Config {
         // Build CLI overrides
         let mut cli_overrides = Config::default();
 
-        if let Some(bind) = bind {
-            cli_overrides.server.bind = bind;
+        if let Some(ref bind) = bind {
+            cli_overrides.server.bind = bind.clone();
         }
 
         if let Some(port) = port {
             cli_overrides.server.port = port;
         }
 
-        if let Some(shards) = shards {
+        if let Some(ref shards) = shards {
             cli_overrides.server.num_shards = if shards == "auto" {
                 std::thread::available_parallelism()
                     .map(|p| p.get())
@@ -148,12 +148,12 @@ impl Config {
             };
         }
 
-        if let Some(level) = log_level {
-            cli_overrides.logging.level = level;
+        if let Some(ref level) = log_level {
+            cli_overrides.logging.level = level.clone();
         }
 
-        if let Some(format) = log_format {
-            cli_overrides.logging.format = format;
+        if let Some(ref format) = log_format {
+            cli_overrides.logging.format = format.clone();
         }
 
         // Merge CLI overrides (only non-default values)
