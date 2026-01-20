@@ -1,6 +1,7 @@
 //! Response types for RESP2/RESP3.
 
 use bytes::Bytes;
+use bytes_utils::Str;
 use redis_protocol::resp2::types::BytesFrame;
 
 /// Response types that can be sent to clients.
@@ -96,8 +97,10 @@ impl From<Response> for BytesFrame {
     fn from(response: Response) -> Self {
         match response {
             Response::Simple(s) => BytesFrame::SimpleString(s),
-            Response::Error(e) => BytesFrame::SimpleError(e),
-            Response::Integer(i) => BytesFrame::Number(i),
+            Response::Error(e) => {
+                BytesFrame::Error(Str::from_inner(e).expect("error messages must be valid UTF-8"))
+            }
+            Response::Integer(i) => BytesFrame::Integer(i),
             Response::Bulk(Some(b)) => BytesFrame::BulkString(b),
             Response::Bulk(None) => BytesFrame::Null,
             Response::Array(items) => {
@@ -134,7 +137,7 @@ mod tests {
     fn test_response_to_frame() {
         let resp = Response::Integer(42);
         let frame: BytesFrame = resp.into();
-        assert!(matches!(frame, BytesFrame::Number(42)));
+        assert!(matches!(frame, BytesFrame::Integer(42)));
     }
 
     #[test]

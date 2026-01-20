@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Bytes;
+use redis_protocol::bytes_utils::Str;
 use frogdb_core::{shard_for_key, CommandRegistry, ShardMessage};
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use futures::{SinkExt, StreamExt};
-use redis_protocol::resp2::codec::Resp2;
+use redis_protocol::codec::Resp2;
 use redis_protocol::resp2::types::BytesFrame;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
@@ -101,7 +102,10 @@ impl ConnectionHandler {
                 Some(Ok(frame)) => frame,
                 Some(Err(e)) => {
                     debug!(conn_id = self.state.id, error = %e, "Frame error");
-                    let error_frame = BytesFrame::SimpleError(Bytes::from(format!("ERR {}", e)));
+                    let error_frame = BytesFrame::Error(
+                        Str::from_inner(Bytes::from(format!("ERR {}", e)))
+                            .expect("error message must be valid UTF-8"),
+                    );
                     let _ = self.framed.send(error_frame).await;
                     continue;
                 }
@@ -115,7 +119,10 @@ impl ConnectionHandler {
             let cmd = match ParsedCommand::try_from(frame) {
                 Ok(cmd) => cmd,
                 Err(e) => {
-                    let error_frame = BytesFrame::SimpleError(Bytes::from(format!("ERR {}", e)));
+                    let error_frame = BytesFrame::Error(
+                        Str::from_inner(Bytes::from(format!("ERR {}", e)))
+                            .expect("error message must be valid UTF-8"),
+                    );
                     let _ = self.framed.send(error_frame).await;
                     continue;
                 }

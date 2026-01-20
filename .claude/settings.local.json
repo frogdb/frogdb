@@ -22,7 +22,14 @@
       "Bash(npm info:*)",
       "mcp__onyx-frogdb__search_onyx",
       "mcp__onyx-frogdb__chat_with_onyx",
-      "Bash(cargo build:*)"
+      "Bash(cargo build:*)",
+      "WebFetch(domain:index.crates.io)",
+      "WebFetch(domain:static.crates.io)",
+      "Bash(source ~/.cargo/env)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(cargo doc:*)",
+      "Bash(cargo test:*)",
+      "Bash(timeout 2 cargo run:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

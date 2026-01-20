@@ -68,6 +68,8 @@ async fn main() -> Result<()> {
         bind = %config.server.bind,
         port = config.server.port,
         shards = config.server.num_shards,
+        log_level = %config.logging.level,
+        log_format = %config.logging.format,
         "Starting FrogDB server"
     );
 

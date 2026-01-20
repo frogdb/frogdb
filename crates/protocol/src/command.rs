@@ -1,7 +1,7 @@
 //! Parsed command representation.
 
 use bytes::Bytes;
-use redis_protocol::resp2::types::BytesFrame;
+use redis_protocol::resp2::types::{BytesFrame, Resp2Frame};
 
 use crate::ProtocolError;
 
@@ -40,11 +40,12 @@ impl TryFrom<BytesFrame> for ParsedCommand {
                 let name = iter
                     .next()
                     .ok_or(ProtocolError::EmptyCommand)?
-                    .to_bytes()
+                    .as_bytes()
+                    .map(Bytes::copy_from_slice)
                     .ok_or(ProtocolError::InvalidFrame)?;
 
                 let args: Vec<Bytes> = iter
-                    .filter_map(|f| f.to_bytes())
+                    .filter_map(|f| f.as_bytes().map(Bytes::copy_from_slice))
                     .collect();
 
                 Ok(ParsedCommand { name, args })
