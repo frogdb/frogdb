@@ -24,6 +24,10 @@ pub struct Config {
     #[serde(default)]
     pub persistence: PersistenceConfig,
 
+    /// Snapshot configuration.
+    #[serde(default)]
+    pub snapshot: SnapshotConfig,
+
     /// Metrics configuration.
     #[serde(default)]
     pub metrics: MetricsConfig,
@@ -243,6 +247,55 @@ pub struct PersistenceConfig {
     /// Batch timeout in milliseconds before flushing.
     #[serde(default = "default_batch_timeout_ms")]
     pub batch_timeout_ms: u64,
+}
+
+/// Snapshot configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SnapshotConfig {
+    /// Directory for storing snapshots.
+    #[serde(default = "default_snapshot_dir")]
+    pub snapshot_dir: PathBuf,
+
+    /// Interval between automatic snapshots in seconds (0 = disabled).
+    #[serde(default = "default_snapshot_interval_secs")]
+    pub snapshot_interval_secs: u64,
+
+    /// Maximum number of snapshots to retain (0 = unlimited).
+    #[serde(default = "default_max_snapshots")]
+    pub max_snapshots: usize,
+}
+
+fn default_snapshot_dir() -> PathBuf {
+    PathBuf::from("./snapshots")
+}
+
+fn default_snapshot_interval_secs() -> u64 {
+    3600 // 1 hour
+}
+
+fn default_max_snapshots() -> usize {
+    5
+}
+
+impl Default for SnapshotConfig {
+    fn default() -> Self {
+        Self {
+            snapshot_dir: default_snapshot_dir(),
+            snapshot_interval_secs: default_snapshot_interval_secs(),
+            max_snapshots: default_max_snapshots(),
+        }
+    }
+}
+
+impl SnapshotConfig {
+    /// Convert to the core SnapshotConfig type.
+    pub fn to_core_config(&self) -> frogdb_core::persistence::SnapshotConfig {
+        frogdb_core::persistence::SnapshotConfig {
+            snapshot_dir: self.snapshot_dir.clone(),
+            snapshot_interval_secs: self.snapshot_interval_secs,
+            max_snapshots: self.max_snapshots,
+        }
+    }
 }
 
 /// Memory management configuration.
@@ -692,6 +745,16 @@ batch_size_threshold_kb = 4096
 
 # Batch timeout in milliseconds before flushing
 batch_timeout_ms = 10
+
+[snapshot]
+# Directory for storing point-in-time snapshots
+snapshot_dir = "./snapshots"
+
+# Interval between automatic snapshots in seconds (0 = disabled)
+snapshot_interval_secs = 3600
+
+# Maximum number of snapshots to retain (0 = unlimited)
+max_snapshots = 5
 
 [metrics]
 # Whether metrics are enabled

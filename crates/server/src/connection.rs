@@ -8,12 +8,12 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::{Bytes, BytesMut};
 use frogdb_core::{
-    shard_for_key, AclManager, AuthenticatedUser, ClientHandle, ClientRegistry,
-    CommandCategory, CommandFlags, CommandRegistry, GlobPattern,
-    IntrospectionRequest, IntrospectionResponse, MetricsRecorder, PartialResult,
-    PauseMode, PubSubMessage, PubSubSender, ScatterOp, ShardMessage,
-    TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
+    persistence::SnapshotCoordinator, shard_for_key, AclManager, AuthenticatedUser, ClientHandle,
+    ClientRegistry, CommandCategory, CommandFlags, CommandRegistry, GlobPattern,
+    IntrospectionRequest, IntrospectionResponse, MetricsRecorder, PartialResult, PauseMode,
+    PubSubMessage, PubSubSender, ScatterOp, ShardMessage, TransactionResult,
+    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use futures::{SinkExt, StreamExt};
@@ -237,6 +237,9 @@ pub struct ConnectionHandler {
 
     /// ACL manager for authentication and authorization.
     acl_manager: Arc<AclManager>,
+
+    /// Snapshot coordinator for BGSAVE/LASTSAVE commands.
+    snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
 }
 
 /// Convert protocol BlockingOp to core BlockingOp.
@@ -291,6 +294,7 @@ impl ConnectionHandler {
         scatter_gather_timeout_ms: u64,
         metrics_recorder: Arc<dyn MetricsRecorder>,
         acl_manager: Arc<AclManager>,
+        snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
     ) -> Self {
         let framed = Framed::new(socket, Resp2);
         let requires_auth = acl_manager.requires_auth();
@@ -315,6 +319,7 @@ impl ConnectionHandler {
             pubsub_rx,
             metrics_recorder,
             acl_manager,
+            snapshot_coordinator,
         }
     }
 
@@ -641,6 +646,14 @@ impl ConnectionHandler {
         // Handle SLOWLOG commands specially (need scatter-gather across shards)
         if cmd_name_str == "SLOWLOG" {
             return vec![self.handle_slowlog_command(&cmd.args).await];
+        }
+
+        // Handle BGSAVE/LASTSAVE commands specially (need snapshot coordinator)
+        if cmd_name_str == "BGSAVE" {
+            return vec![self.handle_bgsave(&cmd.args)];
+        }
+        if cmd_name_str == "LASTSAVE" {
+            return vec![self.handle_lastsave()];
         }
 
         // Handle server commands that need special routing
@@ -3364,6 +3377,62 @@ impl ConnectionHandler {
             Response::bulk(Bytes::from_static(b"    Print this help.")),
         ];
         Response::Array(help)
+    }
+
+    // =========================================================================
+    // BGSAVE/LASTSAVE command handlers
+    // =========================================================================
+
+    /// Handle BGSAVE command - trigger a background snapshot.
+    fn handle_bgsave(&self, args: &[Bytes]) -> Response {
+        // Check for SCHEDULE option (not yet supported)
+        if !args.is_empty() {
+            let opt = args[0].to_ascii_uppercase();
+            if opt.as_slice() == b"SCHEDULE" {
+                // BGSAVE SCHEDULE - schedule a save if not already running
+                if self.snapshot_coordinator.in_progress() {
+                    return Response::Simple(Bytes::from_static(
+                        b"Background saving scheduled",
+                    ));
+                }
+            }
+        }
+
+        match self.snapshot_coordinator.start_snapshot() {
+            Ok(handle) => {
+                tracing::info!(epoch = handle.epoch(), "BGSAVE started");
+                Response::Simple(Bytes::from_static(b"Background saving started"))
+            }
+            Err(frogdb_core::persistence::SnapshotError::AlreadyInProgress) => {
+                // Return a simple status like Redis does
+                Response::Simple(Bytes::from_static(
+                    b"Background save already in progress",
+                ))
+            }
+            Err(e) => Response::error(format!("ERR {}", e)),
+        }
+    }
+
+    /// Handle LASTSAVE command - return Unix timestamp of last successful save.
+    fn handle_lastsave(&self) -> Response {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        match self.snapshot_coordinator.last_save_time() {
+            Some(instant) => {
+                // Convert Instant to Unix timestamp
+                // We calculate how long ago the save was and subtract from current time
+                let elapsed = instant.elapsed();
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default();
+                let save_time = now.as_secs().saturating_sub(elapsed.as_secs());
+                Response::Integer(save_time as i64)
+            }
+            None => {
+                // No snapshot has been taken yet
+                Response::Integer(0)
+            }
+        }
     }
 
     /// Wait if the server is paused (CLIENT PAUSE).

@@ -3,7 +3,7 @@
 use anyhow::Result;
 use frogdb_core::persistence::{
     recover_all_shards, spawn_periodic_sync, CompressionType, DurabilityMode, NoopSnapshotCoordinator,
-    RocksConfig, RocksStore, SnapshotCoordinator, WalConfig,
+    RocksConfig, RocksSnapshotCoordinator, RocksStore, SnapshotCoordinator, WalConfig,
 };
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
 use frogdb_core::{AclManager, ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, ShardMessage, ShardWorker};
@@ -78,6 +78,9 @@ pub struct Server {
 
     /// Optional periodic sync task handle.
     periodic_sync_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Optional periodic snapshot task handle.
+    periodic_snapshot_handle: Option<tokio::task::JoinHandle<()>>,
 
     /// Snapshot coordinator (shared across all shards).
     snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
@@ -169,8 +172,40 @@ impl Server {
             };
 
         // Create snapshot coordinator
-        let snapshot_coordinator: Arc<dyn SnapshotCoordinator> =
-            Arc::new(NoopSnapshotCoordinator::new());
+        let (snapshot_coordinator, periodic_snapshot_handle): (
+            Arc<dyn SnapshotCoordinator>,
+            Option<tokio::task::JoinHandle<()>>,
+        ) = if let Some(ref rocks) = rocks_store {
+            // Real snapshot coordinator with RocksDB
+            match RocksSnapshotCoordinator::new(
+                rocks.clone(),
+                config.snapshot.to_core_config(),
+                metrics_recorder.clone(),
+            ) {
+                Ok(coordinator) => {
+                    let coordinator = Arc::new(coordinator);
+
+                    // Spawn periodic snapshot task if enabled
+                    let snapshot_handle = if config.snapshot.snapshot_interval_secs > 0 {
+                        Some(Self::spawn_periodic_snapshot_task(
+                            coordinator.clone(),
+                            config.snapshot.snapshot_interval_secs,
+                        ))
+                    } else {
+                        None
+                    };
+
+                    (coordinator, snapshot_handle)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to create snapshot coordinator, using noop");
+                    (Arc::new(NoopSnapshotCoordinator::new()), None)
+                }
+            }
+        } else {
+            // No persistence - use noop coordinator
+            (Arc::new(NoopSnapshotCoordinator::new()), None)
+        };
 
         // Create channels for each shard
         let mut shard_senders = Vec::with_capacity(num_shards);
@@ -265,11 +300,46 @@ impl Server {
             shard_handles,
             rocks_store,
             periodic_sync_handle,
+            periodic_snapshot_handle,
             snapshot_coordinator,
             metrics_recorder,
             prometheus_recorder,
             health_checker,
             acl_manager,
+        })
+    }
+
+    /// Spawn periodic snapshot task.
+    fn spawn_periodic_snapshot_task(
+        coordinator: Arc<dyn SnapshotCoordinator>,
+        interval_secs: u64,
+    ) -> tokio::task::JoinHandle<()> {
+        info!(
+            interval_secs,
+            "Starting periodic snapshot task"
+        );
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+
+            loop {
+                interval.tick().await;
+
+                if coordinator.in_progress() {
+                    tracing::debug!("Skipping periodic snapshot - already in progress");
+                    continue;
+                }
+
+                match coordinator.start_snapshot() {
+                    Ok(handle) => {
+                        tracing::info!(epoch = handle.epoch(), "Periodic snapshot started");
+                        // Handle completes when background task finishes
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Periodic snapshot failed to start");
+                    }
+                }
+            }
         })
     }
 
@@ -387,6 +457,7 @@ impl Server {
             self.config.server.scatter_gather_timeout_ms,
             self.metrics_recorder.clone(),
             self.acl_manager.clone(),
+            self.snapshot_coordinator.clone(),
         );
 
         // Spawn acceptor task
@@ -425,6 +496,20 @@ impl Server {
         // Stop periodic sync task if running
         if let Some(handle) = self.periodic_sync_handle {
             handle.abort();
+        }
+
+        // Stop periodic snapshot task if running
+        if let Some(handle) = self.periodic_snapshot_handle {
+            handle.abort();
+        }
+
+        // Wait for any in-progress snapshot to complete before final flush
+        if self.snapshot_coordinator.in_progress() {
+            info!("Waiting for in-progress snapshot to complete...");
+            while self.snapshot_coordinator.in_progress() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            info!("Snapshot completed");
         }
 
         // Stop metrics server and system collector
