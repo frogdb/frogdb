@@ -42,10 +42,52 @@ Root document located in `spec/INDEX.md`. Supplemental documents describing vari
 ### Prerequisites
 
 - Rust 1.75+ (2024 edition)
+- [just](https://github.com/casey/just) - Command runner
+
+Install dependencies via Homebrew:
+
+```bash
+brew bundle
+```
+
+Or install just manually:
+
+```bash
+brew install just
+# or: cargo install just
+```
+
+### Development Commands
+
+FrogDB uses `just` as its command runner. Run `just` to see all available commands:
+
+```bash
+just              # Show all available commands
+just build        # Build (debug)
+just release      # Build (release)
+just test         # Run all tests
+just test-crate frogdb-core  # Test a specific crate
+just test-one test_name      # Run a specific test
+just fmt          # Format code
+just fmt-check    # Check formatting (CI)
+just lint         # Run clippy lints
+just deny         # Run cargo-deny audit
+just check        # Run all checks (fmt-check, lint, deny, test)
+just run          # Run server (debug)
+just run-release  # Run server (release)
+just run --port 6380  # Run with arguments
+just clean        # Clean build artifacts
+just watch        # Watch for changes and run tests
+just doc          # Generate and open documentation
+```
 
 ### Build
 
 ```bash
+just build        # Debug build
+just release      # Release build
+
+# Or with cargo directly:
 cargo build --release
 ```
 
@@ -53,10 +95,13 @@ cargo build --release
 
 ```bash
 # Start with defaults (127.0.0.1:6379, 1 shard)
-cargo run --release --bin frogdb-server
+just run
 
 # With options
-cargo run --release --bin frogdb-server -- --port 6380 --shards auto --log-level debug
+just run --port 6380 --shards auto --log-level debug
+
+# Release mode
+just run-release
 
 # Generate default config file
 cargo run --release --bin frogdb-server -- --generate-config > frogdb.toml
@@ -65,17 +110,17 @@ cargo run --release --bin frogdb-server -- --generate-config > frogdb.toml
 ### Test
 
 ```bash
-# Unit tests (all crates)
-cargo test
+# All tests
+just test
+
+# Test a specific crate
+just test-crate frogdb-core
+
+# Run a specific test with output
+just test-one test_set_get
 
 # Concurrency tests (using Shuttle for deterministic testing)
 cargo test -p frogdb-core --features shuttle --test concurrency
-
-# Integration tests (uses dynamic port allocation)
-cargo test --test integration
-
-# All tests
-cargo test --all
 ```
 
 #### Concurrency Testing
@@ -101,14 +146,10 @@ The concurrency tests cover:
 ### Linting
 
 ```bash
-# Run clippy on all targets (library, binaries, tests)
-cargo clippy --all-targets
-
-# Treat warnings as errors (useful for CI)
-cargo clippy --all-targets -- -D warnings
-
-# Run with all features enabled
-cargo clippy --all-targets --all-features
+just lint         # Run clippy with warnings as errors
+just fmt-check    # Check formatting
+just deny         # Run cargo-deny audit (requires cargo-deny)
+just check        # Run all CI checks
 ```
 
 ## Configuration

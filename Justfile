@@ -1,0 +1,62 @@
+# Default recipe - show available commands
+default:
+    @just --list
+
+# Build debug
+build:
+    cargo build
+
+# Build release
+release:
+    cargo build --release
+
+# Run all tests
+test:
+    cargo test --all
+
+# Run tests for a specific crate
+test-crate crate:
+    cargo test -p {{crate}}
+
+# Run a specific test
+test-one name:
+    cargo test {{name}} -- --nocapture
+
+# Format code
+fmt:
+    cargo fmt --all
+
+# Check formatting (CI)
+fmt-check:
+    cargo fmt --all -- --check
+
+# Run clippy lints
+lint:
+    cargo clippy --all-targets --all-features -- -D warnings
+
+# Run cargo-deny (license/security audit)
+deny:
+    cargo deny check
+
+# Run all checks (CI)
+check: fmt-check lint deny test
+
+# Run the server (debug)
+run *args:
+    cargo run -p frogdb-server -- {{args}}
+
+# Run the server (release)
+run-release *args:
+    cargo run --release -p frogdb-server -- {{args}}
+
+# Clean build artifacts
+clean:
+    cargo clean
+
+# Watch for changes and run tests (requires cargo-watch)
+watch:
+    cargo watch -x 'test --all'
+
+# Generate documentation
+doc:
+    cargo doc --all --no-deps --open
