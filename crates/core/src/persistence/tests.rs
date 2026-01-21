@@ -5,7 +5,8 @@ mod integration {
     use crate::noop::NoopMetricsRecorder;
     use crate::persistence::*;
     use crate::store::Store;
-    use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, Value};
+    use crate::bloom::BloomFilterValue;
+    use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec, StreamValue, Value};
     use bytes::Bytes;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -601,5 +602,261 @@ mod integration {
             let zset = value.as_sorted_set().unwrap();
             assert_eq!(zset.get_score(b"alice"), Some(100.0));
         }
+    }
+
+    // ========================================================================
+    // Stream type persistence tests
+    // ========================================================================
+
+    #[test]
+    fn test_stream_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut stream = StreamValue::new();
+        stream
+            .add(
+                StreamIdSpec::Explicit(StreamId::new(1000, 0)),
+                vec![
+                    (Bytes::from("field1"), Bytes::from("value1")),
+                    (Bytes::from("field2"), Bytes::from("value2")),
+                ],
+            )
+            .unwrap();
+        stream
+            .add(
+                StreamIdSpec::Explicit(StreamId::new(1001, 0)),
+                vec![(Bytes::from("name"), Bytes::from("alice"))],
+            )
+            .unwrap();
+
+        let value = Value::Stream(stream);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"mystream", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"mystream").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let stream = recovered.as_stream().unwrap();
+        assert_eq!(stream.len(), 2);
+        assert_eq!(stream.first_id(), Some(StreamId::new(1000, 0)));
+        assert_eq!(stream.last_id(), StreamId::new(1001, 0));
+
+        // Verify entry contents
+        let entry = stream.first_entry().unwrap();
+        assert_eq!(entry.id, StreamId::new(1000, 0));
+        assert_eq!(entry.fields.len(), 2);
+    }
+
+    #[test]
+    fn test_stream_empty() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let stream = StreamValue::new();
+        let value = Value::Stream(stream);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"empty_stream", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"empty_stream").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let stream = recovered.as_stream().unwrap();
+        assert_eq!(stream.len(), 0);
+        assert!(stream.is_empty());
+    }
+
+    #[test]
+    fn test_stream_with_many_fields() {
+        // Test a stream entry with many field-value pairs
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut stream = StreamValue::new();
+
+        // Add entry with many fields
+        let fields: Vec<(Bytes, Bytes)> = (0..20)
+            .map(|i| (Bytes::from(format!("field{}", i)), Bytes::from(format!("value{}", i))))
+            .collect();
+        stream
+            .add(StreamIdSpec::Explicit(StreamId::new(1000, 0)), fields)
+            .unwrap();
+
+        let value = Value::Stream(stream);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"stream_many_fields", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"stream_many_fields").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let stream = recovered.as_stream().unwrap();
+        assert_eq!(stream.len(), 1);
+
+        let entry = stream.first_entry().unwrap();
+        assert_eq!(entry.fields.len(), 20);
+
+        // Verify some fields
+        assert!(entry.fields.iter().any(|(k, v)| k.as_ref() == b"field0" && v.as_ref() == b"value0"));
+        assert!(entry.fields.iter().any(|(k, v)| k.as_ref() == b"field19" && v.as_ref() == b"value19"));
+    }
+
+    #[test]
+    fn test_large_stream_persistence() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut stream = StreamValue::new();
+        // Stream IDs must be > 0-0 for the first entry
+        for i in 1..=1000 {
+            stream
+                .add(
+                    StreamIdSpec::Explicit(StreamId::new(i, 0)),
+                    vec![(Bytes::from("idx"), Bytes::from(format!("{}", i)))],
+                )
+                .unwrap();
+        }
+
+        let value = Value::Stream(stream);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"large_stream", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"large_stream").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let stream = recovered.as_stream().unwrap();
+        assert_eq!(stream.len(), 1000);
+        assert_eq!(stream.first_id(), Some(StreamId::new(1, 0)));
+        assert_eq!(stream.last_id(), StreamId::new(1000, 0));
+    }
+
+    // ========================================================================
+    // BloomFilter type persistence tests
+    // ========================================================================
+
+    #[test]
+    fn test_bloom_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut bloom = BloomFilterValue::new(1000, 0.01);
+        bloom.add(b"item1");
+        bloom.add(b"item2");
+        bloom.add(b"item3");
+
+        let value = Value::BloomFilter(bloom);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"mybloom", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"mybloom").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let bloom = recovered.as_bloom_filter().unwrap();
+        assert!(bloom.contains(b"item1"));
+        assert!(bloom.contains(b"item2"));
+        assert!(bloom.contains(b"item3"));
+        assert!(!bloom.contains(b"not_present"));
+        assert_eq!(bloom.count(), 3);
+    }
+
+    #[test]
+    fn test_bloom_empty() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        // A "new" bloom filter has one layer but no items
+        let bloom = BloomFilterValue::new(100, 0.01);
+        let value = Value::BloomFilter(bloom);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"empty_bloom", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"empty_bloom").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let bloom = recovered.as_bloom_filter().unwrap();
+        assert_eq!(bloom.count(), 0);
+        assert_eq!(bloom.num_layers(), 1);
+        assert!(!bloom.contains(b"anything"));
+    }
+
+    #[test]
+    fn test_bloom_with_scaling() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        // Create a small capacity bloom that will scale
+        let mut bloom = BloomFilterValue::new(10, 0.01);
+        for i in 0..50 {
+            bloom.add(format!("item{}", i).as_bytes());
+        }
+
+        // Should have created multiple layers
+        assert!(bloom.num_layers() > 1);
+
+        let value = Value::BloomFilter(bloom);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"scaled_bloom", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"scaled_bloom").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let bloom = recovered.as_bloom_filter().unwrap();
+
+        // Verify all items are still found
+        for i in 0..50 {
+            assert!(
+                bloom.contains(format!("item{}", i).as_bytes()),
+                "item{} not found after recovery",
+                i
+            );
+        }
+
+        // Verify layer count is preserved
+        assert!(bloom.num_layers() > 1);
+    }
+
+    #[test]
+    fn test_bloom_with_options() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut bloom = BloomFilterValue::with_options(100, 0.001, 4, true);
+        bloom.add(b"test");
+
+        let value = Value::BloomFilter(bloom);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"options_bloom", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"options_bloom").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let bloom = recovered.as_bloom_filter().unwrap();
+        assert!((bloom.error_rate() - 0.001).abs() < 0.0001);
+        assert_eq!(bloom.expansion(), 4);
+        assert!(bloom.is_non_scaling());
+        assert!(bloom.contains(b"test"));
     }
 }
