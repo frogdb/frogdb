@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::bloom::BloomFilterValue;
+use crate::hyperloglog::HyperLogLogValue;
 
 /// Value types stored in FrogDB.
 #[derive(Debug, Clone)]
@@ -25,6 +26,8 @@ pub enum Value {
     Stream(StreamValue),
     /// Bloom filter value.
     BloomFilter(BloomFilterValue),
+    /// HyperLogLog value.
+    HyperLogLog(HyperLogLogValue),
 }
 
 impl Value {
@@ -63,6 +66,11 @@ impl Value {
         Value::BloomFilter(BloomFilterValue::new(capacity, error_rate))
     }
 
+    /// Create a HyperLogLog value.
+    pub fn hyperloglog() -> Self {
+        Value::HyperLogLog(HyperLogLogValue::new())
+    }
+
     /// Get the key type.
     pub fn key_type(&self) -> KeyType {
         match self {
@@ -73,6 +81,7 @@ impl Value {
             Value::Set(_) => KeyType::Set,
             Value::Stream(_) => KeyType::Stream,
             Value::BloomFilter(_) => KeyType::BloomFilter,
+            Value::HyperLogLog(_) => KeyType::HyperLogLog,
         }
     }
 
@@ -86,6 +95,7 @@ impl Value {
             Value::Set(s) => s.memory_size(),
             Value::Stream(st) => st.memory_size(),
             Value::BloomFilter(bf) => bf.memory_size(),
+            Value::HyperLogLog(hll) => hll.memory_size(),
         }
     }
 
@@ -197,6 +207,22 @@ impl Value {
     pub fn as_bloom_filter_mut(&mut self) -> Option<&mut BloomFilterValue> {
         match self {
             Value::BloomFilter(bf) => Some(bf),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a HyperLogLog value.
+    pub fn as_hyperloglog(&self) -> Option<&HyperLogLogValue> {
+        match self {
+            Value::HyperLogLog(hll) => Some(hll),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a mutable HyperLogLog value.
+    pub fn as_hyperloglog_mut(&mut self) -> Option<&mut HyperLogLogValue> {
+        match self {
+            Value::HyperLogLog(hll) => Some(hll),
             _ => None,
         }
     }
@@ -491,6 +517,8 @@ pub enum KeyType {
     Stream,
     /// Bloom filter type.
     BloomFilter,
+    /// HyperLogLog type.
+    HyperLogLog,
 }
 
 impl KeyType {
@@ -505,6 +533,7 @@ impl KeyType {
             KeyType::SortedSet => "zset",
             KeyType::Stream => "stream",
             KeyType::BloomFilter => "bloom",
+            KeyType::HyperLogLog => "hyperloglog",
         }
     }
 }
