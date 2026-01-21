@@ -1,0 +1,35 @@
+# FrogDB Periodic Durability Configuration
+#
+# Balanced throughput and durability (default mode).
+# Writes are synced to disk every 1 second.
+# At most 1 second of data may be lost on crash.
+#
+# Use case: General purpose, typical applications.
+
+[server]
+bind = "127.0.0.1"
+port = 6379
+num_shards = 4
+
+[persistence]
+enabled = true
+data_dir = "/tmp/frogdb-bench-periodic"
+durability_mode = "periodic"
+sync_interval_ms = 1000  # Sync every 1 second
+write_buffer_size_mb = 64
+compression = "lz4"
+# Moderate batch settings
+batch_size_threshold_kb = 1024
+batch_timeout_ms = 10
+
+[snapshot]
+enabled = false
+
+[logging]
+level = "warn"
+
+[metrics]
+enabled = false
+
+[memory]
+maxmemory = "0"  # No limit for benchmarks

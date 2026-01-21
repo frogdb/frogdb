@@ -1,0 +1,58 @@
+# Mixed Realistic Workload Configuration
+#
+# Simulates a typical web application workload with mostly reads.
+# Typical use case: E-commerce product pages, social media feeds, APIs.
+#
+# Characteristics:
+# - 90% GET operations, 10% SET operations (typical read-write ratio)
+# - Gaussian key distribution (hot products/pages)
+# - Variable value sizes (product info, user data)
+
+name: mixed-realistic
+description: "Typical web app - 90% reads, 10% writes"
+
+# Target performance (from OBSERVABILITY.md)
+targets:
+  get_p99_us: 500      # <500us for GET p99
+  set_p99_us: 500      # <500us for SET p99 (async)
+  throughput_ops: 80000  # Combined throughput target
+
+# memtier_benchmark settings
+memtier:
+  ratio: "9:1"            # 90% reads, 10% writes
+  key_pattern: "G:G"      # Gaussian distribution
+  key_maximum: 10000000   # 10M key space
+  data_size: 128          # 128 bytes average
+  pipeline: 1             # No pipelining (realistic latency)
+  threads: 4
+  clients_per_thread: 25
+  requests_per_client: 10000
+
+# Pipelined variant (for throughput testing)
+memtier_pipelined:
+  ratio: "9:1"
+  key_pattern: "G:G"
+  key_maximum: 10000000
+  data_size: 128
+  pipeline: 16            # 16-deep pipeline
+  threads: 4
+  clients_per_thread: 25
+  requests_per_client: 10000
+
+# redis-benchmark settings
+redis_benchmark:
+  tests: "get,set"        # Alternating get/set
+  datasize: 128
+  clients: 50
+  requests: 100000
+  pipeline: 1
+
+# Expected results (baseline for comparison)
+expected:
+  ops_per_sec: 40000     # Conservative baseline
+  get_p50_us: 100
+  get_p95_us: 200
+  get_p99_us: 500
+  set_p50_us: 100
+  set_p95_us: 200
+  set_p99_us: 500
