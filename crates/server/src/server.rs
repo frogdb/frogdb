@@ -552,6 +552,7 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(commands::EchoCommand);
     registry.register(commands::QuitCommand);
     registry.register(commands::CommandCommand);
+    registry.register(crate::commands::HelloCommand);
 
     // String commands (basic)
     registry.register(commands::GetCommand);

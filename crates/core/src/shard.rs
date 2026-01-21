@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use frogdb_protocol::{ParsedCommand, Response};
+use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::command::CommandContext;
@@ -31,6 +31,8 @@ pub enum ShardMessage {
         conn_id: u64,
         /// Transaction ID for VLL ordering (optional for single-shard operations).
         txid: Option<u64>,
+        /// Protocol version for response encoding.
+        protocol_version: ProtocolVersion,
         response_tx: oneshot::Sender<Response>,
     },
 
@@ -53,6 +55,8 @@ pub enum ShardMessage {
         /// Watched keys: (key, version_at_watch_time).
         watches: Vec<(Bytes, u64)>,
         conn_id: u64,
+        /// Protocol version for response encoding.
+        protocol_version: ProtocolVersion,
         response_tx: oneshot::Sender<TransactionResult>,
     },
 
@@ -144,6 +148,8 @@ pub enum ShardMessage {
         argv: Vec<Bytes>,
         /// Connection ID.
         conn_id: u64,
+        /// Protocol version for response encoding.
+        protocol_version: ProtocolVersion,
         /// Response channel.
         response_tx: oneshot::Sender<Response>,
     },
@@ -158,6 +164,8 @@ pub enum ShardMessage {
         argv: Vec<Bytes>,
         /// Connection ID.
         conn_id: u64,
+        /// Protocol version for response encoding.
+        protocol_version: ProtocolVersion,
         /// Response channel.
         response_tx: oneshot::Sender<Response>,
     },
@@ -927,8 +935,8 @@ impl ShardWorker {
                 // Handle shard messages
                 Some(msg) = self.message_rx.recv() => {
                     match msg {
-                        ShardMessage::Execute { command, conn_id, txid: _, response_tx } => {
-                            let response = self.execute_command(&command, conn_id).await;
+                        ShardMessage::Execute { command, conn_id, txid: _, protocol_version, response_tx } => {
+                            let response = self.execute_command(&command, conn_id, protocol_version).await;
                             let _ = response_tx.send(response);
                         }
                         ShardMessage::ScatterRequest { request_id: _, keys, operation, response_tx } => {
@@ -938,8 +946,8 @@ impl ShardWorker {
                         ShardMessage::GetVersion { response_tx } => {
                             let _ = response_tx.send(self.shard_version);
                         }
-                        ShardMessage::ExecTransaction { commands, watches, conn_id, response_tx } => {
-                            let result = self.execute_transaction(commands, &watches, conn_id).await;
+                        ShardMessage::ExecTransaction { commands, watches, conn_id, protocol_version, response_tx } => {
+                            let result = self.execute_transaction(commands, &watches, conn_id, protocol_version).await;
                             let _ = response_tx.send(result);
                         }
 
@@ -985,12 +993,12 @@ impl ShardWorker {
                         }
 
                         // Scripting message handlers
-                        ShardMessage::EvalScript { script_source, keys, argv, conn_id, response_tx } => {
-                            let response = self.handle_eval_script(&script_source, &keys, &argv, conn_id);
+                        ShardMessage::EvalScript { script_source, keys, argv, conn_id, protocol_version, response_tx } => {
+                            let response = self.handle_eval_script(&script_source, &keys, &argv, conn_id, protocol_version);
                             let _ = response_tx.send(response);
                         }
-                        ShardMessage::EvalScriptSha { script_sha, keys, argv, conn_id, response_tx } => {
-                            let response = self.handle_evalsha(&script_sha, &keys, &argv, conn_id);
+                        ShardMessage::EvalScriptSha { script_sha, keys, argv, conn_id, protocol_version, response_tx } => {
+                            let response = self.handle_evalsha(&script_sha, &keys, &argv, conn_id, protocol_version);
                             let _ = response_tx.send(response);
                         }
                         ShardMessage::ScriptLoad { script_source, response_tx } => {
@@ -1604,7 +1612,12 @@ impl ShardWorker {
     }
 
     /// Execute a command locally.
-    async fn execute_command(&mut self, command: &ParsedCommand, conn_id: u64) -> Response {
+    async fn execute_command(
+        &mut self,
+        command: &ParsedCommand,
+        conn_id: u64,
+        protocol_version: ProtocolVersion,
+    ) -> Response {
         let cmd_name = command.name_uppercase();
         let cmd_name_str = String::from_utf8_lossy(&cmd_name);
 
@@ -1644,6 +1657,7 @@ impl ShardWorker {
             self.shard_id,
             self.num_shards,
             conn_id,
+            protocol_version,
         );
 
         // Execute
@@ -1716,6 +1730,7 @@ impl ShardWorker {
         commands: Vec<ParsedCommand>,
         watches: &[(Bytes, u64)],
         conn_id: u64,
+        protocol_version: ProtocolVersion,
     ) -> TransactionResult {
         // Check WATCH conditions
         if !self.check_watches(watches) {
@@ -1725,7 +1740,7 @@ impl ShardWorker {
         // Execute all commands
         let mut results = Vec::with_capacity(commands.len());
         for command in commands {
-            let response = self.execute_command(&command, conn_id).await;
+            let response = self.execute_command(&command, conn_id, protocol_version).await;
             results.push(response);
         }
 
@@ -1983,6 +1998,7 @@ impl ShardWorker {
         keys: &[Bytes],
         argv: &[Bytes],
         conn_id: u64,
+        protocol_version: ProtocolVersion,
     ) -> Response {
         let executor = match &mut self.script_executor {
             Some(e) => e,
@@ -1998,6 +2014,7 @@ impl ShardWorker {
             self.shard_id,
             self.num_shards,
             conn_id,
+            protocol_version,
         );
 
         match executor.eval(script_source, keys, argv, &mut ctx, &self.registry) {
@@ -2013,6 +2030,7 @@ impl ShardWorker {
         keys: &[Bytes],
         argv: &[Bytes],
         conn_id: u64,
+        protocol_version: ProtocolVersion,
     ) -> Response {
         let executor = match &mut self.script_executor {
             Some(e) => e,
@@ -2028,6 +2046,7 @@ impl ShardWorker {
             self.shard_id,
             self.num_shards,
             conn_id,
+            protocol_version,
         );
 
         match executor.evalsha(script_sha, keys, argv, &mut ctx, &self.registry) {

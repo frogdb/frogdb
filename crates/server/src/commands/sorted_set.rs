@@ -422,7 +422,13 @@ impl Command for ZscoreCommand {
             Some(value) => {
                 let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
                 match zset.get_score(member) {
-                    Some(score) => Ok(Response::bulk(Bytes::from(format_float(score)))),
+                    Some(score) => {
+                        if ctx.protocol_version.is_resp3() {
+                            Ok(Response::Double(score))
+                        } else {
+                            Ok(Response::bulk(Bytes::from(format_float(score))))
+                        }
+                    }
                     None => Ok(Response::null()),
                 }
             }
@@ -464,6 +470,7 @@ impl Command for ZmscoreCommand {
         args: &[Bytes],
     ) -> Result<Response, CommandError> {
         let key = &args[0];
+        let is_resp3 = ctx.protocol_version.is_resp3();
 
         match ctx.store.get(key) {
             Some(value) => {
@@ -471,7 +478,13 @@ impl Command for ZmscoreCommand {
                 let scores: Vec<Response> = args[1..]
                     .iter()
                     .map(|member| match zset.get_score(member) {
-                        Some(score) => Response::bulk(Bytes::from(format_float(score))),
+                        Some(score) => {
+                            if is_resp3 {
+                                Response::Double(score)
+                            } else {
+                                Response::bulk(Bytes::from(format_float(score)))
+                            }
+                        }
                         None => Response::null(),
                     })
                     .collect();
@@ -573,7 +586,11 @@ impl Command for ZincrbyCommand {
         let zset = get_or_create_zset(ctx, key)?;
         let new_score = zset.incr(member, increment);
 
-        Ok(Response::bulk(Bytes::from(format_float(new_score))))
+        if ctx.protocol_version.is_resp3() {
+            Ok(Response::Double(new_score))
+        } else {
+            Ok(Response::bulk(Bytes::from(format_float(new_score))))
+        }
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

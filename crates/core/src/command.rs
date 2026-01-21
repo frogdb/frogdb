@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bitflags::bitflags;
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{ProtocolVersion, Response};
 use tokio::sync::mpsc;
 
 use crate::error::CommandError;
@@ -131,6 +131,9 @@ pub struct CommandContext<'a> {
 
     /// Connection ID (for client-specific operations).
     pub conn_id: u64,
+
+    /// Protocol version for response encoding (RESP2 or RESP3).
+    pub protocol_version: ProtocolVersion,
 }
 
 impl<'a> CommandContext<'a> {
@@ -141,6 +144,7 @@ impl<'a> CommandContext<'a> {
         shard_id: usize,
         num_shards: usize,
         conn_id: u64,
+        protocol_version: ProtocolVersion,
     ) -> Self {
         Self {
             store,
@@ -148,6 +152,7 @@ impl<'a> CommandContext<'a> {
             shard_id,
             num_shards,
             conn_id,
+            protocol_version,
         }
     }
 }

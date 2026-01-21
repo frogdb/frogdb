@@ -798,12 +798,17 @@ impl Command for IncrbyfloatCommand {
             return Err(CommandError::NotFloat);
         }
 
+        let is_resp3 = ctx.protocol_version.is_resp3();
+
         if let Some(existing) = ctx.store.get_mut(key) {
             if let Some(sv) = existing.as_string_mut() {
                 match sv.increment_float(delta) {
                     Ok(new_val) => {
-                        // Return the new value as bulk string
-                        Ok(Response::bulk(Bytes::from(format_float(new_val))))
+                        if is_resp3 {
+                            Ok(Response::Double(new_val))
+                        } else {
+                            Ok(Response::bulk(Bytes::from(format_float(new_val))))
+                        }
                     }
                     Err(IncrementError::NotFloat) => Err(CommandError::NotFloat),
                     Err(IncrementError::NotInteger) => Err(CommandError::NotFloat),
@@ -816,7 +821,11 @@ impl Command for IncrbyfloatCommand {
             // Key doesn't exist, create with value delta
             let sv = StringValue::new(Bytes::from(format_float(delta)));
             ctx.store.set(key.clone(), Value::String(sv));
-            Ok(Response::bulk(Bytes::from(format_float(delta))))
+            if is_resp3 {
+                Ok(Response::Double(delta))
+            } else {
+                Ok(Response::bulk(Bytes::from(format_float(delta))))
+            }
         }
     }
 

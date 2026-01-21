@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use frogdb_core::{
     shard_for_key, AclManager, AuthenticatedUser, ClientHandle, ClientRegistry,
     CommandCategory, CommandFlags, CommandRegistry, GlobPattern,
@@ -17,9 +17,8 @@ use frogdb_core::{
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use futures::{SinkExt, StreamExt};
-use redis_protocol::bytes_utils::Str;
 use redis_protocol::codec::Resp2;
-use redis_protocol::resp2::types::BytesFrame;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Framed;
@@ -148,6 +147,12 @@ pub struct ConnectionState {
     /// Protocol version.
     pub protocol_version: ProtocolVersion,
 
+    /// Whether HELLO has been received on this connection.
+    pub hello_received: bool,
+
+    /// When HELLO was received (for debugging/monitoring).
+    pub hello_at: Option<std::time::Instant>,
+
     /// Client name (from CLIENT SETNAME).
     pub name: Option<Bytes>,
 
@@ -171,6 +176,8 @@ impl ConnectionState {
             addr,
             created_at: std::time::Instant::now(),
             protocol_version: ProtocolVersion::default(),
+            hello_received: false,
+            hello_at: None,
             name: None,
             transaction: TransactionState::default(),
             pubsub: PubSubState::default(),
@@ -311,6 +318,32 @@ impl ConnectionHandler {
         }
     }
 
+    /// Send a response to the client, using appropriate encoding based on protocol version.
+    ///
+    /// For RESP2 connections, uses the standard Framed codec.
+    /// For RESP3 connections, manually encodes and writes to the socket.
+    async fn send_response(&mut self, response: Response) -> std::io::Result<()> {
+        match self.state.protocol_version {
+            ProtocolVersion::Resp2 => {
+                // Use RESP2 encoding via the Framed codec
+                let frame = response.to_resp2_frame();
+                self.framed
+                    .send(frame)
+                    .await
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            }
+            ProtocolVersion::Resp3 => {
+                // Manually encode RESP3 and write to socket
+                let frame = response.to_resp3_frame();
+                let mut buf = BytesMut::new();
+                redis_protocol::resp3::encode::complete::extend_encode(&mut buf, &frame)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                self.framed.get_mut().write_all(&buf).await?;
+                self.framed.get_mut().flush().await
+            }
+        }
+    }
+
     /// Run the connection handling loop.
     pub async fn run(mut self) -> Result<()> {
         debug!(conn_id = self.state.id, "Connection handler started");
@@ -325,9 +358,8 @@ impl ConnectionHandler {
 
                 // Handle pub/sub messages from shards
                 Some(pubsub_msg) = self.pubsub_rx.recv() => {
-                    let response = pubsub_msg.to_response();
-                    let response_frame: BytesFrame = response.into();
-                    if self.framed.send(response_frame).await.is_err() {
+                    let response = pubsub_msg.to_response_with_protocol(self.state.protocol_version);
+                    if self.send_response(response).await.is_err() {
                         debug!(conn_id = self.state.id, "Failed to send pub/sub message");
                         break;
                     }
@@ -339,11 +371,7 @@ impl ConnectionHandler {
                         Some(Ok(frame)) => frame,
                         Some(Err(e)) => {
                             debug!(conn_id = self.state.id, error = %e, "Frame error");
-                            let error_frame = BytesFrame::Error(
-                                Str::from_inner(Bytes::from(format!("ERR {}", e)))
-                                    .expect("error message must be valid UTF-8"),
-                            );
-                            let _ = self.framed.send(error_frame).await;
+                            let _ = self.send_response(Response::error(format!("ERR {}", e))).await;
                             continue;
                         }
                         None => {
@@ -356,11 +384,7 @@ impl ConnectionHandler {
                     let cmd = match ParsedCommand::try_from(frame) {
                         Ok(cmd) => cmd,
                         Err(e) => {
-                            let error_frame = BytesFrame::Error(
-                                Str::from_inner(Bytes::from(format!("ERR {}", e)))
-                                    .expect("error message must be valid UTF-8"),
-                            );
-                            let _ = self.framed.send(error_frame).await;
+                            let _ = self.send_response(Response::error(format!("ERR {}", e))).await;
                             continue;
                         }
                     };
@@ -379,8 +403,7 @@ impl ConnectionHandler {
                     if cmd.name.eq_ignore_ascii_case(b"QUIT") {
                         // Clear transaction state before quitting
                         self.state.transaction = TransactionState::default();
-                        let response_frame: BytesFrame = Response::ok().into();
-                        let _ = self.framed.send(response_frame).await;
+                        let _ = self.send_response(Response::ok()).await;
                         break;
                     }
 
@@ -414,8 +437,7 @@ impl ConnectionHandler {
 
                     // Send response(s)
                     for response in responses {
-                        let response_frame: BytesFrame = response.into();
-                        if self.framed.send(response_frame).await.is_err() {
+                        if self.send_response(response).await.is_err() {
                             debug!(conn_id = self.state.id, "Failed to send response");
                             // Break out of the loop on send failure
                             break;
@@ -548,6 +570,11 @@ impl ConnectionHandler {
         // Handle AUTH command (always allowed, even without authentication)
         if cmd_name_str == "AUTH" {
             return vec![self.handle_auth(&cmd.args).await];
+        }
+
+        // Handle HELLO command (always allowed, even without authentication)
+        if cmd_name_str == "HELLO" {
+            return vec![self.handle_hello(&cmd.args).await];
         }
 
         // Handle ACL command
@@ -714,6 +741,154 @@ impl ConnectionHandler {
                 Response::ok()
             }
             Err(e) => Response::error(e.to_string()),
+        }
+    }
+
+    /// Handle HELLO command for protocol negotiation.
+    ///
+    /// Format: HELLO [protover [AUTH username password] [SETNAME clientname]]
+    async fn handle_hello(&mut self, args: &[Bytes]) -> Response {
+        let mut requested_version: Option<u32> = None;
+        let mut auth_username: Option<&Bytes> = None;
+        let mut auth_password: Option<&Bytes> = None;
+        let mut setname: Option<&Bytes> = None;
+
+        // Parse arguments
+        let mut i = 0;
+        while i < args.len() {
+            if i == 0 {
+                // First argument is protocol version
+                match std::str::from_utf8(&args[i]).ok().and_then(|s| s.parse::<u32>().ok()) {
+                    Some(v) => requested_version = Some(v),
+                    None => return Response::error("ERR Protocol version is not an integer or out of range"),
+                }
+            } else {
+                // Check for AUTH or SETNAME
+                let arg = args[i].to_ascii_uppercase();
+                if arg == b"AUTH".as_slice() {
+                    // AUTH username password
+                    if i + 2 >= args.len() {
+                        return Response::error("ERR Syntax error in HELLO option 'AUTH'");
+                    }
+                    auth_username = Some(&args[i + 1]);
+                    auth_password = Some(&args[i + 2]);
+                    i += 2;
+                } else if arg == b"SETNAME".as_slice() {
+                    // SETNAME clientname
+                    if i + 1 >= args.len() {
+                        return Response::error("ERR Syntax error in HELLO option 'SETNAME'");
+                    }
+                    setname = Some(&args[i + 1]);
+                    i += 1;
+                } else {
+                    return Response::error(format!("ERR Syntax error in HELLO option '{}'", String::from_utf8_lossy(&args[i])));
+                }
+            }
+            i += 1;
+        }
+
+        // Handle protocol version
+        if let Some(version) = requested_version {
+            if version < 2 || version > 3 {
+                // Return NOPROTO error for unsupported versions
+                return Response::error("NOPROTO sorry, this protocol version is not supported");
+            }
+
+            let new_version = if version == 3 {
+                ProtocolVersion::Resp3
+            } else {
+                ProtocolVersion::Resp2
+            };
+
+            // Check for downgrade after HELLO 3
+            if self.state.hello_received && self.state.protocol_version.is_resp3() && !new_version.is_resp3() {
+                return Response::error("ERR protocol downgrade from RESP3 to RESP2 is not allowed");
+            }
+
+            self.state.protocol_version = new_version;
+        }
+
+        // Handle AUTH
+        if let (Some(username), Some(password)) = (auth_username, auth_password) {
+            let client_info = self.client_info_string();
+            let username_str = String::from_utf8_lossy(username);
+            let password_str = String::from_utf8_lossy(password);
+
+            match self.acl_manager.authenticate(&username_str, &password_str, &client_info) {
+                Ok(user) => {
+                    self.state.auth = AuthState::Authenticated(user);
+                }
+                Err(_) => {
+                    return Response::error("WRONGPASS invalid username-password pair or user is disabled");
+                }
+            }
+        }
+
+        // Handle SETNAME
+        if let Some(name) = setname {
+            if name.is_empty() {
+                self.state.name = None;
+                self.client_registry.update_name(self.state.id, None);
+            } else {
+                self.state.name = Some(name.clone());
+                self.client_registry.update_name(self.state.id, Some(name.clone()));
+            }
+        }
+
+        // Mark HELLO as received
+        self.state.hello_received = true;
+        self.state.hello_at = Some(std::time::Instant::now());
+
+        // Build server info response
+        self.build_hello_response()
+    }
+
+    /// Build the HELLO response with server info.
+    fn build_hello_response(&self) -> Response {
+        // Server info fields
+        let server = Response::bulk(Bytes::from_static(b"server"));
+        let server_val = Response::bulk(Bytes::from_static(b"frogdb"));
+
+        let version = Response::bulk(Bytes::from_static(b"version"));
+        let version_val = Response::bulk(Bytes::from(env!("CARGO_PKG_VERSION")));
+
+        let proto = Response::bulk(Bytes::from_static(b"proto"));
+        let proto_val = Response::Integer(if self.state.protocol_version.is_resp3() { 3 } else { 2 });
+
+        let id = Response::bulk(Bytes::from_static(b"id"));
+        let id_val = Response::Integer(self.state.id as i64);
+
+        let mode = Response::bulk(Bytes::from_static(b"mode"));
+        let mode_val = Response::bulk(Bytes::from_static(b"standalone"));
+
+        let role = Response::bulk(Bytes::from_static(b"role"));
+        let role_val = Response::bulk(Bytes::from_static(b"master"));
+
+        let modules = Response::bulk(Bytes::from_static(b"modules"));
+        let modules_val = Response::Array(vec![]);
+
+        if self.state.protocol_version.is_resp3() {
+            // Return as Map for RESP3
+            Response::Map(vec![
+                (server, server_val),
+                (version, version_val),
+                (proto, proto_val),
+                (id, id_val),
+                (mode, mode_val),
+                (role, role_val),
+                (modules, modules_val),
+            ])
+        } else {
+            // Return as flat array for RESP2
+            Response::Array(vec![
+                server, server_val,
+                version, version_val,
+                proto, proto_val,
+                id, id_val,
+                mode, mode_val,
+                role, role_val,
+                modules, modules_val,
+            ])
         }
     }
 
@@ -1024,6 +1199,7 @@ impl ConnectionHandler {
             commands: queue,
             watches,
             conn_id: self.state.id,
+            protocol_version: self.state.protocol_version,
             response_tx,
         };
 
@@ -1418,6 +1594,7 @@ impl ConnectionHandler {
             command: cmd.clone(),
             conn_id: self.state.id,
             txid: None, // Single-shard operations don't need txid
+            protocol_version: self.state.protocol_version,
             response_tx,
         };
 
@@ -1994,6 +2171,7 @@ impl ConnectionHandler {
             keys,
             argv,
             conn_id: self.state.id,
+            protocol_version: self.state.protocol_version,
             response_tx,
         };
 
@@ -2053,6 +2231,7 @@ impl ConnectionHandler {
             keys,
             argv,
             conn_id: self.state.id,
+            protocol_version: self.state.protocol_version,
             response_tx,
         };
 
