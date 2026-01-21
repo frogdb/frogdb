@@ -19,7 +19,9 @@ use bytes::Bytes;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
+use crate::bloom::{BloomFilterValue, BloomLayer};
 use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec, StreamValue, StringValue, Value};
+use bitvec::prelude::*;
 
 /// Size of the serialization header in bytes.
 pub const HEADER_SIZE: usize = 24;
@@ -38,6 +40,8 @@ const TYPE_LIST: u8 = 4;
 const TYPE_SET: u8 = 5;
 /// Marker for stream type.
 const TYPE_STREAM: u8 = 6;
+/// Marker for bloom filter type.
+const TYPE_BLOOM: u8 = 7;
 
 /// Errors that can occur during deserialization.
 #[derive(Debug, Error)]
@@ -150,6 +154,7 @@ fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
         Value::List(list) => serialize_list(list),
         Value::Set(set) => serialize_set(set),
         Value::Stream(stream) => serialize_stream(stream),
+        Value::BloomFilter(bf) => serialize_bloom_filter(bf),
     }
 }
 
@@ -324,6 +329,54 @@ fn serialize_stream(stream: &StreamValue) -> (u8, Vec<u8>) {
     (TYPE_STREAM, payload)
 }
 
+/// Serialize a bloom filter.
+///
+/// Format:
+/// - error_rate (8 bytes f64)
+/// - expansion (4 bytes u32)
+/// - non_scaling (1 byte bool)
+/// - num_layers (4 bytes u32)
+/// - for each layer:
+///   - k (4 bytes u32) - number of hash functions
+///   - count (8 bytes u64) - items in this layer
+///   - capacity (8 bytes u64) - layer capacity
+///   - bits_len (8 bytes u64) - number of bits
+///   - bits_bytes (bits_len/8 rounded up)
+fn serialize_bloom_filter(bf: &BloomFilterValue) -> (u8, Vec<u8>) {
+    // Calculate size
+    let mut payload_size = 8 + 4 + 1 + 4; // error_rate + expansion + non_scaling + num_layers
+    for layer in bf.layers() {
+        payload_size += 4 + 8 + 8 + 8; // k + count + capacity + bits_len
+        payload_size += layer.bits_as_bytes().len();
+    }
+
+    let mut payload = Vec::with_capacity(payload_size);
+
+    // Error rate
+    payload.extend_from_slice(&bf.error_rate().to_le_bytes());
+
+    // Expansion
+    payload.extend_from_slice(&bf.expansion().to_le_bytes());
+
+    // Non-scaling flag
+    payload.push(if bf.is_non_scaling() { 1 } else { 0 });
+
+    // Number of layers
+    payload.extend_from_slice(&(bf.num_layers() as u32).to_le_bytes());
+
+    // Each layer
+    for layer in bf.layers() {
+        payload.extend_from_slice(&layer.k().to_le_bytes());
+        payload.extend_from_slice(&layer.count().to_le_bytes());
+        payload.extend_from_slice(&layer.capacity().to_le_bytes());
+        let bits_bytes = layer.bits_as_bytes();
+        payload.extend_from_slice(&(layer.size_bits() as u64).to_le_bytes());
+        payload.extend_from_slice(bits_bytes);
+    }
+
+    (TYPE_BLOOM, payload)
+}
+
 /// Deserialize a value from its type byte and payload.
 fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, SerializationError> {
     match type_byte {
@@ -361,6 +414,10 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
         TYPE_STREAM => {
             let stream = deserialize_stream(payload)?;
             Ok(Value::Stream(stream))
+        }
+        TYPE_BLOOM => {
+            let bf = deserialize_bloom_filter(payload)?;
+            Ok(Value::BloomFilter(bf))
         }
         _ => Err(SerializationError::UnknownType(type_byte)),
     }
@@ -622,6 +679,86 @@ fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError>
     }
 
     Ok(stream)
+}
+
+/// Deserialize a bloom filter from payload.
+fn deserialize_bloom_filter(payload: &[u8]) -> Result<BloomFilterValue, SerializationError> {
+    if payload.len() < 17 {
+        return Err(SerializationError::InvalidPayload(
+            "Bloom filter payload too short for header".to_string(),
+        ));
+    }
+
+    // Read error_rate (8 bytes)
+    let error_rate = f64::from_le_bytes(payload[0..8].try_into().unwrap());
+
+    // Read expansion (4 bytes)
+    let expansion = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+
+    // Read non_scaling (1 byte)
+    let non_scaling = payload[12] != 0;
+
+    // Read num_layers (4 bytes)
+    let num_layers = u32::from_le_bytes(payload[13..17].try_into().unwrap()) as usize;
+
+    let mut offset = 17;
+    let mut layers = Vec::with_capacity(num_layers);
+
+    for _ in 0..num_layers {
+        // Read k (4 bytes)
+        if offset + 4 > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Bloom filter payload truncated at k".to_string(),
+            ));
+        }
+        let k = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+        offset += 4;
+
+        // Read count (8 bytes)
+        if offset + 8 > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Bloom filter payload truncated at count".to_string(),
+            ));
+        }
+        let count = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+
+        // Read capacity (8 bytes)
+        if offset + 8 > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Bloom filter payload truncated at capacity".to_string(),
+            ));
+        }
+        let capacity = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+
+        // Read bits_len (8 bytes)
+        if offset + 8 > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Bloom filter payload truncated at bits_len".to_string(),
+            ));
+        }
+        let bits_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap()) as usize;
+        offset += 8;
+
+        // Read bits bytes (bits_len / 8 rounded up)
+        let bytes_needed = (bits_len + 7) / 8;
+        if offset + bytes_needed > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Bloom filter payload truncated at bits data".to_string(),
+            ));
+        }
+        let bits_bytes = &payload[offset..offset + bytes_needed];
+        offset += bytes_needed;
+
+        // Reconstruct the bitvec
+        let mut bits: BitVec<u8, Lsb0> = BitVec::from_slice(bits_bytes);
+        bits.truncate(bits_len);
+
+        layers.push(BloomLayer::from_raw(bits, k, count, capacity));
+    }
+
+    Ok(BloomFilterValue::from_raw(layers, error_rate, expansion, non_scaling))
 }
 
 /// Convert an Instant to Unix timestamp in milliseconds.

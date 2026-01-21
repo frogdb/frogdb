@@ -6,6 +6,8 @@ use rand::seq::SliceRandom;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::bloom::BloomFilterValue;
+
 /// Value types stored in FrogDB.
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -21,6 +23,8 @@ pub enum Value {
     Set(SetValue),
     /// Stream value.
     Stream(StreamValue),
+    /// Bloom filter value.
+    BloomFilter(BloomFilterValue),
 }
 
 impl Value {
@@ -54,6 +58,11 @@ impl Value {
         Value::Stream(StreamValue::new())
     }
 
+    /// Create a bloom filter value with default settings.
+    pub fn bloom_filter(capacity: u64, error_rate: f64) -> Self {
+        Value::BloomFilter(BloomFilterValue::new(capacity, error_rate))
+    }
+
     /// Get the key type.
     pub fn key_type(&self) -> KeyType {
         match self {
@@ -63,6 +72,7 @@ impl Value {
             Value::List(_) => KeyType::List,
             Value::Set(_) => KeyType::Set,
             Value::Stream(_) => KeyType::Stream,
+            Value::BloomFilter(_) => KeyType::BloomFilter,
         }
     }
 
@@ -75,6 +85,7 @@ impl Value {
             Value::List(l) => l.memory_size(),
             Value::Set(s) => s.memory_size(),
             Value::Stream(st) => st.memory_size(),
+            Value::BloomFilter(bf) => bf.memory_size(),
         }
     }
 
@@ -170,6 +181,22 @@ impl Value {
     pub fn as_stream_mut(&mut self) -> Option<&mut StreamValue> {
         match self {
             Value::Stream(st) => Some(st),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a bloom filter value.
+    pub fn as_bloom_filter(&self) -> Option<&BloomFilterValue> {
+        match self {
+            Value::BloomFilter(bf) => Some(bf),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a mutable bloom filter value.
+    pub fn as_bloom_filter_mut(&mut self) -> Option<&mut BloomFilterValue> {
+        match self {
+            Value::BloomFilter(bf) => Some(bf),
             _ => None,
         }
     }
@@ -361,6 +388,54 @@ impl StringValue {
             StringData::Raw(b) => std::str::from_utf8(b).ok()?.parse().ok(),
         }
     }
+
+    // ========================================================================
+    // Bitmap operations
+    // ========================================================================
+
+    /// Get a bit value at the given offset.
+    ///
+    /// Uses MSB-first bit ordering (offset 0 = bit 7 of byte 0).
+    /// Returns 0 for offsets beyond the string length.
+    pub fn getbit(&self, offset: u64) -> u8 {
+        let bytes = self.as_bytes();
+        crate::bitmap::getbit(&bytes, offset)
+    }
+
+    /// Set a bit value at the given offset.
+    ///
+    /// Returns the previous bit value.
+    /// Auto-extends the string with zeros if offset is beyond the end.
+    pub fn setbit(&mut self, offset: u64, value: u8) -> u8 {
+        let mut bytes = self.as_bytes().to_vec();
+        let old_bit = crate::bitmap::setbit(&mut bytes, offset, value);
+        self.data = StringData::Raw(Bytes::from(bytes));
+        old_bit
+    }
+
+    /// Count the number of set bits in a range.
+    ///
+    /// If bit_mode is true, start/end are bit positions; otherwise byte positions.
+    pub fn bitcount(&self, start: Option<i64>, end: Option<i64>, bit_mode: bool) -> u64 {
+        let bytes = self.as_bytes();
+        crate::bitmap::bitcount(&bytes, start, end, bit_mode)
+    }
+
+    /// Find the position of the first bit set to the given value.
+    pub fn bitpos(&self, bit: u8, start: Option<i64>, end: Option<i64>, bit_mode: bool) -> Option<i64> {
+        let bytes = self.as_bytes();
+        crate::bitmap::bitpos(&bytes, bit, start, end, bit_mode)
+    }
+
+    /// Get the raw bytes as a mutable vector for bitfield operations.
+    pub fn as_bytes_vec(&self) -> Vec<u8> {
+        self.as_bytes().to_vec()
+    }
+
+    /// Set the raw bytes from a vector (used after bitfield operations).
+    pub fn set_bytes(&mut self, bytes: Vec<u8>) {
+        self.data = StringData::Raw(Bytes::from(bytes));
+    }
 }
 
 /// Error type for increment operations.
@@ -414,6 +489,8 @@ pub enum KeyType {
     SortedSet,
     /// Stream type.
     Stream,
+    /// Bloom filter type.
+    BloomFilter,
 }
 
 impl KeyType {
@@ -427,6 +504,7 @@ impl KeyType {
             KeyType::Hash => "hash",
             KeyType::SortedSet => "zset",
             KeyType::Stream => "stream",
+            KeyType::BloomFilter => "bloom",
         }
     }
 }
