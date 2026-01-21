@@ -444,17 +444,35 @@ impl Command for HgetallCommand {
         match ctx.store.get_with_expiry_check(key) {
             Some(value) => {
                 if let Some(hash) = value.as_hash() {
-                    let mut results = Vec::with_capacity(hash.len() * 2);
-                    for (field, value) in hash.iter() {
-                        results.push(Response::bulk(field.clone()));
-                        results.push(Response::bulk(value.clone()));
+                    if ctx.protocol_version.is_resp3() {
+                        // RESP3: Return as Map
+                        let pairs: Vec<(Response, Response)> = hash
+                            .iter()
+                            .map(|(field, value)| {
+                                (Response::bulk(field.clone()), Response::bulk(value.clone()))
+                            })
+                            .collect();
+                        Ok(Response::Map(pairs))
+                    } else {
+                        // RESP2: Return as flattened Array
+                        let mut results = Vec::with_capacity(hash.len() * 2);
+                        for (field, value) in hash.iter() {
+                            results.push(Response::bulk(field.clone()));
+                            results.push(Response::bulk(value.clone()));
+                        }
+                        Ok(Response::Array(results))
                     }
-                    Ok(Response::Array(results))
                 } else {
                     Err(CommandError::WrongType)
                 }
             }
-            None => Ok(Response::Array(vec![])),
+            None => {
+                if ctx.protocol_version.is_resp3() {
+                    Ok(Response::Map(vec![]))
+                } else {
+                    Ok(Response::Array(vec![]))
+                }
+            }
         }
     }
 
@@ -748,7 +766,13 @@ impl Command for HincrbyfloatCommand {
         let hash = get_or_create_hash(ctx, key)?;
 
         match hash.incr_by_float(field, increment) {
-            Ok(new_val) => Ok(Response::bulk(Bytes::from(format_float(new_val)))),
+            Ok(new_val) => {
+                if ctx.protocol_version.is_resp3() {
+                    Ok(Response::Double(new_val))
+                } else {
+                    Ok(Response::bulk(Bytes::from(format_float(new_val))))
+                }
+            }
             Err(frogdb_core::IncrementError::NotFloat) => Err(CommandError::InvalidArgument {
                 message: "hash value is not a float".to_string(),
             }),

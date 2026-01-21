@@ -206,9 +206,19 @@ impl Command for SmembersCommand {
             Some(set) => {
                 let results: Vec<Response> =
                     set.members().map(|m| Response::bulk(m.clone())).collect();
-                Ok(Response::Array(results))
+                if ctx.protocol_version.is_resp3() {
+                    Ok(Response::Set(results))
+                } else {
+                    Ok(Response::Array(results))
+                }
             }
-            None => Ok(Response::Array(vec![])),
+            None => {
+                if ctx.protocol_version.is_resp3() {
+                    Ok(Response::Set(vec![]))
+                } else {
+                    Ok(Response::Array(vec![]))
+                }
+            }
         }
     }
 
@@ -409,7 +419,11 @@ impl Command for SunionCommand {
             .members()
             .map(|m| Response::bulk(m.clone()))
             .collect();
-        Ok(Response::Array(members))
+        if ctx.protocol_version.is_resp3() {
+            Ok(Response::Set(members))
+        } else {
+            Ok(Response::Array(members))
+        }
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -441,10 +455,16 @@ impl Command for SinterCommand {
         ctx: &mut CommandContext,
         args: &[Bytes],
     ) -> Result<Response, CommandError> {
+        let empty_result = if ctx.protocol_version.is_resp3() {
+            Response::Set(vec![])
+        } else {
+            Response::Array(vec![])
+        };
+
         // Get the first set (or empty)
         let first = match get_set_inline(ctx, &args[0])? {
             Some(s) => s.clone(),
-            None => return Ok(Response::Array(vec![])), // Empty set intersects to empty
+            None => return Ok(empty_result), // Empty set intersects to empty
         };
 
         // Collect other sets
@@ -452,7 +472,7 @@ impl Command for SinterCommand {
         for key in &args[1..] {
             match get_set_inline(ctx, key)? {
                 Some(s) => others.push(s),
-                None => return Ok(Response::Array(vec![])), // Missing key = empty intersection
+                None => return Ok(empty_result.clone()), // Missing key = empty intersection
             }
         }
 
@@ -461,7 +481,11 @@ impl Command for SinterCommand {
             .members()
             .map(|m| Response::bulk(m.clone()))
             .collect();
-        Ok(Response::Array(members))
+        if ctx.protocol_version.is_resp3() {
+            Ok(Response::Set(members))
+        } else {
+            Ok(Response::Array(members))
+        }
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -493,10 +517,16 @@ impl Command for SdiffCommand {
         ctx: &mut CommandContext,
         args: &[Bytes],
     ) -> Result<Response, CommandError> {
+        let empty_result = if ctx.protocol_version.is_resp3() {
+            Response::Set(vec![])
+        } else {
+            Response::Array(vec![])
+        };
+
         // Get the first set (or empty)
         let first = match get_set_inline(ctx, &args[0])? {
             Some(s) => s.clone(),
-            None => return Ok(Response::Array(vec![])),
+            None => return Ok(empty_result),
         };
 
         // Collect other sets
@@ -512,7 +542,11 @@ impl Command for SdiffCommand {
             .members()
             .map(|m| Response::bulk(m.clone()))
             .collect();
-        Ok(Response::Array(members))
+        if ctx.protocol_version.is_resp3() {
+            Ok(Response::Set(members))
+        } else {
+            Ok(Response::Array(members))
+        }
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

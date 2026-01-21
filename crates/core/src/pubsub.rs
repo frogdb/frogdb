@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{ProtocolVersion, Response};
 use tokio::sync::mpsc;
 
 /// Connection ID type.
@@ -78,73 +78,87 @@ pub enum PubSubMessage {
 }
 
 impl PubSubMessage {
-    /// Convert to RESP2 push format.
+    /// Convert to RESP2 array format.
     pub fn to_response(&self) -> Response {
-        match self {
+        self.to_response_with_protocol(ProtocolVersion::Resp2)
+    }
+
+    /// Convert to response with protocol-specific format.
+    ///
+    /// In RESP3, pub/sub messages use the Push type.
+    /// In RESP2, they use regular Array type.
+    pub fn to_response_with_protocol(&self, protocol: ProtocolVersion) -> Response {
+        let items = match self {
             PubSubMessage::Message { channel, payload } => {
-                Response::Array(vec![
+                vec![
                     Response::bulk(Bytes::from_static(b"message")),
                     Response::bulk(channel.clone()),
                     Response::bulk(payload.clone()),
-                ])
+                ]
             }
             PubSubMessage::PatternMessage { pattern, channel, payload } => {
-                Response::Array(vec![
+                vec![
                     Response::bulk(Bytes::from_static(b"pmessage")),
                     Response::bulk(pattern.clone()),
                     Response::bulk(channel.clone()),
                     Response::bulk(payload.clone()),
-                ])
+                ]
             }
             PubSubMessage::ShardedMessage { channel, payload } => {
-                Response::Array(vec![
+                vec![
                     Response::bulk(Bytes::from_static(b"smessage")),
                     Response::bulk(channel.clone()),
                     Response::bulk(payload.clone()),
-                ])
+                ]
             }
             PubSubMessage::Subscribe { channel, count } => {
-                Response::Array(vec![
+                vec![
                     Response::bulk(Bytes::from_static(b"subscribe")),
                     Response::bulk(channel.clone()),
                     Response::Integer(*count as i64),
-                ])
+                ]
             }
             PubSubMessage::Unsubscribe { channel, count } => {
-                Response::Array(vec![
+                vec![
                     Response::bulk(Bytes::from_static(b"unsubscribe")),
                     Response::bulk(channel.clone()),
                     Response::Integer(*count as i64),
-                ])
+                ]
             }
             PubSubMessage::PSubscribe { pattern, count } => {
-                Response::Array(vec![
+                vec![
                     Response::bulk(Bytes::from_static(b"psubscribe")),
                     Response::bulk(pattern.clone()),
                     Response::Integer(*count as i64),
-                ])
+                ]
             }
             PubSubMessage::PUnsubscribe { pattern, count } => {
-                Response::Array(vec![
+                vec![
                     Response::bulk(Bytes::from_static(b"punsubscribe")),
                     Response::bulk(pattern.clone()),
                     Response::Integer(*count as i64),
-                ])
+                ]
             }
             PubSubMessage::SSubscribe { channel, count } => {
-                Response::Array(vec![
+                vec![
                     Response::bulk(Bytes::from_static(b"ssubscribe")),
                     Response::bulk(channel.clone()),
                     Response::Integer(*count as i64),
-                ])
+                ]
             }
             PubSubMessage::SUnsubscribe { channel, count } => {
-                Response::Array(vec![
+                vec![
                     Response::bulk(Bytes::from_static(b"sunsubscribe")),
                     Response::bulk(channel.clone()),
                     Response::Integer(*count as i64),
-                ])
+                ]
             }
+        };
+
+        if protocol.is_resp3() {
+            Response::Push(items)
+        } else {
+            Response::Array(items)
         }
     }
 }

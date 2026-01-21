@@ -2,7 +2,11 @@
 
 use bytes::Bytes;
 use bytes_utils::Str;
-use redis_protocol::resp2::types::BytesFrame;
+use redis_protocol::resp2::types::BytesFrame as Resp2BytesFrame;
+use redis_protocol::resp3::types::BytesFrame as Resp3BytesFrame;
+
+/// Re-export RESP2 frame type for backwards compatibility.
+pub type BytesFrame = Resp2BytesFrame;
 
 /// Direction for list operations (BLPOP, BRPOP, BLMOVE, etc.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,39 +168,181 @@ impl Response {
     pub fn queued() -> Self {
         Response::Simple(Bytes::from_static(b"QUEUED"))
     }
-}
 
-impl From<Response> for BytesFrame {
-    fn from(response: Response) -> Self {
-        match response {
-            Response::Simple(s) => BytesFrame::SimpleString(s),
+    /// Convert to a RESP2 frame.
+    ///
+    /// RESP3-only types are converted to their RESP2 equivalents:
+    /// - Map → flattened Array of alternating keys/values
+    /// - Set → Array
+    /// - Double → BulkString (formatted as string)
+    /// - Boolean → Integer (1 or 0)
+    /// - Null → Null bulk string
+    /// - Push → Array
+    pub fn to_resp2_frame(self) -> Resp2BytesFrame {
+        match self {
+            Response::Simple(s) => Resp2BytesFrame::SimpleString(s),
             Response::Error(e) => {
-                BytesFrame::Error(Str::from_inner(e).expect("error messages must be valid UTF-8"))
+                Resp2BytesFrame::Error(Str::from_inner(e).expect("error messages must be valid UTF-8"))
             }
-            Response::Integer(i) => BytesFrame::Integer(i),
-            Response::Bulk(Some(b)) => BytesFrame::BulkString(b),
-            Response::Bulk(None) => BytesFrame::Null,
+            Response::Integer(i) => Resp2BytesFrame::Integer(i),
+            Response::Bulk(Some(b)) => Resp2BytesFrame::BulkString(b),
+            Response::Bulk(None) => Resp2BytesFrame::Null,
             Response::Array(items) => {
-                BytesFrame::Array(items.into_iter().map(Into::into).collect())
+                Resp2BytesFrame::Array(items.into_iter().map(|r| r.to_resp2_frame()).collect())
             }
-            // RESP3 types - implement in Phase 12
-            Response::Null
-            | Response::Double(_)
-            | Response::Boolean(_)
-            | Response::BlobError(_)
-            | Response::VerbatimString { .. }
-            | Response::Map(_)
-            | Response::Set(_)
-            | Response::Attribute(_)
-            | Response::Push(_)
-            | Response::BigNumber(_) => {
-                unimplemented!("RESP3 encoding - implement in Phase 12")
+            // RESP3 types with RESP2 fallbacks
+            Response::Null => Resp2BytesFrame::Null,
+            Response::Double(d) => Resp2BytesFrame::BulkString(Bytes::from(format_float(d))),
+            Response::Boolean(b) => Resp2BytesFrame::Integer(if b { 1 } else { 0 }),
+            Response::BlobError(e) => {
+                // Convert blob error to simple error (truncate if needed)
+                let msg = String::from_utf8_lossy(&e);
+                Resp2BytesFrame::Error(Str::from_inner(Bytes::from(msg.into_owned())).expect("error must be valid UTF-8"))
+            }
+            Response::VerbatimString { data, .. } => {
+                // Strip format prefix, return as bulk string
+                Resp2BytesFrame::BulkString(data)
+            }
+            Response::Map(pairs) => {
+                // Flatten map to array: [k1, v1, k2, v2, ...]
+                let mut items = Vec::with_capacity(pairs.len() * 2);
+                for (k, v) in pairs {
+                    items.push(k.to_resp2_frame());
+                    items.push(v.to_resp2_frame());
+                }
+                Resp2BytesFrame::Array(items)
+            }
+            Response::Set(items) => {
+                // Convert set to array
+                Resp2BytesFrame::Array(items.into_iter().map(|r| r.to_resp2_frame()).collect())
+            }
+            Response::Attribute(inner) => {
+                // Just return the inner value (attributes are metadata)
+                inner.to_resp2_frame()
+            }
+            Response::Push(items) => {
+                // Convert push to array
+                Resp2BytesFrame::Array(items.into_iter().map(|r| r.to_resp2_frame()).collect())
+            }
+            Response::BigNumber(n) => {
+                // Convert big number to bulk string
+                Resp2BytesFrame::BulkString(n)
             }
             // Internal types - should never reach serialization
             Response::BlockingNeeded { .. } => {
                 panic!("BlockingNeeded response should be intercepted by connection handler")
             }
         }
+    }
+
+    /// Convert to a RESP3 frame.
+    ///
+    /// All types are encoded with their native RESP3 representations.
+    pub fn to_resp3_frame(self) -> Resp3BytesFrame {
+        match self {
+            Response::Simple(s) => Resp3BytesFrame::SimpleString {
+                data: s,
+                attributes: None,
+            },
+            Response::Error(e) => Resp3BytesFrame::SimpleError {
+                data: Str::from_inner(e).expect("error messages must be valid UTF-8"),
+                attributes: None,
+            },
+            Response::Integer(i) => Resp3BytesFrame::Number {
+                data: i,
+                attributes: None,
+            },
+            Response::Bulk(Some(b)) => Resp3BytesFrame::BlobString {
+                data: b,
+                attributes: None,
+            },
+            Response::Bulk(None) => Resp3BytesFrame::Null,
+            Response::Array(items) => Resp3BytesFrame::Array {
+                data: items.into_iter().map(|r| r.to_resp3_frame()).collect(),
+                attributes: None,
+            },
+            Response::Null => Resp3BytesFrame::Null,
+            Response::Double(d) => Resp3BytesFrame::Double {
+                data: d,
+                attributes: None,
+            },
+            Response::Boolean(b) => Resp3BytesFrame::Boolean {
+                data: b,
+                attributes: None,
+            },
+            Response::BlobError(e) => Resp3BytesFrame::BlobError {
+                data: e,
+                attributes: None,
+            },
+            Response::VerbatimString { format: _, data } => {
+                // VerbatimString format is limited to txt/mkd in redis-protocol
+                // We default to text format
+                Resp3BytesFrame::VerbatimString {
+                    data,
+                    format: redis_protocol::resp3::types::VerbatimStringFormat::Text,
+                    attributes: None,
+                }
+            }
+            Response::Map(pairs) => Resp3BytesFrame::Map {
+                data: pairs
+                    .into_iter()
+                    .map(|(k, v)| (k.to_resp3_frame(), v.to_resp3_frame()))
+                    .collect(),
+                attributes: None,
+            },
+            Response::Set(items) => Resp3BytesFrame::Set {
+                data: items.into_iter().map(|r| r.to_resp3_frame()).collect(),
+                attributes: None,
+            },
+            Response::Attribute(inner) => {
+                // Attributes in RESP3 are handled at the frame level
+                // For now, just return the inner value
+                inner.to_resp3_frame()
+            }
+            Response::Push(items) => Resp3BytesFrame::Push {
+                data: items.into_iter().map(|r| r.to_resp3_frame()).collect(),
+                attributes: None,
+            },
+            Response::BigNumber(n) => Resp3BytesFrame::BigNumber {
+                data: n,
+                attributes: None,
+            },
+            // Internal types - should never reach serialization
+            Response::BlockingNeeded { .. } => {
+                panic!("BlockingNeeded response should be intercepted by connection handler")
+            }
+        }
+    }
+}
+
+/// Format a float for Redis compatibility.
+fn format_float(f: f64) -> String {
+    if f == f64::INFINITY {
+        return "inf".to_string();
+    }
+    if f == f64::NEG_INFINITY {
+        return "-inf".to_string();
+    }
+    if f.is_nan() {
+        return "nan".to_string();
+    }
+    if f == 0.0 {
+        return "0".to_string();
+    }
+
+    if f.fract() == 0.0 && f.abs() < 1e15 {
+        return format!("{:.0}", f);
+    }
+
+    let s = format!("{:.17}", f);
+    let s = s.trim_end_matches('0');
+    let s = s.trim_end_matches('.');
+    s.to_string()
+}
+
+impl From<Response> for BytesFrame {
+    fn from(response: Response) -> Self {
+        response.to_resp2_frame()
     }
 }
 
@@ -222,5 +368,283 @@ mod tests {
         let resp = Response::null();
         let frame: BytesFrame = resp.into();
         assert!(matches!(frame, BytesFrame::Null));
+    }
+
+    // === RESP3 Encoding Tests ===
+
+    #[test]
+    fn test_map_to_resp3_frame() {
+        let resp = Response::Map(vec![
+            (
+                Response::Bulk(Some(Bytes::from("field1"))),
+                Response::Bulk(Some(Bytes::from("value1"))),
+            ),
+            (
+                Response::Bulk(Some(Bytes::from("field2"))),
+                Response::Integer(42),
+            ),
+        ]);
+        let frame = resp.to_resp3_frame();
+        match frame {
+            Resp3BytesFrame::Map { data, attributes } => {
+                assert_eq!(data.len(), 2);
+                assert!(attributes.is_none());
+            }
+            _ => panic!("Expected Map frame, got {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_map_to_resp2_flattens() {
+        let resp = Response::Map(vec![
+            (
+                Response::Bulk(Some(Bytes::from("field1"))),
+                Response::Bulk(Some(Bytes::from("value1"))),
+            ),
+            (
+                Response::Bulk(Some(Bytes::from("field2"))),
+                Response::Integer(42),
+            ),
+        ]);
+        let frame = resp.to_resp2_frame();
+        match frame {
+            Resp2BytesFrame::Array(items) => {
+                // Map with 2 pairs should flatten to 4 elements
+                assert_eq!(items.len(), 4);
+                // Check first key
+                assert!(matches!(&items[0], Resp2BytesFrame::BulkString(b) if b.as_ref() == b"field1"));
+                // Check first value
+                assert!(matches!(&items[1], Resp2BytesFrame::BulkString(b) if b.as_ref() == b"value1"));
+                // Check second key
+                assert!(matches!(&items[2], Resp2BytesFrame::BulkString(b) if b.as_ref() == b"field2"));
+                // Check second value (integer)
+                assert!(matches!(&items[3], Resp2BytesFrame::Integer(42)));
+            }
+            _ => panic!("Expected Array frame, got {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_set_to_resp3_frame() {
+        let resp = Response::Set(vec![
+            Response::Bulk(Some(Bytes::from("member1"))),
+            Response::Bulk(Some(Bytes::from("member2"))),
+            Response::Bulk(Some(Bytes::from("member3"))),
+        ]);
+        let frame = resp.to_resp3_frame();
+        match frame {
+            Resp3BytesFrame::Set { data, attributes } => {
+                assert_eq!(data.len(), 3);
+                assert!(attributes.is_none());
+            }
+            _ => panic!("Expected Set frame, got {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_set_to_resp2_array() {
+        let resp = Response::Set(vec![
+            Response::Bulk(Some(Bytes::from("member1"))),
+            Response::Bulk(Some(Bytes::from("member2"))),
+        ]);
+        let frame = resp.to_resp2_frame();
+        match frame {
+            Resp2BytesFrame::Array(items) => {
+                assert_eq!(items.len(), 2);
+            }
+            _ => panic!("Expected Array frame, got {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_double_to_resp3_frame() {
+        let resp = Response::Double(3.14159);
+        let frame = resp.to_resp3_frame();
+        match frame {
+            Resp3BytesFrame::Double { data, attributes } => {
+                assert!((data - 3.14159).abs() < f64::EPSILON);
+                assert!(attributes.is_none());
+            }
+            _ => panic!("Expected Double frame, got {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_double_to_resp2_string() {
+        let resp = Response::Double(3.14159);
+        let frame = resp.to_resp2_frame();
+        match frame {
+            Resp2BytesFrame::BulkString(data) => {
+                let s = String::from_utf8(data.to_vec()).unwrap();
+                // Should be a valid float string
+                let parsed: f64 = s.parse().unwrap();
+                assert!((parsed - 3.14159).abs() < 1e-10);
+            }
+            _ => panic!("Expected BulkString frame, got {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_double_special_values() {
+        // Test infinity
+        let resp = Response::Double(f64::INFINITY);
+        let frame = resp.to_resp2_frame();
+        match frame {
+            Resp2BytesFrame::BulkString(data) => {
+                assert_eq!(data.as_ref(), b"inf");
+            }
+            _ => panic!("Expected BulkString frame"),
+        }
+
+        // Test negative infinity
+        let resp = Response::Double(f64::NEG_INFINITY);
+        let frame = resp.to_resp2_frame();
+        match frame {
+            Resp2BytesFrame::BulkString(data) => {
+                assert_eq!(data.as_ref(), b"-inf");
+            }
+            _ => panic!("Expected BulkString frame"),
+        }
+
+        // Test NaN
+        let resp = Response::Double(f64::NAN);
+        let frame = resp.to_resp2_frame();
+        match frame {
+            Resp2BytesFrame::BulkString(data) => {
+                assert_eq!(data.as_ref(), b"nan");
+            }
+            _ => panic!("Expected BulkString frame"),
+        }
+    }
+
+    #[test]
+    fn test_push_to_resp3_frame() {
+        let resp = Response::Push(vec![
+            Response::Bulk(Some(Bytes::from("message"))),
+            Response::Bulk(Some(Bytes::from("channel"))),
+            Response::Bulk(Some(Bytes::from("payload"))),
+        ]);
+        let frame = resp.to_resp3_frame();
+        match frame {
+            Resp3BytesFrame::Push { data, attributes } => {
+                assert_eq!(data.len(), 3);
+                assert!(attributes.is_none());
+            }
+            _ => panic!("Expected Push frame, got {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_push_to_resp2_array() {
+        let resp = Response::Push(vec![
+            Response::Bulk(Some(Bytes::from("message"))),
+            Response::Bulk(Some(Bytes::from("channel"))),
+        ]);
+        let frame = resp.to_resp2_frame();
+        match frame {
+            Resp2BytesFrame::Array(items) => {
+                assert_eq!(items.len(), 2);
+            }
+            _ => panic!("Expected Array frame, got {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_boolean_to_resp3_frame() {
+        // Test true
+        let resp = Response::Boolean(true);
+        let frame = resp.to_resp3_frame();
+        match frame {
+            Resp3BytesFrame::Boolean { data, attributes } => {
+                assert!(data);
+                assert!(attributes.is_none());
+            }
+            _ => panic!("Expected Boolean frame, got {:?}", frame),
+        }
+
+        // Test false
+        let resp = Response::Boolean(false);
+        let frame = resp.to_resp3_frame();
+        match frame {
+            Resp3BytesFrame::Boolean { data, attributes } => {
+                assert!(!data);
+                assert!(attributes.is_none());
+            }
+            _ => panic!("Expected Boolean frame, got {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_boolean_to_resp2_integer() {
+        // True becomes 1
+        let resp = Response::Boolean(true);
+        let frame = resp.to_resp2_frame();
+        assert!(matches!(frame, Resp2BytesFrame::Integer(1)));
+
+        // False becomes 0
+        let resp = Response::Boolean(false);
+        let frame = resp.to_resp2_frame();
+        assert!(matches!(frame, Resp2BytesFrame::Integer(0)));
+    }
+
+    #[test]
+    fn test_null_to_resp3_frame() {
+        let resp = Response::Null;
+        let frame = resp.to_resp3_frame();
+        assert!(matches!(frame, Resp3BytesFrame::Null));
+    }
+
+    #[test]
+    fn test_null_to_resp2_frame() {
+        let resp = Response::Null;
+        let frame = resp.to_resp2_frame();
+        assert!(matches!(frame, Resp2BytesFrame::Null));
+    }
+
+    #[test]
+    fn test_blob_error_to_resp3_frame() {
+        let resp = Response::BlobError(Bytes::from("ERR some long error message"));
+        let frame = resp.to_resp3_frame();
+        match frame {
+            Resp3BytesFrame::BlobError { data, attributes } => {
+                assert_eq!(data.as_ref(), b"ERR some long error message");
+                assert!(attributes.is_none());
+            }
+            _ => panic!("Expected BlobError frame, got {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_big_number_to_resp3_frame() {
+        let resp = Response::BigNumber(Bytes::from("3492890328409238509324850943850943825024385"));
+        let frame = resp.to_resp3_frame();
+        match frame {
+            Resp3BytesFrame::BigNumber { data, attributes } => {
+                assert_eq!(
+                    data.as_ref(),
+                    b"3492890328409238509324850943850943825024385"
+                );
+                assert!(attributes.is_none());
+            }
+            _ => panic!("Expected BigNumber frame, got {:?}", frame),
+        }
+    }
+
+    #[test]
+    fn test_verbatim_string_to_resp3_frame() {
+        let resp = Response::VerbatimString {
+            format: *b"txt",
+            data: Bytes::from("Some text content"),
+        };
+        let frame = resp.to_resp3_frame();
+        match frame {
+            Resp3BytesFrame::VerbatimString {
+                data, attributes, ..
+            } => {
+                assert_eq!(data.as_ref(), b"Some text content");
+                assert!(attributes.is_none());
+            }
+            _ => panic!("Expected VerbatimString frame, got {:?}", frame),
+        }
     }
 }

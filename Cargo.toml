@@ -23,7 +23,7 @@ futures = "0.3"
 # Protocol
 bytes = "1"
 bytes-utils = "0.1"
-redis-protocol = { version = "5", features = ["bytes", "codec"] }
+redis-protocol = { version = "5", features = ["bytes", "codec", "resp3"] }
 
 # Data structures
 griddle = "0.5"

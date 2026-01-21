@@ -11,5 +11,8 @@ mod version;
 
 pub use command::ParsedCommand;
 pub use error::ProtocolError;
-pub use response::{BlockingOp, Direction, Response};
+pub use response::{BlockingOp, BytesFrame, Direction, Response};
 pub use version::ProtocolVersion;
+
+// Re-export RESP3 frame type for protocol-aware sending
+pub use redis_protocol::resp3::types::BytesFrame as Resp3BytesFrame;
