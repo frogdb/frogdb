@@ -197,6 +197,9 @@ impl Server {
         // Build eviction config from memory settings
         let eviction_config = build_eviction_config(&config.memory);
 
+        // Create shared slowlog ID counter for global ordering across shards
+        let slowlog_next_id = Arc::new(AtomicU64::new(0));
+
         // Convert recovered stores to an iterator if available
         let mut recovered_iter = recovered_stores.map(|v| v.into_iter());
 
@@ -225,6 +228,7 @@ impl Server {
                     snapshot_coordinator.clone(),
                     eviction_config.clone(),
                     metrics_recorder.clone(),
+                    slowlog_next_id.clone(),
                 )
             } else {
                 ShardWorker::with_eviction(
@@ -236,6 +240,7 @@ impl Server {
                     registry.clone(),
                     eviction_config.clone(),
                     metrics_recorder.clone(),
+                    slowlog_next_id.clone(),
                 )
             };
 
@@ -742,6 +747,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // Config commands (handled specially in connection.rs, but registered for introspection)
     registry.register(crate::commands::config::ConfigCommand);
+
+    // Slowlog commands (handled specially in connection.rs, but registered for introspection)
+    registry.register(crate::commands::slowlog::SlowlogCommand);
 
     // Stream commands
     registry.register(crate::commands::stream::XaddCommand);

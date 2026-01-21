@@ -13,8 +13,8 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 10.1 (Metrics) ✓, 10.2 (Configuration) ✓, 10.5 (ACL) ✓, 10.6 (Memory Management) ✓
-**Next Milestone**: Phase 10.4 (SLOWLOG), Phase 10.7 (Testing)
+**Phase**: 10.1 (Metrics) ✓, 10.2 (Configuration) ✓, 10.4 (SLOWLOG) ✓, 10.5 (ACL) ✓, 10.6 (Memory Management) ✓
+**Next Milestone**: Phase 10.7 (Testing)
 
 ---
 
@@ -790,12 +790,13 @@ The following optimizations are deferred to a future phase:
 - [x] `CLIENT PAUSE`, `CLIENT UNPAUSE`
 - [x] `CLIENT INFO`
 
-### 10.4 SLOWLOG
+### 10.4 SLOWLOG ✓
 
-- [ ] Slow query threshold config
-- [ ] `SLOWLOG GET [count]`
-- [ ] `SLOWLOG LEN`
-- [ ] `SLOWLOG RESET`
+- [x] Slow query threshold config
+- [x] `SLOWLOG GET [count]`
+- [x] `SLOWLOG LEN`
+- [x] `SLOWLOG RESET`
+- [x] `SLOWLOG HELP`
 
 ### 10.5 ACL ✓
 

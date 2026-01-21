@@ -1,5 +1,6 @@
 //! Shard infrastructure for shared-nothing concurrency.
 
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,6 +19,7 @@ use crate::pubsub::{
 };
 use crate::registry::CommandRegistry;
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
+use crate::slowlog::{SlowLog, SlowLogEntry};
 use crate::store::{HashMapStore, Store};
 
 /// Messages sent to shard workers.
@@ -210,6 +212,42 @@ pub enum ShardMessage {
     UnregisterWait {
         /// Connection ID to unregister.
         conn_id: u64,
+    },
+
+    // =========================================================================
+    // Slowlog messages
+    // =========================================================================
+
+    /// Get slow query log entries from this shard.
+    SlowlogGet {
+        /// Maximum number of entries to return.
+        count: usize,
+        /// Response channel.
+        response_tx: oneshot::Sender<Vec<SlowLogEntry>>,
+    },
+
+    /// Get the number of slowlog entries in this shard.
+    SlowlogLen {
+        /// Response channel.
+        response_tx: oneshot::Sender<usize>,
+    },
+
+    /// Reset (clear) the slowlog for this shard.
+    SlowlogReset {
+        /// Response channel.
+        response_tx: oneshot::Sender<()>,
+    },
+
+    /// Add a slow query entry to this shard's log.
+    SlowlogAdd {
+        /// Duration in microseconds.
+        duration_us: u64,
+        /// Command name and arguments.
+        command: Vec<Bytes>,
+        /// Client address.
+        client_addr: String,
+        /// Client name.
+        client_name: String,
     },
 
     /// Shutdown signal.
@@ -692,6 +730,9 @@ pub struct ShardWorker {
 
     /// Wait queue for blocking commands.
     wait_queue: ShardWaitQueue,
+
+    /// Slow query log for this shard.
+    slowlog: SlowLog,
 }
 
 impl ShardWorker {
@@ -713,10 +754,12 @@ impl ShardWorker {
             registry,
             EvictionConfig::default(),
             Arc::new(crate::noop::NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
         )
     }
 
     /// Create a new shard worker without persistence but with eviction config.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_eviction(
         shard_id: usize,
         num_shards: usize,
@@ -726,6 +769,7 @@ impl ShardWorker {
         registry: Arc<CommandRegistry>,
         eviction_config: EvictionConfig,
         metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+        slowlog_next_id: Arc<AtomicU64>,
     ) -> Self {
         // Try to create script executor
         let script_executor = ScriptExecutor::new(ScriptingConfig::default())
@@ -761,6 +805,11 @@ impl ShardWorker {
             metrics_recorder,
             peak_memory: 0,
             wait_queue: ShardWaitQueue::new(),
+            slowlog: SlowLog::new(
+                crate::slowlog::DEFAULT_SLOWLOG_MAX_LEN,
+                crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
+                slowlog_next_id,
+            ),
         }
     }
 
@@ -779,6 +828,7 @@ impl ShardWorker {
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
         eviction_config: EvictionConfig,
         metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+        slowlog_next_id: Arc<AtomicU64>,
     ) -> Self {
         let wal_writer = RocksWalWriter::new(
             rocks_store.clone(),
@@ -821,6 +871,11 @@ impl ShardWorker {
             metrics_recorder,
             peak_memory: 0,
             wait_queue: ShardWaitQueue::new(),
+            slowlog: SlowLog::new(
+                crate::slowlog::DEFAULT_SLOWLOG_MAX_LEN,
+                crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
+                slowlog_next_id,
+            ),
         }
     }
 
@@ -961,6 +1016,22 @@ impl ShardWorker {
                         }
                         ShardMessage::UnregisterWait { conn_id } => {
                             self.handle_unregister_wait(conn_id);
+                        }
+
+                        // Slowlog handlers
+                        ShardMessage::SlowlogGet { count, response_tx } => {
+                            let entries = self.slowlog.get(count);
+                            let _ = response_tx.send(entries);
+                        }
+                        ShardMessage::SlowlogLen { response_tx } => {
+                            let _ = response_tx.send(self.slowlog.len());
+                        }
+                        ShardMessage::SlowlogReset { response_tx } => {
+                            self.slowlog.reset();
+                            let _ = response_tx.send(());
+                        }
+                        ShardMessage::SlowlogAdd { duration_us, command, client_addr, client_name } => {
+                            self.slowlog.add(duration_us, &command, client_addr, client_name);
                         }
 
                         ShardMessage::Shutdown => {

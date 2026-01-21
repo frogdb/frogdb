@@ -387,15 +387,19 @@ impl ConnectionHandler {
                     // Wait if server is paused (for non-exempt commands)
                     self.wait_if_paused(&cmd).await;
 
-                    // Start timing for metrics
+                    // Start timing for both metrics and slowlog
+                    let start_time = std::time::Instant::now();
                     let cmd_name_for_metrics = String::from_utf8_lossy(&cmd.name).to_uppercase();
                     let timer = frogdb_metrics::CommandTimer::new(
-                        cmd_name_for_metrics,
+                        cmd_name_for_metrics.clone(),
                         self.metrics_recorder.clone(),
                     );
 
                     // Route and execute (with transaction and pub/sub handling)
                     let responses = self.route_and_execute_with_transaction(&cmd).await;
+
+                    // Calculate elapsed time in microseconds for slowlog
+                    let elapsed_us = start_time.elapsed().as_micros() as u64;
 
                     // Record metrics - check for errors in responses
                     let has_error = responses.iter().any(|r| matches!(r, Response::Error(_)));
@@ -404,6 +408,9 @@ impl ConnectionHandler {
                     } else {
                         timer.finish();
                     }
+
+                    // Log to slowlog if threshold exceeded and command not exempt
+                    self.maybe_log_slow_query(&cmd, elapsed_us).await;
 
                     // Send response(s)
                     for response in responses {
@@ -602,6 +609,11 @@ impl ConnectionHandler {
         // Handle CONFIG commands specially (need access to config manager)
         if cmd_name_str == "CONFIG" {
             return vec![self.handle_config_command(&cmd.args)];
+        }
+
+        // Handle SLOWLOG commands specially (need scatter-gather across shards)
+        if cmd_name_str == "SLOWLOG" {
+            return vec![self.handle_slowlog_command(&cmd.args).await];
         }
 
         // Handle server commands that need special routing
@@ -2973,6 +2985,206 @@ impl ConnectionHandler {
             .map(|s| Response::bulk(Bytes::from(s)))
             .collect();
         Response::Array(response)
+    }
+
+    // =========================================================================
+    // SLOWLOG command handlers
+    // =========================================================================
+
+    /// Log a slow query to the appropriate shard if threshold is exceeded.
+    async fn maybe_log_slow_query(&self, cmd: &ParsedCommand, elapsed_us: u64) {
+        // Check threshold setting
+        let threshold = self.config_manager.slowlog_log_slower_than();
+
+        // -1 means disabled
+        if threshold < 0 {
+            return;
+        }
+
+        // Check if elapsed time exceeds threshold (0 means log all)
+        if threshold > 0 && elapsed_us < threshold as u64 {
+            return;
+        }
+
+        // Check if command has SKIP_SLOWLOG flag
+        let cmd_name = cmd.name_uppercase();
+        let cmd_name_str = String::from_utf8_lossy(&cmd_name);
+        if let Some(handler) = self.registry.get(&cmd_name_str) {
+            if handler.flags().contains(CommandFlags::SKIP_SLOWLOG) {
+                return;
+            }
+        }
+
+        // Prepare command args for logging (including command name)
+        let mut command_args = vec![cmd.name.clone()];
+        command_args.extend(cmd.args.iter().cloned());
+
+        // Truncate args according to max_arg_len setting
+        let max_arg_len = self.config_manager.slowlog_max_arg_len();
+        let truncated_args = frogdb_core::SlowLog::truncate_args(&command_args, max_arg_len);
+
+        // Get client info
+        let client_addr = self.state.addr.to_string();
+        let client_name = self
+            .state
+            .name
+            .as_ref()
+            .map(|n| String::from_utf8_lossy(n).to_string())
+            .unwrap_or_default();
+
+        // Send to shard 0 (or we could distribute based on some logic)
+        // Using shard 0 is simplest and matches Redis behavior
+        if let Some(sender) = self.shard_senders.first() {
+            let _ = sender
+                .send(ShardMessage::SlowlogAdd {
+                    duration_us: elapsed_us,
+                    command: truncated_args,
+                    client_addr,
+                    client_name,
+                })
+                .await;
+        }
+    }
+
+    /// Handle SLOWLOG command and dispatch to subcommands.
+    async fn handle_slowlog_command(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'slowlog' command");
+        }
+
+        let subcommand = args[0].to_ascii_uppercase();
+        let subcommand_str = String::from_utf8_lossy(&subcommand);
+
+        match subcommand_str.as_ref() {
+            "GET" => self.handle_slowlog_get(&args[1..]).await,
+            "LEN" => self.handle_slowlog_len().await,
+            "RESET" => self.handle_slowlog_reset().await,
+            "HELP" => self.handle_slowlog_help(),
+            _ => Response::error(format!(
+                "ERR unknown subcommand '{}'. Try SLOWLOG HELP.",
+                subcommand_str
+            )),
+        }
+    }
+
+    /// Handle SLOWLOG GET [count] - get recent slow queries.
+    async fn handle_slowlog_get(&self, args: &[Bytes]) -> Response {
+        // Default count is 10, like Redis
+        let count = if args.is_empty() {
+            10
+        } else {
+            match String::from_utf8_lossy(&args[0]).parse::<usize>() {
+                Ok(n) => n,
+                Err(_) => return Response::error("ERR value is not an integer or out of range"),
+            }
+        };
+
+        // Scatter-gather: collect from all shards
+        let mut all_entries = Vec::new();
+
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::SlowlogGet { count, response_tx })
+                .await
+                .is_ok()
+            {
+                if let Ok(entries) = response_rx.await {
+                    all_entries.extend(entries);
+                }
+            }
+        }
+
+        // Sort by ID descending (newest first) and limit to count
+        all_entries.sort_by(|a, b| b.id.cmp(&a.id));
+        all_entries.truncate(count);
+
+        // Convert to Redis response format
+        let entries: Vec<Response> = all_entries
+            .into_iter()
+            .map(|entry| {
+                let args: Vec<Response> = entry
+                    .command
+                    .into_iter()
+                    .map(|arg| Response::bulk(arg))
+                    .collect();
+
+                Response::Array(vec![
+                    Response::Integer(entry.id as i64),
+                    Response::Integer(entry.timestamp),
+                    Response::Integer(entry.duration_us as i64),
+                    Response::Array(args),
+                    Response::bulk(Bytes::from(entry.client_addr)),
+                    Response::bulk(Bytes::from(entry.client_name)),
+                ])
+            })
+            .collect();
+
+        Response::Array(entries)
+    }
+
+    /// Handle SLOWLOG LEN - get total number of entries across all shards.
+    async fn handle_slowlog_len(&self) -> Response {
+        let mut total_len = 0usize;
+
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::SlowlogLen { response_tx })
+                .await
+                .is_ok()
+            {
+                if let Ok(len) = response_rx.await {
+                    total_len += len;
+                }
+            }
+        }
+
+        Response::Integer(total_len as i64)
+    }
+
+    /// Handle SLOWLOG RESET - clear all slow query logs.
+    async fn handle_slowlog_reset(&self) -> Response {
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::SlowlogReset { response_tx })
+                .await
+                .is_ok()
+            {
+                let _ = response_rx.await;
+            }
+        }
+
+        Response::ok()
+    }
+
+    /// Handle SLOWLOG HELP - show help text.
+    fn handle_slowlog_help(&self) -> Response {
+        let help = vec![
+            Response::bulk(Bytes::from_static(
+                b"SLOWLOG <subcommand> [<arg> ...]. Subcommands are:",
+            )),
+            Response::bulk(Bytes::from_static(b"GET [<count>]")),
+            Response::bulk(Bytes::from_static(
+                b"    Return top <count> entries from the slowlog (default 10).",
+            )),
+            Response::bulk(Bytes::from_static(
+                b"    Entries are made of:",
+            )),
+            Response::bulk(Bytes::from_static(
+                b"    id, timestamp, time in microseconds, arguments array, client address, client name",
+            )),
+            Response::bulk(Bytes::from_static(b"LEN")),
+            Response::bulk(Bytes::from_static(
+                b"    Return the number of entries in the slowlog.",
+            )),
+            Response::bulk(Bytes::from_static(b"RESET")),
+            Response::bulk(Bytes::from_static(b"    Reset the slowlog.")),
+            Response::bulk(Bytes::from_static(b"HELP")),
+            Response::bulk(Bytes::from_static(b"    Print this help.")),
+        ];
+        Response::Array(help)
     }
 
     /// Wait if the server is paused (CLIENT PAUSE).
