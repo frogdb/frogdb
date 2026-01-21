@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::connection::ConnectionHandler;
+use crate::runtime_config::ConfigManager;
 use crate::server::next_conn_id;
 
 /// Round-robin connection assigner.
@@ -51,6 +52,9 @@ pub struct Acceptor {
     /// Client registry for CLIENT commands.
     client_registry: Arc<ClientRegistry>,
 
+    /// Configuration manager for CONFIG commands.
+    config_manager: Arc<ConfigManager>,
+
     /// Connection assigner.
     assigner: RoundRobinAssigner,
 
@@ -79,6 +83,7 @@ impl Acceptor {
         shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
         registry: Arc<CommandRegistry>,
         client_registry: Arc<ClientRegistry>,
+        config_manager: Arc<ConfigManager>,
         allow_cross_slot: bool,
         scatter_gather_timeout_ms: u64,
         metrics_recorder: Arc<dyn MetricsRecorder>,
@@ -91,6 +96,7 @@ impl Acceptor {
             shard_senders,
             registry,
             client_registry,
+            config_manager,
             assigner: RoundRobinAssigner::new(num_shards),
             allow_cross_slot,
             scatter_gather_timeout_ms,
@@ -134,6 +140,7 @@ impl Acceptor {
                     // instead of sending to the shard's new_conn channel
                     let registry = self.registry.clone();
                     let client_registry = self.client_registry.clone();
+                    let config_manager = self.config_manager.clone();
                     let shard_senders = self.shard_senders.clone();
                     let num_shards = self.shard_senders.len();
                     let allow_cross_slot = self.allow_cross_slot;
@@ -151,6 +158,7 @@ impl Acceptor {
                             num_shards,
                             registry,
                             client_registry,
+                            config_manager,
                             client_handle,
                             shard_senders,
                             allow_cross_slot,

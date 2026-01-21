@@ -1,0 +1,621 @@
+//! Runtime configuration for CONFIG GET/SET commands.
+//!
+//! This module provides:
+//! - `RuntimeConfig` - mutable parameters that can be changed at runtime
+//! - `ConfigManager` - main interface for CONFIG commands
+//! - Parameter registry with metadata for each configurable parameter
+
+use std::fmt;
+use std::sync::{Arc, RwLock};
+
+use frogdb_core::glob_match;
+use tracing_subscriber::{reload, EnvFilter};
+
+use crate::config::Config;
+
+/// Error type for CONFIG operations.
+#[derive(Debug, Clone)]
+pub enum ConfigError {
+    /// Parameter is not mutable at runtime.
+    ImmutableParameter(String),
+    /// Parameter does not exist.
+    UnknownParameter(String),
+    /// Invalid value for the parameter.
+    InvalidValue { param: String, message: String },
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigError::ImmutableParameter(name) => {
+                write!(f, "ERR CONFIG parameter '{}' is not mutable", name)
+            }
+            ConfigError::UnknownParameter(name) => {
+                write!(f, "ERR Unknown CONFIG parameter '{}'", name)
+            }
+            ConfigError::InvalidValue { param, message } => {
+                write!(f, "ERR Invalid value for '{}': {}", param, message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+/// Mutable runtime configuration values.
+#[derive(Debug, Clone)]
+pub struct RuntimeConfig {
+    // Memory settings
+    pub maxmemory: u64,
+    pub maxmemory_policy: String,
+    pub maxmemory_samples: usize,
+    pub lfu_log_factor: u8,
+    pub lfu_decay_time: u64,
+
+    // Logging settings
+    pub loglevel: String,
+
+    // Persistence settings
+    pub durability_mode: String,
+    pub sync_interval_ms: u64,
+    pub batch_timeout_ms: u64,
+
+    // Server settings
+    pub scatter_gather_timeout_ms: u64,
+}
+
+impl RuntimeConfig {
+    /// Create from the initial config.
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            maxmemory: config.memory.maxmemory,
+            maxmemory_policy: config.memory.maxmemory_policy.clone(),
+            maxmemory_samples: config.memory.maxmemory_samples,
+            lfu_log_factor: config.memory.lfu_log_factor,
+            lfu_decay_time: config.memory.lfu_decay_time,
+            loglevel: config.logging.level.clone(),
+            durability_mode: config.persistence.durability_mode.clone(),
+            sync_interval_ms: config.persistence.sync_interval_ms,
+            batch_timeout_ms: config.persistence.batch_timeout_ms,
+            scatter_gather_timeout_ms: config.server.scatter_gather_timeout_ms,
+        }
+    }
+}
+
+/// Immutable configuration values (for reference only).
+#[derive(Debug, Clone)]
+pub struct StaticConfig {
+    pub bind: String,
+    pub port: u16,
+    pub num_shards: usize,
+    pub data_dir: String,
+    pub persistence_enabled: bool,
+    pub metrics_enabled: bool,
+    pub metrics_port: u16,
+}
+
+impl StaticConfig {
+    /// Create from the initial config.
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            bind: config.server.bind.clone(),
+            port: config.server.port,
+            num_shards: config.server.num_shards,
+            data_dir: config.persistence.data_dir.display().to_string(),
+            persistence_enabled: config.persistence.enabled,
+            metrics_enabled: config.metrics.enabled,
+            metrics_port: config.metrics.port,
+        }
+    }
+}
+
+/// Type alias for parameter setter function.
+type ParamSetter = fn(&ConfigManager, &str) -> Result<(), ConfigError>;
+
+/// Parameter metadata.
+pub struct ParamMeta {
+    /// Redis-style parameter name.
+    pub name: &'static str,
+    /// Whether this parameter can be changed at runtime.
+    pub mutable: bool,
+    /// Get the current value as a string.
+    pub getter: fn(&ConfigManager) -> String,
+    /// Set the value from a string (only for mutable params).
+    pub setter: Option<ParamSetter>,
+}
+
+/// Type alias for the log reload handle.
+pub type LogReloadHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
+
+/// Configuration manager for CONFIG GET/SET commands.
+pub struct ConfigManager {
+    /// Mutable runtime configuration.
+    runtime: Arc<RwLock<RuntimeConfig>>,
+    /// Immutable static configuration.
+    static_config: StaticConfig,
+    /// Log level reload handle (optional, not available in tests).
+    log_reload_handle: Option<Arc<RwLock<Option<LogReloadHandle>>>>,
+    /// Parameter metadata registry.
+    params: Vec<ParamMeta>,
+}
+
+impl ConfigManager {
+    /// Create a new ConfigManager from the initial config.
+    pub fn new(config: &Config) -> Self {
+        let runtime = RuntimeConfig::from_config(config);
+        let static_config = StaticConfig::from_config(config);
+
+        Self {
+            runtime: Arc::new(RwLock::new(runtime)),
+            static_config,
+            log_reload_handle: None,
+            params: Self::build_param_registry(),
+        }
+    }
+
+    /// Set the log reload handle for dynamic log level changes.
+    pub fn set_log_reload_handle(&mut self, handle: LogReloadHandle) {
+        self.log_reload_handle = Some(Arc::new(RwLock::new(Some(handle))));
+    }
+
+    /// Build the parameter registry.
+    fn build_param_registry() -> Vec<ParamMeta> {
+        vec![
+            // Mutable parameters
+            ParamMeta {
+                name: "maxmemory",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().maxmemory.to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "maxmemory".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.runtime.write().unwrap().maxmemory = parsed;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "maxmemory-policy",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().maxmemory_policy.clone(),
+                setter: Some(|mgr, val| {
+                    let valid_policies = [
+                        "noeviction",
+                        "volatile-lru",
+                        "allkeys-lru",
+                        "volatile-lfu",
+                        "allkeys-lfu",
+                        "volatile-random",
+                        "allkeys-random",
+                        "volatile-ttl",
+                    ];
+                    let lower = val.to_lowercase();
+                    if !valid_policies.contains(&lower.as_str()) {
+                        return Err(ConfigError::InvalidValue {
+                            param: "maxmemory-policy".to_string(),
+                            message: format!(
+                                "must be one of: {}",
+                                valid_policies.join(", ")
+                            ),
+                        });
+                    }
+                    mgr.runtime.write().unwrap().maxmemory_policy = lower;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "maxmemory-samples",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().maxmemory_samples.to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: usize = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "maxmemory-samples".to_string(),
+                        message: "must be a positive integer".to_string(),
+                    })?;
+                    if parsed == 0 {
+                        return Err(ConfigError::InvalidValue {
+                            param: "maxmemory-samples".to_string(),
+                            message: "must be > 0".to_string(),
+                        });
+                    }
+                    mgr.runtime.write().unwrap().maxmemory_samples = parsed;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "lfu-log-factor",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().lfu_log_factor.to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: u8 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "lfu-log-factor".to_string(),
+                        message: "must be an integer 0-255".to_string(),
+                    })?;
+                    mgr.runtime.write().unwrap().lfu_log_factor = parsed;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "lfu-decay-time",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().lfu_decay_time.to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "lfu-decay-time".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.runtime.write().unwrap().lfu_decay_time = parsed;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "loglevel",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().loglevel.clone(),
+                setter: Some(|mgr, val| {
+                    let valid_levels = ["trace", "debug", "info", "warn", "error"];
+                    let lower = val.to_lowercase();
+                    if !valid_levels.contains(&lower.as_str()) {
+                        return Err(ConfigError::InvalidValue {
+                            param: "loglevel".to_string(),
+                            message: format!("must be one of: {}", valid_levels.join(", ")),
+                        });
+                    }
+                    mgr.runtime.write().unwrap().loglevel = lower.clone();
+
+                    // Apply log level change if handle is available
+                    if let Some(ref handle_lock) = mgr.log_reload_handle {
+                        let guard = handle_lock.read().unwrap();
+                        if let Some(ref handle) = *guard {
+                            let filter = EnvFilter::try_new(&lower)
+                                .unwrap_or_else(|_| EnvFilter::new("info"));
+                            let _ = handle.reload(filter);
+                        }
+                    }
+
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "durability-mode",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().durability_mode.clone(),
+                setter: Some(|mgr, val| {
+                    let valid_modes = ["async", "periodic", "sync"];
+                    let lower = val.to_lowercase();
+                    if !valid_modes.contains(&lower.as_str()) {
+                        return Err(ConfigError::InvalidValue {
+                            param: "durability-mode".to_string(),
+                            message: format!("must be one of: {}", valid_modes.join(", ")),
+                        });
+                    }
+                    mgr.runtime.write().unwrap().durability_mode = lower;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "sync-interval-ms",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().sync_interval_ms.to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "sync-interval-ms".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.runtime.write().unwrap().sync_interval_ms = parsed;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "batch-timeout-ms",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().batch_timeout_ms.to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "batch-timeout-ms".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.runtime.write().unwrap().batch_timeout_ms = parsed;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "scatter-gather-timeout-ms",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().scatter_gather_timeout_ms.to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "scatter-gather-timeout-ms".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.runtime.write().unwrap().scatter_gather_timeout_ms = parsed;
+                    Ok(())
+                }),
+            },
+            // Immutable parameters
+            ParamMeta {
+                name: "bind",
+                mutable: false,
+                getter: |mgr| mgr.static_config.bind.clone(),
+                setter: None,
+            },
+            ParamMeta {
+                name: "port",
+                mutable: false,
+                getter: |mgr| mgr.static_config.port.to_string(),
+                setter: None,
+            },
+            ParamMeta {
+                name: "num-shards",
+                mutable: false,
+                getter: |mgr| mgr.static_config.num_shards.to_string(),
+                setter: None,
+            },
+            ParamMeta {
+                name: "dir",
+                mutable: false,
+                getter: |mgr| mgr.static_config.data_dir.clone(),
+                setter: None,
+            },
+            ParamMeta {
+                name: "persistence-enabled",
+                mutable: false,
+                getter: |mgr| {
+                    if mgr.static_config.persistence_enabled {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    }
+                },
+                setter: None,
+            },
+            ParamMeta {
+                name: "metrics-enabled",
+                mutable: false,
+                getter: |mgr| {
+                    if mgr.static_config.metrics_enabled {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    }
+                },
+                setter: None,
+            },
+            ParamMeta {
+                name: "metrics-port",
+                mutable: false,
+                getter: |mgr| mgr.static_config.metrics_port.to_string(),
+                setter: None,
+            },
+        ]
+    }
+
+    /// Get parameters matching a glob pattern.
+    ///
+    /// Returns a vector of (name, value) pairs.
+    pub fn get(&self, pattern: &str) -> Vec<(String, String)> {
+        let pattern_bytes = pattern.as_bytes();
+        self.params
+            .iter()
+            .filter(|param| glob_match(pattern_bytes, param.name.as_bytes()))
+            .map(|param| (param.name.to_string(), (param.getter)(self)))
+            .collect()
+    }
+
+    /// Set a configuration parameter.
+    ///
+    /// Returns Ok(()) on success, or an error if the parameter is immutable,
+    /// unknown, or the value is invalid.
+    pub fn set(&self, name: &str, value: &str) -> Result<(), ConfigError> {
+        // Normalize name (lowercase, allow underscores as dashes)
+        let normalized = name.to_lowercase().replace('_', "-");
+
+        let param = self
+            .params
+            .iter()
+            .find(|p| p.name == normalized)
+            .ok_or_else(|| ConfigError::UnknownParameter(name.to_string()))?;
+
+        if !param.mutable {
+            return Err(ConfigError::ImmutableParameter(name.to_string()));
+        }
+
+        let setter = param
+            .setter
+            .ok_or_else(|| ConfigError::ImmutableParameter(name.to_string()))?;
+
+        setter(self, value)
+    }
+
+    /// Get all parameter names.
+    pub fn all_param_names(&self) -> Vec<&'static str> {
+        self.params.iter().map(|p| p.name).collect()
+    }
+
+    /// Get mutable parameter names.
+    pub fn mutable_param_names(&self) -> Vec<&'static str> {
+        self.params
+            .iter()
+            .filter(|p| p.mutable)
+            .map(|p| p.name)
+            .collect()
+    }
+
+    /// Get immutable parameter names.
+    pub fn immutable_param_names(&self) -> Vec<&'static str> {
+        self.params
+            .iter()
+            .filter(|p| !p.mutable)
+            .map(|p| p.name)
+            .collect()
+    }
+
+    /// Get the current runtime config snapshot.
+    pub fn runtime_snapshot(&self) -> RuntimeConfig {
+        self.runtime.read().unwrap().clone()
+    }
+
+    /// Get the current maxmemory value.
+    pub fn maxmemory(&self) -> u64 {
+        self.runtime.read().unwrap().maxmemory
+    }
+
+    /// Get the current maxmemory policy.
+    pub fn maxmemory_policy(&self) -> String {
+        self.runtime.read().unwrap().maxmemory_policy.clone()
+    }
+
+    /// Generate CONFIG HELP output.
+    pub fn help_text() -> Vec<String> {
+        vec![
+            "CONFIG <subcommand> [<arg> ...]. Subcommands are:".to_string(),
+            "GET <pattern>".to_string(),
+            "    Return parameters matching <pattern>.".to_string(),
+            "SET <param> <value>".to_string(),
+            "    Set a mutable configuration parameter.".to_string(),
+            "HELP".to_string(),
+            "    Print this help.".to_string(),
+            String::new(),
+            "Mutable parameters: maxmemory, maxmemory-policy, maxmemory-samples, lfu-log-factor, lfu-decay-time, loglevel, durability-mode, sync-interval-ms, batch-timeout-ms, scatter-gather-timeout-ms".to_string(),
+            String::new(),
+            "Immutable parameters (require restart): bind, port, num-shards, dir, persistence-enabled, metrics-enabled, metrics-port".to_string(),
+        ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> Config {
+        Config::default()
+    }
+
+    #[test]
+    fn test_config_get_all() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        let results = manager.get("*");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|(k, _)| k == "maxmemory"));
+        assert!(results.iter().any(|(k, _)| k == "bind"));
+    }
+
+    #[test]
+    fn test_config_get_pattern() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        let results = manager.get("max*");
+        assert!(results.iter().all(|(k, _)| k.starts_with("max")));
+        assert!(results.iter().any(|(k, _)| k == "maxmemory"));
+        assert!(results.iter().any(|(k, _)| k == "maxmemory-policy"));
+    }
+
+    #[test]
+    fn test_config_set_mutable() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        assert!(manager.set("maxmemory", "1048576").is_ok());
+        let results = manager.get("maxmemory");
+        assert_eq!(results[0].1, "1048576");
+    }
+
+    #[test]
+    fn test_config_set_immutable() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        let result = manager.set("bind", "0.0.0.0");
+        assert!(matches!(result, Err(ConfigError::ImmutableParameter(_))));
+    }
+
+    #[test]
+    fn test_config_set_unknown() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        let result = manager.set("unknown-param", "value");
+        assert!(matches!(result, Err(ConfigError::UnknownParameter(_))));
+    }
+
+    #[test]
+    fn test_config_set_invalid_value() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        let result = manager.set("maxmemory", "not-a-number");
+        assert!(matches!(result, Err(ConfigError::InvalidValue { .. })));
+    }
+
+    #[test]
+    fn test_config_set_invalid_policy() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        let result = manager.set("maxmemory-policy", "invalid-policy");
+        assert!(matches!(result, Err(ConfigError::InvalidValue { .. })));
+    }
+
+    #[test]
+    fn test_config_set_valid_policy() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        assert!(manager.set("maxmemory-policy", "allkeys-lru").is_ok());
+        let results = manager.get("maxmemory-policy");
+        assert_eq!(results[0].1, "allkeys-lru");
+    }
+
+    #[test]
+    fn test_config_set_loglevel() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        assert!(manager.set("loglevel", "debug").is_ok());
+        let results = manager.get("loglevel");
+        assert_eq!(results[0].1, "debug");
+    }
+
+    #[test]
+    fn test_config_set_invalid_loglevel() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        let result = manager.set("loglevel", "invalid");
+        assert!(matches!(result, Err(ConfigError::InvalidValue { .. })));
+    }
+
+    #[test]
+    fn test_parameter_name_mapping() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        // Test underscore to dash conversion
+        assert!(manager.set("maxmemory_policy", "allkeys-lfu").is_ok());
+
+        // Test case insensitivity
+        assert!(manager.set("MAXMEMORY", "2048").is_ok());
+    }
+
+    #[test]
+    fn test_maxmemory_samples_validation() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        let result = manager.set("maxmemory-samples", "0");
+        assert!(matches!(result, Err(ConfigError::InvalidValue { .. })));
+
+        assert!(manager.set("maxmemory-samples", "10").is_ok());
+    }
+
+    #[test]
+    fn test_help_text() {
+        let help = ConfigManager::help_text();
+        assert!(!help.is_empty());
+        assert!(help[0].contains("CONFIG"));
+    }
+}
