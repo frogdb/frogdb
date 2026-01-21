@@ -6,7 +6,7 @@ use frogdb_core::persistence::{
     RocksConfig, RocksStore, SnapshotCoordinator, WalConfig,
 };
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
-use frogdb_core::{ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, ShardMessage, ShardWorker};
+use frogdb_core::{AclManager, ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, ShardMessage, ShardWorker};
 use frogdb_metrics::{HealthChecker, MetricsServer, PrometheusRecorder, SystemMetricsCollector};
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -86,6 +86,9 @@ pub struct Server {
 
     /// Health checker.
     health_checker: HealthChecker,
+
+    /// ACL manager for authentication and authorization.
+    acl_manager: Arc<AclManager>,
 }
 
 impl Server {
@@ -226,6 +229,9 @@ impl Server {
             shard_handles.push(handle);
         }
 
+        // Create ACL manager
+        let acl_manager = AclManager::new(config.to_acl_config());
+
         Ok(Self {
             config,
             listener,
@@ -240,6 +246,7 @@ impl Server {
             metrics_recorder,
             prometheus_recorder,
             health_checker,
+            acl_manager,
         })
     }
 
@@ -355,6 +362,7 @@ impl Server {
             self.config.server.allow_cross_slot_standalone,
             self.config.server.scatter_gather_timeout_ms,
             self.metrics_recorder.clone(),
+            self.acl_manager.clone(),
         );
 
         // Spawn acceptor task
@@ -719,6 +727,10 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::stream::XautoclaimCommand);
     registry.register(crate::commands::stream::XinfoCommand);
     registry.register(crate::commands::stream::XsetidCommand);
+
+    // Auth/ACL commands (handled specially in connection.rs, but registered for introspection)
+    registry.register(crate::commands::auth::Auth);
+    registry.register(crate::commands::acl::Acl);
 }
 
 // Commands module

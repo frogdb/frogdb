@@ -156,57 +156,6 @@ impl ReplicationTracker for NoopReplicationTracker {
 }
 
 // ============================================================================
-// Security / ACL
-// ============================================================================
-
-/// ACL (Access Control List) checker trait.
-pub trait AclChecker: Send + Sync {
-    /// Check if a user has permission to execute a command.
-    fn check_permission(&self, user: &str, command: &str, keys: &[&[u8]]) -> AclResult;
-
-    /// Check if a user is authenticated.
-    fn is_authenticated(&self, user: &str) -> bool;
-}
-
-/// Result of an ACL check.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AclResult {
-    /// Permission granted.
-    Allowed,
-    /// Permission denied.
-    Denied { reason: String },
-    /// Authentication required.
-    NoAuth,
-}
-
-impl AclResult {
-    pub fn is_allowed(&self) -> bool {
-        matches!(self, AclResult::Allowed)
-    }
-}
-
-/// ACL checker that always allows access.
-#[derive(Debug, Default)]
-pub struct AlwaysAllowAcl;
-
-impl AlwaysAllowAcl {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl AclChecker for AlwaysAllowAcl {
-    fn check_permission(&self, _user: &str, _command: &str, _keys: &[&[u8]]) -> AclResult {
-        tracing::trace!("AlwaysAllow ACL check");
-        AclResult::Allowed
-    }
-
-    fn is_authenticated(&self, _user: &str) -> bool {
-        true
-    }
-}
-
-// ============================================================================
 // Expiry
 // ============================================================================
 
@@ -415,13 +364,6 @@ mod tests {
         assert!(ReplicationConfig::Standalone.is_standalone());
         assert!(ReplicationConfig::Primary { min_replicas_to_write: 0 }.is_primary());
         assert!(ReplicationConfig::Replica { primary_addr: "localhost:6379".into() }.is_replica());
-    }
-
-    #[test]
-    fn test_always_allow_acl() {
-        let acl = AlwaysAllowAcl::new();
-        assert!(acl.check_permission("user", "GET", &[b"key"]).is_allowed());
-        assert!(acl.is_authenticated("any"));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use anyhow::Result;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use std::sync::atomic::AtomicI64;
-use frogdb_core::{shard::NewConnection, ClientRegistry, CommandRegistry, MetricsRecorder, ShardMessage};
+use frogdb_core::{shard::NewConnection, AclManager, ClientRegistry, CommandRegistry, MetricsRecorder, ShardMessage};
 use frogdb_metrics::metric_names;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -65,6 +65,9 @@ pub struct Acceptor {
 
     /// Current connection count (shared for decrement on drop).
     current_connections: Arc<AtomicI64>,
+
+    /// ACL manager for authentication and authorization.
+    acl_manager: Arc<AclManager>,
 }
 
 impl Acceptor {
@@ -79,6 +82,7 @@ impl Acceptor {
         allow_cross_slot: bool,
         scatter_gather_timeout_ms: u64,
         metrics_recorder: Arc<dyn MetricsRecorder>,
+        acl_manager: Arc<AclManager>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -92,6 +96,7 @@ impl Acceptor {
             scatter_gather_timeout_ms,
             metrics_recorder,
             current_connections: Arc::new(AtomicI64::new(0)),
+            acl_manager,
         }
     }
 
@@ -135,6 +140,7 @@ impl Acceptor {
                     let scatter_gather_timeout_ms = self.scatter_gather_timeout_ms;
                     let metrics_recorder = self.metrics_recorder.clone();
                     let current_connections = self.current_connections.clone();
+                    let acl_manager = self.acl_manager.clone();
 
                     tokio::spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -150,6 +156,7 @@ impl Acceptor {
                             allow_cross_slot,
                             scatter_gather_timeout_ms,
                             metrics_recorder.clone(),
+                            acl_manager,
                         );
 
                         if let Err(e) = handler.run().await {

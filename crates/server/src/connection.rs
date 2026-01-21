@@ -8,11 +8,12 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::Bytes;
 use frogdb_core::{
-    shard_for_key, ClientHandle, ClientRegistry, CommandFlags, CommandRegistry, GlobPattern,
-    IntrospectionRequest, IntrospectionResponse, MetricsRecorder, PartialResult, PauseMode,
-    PubSubMessage, PubSubSender, ScatterOp, ShardMessage, TransactionResult,
-    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SUBSCRIPTIONS_PER_CONNECTION,
+    shard_for_key, AclManager, AuthenticatedUser, ClientHandle, ClientRegistry,
+    CommandCategory, CommandFlags, CommandRegistry, GlobPattern,
+    IntrospectionRequest, IntrospectionResponse, MetricsRecorder, PartialResult,
+    PauseMode, PubSubMessage, PubSubSender, ScatterOp, ShardMessage,
+    TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use futures::{SinkExt, StreamExt};
@@ -83,6 +84,45 @@ impl PubSubState {
     }
 }
 
+/// Authentication state for a connection.
+#[derive(Debug, Clone)]
+pub enum AuthState {
+    /// Not authenticated yet (default when requirepass is set).
+    NotAuthenticated,
+    /// Authenticated with a specific user.
+    Authenticated(AuthenticatedUser),
+}
+
+impl Default for AuthState {
+    fn default() -> Self {
+        // By default, use the default user with full permissions
+        AuthState::Authenticated(AuthenticatedUser::default_user())
+    }
+}
+
+impl AuthState {
+    /// Check if the connection is authenticated.
+    pub fn is_authenticated(&self) -> bool {
+        matches!(self, AuthState::Authenticated(_))
+    }
+
+    /// Get the authenticated user, if any.
+    pub fn user(&self) -> Option<&AuthenticatedUser> {
+        match self {
+            AuthState::Authenticated(user) => Some(user),
+            AuthState::NotAuthenticated => None,
+        }
+    }
+
+    /// Get the username.
+    pub fn username(&self) -> &str {
+        match self {
+            AuthState::Authenticated(user) => &user.username,
+            AuthState::NotAuthenticated => "(not authenticated)",
+        }
+    }
+}
+
 /// Connection state.
 #[allow(dead_code)]
 pub struct ConnectionState {
@@ -106,10 +146,13 @@ pub struct ConnectionState {
 
     /// Pub/Sub state.
     pub pubsub: PubSubState,
+
+    /// Authentication state.
+    pub auth: AuthState,
 }
 
 impl ConnectionState {
-    fn new(id: u64, addr: SocketAddr) -> Self {
+    fn new(id: u64, addr: SocketAddr, requires_auth: bool) -> Self {
         Self {
             id,
             addr,
@@ -118,6 +161,11 @@ impl ConnectionState {
             name: None,
             transaction: TransactionState::default(),
             pubsub: PubSubState::default(),
+            auth: if requires_auth {
+                AuthState::NotAuthenticated
+            } else {
+                AuthState::default()
+            },
         }
     }
 }
@@ -163,6 +211,9 @@ pub struct ConnectionHandler {
     /// Metrics recorder.
     #[allow(dead_code)]
     metrics_recorder: Arc<dyn MetricsRecorder>,
+
+    /// ACL manager for authentication and authorization.
+    acl_manager: Arc<AclManager>,
 }
 
 impl ConnectionHandler {
@@ -181,9 +232,11 @@ impl ConnectionHandler {
         allow_cross_slot: bool,
         scatter_gather_timeout_ms: u64,
         metrics_recorder: Arc<dyn MetricsRecorder>,
+        acl_manager: Arc<AclManager>,
     ) -> Self {
         let framed = Framed::new(socket, Resp2);
-        let state = ConnectionState::new(conn_id, addr);
+        let requires_auth = acl_manager.requires_auth();
+        let state = ConnectionState::new(conn_id, addr, requires_auth);
 
         // Create pub/sub channel
         let (pubsub_tx, pubsub_rx) = mpsc::unbounded_channel();
@@ -202,6 +255,7 @@ impl ConnectionHandler {
             pubsub_tx,
             pubsub_rx,
             metrics_recorder,
+            acl_manager,
         }
     }
 
@@ -322,6 +376,22 @@ impl ConnectionHandler {
         let cmd_name = cmd.name_uppercase();
         let cmd_name_str = String::from_utf8_lossy(&cmd_name);
 
+        // Handle AUTH command (always allowed, even without authentication)
+        if cmd_name_str == "AUTH" {
+            return vec![self.handle_auth(&cmd.args).await];
+        }
+
+        // Handle ACL command
+        if cmd_name_str == "ACL" {
+            return vec![self.handle_acl_command(&cmd.args).await];
+        }
+
+        // Check authentication before processing other commands
+        // AUTH, QUIT, HELLO, and PING are allowed without authentication
+        if !self.state.auth.is_authenticated() && !Self::is_auth_exempt(&cmd_name_str) {
+            return vec![Response::error("NOAUTH Authentication required.")];
+        }
+
         // Check pub/sub mode restrictions
         if self.state.pubsub.in_pubsub_mode() && !Self::is_allowed_in_pubsub_mode(&cmd_name_str) {
             return vec![Response::error(format!(
@@ -402,6 +472,293 @@ impl ConnectionHandler {
             "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE"
                 | "SSUBSCRIBE" | "SUNSUBSCRIBE" | "PING" | "QUIT" | "RESET"
         )
+    }
+
+    /// Check if a command is exempt from authentication requirements.
+    fn is_auth_exempt(cmd: &str) -> bool {
+        matches!(cmd, "AUTH" | "QUIT" | "HELLO" | "PING")
+    }
+
+    /// Get client info string for ACL logging.
+    fn client_info_string(&self) -> String {
+        format!(
+            "id={} addr={} name={}",
+            self.state.id,
+            self.state.addr,
+            self.state.name.as_ref().map(|b| String::from_utf8_lossy(b)).unwrap_or_default()
+        )
+    }
+
+    /// Handle AUTH command.
+    async fn handle_auth(&mut self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'auth' command");
+        }
+
+        let client_info = self.client_info_string();
+
+        let result = if args.len() == 1 {
+            // AUTH <password> - authenticate as default user
+            let password = String::from_utf8_lossy(&args[0]);
+            self.acl_manager.authenticate_default(&password, &client_info)
+        } else {
+            // AUTH <username> <password>
+            let username = String::from_utf8_lossy(&args[0]);
+            let password = String::from_utf8_lossy(&args[1]);
+            self.acl_manager.authenticate(&username, &password, &client_info)
+        };
+
+        match result {
+            Ok(user) => {
+                self.state.auth = AuthState::Authenticated(user);
+                Response::ok()
+            }
+            Err(e) => Response::error(e.to_string()),
+        }
+    }
+
+    /// Handle ACL command and subcommands.
+    async fn handle_acl_command(&mut self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'acl' command");
+        }
+
+        let subcmd = String::from_utf8_lossy(&args[0]).to_uppercase();
+        let subcmd_args = &args[1..];
+
+        match subcmd.as_str() {
+            "WHOAMI" => self.handle_acl_whoami(),
+            "LIST" => self.handle_acl_list(),
+            "USERS" => self.handle_acl_users(),
+            "GETUSER" => self.handle_acl_getuser(subcmd_args),
+            "SETUSER" => self.handle_acl_setuser(subcmd_args),
+            "DELUSER" => self.handle_acl_deluser(subcmd_args),
+            "CAT" => self.handle_acl_cat(subcmd_args),
+            "GENPASS" => self.handle_acl_genpass(subcmd_args),
+            "LOG" => self.handle_acl_log(subcmd_args),
+            "SAVE" => self.handle_acl_save(),
+            "LOAD" => self.handle_acl_load(),
+            "HELP" => self.handle_acl_help(),
+            _ => Response::error(format!("ERR Unknown subcommand or wrong number of arguments for '{}'", subcmd)),
+        }
+    }
+
+    /// ACL WHOAMI - return current username.
+    fn handle_acl_whoami(&self) -> Response {
+        Response::bulk(Bytes::from(self.state.auth.username().to_string()))
+    }
+
+    /// ACL LIST - list all users with their ACL rules.
+    fn handle_acl_list(&self) -> Response {
+        let users = self.acl_manager.list_users_detailed();
+        Response::Array(users.into_iter().map(|s| Response::bulk(Bytes::from(s))).collect())
+    }
+
+    /// ACL USERS - list all usernames.
+    fn handle_acl_users(&self) -> Response {
+        let users = self.acl_manager.list_users();
+        Response::Array(users.into_iter().map(|s| Response::bulk(Bytes::from(s))).collect())
+    }
+
+    /// ACL GETUSER <username> - get user info.
+    fn handle_acl_getuser(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'acl|getuser' command");
+        }
+
+        let username = String::from_utf8_lossy(&args[0]);
+        match self.acl_manager.get_user(&username) {
+            Some(user) => {
+                let info = user.to_getuser_info();
+                let mut result = Vec::new();
+                for (key, value) in info {
+                    result.push(Response::bulk(Bytes::from(key)));
+                    match value {
+                        frogdb_core::acl::user::UserInfoValue::String(s) => {
+                            result.push(Response::bulk(Bytes::from(s)));
+                        }
+                        frogdb_core::acl::user::UserInfoValue::StringArray(arr) => {
+                            result.push(Response::Array(
+                                arr.into_iter()
+                                    .map(|s| Response::bulk(Bytes::from(s)))
+                                    .collect(),
+                            ));
+                        }
+                    }
+                }
+                Response::Array(result)
+            }
+            None => Response::null(),
+        }
+    }
+
+    /// ACL SETUSER <username> [rules...] - create or modify user.
+    fn handle_acl_setuser(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'acl|setuser' command");
+        }
+
+        let username = String::from_utf8_lossy(&args[0]);
+        let rules: Vec<&str> = args[1..]
+            .iter()
+            .map(|b| std::str::from_utf8(b).unwrap_or(""))
+            .collect();
+
+        match self.acl_manager.set_user(&username, &rules) {
+            Ok(()) => Response::ok(),
+            Err(e) => Response::error(e.to_string()),
+        }
+    }
+
+    /// ACL DELUSER <username> [...] - delete users.
+    fn handle_acl_deluser(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'acl|deluser' command");
+        }
+
+        let usernames: Vec<&str> = args
+            .iter()
+            .map(|b| std::str::from_utf8(b).unwrap_or(""))
+            .collect();
+
+        match self.acl_manager.delete_users(&usernames) {
+            Ok(count) => Response::Integer(count as i64),
+            Err(e) => Response::error(e.to_string()),
+        }
+    }
+
+    /// ACL CAT [category] - list categories or commands in category.
+    fn handle_acl_cat(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            // List all categories
+            let categories: Vec<Response> = CommandCategory::all()
+                .iter()
+                .map(|c| Response::bulk(Bytes::from(c.name())))
+                .collect();
+            Response::Array(categories)
+        } else {
+            // List commands in category
+            let category_name = String::from_utf8_lossy(&args[0]);
+            match CommandCategory::from_str(&category_name) {
+                Some(category) => {
+                    let commands: Vec<Response> = category
+                        .commands()
+                        .iter()
+                        .map(|c| Response::bulk(Bytes::from(*c)))
+                        .collect();
+                    Response::Array(commands)
+                }
+                None => Response::error(format!("ERR Unknown ACL category '{}'", category_name)),
+            }
+        }
+    }
+
+    /// ACL GENPASS [bits] - generate secure random password.
+    fn handle_acl_genpass(&self, args: &[Bytes]) -> Response {
+        let bits = if args.is_empty() {
+            256
+        } else {
+            match String::from_utf8_lossy(&args[0]).parse::<u32>() {
+                Ok(b) if b > 0 => b,
+                _ => return Response::error("ERR ACL GENPASS argument must be a positive integer"),
+            }
+        };
+
+        let password = frogdb_core::generate_password(bits);
+        Response::bulk(Bytes::from(password))
+    }
+
+    /// ACL LOG [count|RESET] - view or reset security log.
+    fn handle_acl_log(&self, args: &[Bytes]) -> Response {
+        if !args.is_empty() {
+            let arg = String::from_utf8_lossy(&args[0]).to_uppercase();
+            if arg == "RESET" {
+                self.acl_manager.log().reset();
+                return Response::ok();
+            }
+        }
+
+        let count = if args.is_empty() {
+            None
+        } else {
+            String::from_utf8_lossy(&args[0]).parse::<usize>().ok()
+        };
+
+        let entries = self.acl_manager.log().get(count);
+        let result: Vec<Response> = entries
+            .into_iter()
+            .map(|entry| {
+                let fields = entry.to_resp_fields();
+                let mut arr = Vec::new();
+                for (key, value) in fields {
+                    arr.push(Response::bulk(Bytes::from(key)));
+                    match value {
+                        frogdb_core::acl::log::AclLogValue::String(s) => {
+                            arr.push(Response::bulk(Bytes::from(s)));
+                        }
+                        frogdb_core::acl::log::AclLogValue::Integer(i) => {
+                            arr.push(Response::Integer(i));
+                        }
+                        frogdb_core::acl::log::AclLogValue::Float(f) => {
+                            arr.push(Response::bulk(Bytes::from(format!("{:.6}", f))));
+                        }
+                    }
+                }
+                Response::Array(arr)
+            })
+            .collect();
+
+        Response::Array(result)
+    }
+
+    /// ACL SAVE - save ACL to file.
+    fn handle_acl_save(&self) -> Response {
+        match self.acl_manager.save() {
+            Ok(()) => Response::ok(),
+            Err(e) => Response::error(e.to_string()),
+        }
+    }
+
+    /// ACL LOAD - load ACL from file.
+    fn handle_acl_load(&self) -> Response {
+        match self.acl_manager.load() {
+            Ok(()) => Response::ok(),
+            Err(e) => Response::error(e.to_string()),
+        }
+    }
+
+    /// ACL HELP - show help.
+    fn handle_acl_help(&self) -> Response {
+        let help = vec![
+            "ACL <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+            "CAT [<category>]",
+            "    List all commands that belong to <category>, or all command categories",
+            "    when no category is specified.",
+            "DELUSER <username> [<username> ...]",
+            "    Delete a list of users.",
+            "GENPASS [<bits>]",
+            "    Generate a secure random password. The optional `bits` argument specifies",
+            "    the amount of bits for the password; default is 256.",
+            "GETUSER <username>",
+            "    Get the user details.",
+            "LIST",
+            "    List all users in ACL format.",
+            "LOAD",
+            "    Reload users from the ACL file.",
+            "LOG [<count>|RESET]",
+            "    List latest ACL security events, or RESET to clear log.",
+            "SAVE",
+            "    Save the current ACL to file.",
+            "SETUSER <username> [<property> [<property> ...]]",
+            "    Create or modify a user with the specified properties.",
+            "USERS",
+            "    List all usernames.",
+            "WHOAMI",
+            "    Return the current connection username.",
+            "HELP",
+            "    Print this help.",
+        ];
+        Response::Array(help.into_iter().map(|s| Response::bulk(Bytes::from(s))).collect())
     }
 
     /// Handle MULTI command - start a transaction.

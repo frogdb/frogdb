@@ -31,6 +31,40 @@ pub struct Config {
     /// Memory configuration.
     #[serde(default)]
     pub memory: MemoryConfig,
+
+    /// Security configuration.
+    #[serde(default)]
+    pub security: SecurityConfig,
+
+    /// ACL configuration.
+    #[serde(default)]
+    pub acl: AclFileConfig,
+}
+
+/// Security configuration.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct SecurityConfig {
+    /// Legacy password for the default user (like Redis requirepass).
+    /// If set, clients must AUTH with this password before running commands.
+    #[serde(default)]
+    pub requirepass: String,
+}
+
+/// ACL configuration.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct AclFileConfig {
+    /// Path to the ACL file for SAVE/LOAD operations.
+    /// If empty, ACL SAVE/LOAD will return an error.
+    #[serde(default)]
+    pub aclfile: String,
+
+    /// Maximum number of entries in the ACL LOG.
+    #[serde(default = "default_acl_log_max_len")]
+    pub log_max_len: usize,
+}
+
+fn default_acl_log_max_len() -> usize {
+    128
 }
 
 /// Metrics configuration.
@@ -629,8 +663,41 @@ lfu_log_factor = 10
 # LFU decay time in minutes - counter decays by 1 every N minutes.
 # This allows old hot keys to eventually become evictable.
 lfu_decay_time = 1
+
+[security]
+# Legacy password for the default user.
+# If set, clients must AUTH with this password before running commands.
+# Leave empty to allow connections without authentication.
+requirepass = ""
+
+[acl]
+# Path to the ACL file for SAVE/LOAD operations.
+# If empty, ACL SAVE/LOAD will return an error.
+aclfile = ""
+
+# Maximum number of entries in the ACL LOG.
+log_max_len = 128
 "#
         .to_string()
+    }
+
+    /// Convert to AclConfig for AclManager initialization.
+    pub fn to_acl_config(&self) -> frogdb_core::AclConfig {
+        use std::path::PathBuf;
+
+        frogdb_core::AclConfig {
+            aclfile: if self.acl.aclfile.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(&self.acl.aclfile))
+            },
+            log_max_len: self.acl.log_max_len,
+            requirepass: if self.security.requirepass.is_empty() {
+                None
+            } else {
+                Some(self.security.requirepass.clone())
+            },
+        }
     }
 
     /// Get the full bind address.
