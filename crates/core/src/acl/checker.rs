@@ -149,17 +149,15 @@ impl AclChecker for FullAclChecker {
     ) -> PermissionResult {
         if user.check_command(cmd, subcmd) {
             PermissionResult::Allowed
+        } else if let Some(sub) = subcmd {
+            PermissionResult::Denied(AclError::NoPermissionSubcommand {
+                command: cmd.to_uppercase(),
+                subcommand: sub.to_uppercase(),
+            })
         } else {
-            if let Some(sub) = subcmd {
-                PermissionResult::Denied(AclError::NoPermissionSubcommand {
-                    command: cmd.to_uppercase(),
-                    subcommand: sub.to_uppercase(),
-                })
-            } else {
-                PermissionResult::Denied(AclError::NoPermissionCommand {
-                    command: cmd.to_uppercase(),
-                })
-            }
+            PermissionResult::Denied(AclError::NoPermissionCommand {
+                command: cmd.to_uppercase(),
+            })
         }
     }
 

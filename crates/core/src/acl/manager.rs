@@ -253,7 +253,7 @@ impl AclManager {
                 continue;
             }
 
-            let (username, rules) = parse_acl_line(&line).map_err(|_| AclError::FileError {
+            let (username, rules) = parse_acl_line(line).map_err(|_| AclError::FileError {
                 message: format!("Parse error on line {}: {}", line_num + 1, line),
             })?;
 

@@ -283,6 +283,7 @@ fn serialize_set(set: &SetValue) -> (u8, Vec<u8>) {
 ///     - field bytes
 ///     - value_len (4 bytes u32)
 ///     - value bytes
+///
 /// Note: Consumer groups are not persisted (they are ephemeral state)
 fn serialize_stream(stream: &StreamValue) -> (u8, Vec<u8>) {
     let entries = stream.to_vec();

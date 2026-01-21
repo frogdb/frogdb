@@ -206,7 +206,7 @@ impl User {
         // passwords (hashes)
         let passwords: Vec<String> = self.password_hashes
             .iter()
-            .map(|h| hex::encode(h))
+            .map(hex::encode)
             .collect();
         info.push(("passwords", UserInfoValue::StringArray(passwords)));
 
@@ -343,10 +343,8 @@ impl UserPermissions {
 
         // Check denied categories
         if let Some(category) = super::categories::CommandCategory::for_command(&cmd_lower) {
-            if self.denied_categories.contains(&category) {
-                if !self.allowed_commands.contains(&cmd_lower) {
-                    return false;
-                }
+            if self.denied_categories.contains(&category) && !self.allowed_commands.contains(&cmd_lower) {
+                return false;
             }
         }
 

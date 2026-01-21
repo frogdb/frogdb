@@ -1796,18 +1796,12 @@ impl ListValue {
 // ============================================================================
 
 /// Stream entry ID consisting of millisecond timestamp and sequence number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct StreamId {
     /// Unix timestamp in milliseconds.
     pub ms: u64,
     /// Sequence number within the millisecond.
     pub seq: u64,
-}
-
-impl Default for StreamId {
-    fn default() -> Self {
-        Self { ms: 0, seq: 0 }
-    }
 }
 
 impl StreamId {
@@ -2224,13 +2218,13 @@ impl ConsumerGroup {
         let base = std::mem::size_of::<Self>();
         let pending_size: usize = self
             .pending
-            .iter()
-            .map(|(_, pe)| std::mem::size_of::<StreamId>() + pe.consumer.len() + 32)
+            .values()
+            .map(|pe| std::mem::size_of::<StreamId>() + pe.consumer.len() + 32)
             .sum();
         let consumers_size: usize = self
             .consumers
-            .iter()
-            .map(|(k, _)| k.len() + std::mem::size_of::<Consumer>() + 32)
+            .keys()
+            .map(|k| k.len() + std::mem::size_of::<Consumer>() + 32)
             .sum();
         base + pending_size + consumers_size + self.name.len()
     }
@@ -2557,8 +2551,8 @@ impl StreamValue {
 
         let entries_size: usize = self
             .entries
-            .iter()
-            .map(|(_, fields)| {
+            .values()
+            .map(|fields| {
                 let fields_size: usize = fields.iter().map(|(k, v)| k.len() + v.len() + 16).sum();
                 std::mem::size_of::<StreamId>() + fields_size + 32
             })
