@@ -13,8 +13,8 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 4 (Multi-Shard Operations) ✓
-**Next Milestone**: Phase 5 - Persistence
+**Phase**: 7 (Transactions & Pub/Sub) ✓
+**Next Milestone**: Phase 5 - Persistence (RocksDB)
 
 ---
 
@@ -635,31 +635,33 @@ The following optimizations are deferred to a future phase:
 
 ### 7.2 Pub/Sub - Broadcast
 
-- [ ] `SUBSCRIBE`, `UNSUBSCRIBE`
-- [ ] `PSUBSCRIBE`, `PUNSUBSCRIBE`
-- [ ] `PUBLISH` (fan-out to all shards)
-- [ ] Pub/sub mode restrictions
+- [x] `SUBSCRIBE`, `UNSUBSCRIBE`
+- [x] `PSUBSCRIBE`, `PUNSUBSCRIBE`
+- [x] `PUBLISH` (fan-out to all shards)
+- [x] Pub/sub mode restrictions
 
 ### 7.3 Pub/Sub - Sharded
 
-- [ ] `SSUBSCRIBE`, `SUNSUBSCRIBE`
-- [ ] `SPUBLISH` (route to channel's shard)
+- [x] `SSUBSCRIBE`, `SUNSUBSCRIBE`
+- [x] `SPUBLISH` (route to channel's shard)
 
 ### 7.4 Pub/Sub - Introspection
 
-- [ ] `PUBSUB CHANNELS`
-- [ ] `PUBSUB NUMSUB`
-- [ ] `PUBSUB NUMPAT`
-- [ ] `PUBSUB SHARDCHANNELS`
-- [ ] `PUBSUB SHARDNUMSUB`
+- [x] `PUBSUB CHANNELS`
+- [x] `PUBSUB NUMSUB`
+- [x] `PUBSUB NUMPAT`
+- [x] `PUBSUB SHARDCHANNELS`
+- [x] `PUBSUB SHARDNUMSUB`
 
 ### 7.5 Testing
 
 - [x] Test MULTI/EXEC flow
 - [x] Test WATCH conflict detection
-- [ ] Test broadcast pub/sub
-- [ ] Test sharded pub/sub
-- [ ] Test pattern subscriptions
+- [x] Test broadcast pub/sub
+- [x] Test sharded pub/sub
+- [x] Test pattern subscriptions
+- [x] Test namespace isolation (PUBLISH/SPUBLISH separation)
+- [x] Test pub/sub mode restrictions
 
 ---
 

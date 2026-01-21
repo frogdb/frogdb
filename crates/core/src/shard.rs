@@ -11,6 +11,9 @@ use crate::command::CommandContext;
 use crate::persistence::{
     NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
 };
+use crate::pubsub::{
+    ConnId, IntrospectionRequest, IntrospectionResponse, PubSubSender, ShardSubscriptions,
+};
 use crate::registry::CommandRegistry;
 use crate::store::{HashMapStore, Store};
 
@@ -46,6 +49,80 @@ pub enum ShardMessage {
         watches: Vec<(Bytes, u64)>,
         conn_id: u64,
         response_tx: oneshot::Sender<TransactionResult>,
+    },
+
+    // =========================================================================
+    // Pub/Sub messages
+    // =========================================================================
+
+    /// Subscribe to broadcast channels.
+    Subscribe {
+        channels: Vec<Bytes>,
+        conn_id: ConnId,
+        sender: PubSubSender,
+        response_tx: oneshot::Sender<Vec<usize>>,
+    },
+
+    /// Unsubscribe from broadcast channels.
+    Unsubscribe {
+        channels: Vec<Bytes>,
+        conn_id: ConnId,
+        response_tx: oneshot::Sender<Vec<usize>>,
+    },
+
+    /// Subscribe to patterns.
+    PSubscribe {
+        patterns: Vec<Bytes>,
+        conn_id: ConnId,
+        sender: PubSubSender,
+        response_tx: oneshot::Sender<Vec<usize>>,
+    },
+
+    /// Unsubscribe from patterns.
+    PUnsubscribe {
+        patterns: Vec<Bytes>,
+        conn_id: ConnId,
+        response_tx: oneshot::Sender<Vec<usize>>,
+    },
+
+    /// Publish to a broadcast channel.
+    Publish {
+        channel: Bytes,
+        message: Bytes,
+        response_tx: oneshot::Sender<usize>,
+    },
+
+    /// Subscribe to sharded channels.
+    ShardedSubscribe {
+        channels: Vec<Bytes>,
+        conn_id: ConnId,
+        sender: PubSubSender,
+        response_tx: oneshot::Sender<Vec<usize>>,
+    },
+
+    /// Unsubscribe from sharded channels.
+    ShardedUnsubscribe {
+        channels: Vec<Bytes>,
+        conn_id: ConnId,
+        response_tx: oneshot::Sender<Vec<usize>>,
+    },
+
+    /// Publish to a sharded channel.
+    ShardedPublish {
+        channel: Bytes,
+        message: Bytes,
+        response_tx: oneshot::Sender<usize>,
+    },
+
+    /// Pub/Sub introspection request.
+    PubSubIntrospection {
+        request: IntrospectionRequest,
+        response_tx: oneshot::Sender<IntrospectionResponse>,
+    },
+
+    /// Connection closed - clean up subscriptions.
+    ConnectionClosed {
+        conn_id: ConnId,
     },
 
     /// Shutdown signal.
@@ -205,6 +282,9 @@ pub struct ShardWorker {
     /// Monotonically increasing version for WATCH detection.
     /// Reset to 0 on server restart.
     shard_version: u64,
+
+    /// Pub/Sub subscriptions for this shard.
+    subscriptions: ShardSubscriptions,
 }
 
 impl ShardWorker {
@@ -229,6 +309,7 @@ impl ShardWorker {
             wal_writer: None,
             snapshot_coordinator: Arc::new(NoopSnapshotCoordinator::new()),
             shard_version: 0,
+            subscriptions: ShardSubscriptions::new(),
         }
     }
 
@@ -259,6 +340,7 @@ impl ShardWorker {
             wal_writer: Some(wal_writer),
             snapshot_coordinator,
             shard_version: 0,
+            subscriptions: ShardSubscriptions::new(),
         }
     }
 
@@ -319,6 +401,48 @@ impl ShardWorker {
                             let result = self.execute_transaction(commands, &watches, conn_id);
                             let _ = response_tx.send(result);
                         }
+
+                        // Pub/Sub message handlers
+                        ShardMessage::Subscribe { channels, conn_id, sender, response_tx } => {
+                            let counts = self.handle_subscribe(channels, conn_id, sender);
+                            let _ = response_tx.send(counts);
+                        }
+                        ShardMessage::Unsubscribe { channels, conn_id, response_tx } => {
+                            let counts = self.handle_unsubscribe(channels, conn_id);
+                            let _ = response_tx.send(counts);
+                        }
+                        ShardMessage::PSubscribe { patterns, conn_id, sender, response_tx } => {
+                            let counts = self.handle_psubscribe(patterns, conn_id, sender);
+                            let _ = response_tx.send(counts);
+                        }
+                        ShardMessage::PUnsubscribe { patterns, conn_id, response_tx } => {
+                            let counts = self.handle_punsubscribe(patterns, conn_id);
+                            let _ = response_tx.send(counts);
+                        }
+                        ShardMessage::Publish { channel, message, response_tx } => {
+                            let count = self.subscriptions.publish(&channel, &message);
+                            let _ = response_tx.send(count);
+                        }
+                        ShardMessage::ShardedSubscribe { channels, conn_id, sender, response_tx } => {
+                            let counts = self.handle_ssubscribe(channels, conn_id, sender);
+                            let _ = response_tx.send(counts);
+                        }
+                        ShardMessage::ShardedUnsubscribe { channels, conn_id, response_tx } => {
+                            let counts = self.handle_sunsubscribe(channels, conn_id);
+                            let _ = response_tx.send(counts);
+                        }
+                        ShardMessage::ShardedPublish { channel, message, response_tx } => {
+                            let count = self.subscriptions.spublish(&channel, &message);
+                            let _ = response_tx.send(count);
+                        }
+                        ShardMessage::PubSubIntrospection { request, response_tx } => {
+                            let response = self.handle_introspection(request);
+                            let _ = response_tx.send(response);
+                        }
+                        ShardMessage::ConnectionClosed { conn_id } => {
+                            self.subscriptions.remove_connection(conn_id);
+                        }
+
                         ShardMessage::Shutdown => {
                             tracing::info!(shard_id = self.shard_id, "Shard worker shutting down");
                             // Flush WAL before shutdown
@@ -567,6 +691,124 @@ impl ShardWorker {
         };
 
         PartialResult { results }
+    }
+
+    // =========================================================================
+    // Pub/Sub helpers
+    // =========================================================================
+
+    /// Handle SUBSCRIBE - subscribe to broadcast channels.
+    fn handle_subscribe(
+        &mut self,
+        channels: Vec<Bytes>,
+        conn_id: ConnId,
+        sender: PubSubSender,
+    ) -> Vec<usize> {
+        // This returns the total subscription count after each subscription
+        // The count is just a placeholder here since we don't track across shards
+        channels
+            .into_iter()
+            .enumerate()
+            .map(|(i, channel)| {
+                self.subscriptions.subscribe(channel, conn_id, sender.clone());
+                i + 1 // Placeholder count
+            })
+            .collect()
+    }
+
+    /// Handle UNSUBSCRIBE - unsubscribe from broadcast channels.
+    fn handle_unsubscribe(&mut self, channels: Vec<Bytes>, conn_id: ConnId) -> Vec<usize> {
+        channels
+            .into_iter()
+            .enumerate()
+            .map(|(i, channel)| {
+                self.subscriptions.unsubscribe(&channel, conn_id);
+                i // Placeholder remaining count
+            })
+            .collect()
+    }
+
+    /// Handle PSUBSCRIBE - subscribe to patterns.
+    fn handle_psubscribe(
+        &mut self,
+        patterns: Vec<Bytes>,
+        conn_id: ConnId,
+        sender: PubSubSender,
+    ) -> Vec<usize> {
+        patterns
+            .into_iter()
+            .enumerate()
+            .map(|(i, pattern)| {
+                self.subscriptions.psubscribe(pattern, conn_id, sender.clone());
+                i + 1 // Placeholder count
+            })
+            .collect()
+    }
+
+    /// Handle PUNSUBSCRIBE - unsubscribe from patterns.
+    fn handle_punsubscribe(&mut self, patterns: Vec<Bytes>, conn_id: ConnId) -> Vec<usize> {
+        patterns
+            .into_iter()
+            .enumerate()
+            .map(|(i, pattern)| {
+                self.subscriptions.punsubscribe(&pattern, conn_id);
+                i // Placeholder remaining count
+            })
+            .collect()
+    }
+
+    /// Handle SSUBSCRIBE - subscribe to sharded channels.
+    fn handle_ssubscribe(
+        &mut self,
+        channels: Vec<Bytes>,
+        conn_id: ConnId,
+        sender: PubSubSender,
+    ) -> Vec<usize> {
+        channels
+            .into_iter()
+            .enumerate()
+            .map(|(i, channel)| {
+                self.subscriptions.ssubscribe(channel, conn_id, sender.clone());
+                i + 1 // Placeholder count
+            })
+            .collect()
+    }
+
+    /// Handle SUNSUBSCRIBE - unsubscribe from sharded channels.
+    fn handle_sunsubscribe(&mut self, channels: Vec<Bytes>, conn_id: ConnId) -> Vec<usize> {
+        channels
+            .into_iter()
+            .enumerate()
+            .map(|(i, channel)| {
+                self.subscriptions.sunsubscribe(&channel, conn_id);
+                i // Placeholder remaining count
+            })
+            .collect()
+    }
+
+    /// Handle introspection requests.
+    fn handle_introspection(&self, request: IntrospectionRequest) -> IntrospectionResponse {
+        match request {
+            IntrospectionRequest::Channels { pattern } => {
+                let channels = self.subscriptions.channels(pattern.as_ref());
+                IntrospectionResponse::Channels(channels)
+            }
+            IntrospectionRequest::NumSub { channels } => {
+                let counts = self.subscriptions.numsub(&channels);
+                IntrospectionResponse::NumSub(counts)
+            }
+            IntrospectionRequest::NumPat => {
+                IntrospectionResponse::NumPat(self.subscriptions.pattern_count())
+            }
+            IntrospectionRequest::ShardChannels { pattern } => {
+                let channels = self.subscriptions.shard_channels(pattern.as_ref());
+                IntrospectionResponse::Channels(channels)
+            }
+            IntrospectionRequest::ShardNumSub { channels } => {
+                let counts = self.subscriptions.shard_numsub(&channels);
+                IntrospectionResponse::NumSub(counts)
+            }
+        }
     }
 }
 
