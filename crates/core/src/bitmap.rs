@@ -137,7 +137,9 @@ impl BitfieldEncoding {
         };
 
         let bits: u8 = bits_str.parse().ok()?;
-        if bits == 0 || bits > 64 || (signed && bits > 64) || (!signed && bits > 63) {
+        // Signed can use up to 64 bits (i64), unsigned up to 63 bits
+        let max_bits = if signed { 64 } else { 63 };
+        if bits == 0 || bits > max_bits {
             return None;
         }
 
