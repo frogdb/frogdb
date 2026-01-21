@@ -702,6 +702,23 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // Client commands (handled specially in connection.rs, but registered for introspection)
     registry.register(crate::commands::client::ClientCommand);
+
+    // Stream commands
+    registry.register(crate::commands::stream::XaddCommand);
+    registry.register(crate::commands::stream::XlenCommand);
+    registry.register(crate::commands::stream::XrangeCommand);
+    registry.register(crate::commands::stream::XrevrangeCommand);
+    registry.register(crate::commands::stream::XdelCommand);
+    registry.register(crate::commands::stream::XtrimCommand);
+    registry.register(crate::commands::stream::XreadCommand);
+    registry.register(crate::commands::stream::XgroupCommand);
+    registry.register(crate::commands::stream::XreadgroupCommand);
+    registry.register(crate::commands::stream::XackCommand);
+    registry.register(crate::commands::stream::XpendingCommand);
+    registry.register(crate::commands::stream::XclaimCommand);
+    registry.register(crate::commands::stream::XautoclaimCommand);
+    registry.register(crate::commands::stream::XinfoCommand);
+    registry.register(crate::commands::stream::XsetidCommand);
 }
 
 // Commands module

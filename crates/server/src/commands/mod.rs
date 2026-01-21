@@ -15,6 +15,7 @@ pub mod scripting;
 pub mod server;
 pub mod set;
 pub mod sorted_set;
+pub mod stream;
 pub mod string;
 pub mod transaction;
 
@@ -30,5 +31,6 @@ pub use scripting::*;
 pub use server::*;
 pub use set::*;
 pub use sorted_set::*;
+pub use stream::*;
 pub use string::*;
 pub use transaction::*;

@@ -19,8 +19,8 @@ pub enum Value {
     List(ListValue),
     /// Set value.
     Set(SetValue),
-    // Future types:
-    // Stream(StreamValue),
+    /// Stream value.
+    Stream(StreamValue),
 }
 
 impl Value {
@@ -49,6 +49,11 @@ impl Value {
         Value::Set(SetValue::new())
     }
 
+    /// Create a stream value.
+    pub fn stream() -> Self {
+        Value::Stream(StreamValue::new())
+    }
+
     /// Get the key type.
     pub fn key_type(&self) -> KeyType {
         match self {
@@ -57,6 +62,7 @@ impl Value {
             Value::Hash(_) => KeyType::Hash,
             Value::List(_) => KeyType::List,
             Value::Set(_) => KeyType::Set,
+            Value::Stream(_) => KeyType::Stream,
         }
     }
 
@@ -68,6 +74,7 @@ impl Value {
             Value::Hash(h) => h.memory_size(),
             Value::List(l) => l.memory_size(),
             Value::Set(s) => s.memory_size(),
+            Value::Stream(st) => st.memory_size(),
         }
     }
 
@@ -147,6 +154,22 @@ impl Value {
     pub fn as_set_mut(&mut self) -> Option<&mut SetValue> {
         match self {
             Value::Set(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a stream value.
+    pub fn as_stream(&self) -> Option<&StreamValue> {
+        match self {
+            Value::Stream(st) => Some(st),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a mutable stream value.
+    pub fn as_stream_mut(&mut self) -> Option<&mut StreamValue> {
+        match self {
+            Value::Stream(st) => Some(st),
             _ => None,
         }
     }
@@ -1768,6 +1791,809 @@ impl ListValue {
     }
 }
 
+// ============================================================================
+// Stream Type
+// ============================================================================
+
+/// Stream entry ID consisting of millisecond timestamp and sequence number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StreamId {
+    /// Unix timestamp in milliseconds.
+    pub ms: u64,
+    /// Sequence number within the millisecond.
+    pub seq: u64,
+}
+
+impl Default for StreamId {
+    fn default() -> Self {
+        Self { ms: 0, seq: 0 }
+    }
+}
+
+impl StreamId {
+    /// Create a new stream ID.
+    pub fn new(ms: u64, seq: u64) -> Self {
+        Self { ms, seq }
+    }
+
+    /// Minimum possible stream ID (0-0).
+    pub fn min() -> Self {
+        Self { ms: 0, seq: 0 }
+    }
+
+    /// Maximum possible stream ID.
+    pub fn max() -> Self {
+        Self {
+            ms: u64::MAX,
+            seq: u64::MAX,
+        }
+    }
+
+    /// Check if this is the zero ID (0-0).
+    pub fn is_zero(&self) -> bool {
+        self.ms == 0 && self.seq == 0
+    }
+
+    /// Parse a stream ID from bytes.
+    ///
+    /// Format: "ms-seq" where ms and seq are unsigned integers.
+    /// Also accepts just "ms" (sequence defaults to 0 for explicit IDs).
+    pub fn parse(s: &[u8]) -> Result<Self, StreamIdParseError> {
+        let s = std::str::from_utf8(s).map_err(|_| StreamIdParseError::InvalidFormat)?;
+
+        if let Some((ms_str, seq_str)) = s.split_once('-') {
+            let ms = ms_str
+                .parse::<u64>()
+                .map_err(|_| StreamIdParseError::InvalidFormat)?;
+            let seq = seq_str
+                .parse::<u64>()
+                .map_err(|_| StreamIdParseError::InvalidFormat)?;
+            Ok(Self { ms, seq })
+        } else {
+            // Just milliseconds, sequence is 0
+            let ms = s
+                .parse::<u64>()
+                .map_err(|_| StreamIdParseError::InvalidFormat)?;
+            Ok(Self { ms, seq: 0 })
+        }
+    }
+
+    /// Parse a stream ID for use as a range bound.
+    ///
+    /// Supports special values:
+    /// - "-" means minimum ID
+    /// - "+" means maximum ID
+    /// - Otherwise parses as normal ID
+    pub fn parse_range_bound(s: &[u8]) -> Result<StreamRangeBound, StreamIdParseError> {
+        match s {
+            b"-" => Ok(StreamRangeBound::Min),
+            b"+" => Ok(StreamRangeBound::Max),
+            _ => {
+                // Check for exclusive prefix
+                if s.starts_with(b"(") {
+                    let id = Self::parse(&s[1..])?;
+                    Ok(StreamRangeBound::Exclusive(id))
+                } else {
+                    let id = Self::parse(s)?;
+                    Ok(StreamRangeBound::Inclusive(id))
+                }
+            }
+        }
+    }
+
+    /// Parse a stream ID for XADD.
+    ///
+    /// Supports special values:
+    /// - "*" means auto-generate
+    /// - "ms-*" means auto-generate sequence for given timestamp
+    /// - Otherwise parses as explicit ID
+    pub fn parse_for_add(s: &[u8]) -> Result<StreamIdSpec, StreamIdParseError> {
+        let s_str = std::str::from_utf8(s).map_err(|_| StreamIdParseError::InvalidFormat)?;
+
+        if s_str == "*" {
+            return Ok(StreamIdSpec::Auto);
+        }
+
+        if let Some((ms_str, seq_str)) = s_str.split_once('-') {
+            let ms = ms_str
+                .parse::<u64>()
+                .map_err(|_| StreamIdParseError::InvalidFormat)?;
+            if seq_str == "*" {
+                return Ok(StreamIdSpec::AutoSeq(ms));
+            }
+            let seq = seq_str
+                .parse::<u64>()
+                .map_err(|_| StreamIdParseError::InvalidFormat)?;
+            Ok(StreamIdSpec::Explicit(Self { ms, seq }))
+        } else {
+            let ms = s_str
+                .parse::<u64>()
+                .map_err(|_| StreamIdParseError::InvalidFormat)?;
+            Ok(StreamIdSpec::Explicit(Self { ms, seq: 0 }))
+        }
+    }
+
+    /// Generate a new stream ID based on current time and the last ID.
+    pub fn generate(last: &StreamId) -> Self {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        if now_ms > last.ms {
+            Self { ms: now_ms, seq: 0 }
+        } else {
+            // Same or earlier timestamp, increment sequence
+            Self {
+                ms: last.ms,
+                seq: last.seq.saturating_add(1),
+            }
+        }
+    }
+
+    /// Generate a new stream ID with auto-sequence for a given timestamp.
+    pub fn generate_with_ms(ms: u64, last: &StreamId) -> Option<Self> {
+        if ms > last.ms {
+            Some(Self { ms, seq: 0 })
+        } else if ms == last.ms {
+            Some(Self {
+                ms,
+                seq: last.seq.saturating_add(1),
+            })
+        } else {
+            // Timestamp is in the past
+            None
+        }
+    }
+
+    /// Check if this ID is valid as a new entry after the last ID.
+    pub fn is_valid_after(&self, last: &StreamId) -> bool {
+        self > last
+    }
+}
+
+impl std::fmt::Display for StreamId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{}", self.ms, self.seq)
+    }
+}
+
+impl Ord for StreamId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.ms.cmp(&other.ms) {
+            std::cmp::Ordering::Equal => self.seq.cmp(&other.seq),
+            ord => ord,
+        }
+    }
+}
+
+impl PartialOrd for StreamId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Stream ID parsing error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamIdParseError {
+    /// Invalid format (not "ms-seq" or "ms").
+    InvalidFormat,
+}
+
+/// Stream ID specification for XADD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamIdSpec {
+    /// Auto-generate ID based on current time.
+    Auto,
+    /// Auto-generate sequence for given millisecond timestamp.
+    AutoSeq(u64),
+    /// Explicit ID.
+    Explicit(StreamId),
+}
+
+/// Stream range bound for XRANGE/XREVRANGE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamRangeBound {
+    /// Minimum ID ("-").
+    Min,
+    /// Maximum ID ("+").
+    Max,
+    /// Inclusive bound.
+    Inclusive(StreamId),
+    /// Exclusive bound (prefixed with "(").
+    Exclusive(StreamId),
+}
+
+impl StreamRangeBound {
+    /// Check if an ID satisfies this bound as a minimum.
+    pub fn satisfies_min(&self, id: &StreamId) -> bool {
+        match self {
+            StreamRangeBound::Min => true,
+            StreamRangeBound::Max => false,
+            StreamRangeBound::Inclusive(bound) => id >= bound,
+            StreamRangeBound::Exclusive(bound) => id > bound,
+        }
+    }
+
+    /// Check if an ID satisfies this bound as a maximum.
+    pub fn satisfies_max(&self, id: &StreamId) -> bool {
+        match self {
+            StreamRangeBound::Min => false,
+            StreamRangeBound::Max => true,
+            StreamRangeBound::Inclusive(bound) => id <= bound,
+            StreamRangeBound::Exclusive(bound) => id < bound,
+        }
+    }
+}
+
+/// Stream entry with ID and field-value pairs.
+#[derive(Debug, Clone)]
+pub struct StreamEntry {
+    /// Entry ID.
+    pub id: StreamId,
+    /// Field-value pairs.
+    pub fields: Vec<(Bytes, Bytes)>,
+}
+
+impl StreamEntry {
+    /// Create a new stream entry.
+    pub fn new(id: StreamId, fields: Vec<(Bytes, Bytes)>) -> Self {
+        Self { id, fields }
+    }
+
+    /// Calculate memory size of this entry.
+    pub fn memory_size(&self) -> usize {
+        let base = std::mem::size_of::<Self>();
+        let fields_size: usize = self
+            .fields
+            .iter()
+            .map(|(k, v)| k.len() + v.len() + 16) // 16 for Vec overhead
+            .sum();
+        base + fields_size
+    }
+}
+
+/// Pending entry in a consumer group's PEL (Pending Entries List).
+#[derive(Debug, Clone)]
+pub struct PendingEntry {
+    /// Consumer that owns this pending entry.
+    pub consumer: Bytes,
+    /// Time when the entry was delivered.
+    pub delivery_time: Instant,
+    /// Number of times this entry has been delivered.
+    pub delivery_count: u32,
+}
+
+impl PendingEntry {
+    /// Create a new pending entry.
+    pub fn new(consumer: Bytes) -> Self {
+        Self {
+            consumer,
+            delivery_time: Instant::now(),
+            delivery_count: 1,
+        }
+    }
+
+    /// Get idle time in milliseconds.
+    pub fn idle_ms(&self) -> u64 {
+        self.delivery_time.elapsed().as_millis() as u64
+    }
+}
+
+/// Consumer in a consumer group.
+#[derive(Debug, Clone)]
+pub struct Consumer {
+    /// Consumer name.
+    pub name: Bytes,
+    /// Number of pending entries for this consumer.
+    pub pending_count: usize,
+    /// Last time this consumer was seen (read or claimed).
+    pub last_seen: Instant,
+}
+
+impl Consumer {
+    /// Create a new consumer.
+    pub fn new(name: Bytes) -> Self {
+        Self {
+            name,
+            pending_count: 0,
+            last_seen: Instant::now(),
+        }
+    }
+
+    /// Get idle time in milliseconds.
+    pub fn idle_ms(&self) -> u64 {
+        self.last_seen.elapsed().as_millis() as u64
+    }
+
+    /// Touch the consumer (update last_seen).
+    pub fn touch(&mut self) {
+        self.last_seen = Instant::now();
+    }
+}
+
+/// Consumer group for a stream.
+#[derive(Debug, Clone)]
+pub struct ConsumerGroup {
+    /// Group name.
+    pub name: Bytes,
+    /// Last delivered ID (entries after this are "new").
+    pub last_delivered_id: StreamId,
+    /// Pending entries list (PEL) - entries delivered but not acknowledged.
+    pub pending: BTreeMap<StreamId, PendingEntry>,
+    /// Consumers in this group.
+    pub consumers: HashMap<Bytes, Consumer>,
+    /// Number of entries read by this group (for XINFO).
+    pub entries_read: Option<u64>,
+}
+
+impl ConsumerGroup {
+    /// Create a new consumer group.
+    pub fn new(name: Bytes, last_delivered_id: StreamId) -> Self {
+        Self {
+            name,
+            last_delivered_id,
+            pending: BTreeMap::new(),
+            consumers: HashMap::new(),
+            entries_read: None,
+        }
+    }
+
+    /// Get or create a consumer.
+    pub fn get_or_create_consumer(&mut self, name: Bytes) -> &mut Consumer {
+        self.consumers
+            .entry(name.clone())
+            .or_insert_with(|| Consumer::new(name))
+    }
+
+    /// Create a consumer if it doesn't exist.
+    ///
+    /// Returns true if the consumer was created, false if it already existed.
+    pub fn create_consumer(&mut self, name: Bytes) -> bool {
+        if self.consumers.contains_key(&name) {
+            false
+        } else {
+            self.consumers.insert(name.clone(), Consumer::new(name));
+            true
+        }
+    }
+
+    /// Delete a consumer.
+    ///
+    /// Returns the number of pending entries that were deleted with the consumer.
+    pub fn delete_consumer(&mut self, name: &[u8]) -> usize {
+        if self.consumers.remove(name).is_some() {
+            // Remove all pending entries for this consumer
+            let to_remove: Vec<StreamId> = self
+                .pending
+                .iter()
+                .filter(|(_, pe)| pe.consumer.as_ref() == name)
+                .map(|(id, _)| *id)
+                .collect();
+            let count = to_remove.len();
+            for id in to_remove {
+                self.pending.remove(&id);
+            }
+            count
+        } else {
+            0
+        }
+    }
+
+    /// Add a pending entry for a consumer.
+    pub fn add_pending(&mut self, id: StreamId, consumer: Bytes) {
+        // Update consumer's pending count
+        if let Some(c) = self.consumers.get_mut(&consumer) {
+            c.pending_count += 1;
+            c.touch();
+        }
+        self.pending.insert(id, PendingEntry::new(consumer));
+    }
+
+    /// Acknowledge entries (remove from PEL).
+    ///
+    /// Returns the number of entries acknowledged.
+    pub fn ack(&mut self, ids: &[StreamId]) -> usize {
+        let mut count = 0;
+        for id in ids {
+            if let Some(pe) = self.pending.remove(id) {
+                count += 1;
+                // Update consumer's pending count
+                if let Some(c) = self.consumers.get_mut(&pe.consumer) {
+                    c.pending_count = c.pending_count.saturating_sub(1);
+                }
+            }
+        }
+        count
+    }
+
+    /// Get pending entry count summary.
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Get the smallest and largest pending IDs.
+    pub fn pending_range(&self) -> Option<(StreamId, StreamId)> {
+        let first = self.pending.first_key_value()?.0;
+        let last = self.pending.last_key_value()?.0;
+        Some((*first, *last))
+    }
+
+    /// Calculate memory size of this group.
+    pub fn memory_size(&self) -> usize {
+        let base = std::mem::size_of::<Self>();
+        let pending_size: usize = self
+            .pending
+            .iter()
+            .map(|(_, pe)| std::mem::size_of::<StreamId>() + pe.consumer.len() + 32)
+            .sum();
+        let consumers_size: usize = self
+            .consumers
+            .iter()
+            .map(|(k, _)| k.len() + std::mem::size_of::<Consumer>() + 32)
+            .sum();
+        base + pending_size + consumers_size + self.name.len()
+    }
+}
+
+/// Trimming strategy for streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamTrimStrategy {
+    /// Trim by maximum length.
+    MaxLen(u64),
+    /// Trim by minimum ID (entries older than this ID are removed).
+    MinId(StreamId),
+}
+
+/// Trimming mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamTrimMode {
+    /// Exact trimming (remove exactly to the threshold).
+    Exact,
+    /// Approximate trimming (may keep slightly more entries for efficiency).
+    Approximate,
+}
+
+/// Trimming options for XTRIM and XADD.
+#[derive(Debug, Clone, Copy)]
+pub struct StreamTrimOptions {
+    /// Trimming strategy.
+    pub strategy: StreamTrimStrategy,
+    /// Trimming mode.
+    pub mode: StreamTrimMode,
+    /// Maximum number of entries to trim in one operation (0 = unlimited).
+    pub limit: usize,
+}
+
+/// Stream value - an append-only log of entries with consumer groups.
+#[derive(Debug, Clone)]
+pub struct StreamValue {
+    /// Entries ordered by ID.
+    entries: BTreeMap<StreamId, Vec<(Bytes, Bytes)>>,
+    /// Last generated/added ID (for auto-generation).
+    last_id: StreamId,
+    /// Consumer groups.
+    groups: HashMap<Bytes, ConsumerGroup>,
+    /// First entry ID (cached for efficiency).
+    first_id: Option<StreamId>,
+}
+
+impl Default for StreamValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StreamValue {
+    /// Create a new empty stream.
+    pub fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            last_id: StreamId::default(),
+            groups: HashMap::new(),
+            first_id: None,
+        }
+    }
+
+    /// Get the number of entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Check if the stream is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Get the last entry ID.
+    pub fn last_id(&self) -> StreamId {
+        self.last_id
+    }
+
+    /// Get the first entry ID.
+    pub fn first_id(&self) -> Option<StreamId> {
+        self.first_id
+    }
+
+    /// Get the first entry.
+    pub fn first_entry(&self) -> Option<StreamEntry> {
+        self.entries.first_key_value().map(|(id, fields)| {
+            StreamEntry::new(*id, fields.clone())
+        })
+    }
+
+    /// Get the last entry.
+    pub fn last_entry(&self) -> Option<StreamEntry> {
+        self.entries.last_key_value().map(|(id, fields)| {
+            StreamEntry::new(*id, fields.clone())
+        })
+    }
+
+    /// Add an entry to the stream.
+    ///
+    /// Returns the ID of the added entry, or an error if the ID is invalid.
+    pub fn add(&mut self, id_spec: StreamIdSpec, fields: Vec<(Bytes, Bytes)>) -> Result<StreamId, StreamAddError> {
+        let id = match id_spec {
+            StreamIdSpec::Auto => StreamId::generate(&self.last_id),
+            StreamIdSpec::AutoSeq(ms) => {
+                StreamId::generate_with_ms(ms, &self.last_id)
+                    .ok_or(StreamAddError::IdTooSmall)?
+            }
+            StreamIdSpec::Explicit(id) => {
+                if !id.is_valid_after(&self.last_id) {
+                    return Err(StreamAddError::IdTooSmall);
+                }
+                id
+            }
+        };
+
+        // Check for zero ID (not allowed as first entry)
+        if self.is_empty() && id.is_zero() {
+            return Err(StreamAddError::IdTooSmall);
+        }
+
+        self.entries.insert(id, fields);
+        self.last_id = id;
+
+        // Update first_id if this is the first entry
+        if self.first_id.is_none() {
+            self.first_id = Some(id);
+        }
+
+        Ok(id)
+    }
+
+    /// Delete entries by ID.
+    ///
+    /// Returns the number of entries deleted.
+    pub fn delete(&mut self, ids: &[StreamId]) -> usize {
+        let mut count = 0;
+        for id in ids {
+            if self.entries.remove(id).is_some() {
+                count += 1;
+            }
+        }
+
+        // Update first_id if needed
+        if count > 0 {
+            self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
+        }
+
+        count
+    }
+
+    /// Get entries in a range.
+    pub fn range(
+        &self,
+        start: StreamRangeBound,
+        end: StreamRangeBound,
+        count: Option<usize>,
+    ) -> Vec<StreamEntry> {
+        let iter = self.entries.iter().filter(|(id, _)| {
+            start.satisfies_min(id) && end.satisfies_max(id)
+        });
+
+        let entries: Vec<_> = if let Some(count) = count {
+            iter.take(count)
+                .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+                .collect()
+        } else {
+            iter.map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+                .collect()
+        };
+
+        entries
+    }
+
+    /// Get entries in a range (reverse order).
+    pub fn range_rev(
+        &self,
+        start: StreamRangeBound,
+        end: StreamRangeBound,
+        count: Option<usize>,
+    ) -> Vec<StreamEntry> {
+        // For reverse range, start and end are swapped (end is the "start" bound)
+        let iter = self.entries.iter().rev().filter(|(id, _)| {
+            end.satisfies_min(id) && start.satisfies_max(id)
+        });
+
+        let entries: Vec<_> = if let Some(count) = count {
+            iter.take(count)
+                .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+                .collect()
+        } else {
+            iter.map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+                .collect()
+        };
+
+        entries
+    }
+
+    /// Read entries after a given ID (for XREAD).
+    pub fn read_after(&self, after: &StreamId, count: Option<usize>) -> Vec<StreamEntry> {
+        let iter = self.entries.range((std::ops::Bound::Excluded(*after), std::ops::Bound::Unbounded));
+
+        let entries: Vec<_> = if let Some(count) = count {
+            iter.take(count)
+                .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+                .collect()
+        } else {
+            iter.map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+                .collect()
+        };
+
+        entries
+    }
+
+    /// Trim the stream.
+    ///
+    /// Returns the number of entries removed.
+    pub fn trim(&mut self, options: StreamTrimOptions) -> usize {
+        let mut removed = 0;
+        let limit = if options.limit == 0 { usize::MAX } else { options.limit };
+
+        match options.strategy {
+            StreamTrimStrategy::MaxLen(max_len) => {
+                let max_len = max_len as usize;
+                while self.entries.len() > max_len && removed < limit {
+                    if let Some((id, _)) = self.entries.pop_first() {
+                        removed += 1;
+                        // Update first_id
+                        if Some(id) == self.first_id {
+                            self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+            StreamTrimStrategy::MinId(min_id) => {
+                // Remove all entries with ID < min_id
+                let to_remove: Vec<StreamId> = self
+                    .entries
+                    .range(..min_id)
+                    .take(limit)
+                    .map(|(id, _)| *id)
+                    .collect();
+                for id in to_remove {
+                    self.entries.remove(&id);
+                    removed += 1;
+                }
+                // Update first_id
+                if removed > 0 {
+                    self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
+                }
+            }
+        }
+
+        removed
+    }
+
+    // ==================== Consumer Group Methods ====================
+
+    /// Create a consumer group.
+    ///
+    /// Returns an error if the group already exists.
+    pub fn create_group(&mut self, name: Bytes, last_delivered_id: StreamId, entries_read: Option<u64>) -> Result<(), StreamGroupError> {
+        if self.groups.contains_key(&name) {
+            return Err(StreamGroupError::GroupExists);
+        }
+        let mut group = ConsumerGroup::new(name.clone(), last_delivered_id);
+        group.entries_read = entries_read;
+        self.groups.insert(name, group);
+        Ok(())
+    }
+
+    /// Destroy a consumer group.
+    ///
+    /// Returns true if the group was destroyed, false if it didn't exist.
+    pub fn destroy_group(&mut self, name: &[u8]) -> bool {
+        self.groups.remove(name).is_some()
+    }
+
+    /// Get a consumer group.
+    pub fn get_group(&self, name: &[u8]) -> Option<&ConsumerGroup> {
+        self.groups.get(name)
+    }
+
+    /// Get a mutable consumer group.
+    pub fn get_group_mut(&mut self, name: &[u8]) -> Option<&mut ConsumerGroup> {
+        self.groups.get_mut(name)
+    }
+
+    /// Get all consumer groups.
+    pub fn groups(&self) -> impl Iterator<Item = &ConsumerGroup> {
+        self.groups.values()
+    }
+
+    /// Number of consumer groups.
+    pub fn group_count(&self) -> usize {
+        self.groups.len()
+    }
+
+    /// Set a consumer group's last delivered ID.
+    pub fn set_group_id(&mut self, name: &[u8], id: StreamId, entries_read: Option<u64>) -> Result<(), StreamGroupError> {
+        let group = self.groups.get_mut(name).ok_or(StreamGroupError::NoGroup)?;
+        group.last_delivered_id = id;
+        if entries_read.is_some() {
+            group.entries_read = entries_read;
+        }
+        Ok(())
+    }
+
+    /// Get an entry by ID.
+    pub fn get(&self, id: &StreamId) -> Option<StreamEntry> {
+        self.entries.get(id).map(|fields| StreamEntry::new(*id, fields.clone()))
+    }
+
+    /// Check if an entry exists.
+    pub fn contains(&self, id: &StreamId) -> bool {
+        self.entries.contains_key(id)
+    }
+
+    /// Calculate memory size of this stream.
+    pub fn memory_size(&self) -> usize {
+        let base = std::mem::size_of::<Self>();
+
+        let entries_size: usize = self
+            .entries
+            .iter()
+            .map(|(_, fields)| {
+                let fields_size: usize = fields.iter().map(|(k, v)| k.len() + v.len() + 16).sum();
+                std::mem::size_of::<StreamId>() + fields_size + 32
+            })
+            .sum();
+
+        let groups_size: usize = self.groups.values().map(|g| g.memory_size()).sum();
+
+        base + entries_size + groups_size
+    }
+
+    /// Convert to vec for serialization.
+    pub fn to_vec(&self) -> Vec<StreamEntry> {
+        self.entries
+            .iter()
+            .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
+            .collect()
+    }
+}
+
+/// Error when adding to a stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamAddError {
+    /// The ID is equal to or smaller than the last ID.
+    IdTooSmall,
+}
+
+/// Error for consumer group operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamGroupError {
+    /// Consumer group already exists.
+    GroupExists,
+    /// Consumer group doesn't exist.
+    NoGroup,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1901,5 +2727,298 @@ mod tests {
 
         let sv_invalid = StringValue::new("not a float");
         assert!(sv_invalid.as_float().is_none());
+    }
+
+    // ==================== Stream Tests ====================
+
+    #[test]
+    fn test_stream_id_parse() {
+        // Valid formats
+        let id = StreamId::parse(b"1234567890123-0").unwrap();
+        assert_eq!(id.ms, 1234567890123);
+        assert_eq!(id.seq, 0);
+
+        let id = StreamId::parse(b"1-99").unwrap();
+        assert_eq!(id.ms, 1);
+        assert_eq!(id.seq, 99);
+
+        // Just milliseconds
+        let id = StreamId::parse(b"1234").unwrap();
+        assert_eq!(id.ms, 1234);
+        assert_eq!(id.seq, 0);
+
+        // Invalid formats
+        assert!(StreamId::parse(b"invalid").is_err());
+        assert!(StreamId::parse(b"-1-0").is_err());
+        assert!(StreamId::parse(b"1--0").is_err());
+    }
+
+    #[test]
+    fn test_stream_id_ordering() {
+        let id1 = StreamId::new(1000, 0);
+        let id2 = StreamId::new(1000, 1);
+        let id3 = StreamId::new(1001, 0);
+
+        assert!(id1 < id2);
+        assert!(id2 < id3);
+        assert!(id1 < id3);
+    }
+
+    #[test]
+    fn test_stream_id_display() {
+        let id = StreamId::new(1234567890123, 42);
+        assert_eq!(id.to_string(), "1234567890123-42");
+    }
+
+    #[test]
+    fn test_stream_id_range_bound() {
+        // Min bound
+        let bound = StreamId::parse_range_bound(b"-").unwrap();
+        assert_eq!(bound, StreamRangeBound::Min);
+
+        // Max bound
+        let bound = StreamId::parse_range_bound(b"+").unwrap();
+        assert_eq!(bound, StreamRangeBound::Max);
+
+        // Inclusive bound
+        let bound = StreamId::parse_range_bound(b"1000-0").unwrap();
+        assert_eq!(bound, StreamRangeBound::Inclusive(StreamId::new(1000, 0)));
+
+        // Exclusive bound
+        let bound = StreamId::parse_range_bound(b"(1000-0").unwrap();
+        assert_eq!(bound, StreamRangeBound::Exclusive(StreamId::new(1000, 0)));
+    }
+
+    #[test]
+    fn test_stream_value_add_auto() {
+        let mut stream = StreamValue::new();
+
+        let fields = vec![(Bytes::from("field1"), Bytes::from("value1"))];
+        let id = stream.add(StreamIdSpec::Auto, fields.clone()).unwrap();
+
+        assert!(id.ms > 0);
+        assert_eq!(stream.len(), 1);
+
+        // Add another entry
+        let id2 = stream.add(StreamIdSpec::Auto, fields).unwrap();
+        assert!(id2 > id);
+        assert_eq!(stream.len(), 2);
+    }
+
+    #[test]
+    fn test_stream_value_add_explicit() {
+        let mut stream = StreamValue::new();
+
+        let fields = vec![(Bytes::from("field1"), Bytes::from("value1"))];
+        let id = stream.add(StreamIdSpec::Explicit(StreamId::new(1000, 0)), fields.clone()).unwrap();
+
+        assert_eq!(id, StreamId::new(1000, 0));
+        assert_eq!(stream.len(), 1);
+
+        // Add with larger ID
+        let id2 = stream.add(StreamIdSpec::Explicit(StreamId::new(1000, 1)), fields.clone()).unwrap();
+        assert_eq!(id2, StreamId::new(1000, 1));
+
+        // Cannot add with smaller ID
+        let result = stream.add(StreamIdSpec::Explicit(StreamId::new(999, 0)), fields);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_stream_value_range() {
+        let mut stream = StreamValue::new();
+
+        for i in 0..5 {
+            let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
+            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+        }
+
+        // Full range
+        let entries = stream.range(StreamRangeBound::Min, StreamRangeBound::Max, None);
+        assert_eq!(entries.len(), 5);
+
+        // Range with count
+        let entries = stream.range(StreamRangeBound::Min, StreamRangeBound::Max, Some(2));
+        assert_eq!(entries.len(), 2);
+
+        // Specific range
+        let entries = stream.range(
+            StreamRangeBound::Inclusive(StreamId::new(1001, 0)),
+            StreamRangeBound::Inclusive(StreamId::new(1003, 0)),
+            None
+        );
+        assert_eq!(entries.len(), 3);
+    }
+
+    #[test]
+    fn test_stream_value_delete() {
+        let mut stream = StreamValue::new();
+
+        for i in 0..5 {
+            let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
+            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+        }
+
+        let deleted = stream.delete(&[StreamId::new(1001, 0), StreamId::new(1003, 0)]);
+        assert_eq!(deleted, 2);
+        assert_eq!(stream.len(), 3);
+
+        // Try to delete non-existent
+        let deleted = stream.delete(&[StreamId::new(9999, 0)]);
+        assert_eq!(deleted, 0);
+    }
+
+    #[test]
+    fn test_stream_value_trim_maxlen() {
+        let mut stream = StreamValue::new();
+
+        for i in 0..10 {
+            let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
+            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+        }
+
+        let trimmed = stream.trim(StreamTrimOptions {
+            strategy: StreamTrimStrategy::MaxLen(5),
+            mode: StreamTrimMode::Exact,
+            limit: 0,
+        });
+
+        assert_eq!(trimmed, 5);
+        assert_eq!(stream.len(), 5);
+
+        // First entry should now be 1005-0
+        assert_eq!(stream.first_id(), Some(StreamId::new(1005, 0)));
+    }
+
+    #[test]
+    fn test_stream_value_trim_minid() {
+        let mut stream = StreamValue::new();
+
+        for i in 0..10 {
+            let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
+            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+        }
+
+        let trimmed = stream.trim(StreamTrimOptions {
+            strategy: StreamTrimStrategy::MinId(StreamId::new(1005, 0)),
+            mode: StreamTrimMode::Exact,
+            limit: 0,
+        });
+
+        assert_eq!(trimmed, 5);
+        assert_eq!(stream.len(), 5);
+        assert_eq!(stream.first_id(), Some(StreamId::new(1005, 0)));
+    }
+
+    #[test]
+    fn test_consumer_group_basic() {
+        let mut stream = StreamValue::new();
+
+        // Add some entries
+        for i in 0..5 {
+            let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
+            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+        }
+
+        // Create a group
+        stream.create_group(Bytes::from("mygroup"), StreamId::new(0, 0), None).unwrap();
+
+        // Try to create duplicate group
+        let result = stream.create_group(Bytes::from("mygroup"), StreamId::new(0, 0), None);
+        assert!(result.is_err());
+
+        // Get the group
+        let group = stream.get_group(b"mygroup").unwrap();
+        assert_eq!(group.name, Bytes::from("mygroup"));
+        assert_eq!(group.last_delivered_id, StreamId::new(0, 0));
+
+        // Destroy the group
+        assert!(stream.destroy_group(b"mygroup"));
+        assert!(!stream.destroy_group(b"mygroup")); // Already destroyed
+    }
+
+    #[test]
+    fn test_consumer_group_pending() {
+        let mut stream = StreamValue::new();
+
+        // Add some entries
+        for i in 0..5 {
+            let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
+            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+        }
+
+        // Create a group and add pending entries
+        stream.create_group(Bytes::from("mygroup"), StreamId::new(0, 0), None).unwrap();
+
+        let group = stream.get_group_mut(b"mygroup").unwrap();
+        group.get_or_create_consumer(Bytes::from("consumer1"));
+        group.add_pending(StreamId::new(1000, 0), Bytes::from("consumer1"));
+        group.add_pending(StreamId::new(1001, 0), Bytes::from("consumer1"));
+
+        assert_eq!(group.pending_count(), 2);
+
+        // Acknowledge one
+        let acked = group.ack(&[StreamId::new(1000, 0)]);
+        assert_eq!(acked, 1);
+        assert_eq!(group.pending_count(), 1);
+
+        // Acknowledge non-existent
+        let acked = group.ack(&[StreamId::new(9999, 0)]);
+        assert_eq!(acked, 0);
+    }
+
+    #[test]
+    fn test_consumer_group_consumer_management() {
+        let mut group = ConsumerGroup::new(Bytes::from("mygroup"), StreamId::new(0, 0));
+
+        // Create consumers
+        assert!(group.create_consumer(Bytes::from("consumer1")));
+        assert!(!group.create_consumer(Bytes::from("consumer1"))); // Already exists
+        assert!(group.create_consumer(Bytes::from("consumer2")));
+
+        assert_eq!(group.consumers.len(), 2);
+
+        // Delete consumer
+        let pending_deleted = group.delete_consumer(b"consumer1");
+        assert_eq!(pending_deleted, 0);
+        assert_eq!(group.consumers.len(), 1);
+
+        // Delete with pending entries
+        group.get_or_create_consumer(Bytes::from("consumer2"));
+        group.add_pending(StreamId::new(1000, 0), Bytes::from("consumer2"));
+        let pending_deleted = group.delete_consumer(b"consumer2");
+        assert_eq!(pending_deleted, 1);
+    }
+
+    #[test]
+    fn test_stream_value_memory_size() {
+        let mut stream = StreamValue::new();
+
+        let initial_size = stream.memory_size();
+
+        // Add an entry
+        let fields = vec![(Bytes::from("field"), Bytes::from("value"))];
+        stream.add(StreamIdSpec::Explicit(StreamId::new(1000, 0)), fields).unwrap();
+
+        let after_add = stream.memory_size();
+        assert!(after_add > initial_size);
+
+        // Add a group
+        stream.create_group(Bytes::from("mygroup"), StreamId::new(0, 0), None).unwrap();
+
+        let after_group = stream.memory_size();
+        assert!(after_group > after_add);
+    }
+
+    #[test]
+    fn test_value_stream_accessors() {
+        let value = Value::stream();
+
+        // Test as_stream
+        assert!(value.as_stream().is_some());
+        assert!(value.as_string().is_none());
+
+        // Test key_type
+        assert_eq!(value.key_type(), KeyType::Stream);
     }
 }

@@ -43,8 +43,11 @@ pub use shard::{
 };
 pub use store::{HashMapStore, Store};
 pub use types::{
-    Expiry, HashValue, IncrementError, KeyMetadata, KeyType, LexBound, ListValue, ScoreBound,
-    SetCondition, SetOptions, SetResult, SetValue, SortedSetValue, StringValue, Value, ZAddResult,
+    Consumer, ConsumerGroup, Expiry, HashValue, IncrementError, KeyMetadata, KeyType, LexBound,
+    ListValue, PendingEntry, ScoreBound, SetCondition, SetOptions, SetResult, SetValue,
+    SortedSetValue, StreamAddError, StreamEntry, StreamGroupError, StreamId, StreamIdParseError,
+    StreamIdSpec, StreamRangeBound, StreamTrimMode, StreamTrimOptions, StreamTrimStrategy,
+    StreamValue, StringValue, Value, ZAddResult,
 };
 pub use scripting::{
     CachedScript, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig, ScriptRoute,
