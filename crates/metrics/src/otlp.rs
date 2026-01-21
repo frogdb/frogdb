@@ -216,4 +216,50 @@ mod tests {
         composite.record_gauge("test", 1.0, &[]);
         composite.record_histogram("test", 0.1, &[]);
     }
+
+    #[test]
+    fn test_composite_recorder_with_prometheus() {
+        use crate::prometheus_recorder::PrometheusRecorder;
+
+        // Create the prometheus recorder and keep a reference to it
+        let prom = Arc::new(PrometheusRecorder::new());
+        let prom_trait = prom.clone() as Arc<dyn MetricsRecorder>;
+        let noop = Arc::new(frogdb_core::NoopMetricsRecorder::new()) as Arc<dyn MetricsRecorder>;
+
+        let composite = CompositeRecorder::new(vec![prom_trait, noop]);
+
+        // Record through composite
+        composite.increment_counter("test_counter", 5, &[("label", "value")]);
+        composite.record_gauge("test_gauge", 42.0, &[]);
+        composite.record_histogram("test_histogram", 0.123, &[]);
+
+        // Verify prometheus backend received the metrics using our original Arc
+        let output = prom.encode();
+        assert!(output.contains("test_counter"));
+        assert!(output.contains("test_gauge"));
+        assert!(output.contains("test_histogram"));
+    }
+
+    #[test]
+    fn test_composite_recorder_empty() {
+        let composite = CompositeRecorder::new(vec![]);
+
+        // Should not panic with no backends
+        composite.increment_counter("test", 1, &[]);
+        composite.record_gauge("test", 1.0, &[]);
+        composite.record_histogram("test", 0.1, &[]);
+    }
+
+    #[test]
+    fn test_composite_recorder_with_labels() {
+        use frogdb_core::NoopMetricsRecorder;
+
+        let noop = Arc::new(NoopMetricsRecorder::new()) as Arc<dyn MetricsRecorder>;
+        let composite = CompositeRecorder::new(vec![noop]);
+
+        // Should handle various label configurations
+        composite.increment_counter("counter", 1, &[("a", "1"), ("b", "2")]);
+        composite.record_gauge("gauge", 1.0, &[("cmd", "GET")]);
+        composite.record_histogram("histogram", 0.1, &[("shard", "0"), ("op", "read")]);
+    }
 }
