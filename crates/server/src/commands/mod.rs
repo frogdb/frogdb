@@ -5,10 +5,13 @@
 
 pub mod acl;
 pub mod auth;
+pub mod bitmap;
+pub mod bloom;
 pub mod client;
 pub mod config;
 pub mod expiry;
 pub mod generic;
+pub mod geo;
 pub mod hash;
 pub mod info;
 pub mod list;
@@ -24,10 +27,13 @@ pub mod transaction;
 
 pub use acl::*;
 pub use auth::*;
+pub use bitmap::*;
+pub use bloom::*;
 pub use client::*;
 pub use config::*;
 pub use expiry::*;
 pub use generic::*;
+pub use geo::*;
 pub use hash::*;
 pub use info::*;
 pub use list::*;

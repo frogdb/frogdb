@@ -29,6 +29,7 @@ tracing-subscriber.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 futures.workspace = true
+bitvec.workspace = true
 shuttle = { workspace = true, optional = true }
 
 [dev-dependencies]

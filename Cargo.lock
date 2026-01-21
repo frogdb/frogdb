@@ -565,6 +565,7 @@ name = "frogdb-core"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "bitvec",
  "bytes",
  "crc16",
  "frogdb-protocol",
@@ -572,6 +573,7 @@ dependencies = [
  "hex",
  "linked-hash-map",
  "mlua",
+ "murmur3",
  "ordered-float 4.6.0",
  "proptest",
  "rand 0.8.5",
@@ -626,6 +628,7 @@ name = "frogdb-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bitvec",
  "bytes",
  "clap",
  "figment",
@@ -1225,6 +1228,12 @@ dependencies = [
  "luajit-src",
  "pkg-config",
 ]
+
+[[package]]
+name = "murmur3"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9252111cf132ba0929b6f8e030cac2a24b507f3a4d6db6fb2896f27b354c714b"
 
 [[package]]
 name = "nom"

@@ -743,6 +743,37 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Auth/ACL commands (handled specially in connection.rs, but registered for introspection)
     registry.register(crate::commands::auth::Auth);
     registry.register(crate::commands::acl::Acl);
+
+    // Bitmap commands
+    registry.register(crate::commands::bitmap::SetbitCommand);
+    registry.register(crate::commands::bitmap::GetbitCommand);
+    registry.register(crate::commands::bitmap::BitcountCommand);
+    registry.register(crate::commands::bitmap::BitopCommand);
+    registry.register(crate::commands::bitmap::BitposCommand);
+    registry.register(crate::commands::bitmap::BitfieldCommand);
+    registry.register(crate::commands::bitmap::BitfieldRoCommand);
+
+    // Geo commands
+    registry.register(crate::commands::geo::GeoaddCommand);
+    registry.register(crate::commands::geo::GeodistCommand);
+    registry.register(crate::commands::geo::GeohashCommand);
+    registry.register(crate::commands::geo::GeoposCommand);
+    registry.register(crate::commands::geo::GeosearchCommand);
+    registry.register(crate::commands::geo::GeosearchstoreCommand);
+    registry.register(crate::commands::geo::GeoradiusCommand);
+    registry.register(crate::commands::geo::GeoradiusbymemberCommand);
+
+    // Bloom filter commands
+    registry.register(crate::commands::bloom::BfReserve);
+    registry.register(crate::commands::bloom::BfAdd);
+    registry.register(crate::commands::bloom::BfMadd);
+    registry.register(crate::commands::bloom::BfExists);
+    registry.register(crate::commands::bloom::BfMexists);
+    registry.register(crate::commands::bloom::BfInsert);
+    registry.register(crate::commands::bloom::BfInfo);
+    registry.register(crate::commands::bloom::BfCard);
+    registry.register(crate::commands::bloom::BfScandump);
+    registry.register(crate::commands::bloom::BfLoadchunk);
 }
 
 // Commands module

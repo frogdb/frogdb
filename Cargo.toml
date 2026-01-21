@@ -54,6 +54,10 @@ xxhash-rust = { version = "0.8", features = ["xxh64"] }
 crc16 = "0.4"
 sha2 = "0.10"
 hex = "0.4"
+murmur3 = "0.5"
+
+# Bloom filter
+bitvec = "1.0"
 
 # Testing - Concurrency
 shuttle = { version = "0.8" }

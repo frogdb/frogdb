@@ -4,10 +4,13 @@
 //! This crate provides the foundational types used by the server.
 
 pub mod acl;
+pub mod bitmap;
+pub mod bloom;
 pub mod client_registry;
 pub mod command;
 pub mod error;
 pub mod eviction;
+pub mod geo;
 pub mod glob;
 pub mod noop;
 pub mod persistence;
@@ -68,3 +71,13 @@ pub use glob::glob_match;
 pub use client_registry::{
     ClientFlags, ClientHandle, ClientInfo, ClientRegistry, KillFilter, PauseMode,
 };
+pub use bitmap::{
+    BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, OverflowMode,
+    bitop, bitcount, bitfield_get, bitfield_incrby, bitfield_set, bitpos, getbit, setbit,
+};
+pub use geo::{
+    BoundingBox, Coordinates, DistanceUnit, EARTH_RADIUS_M, GEOHASH_BITS, LAT_MAX, LAT_MIN,
+    LON_MAX, LON_MIN, geohash_decode, geohash_encode, geohash_range_for_bbox, geohash_to_score,
+    geohash_to_string, haversine_distance, is_within_box, is_within_radius, score_to_geohash,
+};
+pub use bloom::{BloomFilterValue, BloomLayer};

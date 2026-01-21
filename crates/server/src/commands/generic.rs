@@ -344,6 +344,10 @@ impl Command for ObjectCommand {
                                 // Redis uses radix tree for streams
                                 "radix-tree"
                             }
+                            Value::BloomFilter(_) => {
+                                // Bloom filters use a custom scalable structure
+                                "bloom"
+                            }
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }
@@ -492,6 +496,9 @@ impl Command for DebugCommand {
                             }
                             Value::Stream(_) => {
                                 "radix-tree"
+                            }
+                            Value::BloomFilter(_) => {
+                                "bloom"
                             }
                         };
                         let info = format!(
