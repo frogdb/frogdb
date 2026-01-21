@@ -1,0 +1,44 @@
+# Write-Heavy Workload Configuration
+#
+# Simulates a logging, metrics, or queue scenario where writes dominate.
+# Typical use case: Application logging, metrics collection, job queues.
+#
+# Characteristics:
+# - 95% SET operations, 5% GET operations
+# - Sequential key pattern (append-like behavior)
+# - Small to medium value sizes (log entries, metrics)
+
+name: write-heavy
+description: "Logging / queue simulation - 95% writes"
+
+# Target performance (from OBSERVABILITY.md)
+targets:
+  set_async_p99_us: 500   # <500us for SET p99 (async durability)
+  set_sync_p99_us: 5000   # <5ms for SET p99 (sync durability)
+  throughput_ops: 50000   # 50k+ ops/sec target
+
+# memtier_benchmark settings
+memtier:
+  ratio: "1:19"           # 5% reads, 95% writes
+  key_pattern: "S:S"      # Sequential (append-like)
+  key_maximum: 10000000   # 10M key space
+  data_size: 256          # 256 bytes typical log entry
+  pipeline: 1             # No pipelining
+  threads: 4
+  clients_per_thread: 25
+  requests_per_client: 10000
+
+# redis-benchmark settings
+redis_benchmark:
+  tests: "set,set,set,set,set,set,set,set,set,set,set,set,set,set,set,set,set,set,set,get"
+  datasize: 256
+  clients: 50
+  requests: 100000
+  pipeline: 1
+
+# Expected results (baseline for comparison)
+expected:
+  ops_per_sec: 30000     # Conservative baseline (writes are slower)
+  set_p50_us: 100
+  set_p95_us: 200
+  set_p99_us: 500

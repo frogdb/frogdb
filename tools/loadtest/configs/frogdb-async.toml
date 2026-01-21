@@ -1,0 +1,35 @@
+# FrogDB Async Durability Configuration
+#
+# Maximum throughput, lowest durability.
+# Writes are buffered in memory and flushed periodically by RocksDB.
+# Data may be lost on crash (up to RocksDB's write buffer).
+#
+# Use case: Caching, session stores, non-critical data.
+
+[server]
+bind = "127.0.0.1"
+port = 6379
+num_shards = 4
+
+[persistence]
+enabled = true
+data_dir = "/tmp/frogdb-bench-async"
+durability_mode = "async"
+# No explicit sync - rely on OS/RocksDB background flush
+write_buffer_size_mb = 64
+compression = "lz4"
+# Large batch threshold - accumulate writes
+batch_size_threshold_kb = 4096
+batch_timeout_ms = 100
+
+[snapshot]
+enabled = false
+
+[logging]
+level = "warn"
+
+[metrics]
+enabled = false
+
+[memory]
+maxmemory = "0"  # No limit for benchmarks

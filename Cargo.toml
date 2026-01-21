@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "crates/server",
     "crates/metrics",
+    "benches",
 ]
 
 [workspace.package]
@@ -75,6 +76,9 @@ linked-hash-map = "0.5"
 frogdb-protocol = { path = "crates/protocol" }
 frogdb-core = { path = "crates/core" }
 frogdb-metrics = { path = "crates/metrics" }
+
+# Benchmarking
+criterion = { version = "0.5", features = ["async_tokio"] }
 
 [profile.release]
 lto = true

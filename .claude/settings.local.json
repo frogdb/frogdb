@@ -31,7 +31,9 @@
       "Bash(cargo test:*)",
       "Bash(timeout 2 cargo run:*)",
       "Bash(redis-cli:*)",
-      "Bash(cargo clippy:*)"
+      "Bash(cargo clippy:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clean:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

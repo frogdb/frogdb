@@ -1,0 +1,44 @@
+# Read-Heavy Workload Configuration
+#
+# Simulates a session store or cache scenario where reads dominate.
+# Typical use case: User session lookups, CDN cache, configuration store.
+#
+# Characteristics:
+# - 95% GET operations, 5% SET operations
+# - Gaussian key distribution (hot keys are accessed more frequently)
+# - Small to medium value sizes (typical session/config data)
+
+name: read-heavy
+description: "Session store / cache simulation - 95% reads"
+
+# Target performance (from OBSERVABILITY.md)
+targets:
+  get_p99_us: 500    # <500us for GET p99
+  set_p99_us: 2000   # <2ms for SET p99 (async durability)
+  throughput_ops: 100000  # 100k+ ops/sec target
+
+# memtier_benchmark settings
+memtier:
+  ratio: "19:1"           # 95% reads, 5% writes
+  key_pattern: "G:G"      # Gaussian distribution (hot keys)
+  key_maximum: 10000000   # 10M key space
+  data_size: 128          # 128 bytes typical session data
+  pipeline: 1             # No pipelining (realistic latency)
+  threads: 4
+  clients_per_thread: 25
+  requests_per_client: 10000
+
+# redis-benchmark settings
+redis_benchmark:
+  tests: "get,get,get,get,get,get,get,get,get,get,get,get,get,get,get,get,get,get,get,set"
+  datasize: 128
+  clients: 50
+  requests: 100000
+  pipeline: 1
+
+# Expected results (baseline for comparison)
+expected:
+  ops_per_sec: 50000     # Conservative baseline
+  get_p50_us: 100
+  get_p95_us: 200
+  get_p99_us: 500
