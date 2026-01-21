@@ -18,7 +18,7 @@ use super::parser::{hash_password, parse_acl_line, AclRule};
 use super::user::{AuthenticatedUser, User, UserPermissions};
 
 /// Configuration for the ACL manager.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AclConfig {
     /// Path to the ACL file for SAVE/LOAD.
     pub aclfile: Option<PathBuf>,
@@ -28,14 +28,20 @@ pub struct AclConfig {
     pub requirepass: Option<String>,
 }
 
-impl AclConfig {
-    /// Create a new config with defaults.
-    pub fn new() -> Self {
+impl Default for AclConfig {
+    fn default() -> Self {
         Self {
             aclfile: None,
             log_max_len: DEFAULT_ACL_LOG_MAX_LEN,
             requirepass: None,
         }
+    }
+}
+
+impl AclConfig {
+    /// Create a new config with defaults.
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
