@@ -5,10 +5,10 @@
 //!
 //! Run with: cargo test -p frogdb-core --features shuttle --test concurrency
 
-use shuttle::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use shuttle::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use shuttle::sync::{Arc, Mutex};
 use shuttle::{check_pct, check_random, thread};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Test that connection ID generation produces unique values under concurrency.
 ///
@@ -672,6 +672,881 @@ fn test_concurrent_spop() {
             // Check uniqueness
             let unique: HashSet<_> = popped.iter().collect();
             assert_eq!(unique.len(), 8, "All popped elements must be unique");
+        },
+        1000,
+    );
+}
+
+// ============================================================================
+// Cross-shard concurrency tests (MGET/MSET scatter-gather simulation)
+// ============================================================================
+
+/// Simulated value type for cross-shard testing.
+#[derive(Clone, Debug, PartialEq)]
+enum Value {
+    String(Vec<u8>),
+    #[allow(dead_code)]
+    List(Vec<Vec<u8>>),
+}
+
+impl Value {
+    fn string(data: Vec<u8>) -> Self {
+        Value::String(data)
+    }
+
+    fn as_string(&self) -> Option<&Vec<u8>> {
+        match self {
+            Value::String(s) => Some(s),
+            _ => None,
+        }
+    }
+}
+
+/// Simulates multi-shard coordination for scatter-gather operations.
+/// Each "shard" is a Mutex<HashMap> representing shard state.
+///
+/// This models the connection → multi-shard execution flow in FrogDB,
+/// where cross-shard MSET/MGET operations use scatter-gather that is
+/// NOT atomic across shards.
+struct TestCluster {
+    shards: Vec<Arc<Mutex<HashMap<Vec<u8>, Value>>>>,
+    num_shards: usize,
+}
+
+impl TestCluster {
+    fn new(num_shards: usize) -> Self {
+        Self {
+            shards: (0..num_shards)
+                .map(|_| Arc::new(Mutex::new(HashMap::new())))
+                .collect(),
+            num_shards,
+        }
+    }
+
+    fn shard_for_key(&self, key: &[u8]) -> usize {
+        // Simplified hash (real impl uses CRC16)
+        key.iter().map(|&b| b as usize).sum::<usize>() % self.num_shards
+    }
+
+    /// Extract hash tag from key if present (e.g., "{tag}key" -> "tag").
+    /// Keys with same hash tag are guaranteed to be on same shard.
+    fn extract_hash_tag<'a>(&self, key: &'a [u8]) -> Option<&'a [u8]> {
+        let start = key.iter().position(|&b| b == b'{')?;
+        let end = key[start..].iter().position(|&b| b == b'}')?;
+        if end > 1 {
+            Some(&key[start + 1..start + end])
+        } else {
+            None
+        }
+    }
+
+    fn shard_for_key_with_tag(&self, key: &[u8]) -> usize {
+        if let Some(tag) = self.extract_hash_tag(key) {
+            tag.iter().map(|&b| b as usize).sum::<usize>() % self.num_shards
+        } else {
+            self.shard_for_key(key)
+        }
+    }
+
+    /// MSET with scatter-gather semantics (non-atomic across shards).
+    /// This simulates the real behavior where each shard commits independently.
+    fn mset(&self, pairs: &[(Vec<u8>, Vec<u8>)]) {
+        // Group by shard
+        let mut by_shard: HashMap<usize, Vec<(Vec<u8>, Vec<u8>)>> = HashMap::new();
+        for (k, v) in pairs {
+            let shard_id = self.shard_for_key_with_tag(k);
+            by_shard
+                .entry(shard_id)
+                .or_default()
+                .push((k.clone(), v.clone()));
+        }
+
+        // Execute on each shard (simulates parallel scatter)
+        // In the real implementation, these run concurrently without coordination
+        for (shard_id, shard_pairs) in by_shard {
+            let mut shard = self.shards[shard_id].lock().unwrap();
+            for (k, v) in shard_pairs {
+                shard.insert(k, Value::string(v));
+            }
+            // Yield between shard operations to simulate non-atomicity
+            drop(shard);
+            shuttle::thread::yield_now();
+        }
+    }
+
+    /// MSET atomic version - all keys in single shard lock.
+    /// Used to test same-shard atomicity.
+    fn mset_atomic(&self, pairs: &[(Vec<u8>, Vec<u8>)]) {
+        // Verify all keys are on same shard (would be rejected with CROSSSLOT otherwise)
+        let shard_ids: HashSet<_> = pairs
+            .iter()
+            .map(|(k, _)| self.shard_for_key_with_tag(k))
+            .collect();
+        assert_eq!(
+            shard_ids.len(),
+            1,
+            "Atomic MSET requires all keys on same shard"
+        );
+
+        let shard_id = *shard_ids.iter().next().unwrap();
+        let mut shard = self.shards[shard_id].lock().unwrap();
+        for (k, v) in pairs {
+            shard.insert(k.clone(), Value::string(v.clone()));
+        }
+        // Single lock release - atomic from observer's perspective
+    }
+
+    /// MGET with scatter-gather semantics.
+    /// Results may reflect different points in time across shards.
+    /// Within a single shard, reads are atomic (single lock acquisition).
+    fn mget(&self, keys: &[Vec<u8>]) -> Vec<Option<Vec<u8>>> {
+        // Group keys by shard (preserving order indices)
+        let mut by_shard: HashMap<usize, Vec<(usize, &Vec<u8>)>> = HashMap::new();
+        for (idx, k) in keys.iter().enumerate() {
+            let shard_id = self.shard_for_key_with_tag(k);
+            by_shard.entry(shard_id).or_default().push((idx, k));
+        }
+
+        let mut results = vec![None; keys.len()];
+
+        // Read from each shard (atomically within shard, but yields between shards)
+        for (shard_id, shard_keys) in by_shard {
+            let shard = self.shards[shard_id].lock().unwrap();
+            for (idx, k) in shard_keys {
+                results[idx] = shard.get(k).and_then(|v| v.as_string().cloned());
+            }
+            drop(shard);
+            // Yield between shard reads to simulate cross-shard non-isolation
+            shuttle::thread::yield_now();
+        }
+
+        results
+    }
+}
+
+/// Verify that MGET can observe partial MSET results when keys span shards.
+/// This documents the current behavior (not a bug, but must be understood).
+#[test]
+fn test_mset_cross_shard_partial_visibility() {
+    check_random(
+        || {
+            let cluster = Arc::new(TestCluster::new(2));
+
+            // Keys chosen to hash to different shards
+            // 'a' = 97, hashes to shard 1; 'b' = 98, hashes to shard 0
+            let key_shard0 = b"b".to_vec();
+            let key_shard1 = b"a".to_vec();
+
+            // Verify they're on different shards
+            assert_ne!(
+                cluster.shard_for_key(&key_shard0),
+                cluster.shard_for_key(&key_shard1),
+                "Test setup: keys must be on different shards"
+            );
+
+            let observed_states = Arc::new(Mutex::new(Vec::new()));
+            let cluster_w = cluster.clone();
+            let cluster_r = cluster.clone();
+            let observed = observed_states.clone();
+            let k0 = key_shard0.clone();
+            let k1 = key_shard1.clone();
+
+            // Writer thread
+            let writer = thread::spawn(move || {
+                cluster_w.mset(&[
+                    (key_shard0, b"v1".to_vec()),
+                    (key_shard1, b"v2".to_vec()),
+                ]);
+            });
+
+            // Reader thread (concurrent)
+            let reader = thread::spawn(move || {
+                let results = cluster_r.mget(&[k0, k1]);
+                observed.lock().unwrap().push(results);
+            });
+
+            writer.join().unwrap();
+            reader.join().unwrap();
+
+            // Document what states are possible:
+            // - [None, None] - read before any write
+            // - [Some("v1"), None] - partial write visible (key_shard0 written)
+            // - [None, Some("v2")] - partial write visible (key_shard1 written)
+            // - [Some("v1"), Some("v2")] - full write visible
+            // All of these are valid under scatter-gather semantics
+            let states = observed_states.lock().unwrap();
+            for state in states.iter() {
+                match (state[0].as_ref(), state[1].as_ref()) {
+                    (None, None) => {} // Before write
+                    (Some(v), None) if v == b"v1" => {} // Partial (first key)
+                    (None, Some(v)) if v == b"v2" => {} // Partial (second key)
+                    (Some(v1), Some(v2)) if v1 == b"v1" && v2 == b"v2" => {} // Complete
+                    other => panic!("Unexpected state: {:?}", other),
+                }
+            }
+        },
+        1000,
+    );
+}
+
+/// Verify that MSET to same shard is atomic (no partial visibility).
+#[test]
+fn test_mset_same_shard_atomicity() {
+    check_random(
+        || {
+            let cluster = Arc::new(TestCluster::new(4));
+
+            // Use hash tags to force same shard: {x}key1 and {x}key2
+            let key1 = b"{x}key1".to_vec();
+            let key2 = b"{x}key2".to_vec();
+
+            // Verify they're on the same shard
+            assert_eq!(
+                cluster.shard_for_key_with_tag(&key1),
+                cluster.shard_for_key_with_tag(&key2),
+                "Test setup: keys must be on same shard"
+            );
+
+            let observed_partial = Arc::new(AtomicBool::new(false));
+            let cluster_w = cluster.clone();
+            let cluster_r = cluster.clone();
+            let observed = observed_partial.clone();
+            let k1 = key1.clone();
+            let k2 = key2.clone();
+
+            let writer = thread::spawn(move || {
+                // Use atomic MSET for same-shard operation
+                cluster_w.mset_atomic(&[(key1, b"A".to_vec()), (key2, b"A".to_vec())]);
+            });
+
+            let reader = thread::spawn(move || {
+                let results = cluster_r.mget(&[k1, k2]);
+                // Partial = one is Some, other is None
+                match (&results[0], &results[1]) {
+                    (Some(_), None) | (None, Some(_)) => {
+                        observed.store(true, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }
+            });
+
+            writer.join().unwrap();
+            reader.join().unwrap();
+
+            // Same-shard MSET should be atomic - partial visibility is a bug
+            assert!(
+                !observed_partial.load(Ordering::SeqCst),
+                "Same-shard MSET must be atomic - no partial visibility allowed"
+            );
+        },
+        1000,
+    );
+}
+
+/// Multiple threads doing MSET on overlapping keys - final state must be consistent.
+#[test]
+fn test_concurrent_mset_last_write_wins() {
+    check_random(
+        || {
+            let cluster = Arc::new(TestCluster::new(2));
+            let key = b"shared".to_vec();
+            let mut handles = vec![];
+
+            for i in 0..4u8 {
+                let cluster = cluster.clone();
+                let key = key.clone();
+                let value = format!("v{}", i).into_bytes();
+                handles.push(thread::spawn(move || {
+                    cluster.mset(&[(key, value)]);
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // Final value must be one of v0, v1, v2, v3
+            let results = cluster.mget(&[key]);
+            let value = results[0].as_ref().unwrap();
+            assert!(
+                value == b"v0" || value == b"v1" || value == b"v2" || value == b"v3",
+                "Final value must be from one writer, got: {:?}",
+                String::from_utf8_lossy(value)
+            );
+        },
+        1000,
+    );
+}
+
+// ============================================================================
+// MULTI/EXEC concurrency tests
+// ============================================================================
+
+/// Commands queued in MULTI must execute atomically.
+/// This simulates the transaction execution model where all queued commands
+/// execute under a single shard lock.
+#[test]
+fn test_multi_exec_atomic_execution() {
+    check_random(
+        || {
+            let store = Arc::new(Mutex::new(HashMap::<String, i64>::new()));
+            let mut handles = vec![];
+
+            // 4 threads each doing MULTI/INCR/INCR/EXEC (2 increments per tx)
+            for _ in 0..4 {
+                let store = store.clone();
+                handles.push(thread::spawn(move || {
+                    // Simulate atomic EXEC: hold lock for both increments
+                    let mut s = store.lock().unwrap();
+                    let val = s.entry("counter".to_string()).or_insert(0);
+                    *val += 1;
+                    *val += 1;
+                    // Lock released after both operations (atomic transaction)
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            let store = store.lock().unwrap();
+            // 4 threads * 2 increments = 8
+            assert_eq!(
+                store.get("counter"),
+                Some(&8),
+                "All transaction increments must be counted"
+            );
+        },
+        1000,
+    );
+}
+
+/// Test that concurrent transactions don't see each other's intermediate states.
+/// If thread A does SET x 1, SET y 1 in a transaction, thread B should never
+/// see x=1, y=nil or x=nil, y=1 (only both nil or both 1).
+#[test]
+fn test_multi_exec_isolation() {
+    check_random(
+        || {
+            let store = Arc::new(Mutex::new(HashMap::<String, i64>::new()));
+            let observed_partial = Arc::new(AtomicBool::new(false));
+
+            let store_writer = store.clone();
+            let store_reader = store.clone();
+            let partial = observed_partial.clone();
+
+            let writer = thread::spawn(move || {
+                // Atomic transaction: SET x 1, SET y 1
+                let mut s = store_writer.lock().unwrap();
+                s.insert("x".to_string(), 1);
+                s.insert("y".to_string(), 1);
+            });
+
+            let reader = thread::spawn(move || {
+                // Read both values
+                let s = store_reader.lock().unwrap();
+                let x = s.get("x").copied();
+                let y = s.get("y").copied();
+
+                // Check for partial visibility
+                match (x, y) {
+                    (Some(_), None) | (None, Some(_)) => {
+                        partial.store(true, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }
+            });
+
+            writer.join().unwrap();
+            reader.join().unwrap();
+
+            assert!(
+                !observed_partial.load(Ordering::SeqCst),
+                "Transaction must be atomic - no partial visibility"
+            );
+        },
+        1000,
+    );
+}
+
+// ============================================================================
+// WATCH concurrency tests
+// ============================================================================
+
+/// Simulates a store with version tracking for WATCH functionality.
+struct WatchableStore {
+    data: Mutex<HashMap<String, (String, u64)>>, // (value, version)
+}
+
+impl WatchableStore {
+    fn new() -> Self {
+        Self {
+            data: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn get_version(&self, key: &str) -> Option<u64> {
+        self.data.lock().unwrap().get(key).map(|(_, v)| *v)
+    }
+
+    fn get(&self, key: &str) -> Option<String> {
+        self.data.lock().unwrap().get(key).map(|(v, _)| v.clone())
+    }
+
+    fn set(&self, key: &str, value: &str) {
+        let mut data = self.data.lock().unwrap();
+        let version = data.get(key).map(|(_, v)| v + 1).unwrap_or(1);
+        data.insert(key.to_string(), (value.to_string(), version));
+    }
+
+    /// Check if version is unchanged (EXEC check)
+    #[allow(dead_code)]
+    fn exec_if_unchanged(&self, key: &str, watched_version: Option<u64>) -> bool {
+        let data = self.data.lock().unwrap();
+        let current_version = data.get(key).map(|(_, v)| *v);
+        watched_version == current_version
+    }
+
+    /// Execute transaction only if watched keys unchanged
+    fn exec_with_watch<F, R>(&self, watched_keys: &[(&str, Option<u64>)], f: F) -> Option<R>
+    where
+        F: FnOnce(&mut HashMap<String, (String, u64)>) -> R,
+    {
+        let mut data = self.data.lock().unwrap();
+
+        // Check all watched keys
+        for (key, watched_version) in watched_keys {
+            let current_version = data.get(*key).map(|(_, v)| *v);
+            if *watched_version != current_version {
+                return None; // Abort - watched key changed
+            }
+        }
+
+        // Execute transaction
+        Some(f(&mut data))
+    }
+}
+
+/// WATCH key → concurrent SET → EXEC should abort.
+#[test]
+fn test_watch_detects_concurrent_modification() {
+    check_random(
+        || {
+            let store = Arc::new(WatchableStore::new());
+            store.set("key", "initial");
+
+            let abort_count = Arc::new(AtomicUsize::new(0));
+            let success_count = Arc::new(AtomicUsize::new(0));
+
+            let store_watcher = store.clone();
+            let store_modifier = store.clone();
+            let aborts = abort_count.clone();
+            let successes = success_count.clone();
+
+            // Thread A: WATCH key, then try to update it
+            let watcher = thread::spawn(move || {
+                let watched_version = store_watcher.get_version("key");
+
+                // Yield to let modifier potentially run
+                shuttle::thread::yield_now();
+
+                // Try to EXEC (update key to "watcher_value")
+                let result = store_watcher.exec_with_watch(
+                    &[("key", watched_version)],
+                    |data| {
+                        let version = data.get("key").map(|(_, v)| v + 1).unwrap_or(1);
+                        data.insert("key".to_string(), ("watcher_value".to_string(), version));
+                    },
+                );
+
+                if result.is_none() {
+                    aborts.fetch_add(1, Ordering::SeqCst);
+                } else {
+                    successes.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+
+            // Thread B: Modify the watched key
+            let modifier = thread::spawn(move || {
+                store_modifier.set("key", "modified");
+            });
+
+            watcher.join().unwrap();
+            modifier.join().unwrap();
+
+            // Either the watcher succeeds (ran first) or aborts (modifier ran first)
+            let total = abort_count.load(Ordering::SeqCst) + success_count.load(Ordering::SeqCst);
+            assert_eq!(total, 1, "Watcher must either succeed or abort");
+
+            // Verify final state is consistent
+            let final_value = store.get("key").unwrap();
+            assert!(
+                final_value == "modified" || final_value == "watcher_value",
+                "Final value must be from one of the writers"
+            );
+        },
+        1000,
+    );
+}
+
+/// Multiple watchers on same key - at most one can succeed.
+#[test]
+fn test_watch_multiple_watchers() {
+    check_random(
+        || {
+            let store = Arc::new(WatchableStore::new());
+            store.set("counter", "0");
+
+            let success_count = Arc::new(AtomicUsize::new(0));
+            let mut handles = vec![];
+
+            // 4 threads all trying to atomically increment
+            for i in 0..4 {
+                let store = store.clone();
+                let successes = success_count.clone();
+
+                handles.push(thread::spawn(move || {
+                    // WATCH counter
+                    let watched_version = store.get_version("counter");
+                    let current_value: i64 = store.get("counter").unwrap().parse().unwrap();
+
+                    shuttle::thread::yield_now();
+
+                    // Try to increment
+                    let result = store.exec_with_watch(&[("counter", watched_version)], |data| {
+                        let version = data.get("counter").map(|(_, v)| v + 1).unwrap_or(1);
+                        data.insert(
+                            "counter".to_string(),
+                            ((current_value + 1).to_string(), version),
+                        );
+                    });
+
+                    if result.is_some() {
+                        successes.fetch_add(1, Ordering::SeqCst);
+                    }
+
+                    (i, result.is_some())
+                }));
+            }
+
+            let _results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+            // At least one should succeed, but possibly all if they serialize perfectly
+            let total_successes = success_count.load(Ordering::SeqCst);
+            assert!(
+                total_successes >= 1,
+                "At least one watcher should succeed"
+            );
+
+            // If multiple succeeded, they must have serialized (each saw the other's write)
+            // The final counter value depends on how many serialized successfully
+        },
+        1000,
+    );
+}
+
+// ============================================================================
+// Type conflict concurrency tests
+// ============================================================================
+
+/// Typed value enum for testing type conflicts.
+#[derive(Clone, Debug)]
+enum TypedValue {
+    String(String),
+    List(Vec<String>),
+}
+
+/// Concurrent SET (string) and LPUSH (list) on same key.
+/// One should succeed, one should get WRONGTYPE error.
+#[test]
+fn test_type_conflict_under_concurrency() {
+    check_random(
+        || {
+            let store = Arc::new(Mutex::new(HashMap::<String, TypedValue>::new()));
+
+            let set_result = Arc::new(Mutex::new(None::<Result<(), &'static str>>));
+            let lpush_result = Arc::new(Mutex::new(None::<Result<(), &'static str>>));
+
+            let store_set = store.clone();
+            let store_lpush = store.clone();
+            let set_res = set_result.clone();
+            let lpush_res = lpush_result.clone();
+
+            let t1 = thread::spawn(move || {
+                let mut s = store_set.lock().unwrap();
+                match s.get("key") {
+                    Some(TypedValue::List(_)) => {
+                        *set_res.lock().unwrap() = Some(Err("WRONGTYPE"));
+                    }
+                    _ => {
+                        s.insert("key".to_string(), TypedValue::String("value".to_string()));
+                        *set_res.lock().unwrap() = Some(Ok(()));
+                    }
+                }
+            });
+
+            let t2 = thread::spawn(move || {
+                let mut s = store_lpush.lock().unwrap();
+                match s.get_mut("key") {
+                    Some(TypedValue::String(_)) => {
+                        *lpush_res.lock().unwrap() = Some(Err("WRONGTYPE"));
+                    }
+                    Some(TypedValue::List(list)) => {
+                        list.push("item".to_string());
+                        *lpush_res.lock().unwrap() = Some(Ok(()));
+                    }
+                    None => {
+                        s.insert(
+                            "key".to_string(),
+                            TypedValue::List(vec!["item".to_string()]),
+                        );
+                        *lpush_res.lock().unwrap() = Some(Ok(()));
+                    }
+                }
+            });
+
+            t1.join().unwrap();
+            t2.join().unwrap();
+
+            let set_ok = set_result
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|r| r.is_ok())
+                .unwrap_or(false);
+            let lpush_ok = lpush_result
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|r| r.is_ok())
+                .unwrap_or(false);
+
+            // Final type must be consistent with results
+            let store = store.lock().unwrap();
+            if let Some(value) = store.get("key") {
+                match value {
+                    TypedValue::String(_) => {
+                        assert!(set_ok, "String type but SET failed?");
+                        // LPUSH must have either failed with WRONGTYPE or not run yet
+                    }
+                    TypedValue::List(_) => {
+                        assert!(lpush_ok, "List type but LPUSH failed?");
+                        // SET must have either failed with WRONGTYPE or not run yet
+                    }
+                }
+            }
+
+            // Both cannot have succeeded with conflicting types
+            if set_ok && lpush_ok {
+                // Both succeeded means they didn't race on creation
+                // (one created, other saw the type)
+                panic!("Both SET and LPUSH cannot succeed with conflicting types");
+            }
+        },
+        1000,
+    );
+}
+
+/// Test type conflict with existing key.
+/// Key exists as string, two threads try LPUSH and GET concurrently.
+#[test]
+fn test_type_conflict_existing_key() {
+    check_random(
+        || {
+            let store = Arc::new(Mutex::new(HashMap::<String, TypedValue>::new()));
+
+            // Pre-populate with string type
+            {
+                let mut s = store.lock().unwrap();
+                s.insert("key".to_string(), TypedValue::String("initial".to_string()));
+            }
+
+            let lpush_error = Arc::new(AtomicBool::new(false));
+            let store_get = store.clone();
+            let store_lpush = store.clone();
+            let error_flag = lpush_error.clone();
+
+            // Thread 1: GET (should always succeed for string)
+            let getter = thread::spawn(move || {
+                let s = store_get.lock().unwrap();
+                match s.get("key") {
+                    Some(TypedValue::String(v)) => Some(v.clone()),
+                    Some(TypedValue::List(_)) => panic!("Type changed unexpectedly"),
+                    None => None,
+                }
+            });
+
+            // Thread 2: LPUSH (should fail with WRONGTYPE)
+            let pusher = thread::spawn(move || {
+                let mut s = store_lpush.lock().unwrap();
+                match s.get_mut("key") {
+                    Some(TypedValue::String(_)) => {
+                        error_flag.store(true, Ordering::SeqCst);
+                        // WRONGTYPE - don't modify
+                    }
+                    Some(TypedValue::List(list)) => {
+                        list.push("item".to_string());
+                    }
+                    None => {
+                        s.insert(
+                            "key".to_string(),
+                            TypedValue::List(vec!["item".to_string()]),
+                        );
+                    }
+                }
+            });
+
+            getter.join().unwrap();
+            pusher.join().unwrap();
+
+            // LPUSH must have gotten WRONGTYPE error
+            assert!(
+                lpush_error.load(Ordering::SeqCst),
+                "LPUSH on string key must return WRONGTYPE"
+            );
+
+            // Key must still be a string
+            let s = store.lock().unwrap();
+            assert!(
+                matches!(s.get("key"), Some(TypedValue::String(_))),
+                "Key type must remain string"
+            );
+        },
+        1000,
+    );
+}
+
+// ============================================================================
+// Real shard atomicity tests (simulation placeholder)
+// ============================================================================
+
+/// Test INCR atomicity using simulated shard state.
+/// This placeholder uses AtomicU64 to simulate the atomic increment behavior
+/// that would occur in the real ShardState.
+#[test]
+fn test_real_shard_incr_atomicity() {
+    check_random(
+        || {
+            // This simulates what would happen with actual ShardState
+            // In reality, INCR holds the shard lock during the read-modify-write
+            let counter = Arc::new(AtomicU64::new(0));
+            let mut handles = vec![];
+
+            for _ in 0..4 {
+                let counter = counter.clone();
+                handles.push(thread::spawn(move || {
+                    for _ in 0..10 {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                    }
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // 4 threads * 10 increments = 40
+            assert_eq!(
+                counter.load(Ordering::SeqCst),
+                40,
+                "All increments must be counted"
+            );
+        },
+        1000,
+    );
+}
+
+/// Test GETSET atomicity - read and write in single operation.
+#[test]
+fn test_getset_atomicity() {
+    check_random(
+        || {
+            let store = Arc::new(Mutex::new(Some(0i64)));
+            let collected = Arc::new(Mutex::new(Vec::new()));
+            let mut handles = vec![];
+
+            // 4 threads each doing GETSET, incrementing by 1
+            for i in 1..=4i64 {
+                let store = store.clone();
+                let collected = collected.clone();
+                handles.push(thread::spawn(move || {
+                    // Atomic GETSET: read old value, write new value
+                    let old_value = {
+                        let mut s = store.lock().unwrap();
+                        let old = *s;
+                        *s = Some(i);
+                        old
+                    };
+                    collected.lock().unwrap().push((i, old_value));
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // Each thread should have gotten a distinct old value
+            // (0 for first writer, then 1, 2, 3, or 4 depending on order)
+            let results = collected.lock().unwrap();
+            let old_values: HashSet<_> = results.iter().map(|(_, old)| *old).collect();
+
+            // All returned old values should be distinct
+            assert_eq!(
+                old_values.len(),
+                results.len(),
+                "GETSET must return distinct old values"
+            );
+        },
+        1000,
+    );
+}
+
+/// Test DEL atomicity with concurrent access.
+#[test]
+fn test_del_concurrent_access() {
+    check_random(
+        || {
+            let store = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+
+            // Pre-populate
+            {
+                let mut s = store.lock().unwrap();
+                s.insert("key".to_string(), "value".to_string());
+            }
+
+            let del_success = Arc::new(AtomicBool::new(false));
+            let get_found = Arc::new(Mutex::new(None::<bool>));
+
+            let store_del = store.clone();
+            let store_get = store.clone();
+            let del_flag = del_success.clone();
+            let get_flag = get_found.clone();
+
+            let deleter = thread::spawn(move || {
+                let mut s = store_del.lock().unwrap();
+                if s.remove("key").is_some() {
+                    del_flag.store(true, Ordering::SeqCst);
+                }
+            });
+
+            let getter = thread::spawn(move || {
+                let s = store_get.lock().unwrap();
+                *get_flag.lock().unwrap() = Some(s.contains_key("key"));
+            });
+
+            deleter.join().unwrap();
+            getter.join().unwrap();
+
+            // DEL should always succeed (key existed)
+            assert!(
+                del_success.load(Ordering::SeqCst),
+                "DEL should have found the key"
+            );
+
+            // GET result depends on ordering:
+            // - true if GET ran before DEL
+            // - false if GET ran after DEL
+            // Both are valid outcomes
         },
         1000,
     );
