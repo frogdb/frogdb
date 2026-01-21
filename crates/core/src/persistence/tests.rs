@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod integration {
+    use crate::noop::NoopMetricsRecorder;
     use crate::persistence::*;
     use crate::store::Store;
     use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, Value};
@@ -117,6 +118,7 @@ mod integration {
     async fn test_wal_writer_persistence() {
         let tmp = TempDir::new().unwrap();
         let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+        let metrics = Arc::new(NoopMetricsRecorder::new());
 
         let wal = RocksWalWriter::new(
             rocks.clone(),
@@ -126,6 +128,7 @@ mod integration {
                 batch_size_threshold: 1024 * 1024,
                 batch_timeout_ms: 1000,
             },
+            metrics,
         );
 
         // Write through WAL

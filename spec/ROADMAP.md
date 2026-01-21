@@ -13,8 +13,8 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 10.2 (Configuration) ✓, 10.5 (ACL) ✓, 10.6 (Memory Management) ✓
-**Next Milestone**: Phase 10.1 completion (command metrics, keyspace metrics)
+**Phase**: 10.1 (Metrics) ✓, 10.2 (Configuration) ✓, 10.5 (ACL) ✓, 10.6 (Memory Management) ✓
+**Next Milestone**: Phase 10.4 (SLOWLOG), Phase 10.7 (Testing)
 
 ---
 
@@ -314,7 +314,7 @@ These must exist as traits/stubs to avoid refactoring:
 - [x] Background task per shard (~10Hz)
 - [x] Sample keys from ExpiryIndex
 - [x] Time-budgeted deletion (25ms default)
-- [ ] Metrics: expired_keys counter
+- [x] Metrics: expired_keys counter
 
 ### 2.5 Generic Commands
 
@@ -767,10 +767,10 @@ The following optimizations are deferred to a future phase:
 - [x] Connection metrics (total, current)
 - [x] System metrics (uptime, memory RSS)
 - [x] Metrics configuration (bind, port, OTLP optional)
-- [ ] Command metrics (per-command counters, latency histograms)
-- [ ] Memory metrics (used, peak, fragmentation)
-- [ ] Keyspace metrics (keys per DB/shard)
-- [ ] Persistence metrics (WAL pending, last save time)
+- [x] Command metrics (per-command counters, latency histograms)
+- [x] Memory metrics (used, peak, per-shard)
+- [x] Keyspace metrics (keys per shard, hits/misses, expired)
+- [x] Persistence metrics (WAL writes, flush duration)
 
 ### 10.2 Configuration ✓
 
