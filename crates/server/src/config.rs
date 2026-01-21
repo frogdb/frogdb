@@ -23,6 +23,38 @@ pub struct Config {
     /// Persistence configuration.
     #[serde(default)]
     pub persistence: PersistenceConfig,
+
+    /// Metrics configuration.
+    #[serde(default)]
+    pub metrics: MetricsConfig,
+}
+
+/// Metrics configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MetricsConfig {
+    /// Whether metrics are enabled.
+    #[serde(default = "default_metrics_enabled")]
+    pub enabled: bool,
+
+    /// Bind address for the metrics HTTP server.
+    #[serde(default = "default_metrics_bind")]
+    pub bind: String,
+
+    /// Port for the metrics HTTP server.
+    #[serde(default = "default_metrics_port")]
+    pub port: u16,
+
+    /// Whether OTLP export is enabled.
+    #[serde(default)]
+    pub otlp_enabled: bool,
+
+    /// OTLP endpoint URL.
+    #[serde(default = "default_otlp_endpoint")]
+    pub otlp_endpoint: String,
+
+    /// OTLP push interval in seconds.
+    #[serde(default = "default_otlp_interval_secs")]
+    pub otlp_interval_secs: u64,
 }
 
 /// Server-specific configuration.
@@ -159,6 +191,26 @@ fn default_batch_timeout_ms() -> u64 {
     10
 }
 
+fn default_metrics_enabled() -> bool {
+    true
+}
+
+fn default_metrics_bind() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_metrics_port() -> u16 {
+    9090
+}
+
+fn default_otlp_endpoint() -> String {
+    "http://localhost:4317".to_string()
+}
+
+fn default_otlp_interval_secs() -> u64 {
+    15
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -195,6 +247,42 @@ impl Default for PersistenceConfig {
     }
 }
 
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_metrics_enabled(),
+            bind: default_metrics_bind(),
+            port: default_metrics_port(),
+            otlp_enabled: false,
+            otlp_endpoint: default_otlp_endpoint(),
+            otlp_interval_secs: default_otlp_interval_secs(),
+        }
+    }
+}
+
+impl MetricsConfig {
+    /// Get the full bind address.
+    pub fn bind_addr(&self) -> String {
+        format!("{}:{}", self.bind, self.port)
+    }
+
+    /// Validate the configuration.
+    pub fn validate(&self) -> Result<()> {
+        if self.port == 0 {
+            anyhow::bail!("metrics port cannot be 0");
+        }
+
+        if self.otlp_enabled && self.otlp_endpoint.is_empty() {
+            anyhow::bail!("OTLP endpoint must be specified when OTLP is enabled");
+        }
+
+        if self.otlp_interval_secs == 0 {
+            anyhow::bail!("OTLP interval must be > 0");
+        }
+
+        Ok(())
+    }
+}
 
 impl Config {
     /// Load configuration from multiple sources.
@@ -309,6 +397,9 @@ impl Config {
             );
         }
 
+        // Validate metrics config
+        self.metrics.validate()?;
+
         Ok(())
     }
 
@@ -388,6 +479,25 @@ batch_size_threshold_kb = 4096
 
 # Batch timeout in milliseconds before flushing
 batch_timeout_ms = 10
+
+[metrics]
+# Whether metrics are enabled
+enabled = true
+
+# Bind address for the metrics HTTP server
+bind = "0.0.0.0"
+
+# Port for the metrics HTTP server
+port = 9090
+
+# Whether OTLP export is enabled
+otlp_enabled = false
+
+# OTLP endpoint URL
+otlp_endpoint = "http://localhost:4317"
+
+# OTLP push interval in seconds
+otlp_interval_secs = 15
 "#
         .to_string()
     }
@@ -438,5 +548,37 @@ mod tests {
     fn test_bind_addr() {
         let config = Config::default();
         assert_eq!(config.bind_addr(), "127.0.0.1:6379");
+    }
+
+    #[test]
+    fn test_default_metrics_config() {
+        let config = MetricsConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.bind, "0.0.0.0");
+        assert_eq!(config.port, 9090);
+        assert!(!config.otlp_enabled);
+        assert_eq!(config.otlp_endpoint, "http://localhost:4317");
+        assert_eq!(config.otlp_interval_secs, 15);
+    }
+
+    #[test]
+    fn test_metrics_bind_addr() {
+        let config = MetricsConfig::default();
+        assert_eq!(config.bind_addr(), "0.0.0.0:9090");
+    }
+
+    #[test]
+    fn test_validate_metrics_zero_port() {
+        let mut config = Config::default();
+        config.metrics.port = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_metrics_otlp_without_endpoint() {
+        let mut config = Config::default();
+        config.metrics.otlp_enabled = true;
+        config.metrics.otlp_endpoint = String::new();
+        assert!(config.validate().is_err());
     }
 }
