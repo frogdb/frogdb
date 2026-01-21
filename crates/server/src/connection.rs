@@ -124,6 +124,15 @@ impl AuthState {
     }
 }
 
+/// Blocked state for connections waiting on blocking commands.
+#[derive(Debug, Clone)]
+pub struct BlockedState {
+    /// Shard ID where the wait is registered.
+    pub shard_id: usize,
+    /// Keys the client is waiting on.
+    pub keys: Vec<Bytes>,
+}
+
 /// Connection state.
 #[allow(dead_code)]
 pub struct ConnectionState {
@@ -150,6 +159,9 @@ pub struct ConnectionState {
 
     /// Authentication state.
     pub auth: AuthState,
+
+    /// Blocked state for blocking commands (None = not blocked).
+    pub blocked: Option<BlockedState>,
 }
 
 impl ConnectionState {
@@ -167,6 +179,7 @@ impl ConnectionState {
             } else {
                 AuthState::default()
             },
+            blocked: None,
         }
     }
 }
@@ -217,6 +230,40 @@ pub struct ConnectionHandler {
 
     /// ACL manager for authentication and authorization.
     acl_manager: Arc<AclManager>,
+}
+
+/// Convert protocol BlockingOp to core BlockingOp.
+fn convert_blocking_op(op: frogdb_protocol::BlockingOp) -> frogdb_core::BlockingOp {
+    match op {
+        frogdb_protocol::BlockingOp::BLPop => frogdb_core::BlockingOp::BLPop,
+        frogdb_protocol::BlockingOp::BRPop => frogdb_core::BlockingOp::BRPop,
+        frogdb_protocol::BlockingOp::BLMove { dest, src_dir, dest_dir } => {
+            frogdb_core::BlockingOp::BLMove {
+                dest,
+                src_dir: convert_direction(src_dir),
+                dest_dir: convert_direction(dest_dir),
+            }
+        }
+        frogdb_protocol::BlockingOp::BLMPop { direction, count } => {
+            frogdb_core::BlockingOp::BLMPop {
+                direction: convert_direction(direction),
+                count,
+            }
+        }
+        frogdb_protocol::BlockingOp::BZPopMin => frogdb_core::BlockingOp::BZPopMin,
+        frogdb_protocol::BlockingOp::BZPopMax => frogdb_core::BlockingOp::BZPopMax,
+        frogdb_protocol::BlockingOp::BZMPop { min, count } => {
+            frogdb_core::BlockingOp::BZMPop { min, count }
+        }
+    }
+}
+
+/// Convert protocol Direction to core Direction.
+fn convert_direction(dir: frogdb_protocol::Direction) -> frogdb_core::Direction {
+    match dir {
+        frogdb_protocol::Direction::Left => frogdb_core::Direction::Left,
+        frogdb_protocol::Direction::Right => frogdb_core::Direction::Right,
+    }
 }
 
 impl ConnectionHandler {
@@ -380,12 +427,107 @@ impl ConnectionHandler {
 
     /// Notify all shards that this connection is closed.
     async fn notify_connection_closed(&self) {
-        // Only notify if we had any subscriptions
+        // Notify if we had any subscriptions
         if self.state.pubsub.in_pubsub_mode() {
             for sender in self.shard_senders.iter() {
                 let _ = sender.send(ShardMessage::ConnectionClosed {
                     conn_id: self.state.id,
                 }).await;
+            }
+        }
+
+        // Unregister any blocking waits
+        if let Some(ref blocked) = self.state.blocked {
+            if let Some(sender) = self.shard_senders.get(blocked.shard_id) {
+                let _ = sender.send(ShardMessage::UnregisterWait {
+                    conn_id: self.state.id,
+                }).await;
+            }
+        }
+    }
+
+    /// Handle a blocking command wait.
+    ///
+    /// This sends a BlockWait message to the shard and waits for a response.
+    async fn handle_blocking_wait(
+        &mut self,
+        keys: Vec<Bytes>,
+        timeout: f64,
+        proto_op: frogdb_protocol::BlockingOp,
+    ) -> Response {
+        use std::time::{Duration, Instant};
+        use tokio::sync::oneshot;
+
+        // Convert protocol BlockingOp to core BlockingOp
+        let op = convert_blocking_op(proto_op);
+
+        // Determine the target shard - all keys must be on the same shard
+        // (this was already validated in the command execute method)
+        if keys.is_empty() {
+            return Response::error("ERR No keys provided for blocking command");
+        }
+
+        let target_shard = shard_for_key(&keys[0], self.num_shards);
+
+        // Calculate deadline
+        let deadline = if timeout > 0.0 {
+            Some(Instant::now() + Duration::from_secs_f64(timeout))
+        } else {
+            None // Block forever (until data or disconnect)
+        };
+
+        // Create response channel
+        let (response_tx, response_rx) = oneshot::channel();
+
+        // Send BlockWait message to shard
+        let sender = match self.shard_senders.get(target_shard) {
+            Some(s) => s,
+            None => return Response::error("ERR Internal error: invalid shard"),
+        };
+
+        if sender.send(ShardMessage::BlockWait {
+            conn_id: self.state.id,
+            keys: keys.clone(),
+            op,
+            response_tx,
+            deadline,
+        }).await.is_err() {
+            return Response::error("ERR Internal error: shard unreachable");
+        }
+
+        // Update blocked state
+        self.state.blocked = Some(BlockedState {
+            shard_id: target_shard,
+            keys: keys.clone(),
+        });
+
+        // Wait for response with timeout
+        let result = if let Some(deadline) = deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            tokio::time::timeout(remaining, response_rx).await
+        } else {
+            // No timeout - wait indefinitely
+            // Use a very long timeout to avoid blocking forever
+            tokio::time::timeout(Duration::from_secs(86400), response_rx).await
+        };
+
+        // Clear blocked state
+        self.state.blocked = None;
+
+        match result {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) => {
+                // Channel was dropped (shard shutdown or error)
+                Response::Null
+            }
+            Err(_) => {
+                // Timeout - send unregister and return null
+                if let Some(sender) = self.shard_senders.get(target_shard) {
+                    let _ = sender.send(ShardMessage::UnregisterWait {
+                        conn_id: self.state.id,
+                    }).await;
+                }
+                Response::Null
             }
         }
     }
@@ -483,11 +625,32 @@ impl ConnectionHandler {
 
         // If in transaction mode, queue the command instead of executing
         if self.state.transaction.queue.is_some() {
+            // Check if it's a blocking command - not allowed in MULTI
+            if Self::is_blocking_command(&cmd_name_str) {
+                return vec![Response::error(
+                    "ERR Blocking commands are not allowed inside a transaction",
+                )];
+            }
             return vec![self.queue_command(cmd)];
         }
 
         // Normal execution
-        vec![self.route_and_execute(cmd).await]
+        let response = self.route_and_execute(cmd).await;
+
+        // Check if this is a blocking command that needs to wait
+        if let Response::BlockingNeeded { keys, timeout, op } = response {
+            return vec![self.handle_blocking_wait(keys, timeout, op).await];
+        }
+
+        vec![response]
+    }
+
+    /// Check if a command is a blocking command.
+    fn is_blocking_command(cmd: &str) -> bool {
+        matches!(
+            cmd,
+            "BLPOP" | "BRPOP" | "BLMOVE" | "BLMPOP" | "BZPOPMIN" | "BZPOPMAX" | "BZMPOP" | "BRPOPLPUSH"
+        )
     }
 
     /// Check if a command is allowed in pub/sub mode.

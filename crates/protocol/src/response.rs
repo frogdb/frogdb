@@ -4,6 +4,67 @@ use bytes::Bytes;
 use bytes_utils::Str;
 use redis_protocol::resp2::types::BytesFrame;
 
+/// Direction for list operations (BLPOP, BRPOP, BLMOVE, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// Pop/push from the left (front).
+    Left,
+    /// Pop/push from the right (back).
+    Right,
+}
+
+impl Direction {
+    /// Parse a direction from a byte slice.
+    pub fn parse(arg: &[u8]) -> Option<Self> {
+        if arg.eq_ignore_ascii_case(b"LEFT") {
+            Some(Direction::Left)
+        } else if arg.eq_ignore_ascii_case(b"RIGHT") {
+            Some(Direction::Right)
+        } else {
+            None
+        }
+    }
+}
+
+/// Blocking operation type for responses.
+///
+/// This is a simplified version for use in Response::BlockingNeeded.
+/// The connection handler converts this to the full BlockingOp in frogdb_core.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockingOp {
+    /// BLPOP operation.
+    BLPop,
+    /// BRPOP operation.
+    BRPop,
+    /// BLMOVE operation.
+    BLMove {
+        /// Destination key.
+        dest: Bytes,
+        /// Source direction (where to pop from).
+        src_dir: Direction,
+        /// Destination direction (where to push to).
+        dest_dir: Direction,
+    },
+    /// BLMPOP operation.
+    BLMPop {
+        /// Pop direction.
+        direction: Direction,
+        /// Number of elements to pop.
+        count: usize,
+    },
+    /// BZPOPMIN operation.
+    BZPopMin,
+    /// BZPOPMAX operation.
+    BZPopMax,
+    /// BZMPOP operation.
+    BZMPop {
+        /// Whether to pop minimum (true) or maximum (false).
+        min: bool,
+        /// Number of elements to pop.
+        count: usize,
+    },
+}
+
 /// Response types that can be sent to clients.
 ///
 /// Includes both RESP2 types (fully implemented) and RESP3 types
@@ -59,6 +120,18 @@ pub enum Response {
 
     /// Big number ((<big-integer>\r\n)
     BigNumber(Bytes),
+
+    // === Internal Types (Not Wire-Serialized) ===
+    /// Signal that a blocking command needs to wait for data.
+    /// This is intercepted by the connection handler and never sent on the wire.
+    BlockingNeeded {
+        /// Keys to wait on.
+        keys: Vec<Bytes>,
+        /// Timeout in seconds (0 = block forever).
+        timeout: f64,
+        /// The blocking operation to perform when data arrives.
+        op: BlockingOp,
+    },
 }
 
 impl Response {
@@ -118,6 +191,10 @@ impl From<Response> for BytesFrame {
             | Response::Push(_)
             | Response::BigNumber(_) => {
                 unimplemented!("RESP3 encoding - implement in Phase 12")
+            }
+            // Internal types - should never reach serialization
+            Response::BlockingNeeded { .. } => {
+                panic!("BlockingNeeded response should be intercepted by connection handler")
             }
         }
     }

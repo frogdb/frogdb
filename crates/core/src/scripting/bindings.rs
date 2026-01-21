@@ -145,6 +145,13 @@ pub fn response_to_lua(lua: &mlua::Lua, response: Response) -> LuaResult<Value> 
             // Return big number as string
             Ok(Value::String(lua.create_string(n.as_ref())?))
         }
+        Response::BlockingNeeded { .. } => {
+            // Blocking commands are forbidden in scripts, so this should never happen.
+            // If it does, return an error.
+            let table = lua.create_table()?;
+            table.set("err", "ERR blocking commands not allowed inside scripts")?;
+            Ok(Value::Table(table))
+        }
     }
 }
 

@@ -11,5 +11,5 @@ mod version;
 
 pub use command::ParsedCommand;
 pub use error::ProtocolError;
-pub use response::Response;
+pub use response::{BlockingOp, Direction, Response};
 pub use version::ProtocolVersion;

@@ -48,15 +48,16 @@ pub use pubsub::{
 };
 pub use shard::{
     shard_for_key, slot_for_key, PartialResult, ScatterOp, ShardMessage, ShardWorker,
-    TransactionResult, REDIS_CLUSTER_SLOTS,
+    ShardWaitQueue, TransactionResult, WaitEntry, REDIS_CLUSTER_SLOTS,
 };
 pub use store::{HashMapStore, Store};
 pub use types::{
-    Consumer, ConsumerGroup, Expiry, HashValue, IncrementError, KeyMetadata, KeyType, LexBound,
-    ListValue, PendingEntry, ScoreBound, SetCondition, SetOptions, SetResult, SetValue,
-    SortedSetValue, StreamAddError, StreamEntry, StreamGroupError, StreamId, StreamIdParseError,
-    StreamIdSpec, StreamRangeBound, StreamTrimMode, StreamTrimOptions, StreamTrimStrategy,
-    StreamValue, StringValue, Value, ZAddResult,
+    BlockingOp, Consumer, ConsumerGroup, Direction, Expiry, HashValue, IncrementError,
+    KeyMetadata, KeyType, LexBound, ListValue, PendingEntry, ScoreBound, SetCondition,
+    SetOptions, SetResult, SetValue, SortedSetValue, StreamAddError, StreamEntry,
+    StreamGroupError, StreamId, StreamIdParseError, StreamIdSpec, StreamRangeBound,
+    StreamTrimMode, StreamTrimOptions, StreamTrimStrategy, StreamValue, StringValue, Value,
+    ZAddResult,
 };
 pub use scripting::{
     CachedScript, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig, ScriptRoute,

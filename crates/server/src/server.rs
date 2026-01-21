@@ -701,6 +701,16 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::list::LmoveCommand);
     registry.register(crate::commands::list::LmpopCommand);
 
+    // Blocking commands (list and sorted set)
+    registry.register(crate::commands::blocking::BlpopCommand);
+    registry.register(crate::commands::blocking::BrpopCommand);
+    registry.register(crate::commands::blocking::BlmoveCommand);
+    registry.register(crate::commands::blocking::BlmpopCommand);
+    registry.register(crate::commands::blocking::BzpopminCommand);
+    registry.register(crate::commands::blocking::BzpopmaxCommand);
+    registry.register(crate::commands::blocking::BzmpopCommand);
+    registry.register(crate::commands::blocking::BrpoplpushCommand);
+
     // Transaction commands
     registry.register(crate::commands::transaction::MultiCommand);
     registry.register(crate::commands::transaction::ExecCommand);
