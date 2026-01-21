@@ -6,6 +6,7 @@
 pub mod acl;
 pub mod auth;
 pub mod client;
+pub mod config;
 pub mod expiry;
 pub mod generic;
 pub mod hash;
@@ -24,6 +25,7 @@ pub mod transaction;
 pub use acl::*;
 pub use auth::*;
 pub use client::*;
+pub use config::*;
 pub use expiry::*;
 pub use generic::*;
 pub use hash::*;

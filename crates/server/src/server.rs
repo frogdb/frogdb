@@ -16,6 +16,7 @@ use tracing::{error, info, warn};
 
 use crate::acceptor::Acceptor;
 use crate::config::{Config, MemoryConfig, PersistenceConfig};
+use crate::runtime_config::ConfigManager;
 
 /// Channel capacity for shard message queues.
 const SHARD_CHANNEL_CAPACITY: usize = 1024;
@@ -59,6 +60,9 @@ pub struct Server {
 
     /// Client registry for CLIENT commands.
     client_registry: Arc<ClientRegistry>,
+
+    /// Configuration manager for CONFIG commands.
+    config_manager: Arc<ConfigManager>,
 
     /// Shard message senders.
     shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
@@ -130,6 +134,9 @@ impl Server {
 
         // Create client registry
         let client_registry = Arc::new(ClientRegistry::new());
+
+        // Create configuration manager
+        let config_manager = Arc::new(ConfigManager::new(&config));
 
         // Determine number of shards
         let num_shards = if config.server.num_shards == 0 {
@@ -237,6 +244,7 @@ impl Server {
             listener,
             registry,
             client_registry,
+            config_manager,
             shard_senders,
             new_conn_senders,
             shard_handles,
@@ -359,6 +367,7 @@ impl Server {
             self.shard_senders.clone(),
             self.registry.clone(),
             self.client_registry.clone(),
+            self.config_manager.clone(),
             self.config.server.allow_cross_slot_standalone,
             self.config.server.scatter_gather_timeout_ms,
             self.metrics_recorder.clone(),
@@ -710,6 +719,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // Client commands (handled specially in connection.rs, but registered for introspection)
     registry.register(crate::commands::client::ClientCommand);
+
+    // Config commands (handled specially in connection.rs, but registered for introspection)
+    registry.register(crate::commands::config::ConfigCommand);
 
     // Stream commands
     registry.register(crate::commands::stream::XaddCommand);

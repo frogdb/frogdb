@@ -13,7 +13,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 10.5 (ACL) ✓, 10.6 (Memory Management) ✓
+**Phase**: 10.2 (Configuration) ✓, 10.5 (ACL) ✓, 10.6 (Memory Management) ✓
 **Next Milestone**: Phase 10.1 completion (command metrics, keyspace metrics)
 
 ---
@@ -772,13 +772,14 @@ The following optimizations are deferred to a future phase:
 - [ ] Keyspace metrics (keys per DB/shard)
 - [ ] Persistence metrics (WAL pending, last save time)
 
-### 10.2 Configuration
+### 10.2 Configuration ✓
 
-- [ ] TOML config file support
-- [ ] Environment variables (FROGDB_ prefix)
-- [ ] `CONFIG GET`
-- [ ] `CONFIG SET` (mutable parameters)
-- [ ] Document mutable vs immutable parameters
+- [x] TOML config file support
+- [x] Environment variables (FROGDB_ prefix)
+- [x] `CONFIG GET`
+- [x] `CONFIG SET` (mutable parameters)
+- [x] `CONFIG HELP`
+- [x] Document mutable vs immutable parameters
 
 ### 10.3 Client Commands ✓
 

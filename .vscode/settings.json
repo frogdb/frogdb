@@ -3,5 +3,8 @@
         "frogdb",
         "serde",
         "thiserror"
-    ]
+    ],
+    "workbench.colorCustomizations": {
+        "activityBar.background": "#B610EF"
+    }
 }

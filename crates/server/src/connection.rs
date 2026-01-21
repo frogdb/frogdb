@@ -25,6 +25,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Framed;
 use tracing::{debug, trace, warn};
 
+use crate::runtime_config::ConfigManager;
 use crate::server::next_txid;
 
 /// Target shard(s) for a transaction (prepared for future multi-shard support).
@@ -190,6 +191,9 @@ pub struct ConnectionHandler {
     /// Client registry for CLIENT commands.
     client_registry: Arc<ClientRegistry>,
 
+    /// Configuration manager for CONFIG commands.
+    config_manager: Arc<ConfigManager>,
+
     /// Client handle (auto-unregisters on drop).
     client_handle: ClientHandle,
 
@@ -227,6 +231,7 @@ impl ConnectionHandler {
         num_shards: usize,
         registry: Arc<CommandRegistry>,
         client_registry: Arc<ClientRegistry>,
+        config_manager: Arc<ConfigManager>,
         client_handle: ClientHandle,
         shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
         allow_cross_slot: bool,
@@ -248,6 +253,7 @@ impl ConnectionHandler {
             num_shards,
             registry,
             client_registry,
+            config_manager,
             client_handle,
             shard_senders,
             allow_cross_slot,
@@ -435,6 +441,11 @@ impl ConnectionHandler {
         // Handle CLIENT commands specially (need access to client registry)
         if cmd_name_str == "CLIENT" {
             return vec![self.handle_client_command(&cmd.args).await];
+        }
+
+        // Handle CONFIG commands specially (need access to config manager)
+        if cmd_name_str == "CONFIG" {
+            return vec![self.handle_config_command(&cmd.args)];
         }
 
         // Handle server commands that need special routing
@@ -2717,6 +2728,74 @@ impl ConnectionHandler {
             Response::bulk(Bytes::from_static(b"    Print this help.")),
         ];
         Response::Array(help)
+    }
+
+    // =========================================================================
+    // CONFIG command handlers
+    // =========================================================================
+
+    /// Handle CONFIG command and dispatch to subcommands.
+    fn handle_config_command(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'config' command");
+        }
+
+        let subcommand = args[0].to_ascii_uppercase();
+        let subcommand_str = String::from_utf8_lossy(&subcommand);
+
+        match subcommand_str.as_ref() {
+            "GET" => self.handle_config_get(&args[1..]),
+            "SET" => self.handle_config_set(&args[1..]),
+            "HELP" => self.handle_config_help(),
+            _ => Response::error(format!(
+                "ERR unknown subcommand '{}'. Try CONFIG HELP.",
+                subcommand_str
+            )),
+        }
+    }
+
+    /// Handle CONFIG GET <pattern> - return parameters matching pattern.
+    fn handle_config_get(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'config|get' command");
+        }
+
+        let pattern = String::from_utf8_lossy(&args[0]);
+        let results = self.config_manager.get(&pattern);
+
+        // Return as array of [name, value, name, value, ...]
+        let mut response = Vec::with_capacity(results.len() * 2);
+        for (name, value) in results {
+            response.push(Response::bulk(Bytes::from(name)));
+            response.push(Response::bulk(Bytes::from(value)));
+        }
+
+        Response::Array(response)
+    }
+
+    /// Handle CONFIG SET <param> <value> - set a mutable configuration parameter.
+    fn handle_config_set(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'config|set' command");
+        }
+
+        let param = String::from_utf8_lossy(&args[0]);
+        let value = String::from_utf8_lossy(&args[1]);
+
+        match self.config_manager.set(&param, &value) {
+            Ok(()) => Response::ok(),
+            Err(e) => Response::error(e.to_string()),
+        }
+    }
+
+    /// Handle CONFIG HELP - return help text.
+    fn handle_config_help(&self) -> Response {
+        let help = ConfigManager::help_text();
+        let response: Vec<Response> = help
+            .into_iter()
+            .map(|s| Response::bulk(Bytes::from(s)))
+            .collect();
+        Response::Array(response)
     }
 
     /// Wait if the server is paused (CLIENT PAUSE).
