@@ -208,6 +208,26 @@ pub enum ScatterOp {
     Touch,
     /// UNLINK operation (async delete, same as Del for now).
     Unlink,
+    /// KEYS operation - get all keys matching a pattern.
+    Keys {
+        /// Pattern to match (glob syntax).
+        pattern: Bytes,
+    },
+    /// DBSIZE operation - get total key count.
+    DbSize,
+    /// FLUSHDB operation - clear all keys.
+    FlushDb,
+    /// SCAN operation - scan keys with cursor.
+    Scan {
+        /// Position within this shard to start scanning.
+        cursor: u64,
+        /// Hint for number of keys to return.
+        count: usize,
+        /// Optional pattern to match.
+        pattern: Option<Bytes>,
+        /// Optional type filter.
+        key_type: Option<crate::types::KeyType>,
+    },
 }
 
 /// Result from a shard for scatter-gather operations.
@@ -794,6 +814,39 @@ impl ShardWorker {
                         (key.clone(), Response::Integer(if touched { 1 } else { 0 }))
                     })
                     .collect()
+            }
+            ScatterOp::Keys { pattern } => {
+                // Get all keys matching pattern
+                let all_keys = self.store.all_keys();
+                let matching_keys: Vec<_> = all_keys
+                    .into_iter()
+                    .filter(|key| crate::glob::glob_match(pattern, key))
+                    .map(|key| (key.clone(), Response::bulk(key)))
+                    .collect();
+                matching_keys
+            }
+            ScatterOp::DbSize => {
+                // Return the key count for this shard
+                let count = self.store.len();
+                vec![(Bytes::from_static(b"__dbsize__"), Response::Integer(count as i64))]
+            }
+            ScatterOp::FlushDb => {
+                // Clear all keys in this shard
+                self.store.clear();
+                self.increment_version();
+                vec![(Bytes::from_static(b"__flushdb__"), Response::ok())]
+            }
+            ScatterOp::Scan { cursor, count, pattern, key_type } => {
+                // Scan keys in this shard
+                let pattern_ref = pattern.as_ref().map(|p| p.as_ref());
+                let (next_cursor, found_keys) = self.store.scan_filtered(*cursor, *count, pattern_ref, *key_type);
+                // Return cursor and keys as a special response
+                let mut results = Vec::with_capacity(found_keys.len() + 1);
+                results.push((Bytes::from_static(b"__cursor__"), Response::Integer(next_cursor as i64)));
+                for key in found_keys {
+                    results.push((key.clone(), Response::bulk(key)));
+                }
+                results
             }
         };
 
