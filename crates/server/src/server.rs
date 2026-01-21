@@ -114,6 +114,14 @@ impl Server {
                     ("mode", "standalone"),
                 ],
             );
+            // Record maxmemory at startup
+            if config.memory.maxmemory > 0 {
+                recorder.record_gauge(
+                    frogdb_metrics::metric_names::MEMORY_MAXMEMORY_BYTES,
+                    config.memory.maxmemory as f64,
+                    &[],
+                );
+            }
             (recorder.clone(), Some(recorder))
         } else {
             (Arc::new(frogdb_core::NoopMetricsRecorder::new()), None)
@@ -216,6 +224,7 @@ impl Server {
                     wal_config.clone(),
                     snapshot_coordinator.clone(),
                     eviction_config.clone(),
+                    metrics_recorder.clone(),
                 )
             } else {
                 ShardWorker::with_eviction(
@@ -226,6 +235,7 @@ impl Server {
                     shard_senders.clone(),
                     registry.clone(),
                     eviction_config.clone(),
+                    metrics_recorder.clone(),
                 )
             };
 

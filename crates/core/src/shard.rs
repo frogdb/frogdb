@@ -381,6 +381,12 @@ pub struct ShardWorker {
     /// Current memory limit for this shard (0 = unlimited).
     /// This is maxmemory / num_shards.
     memory_limit: u64,
+
+    /// Metrics recorder for observability.
+    metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+
+    /// Peak memory usage for this shard (high-water mark).
+    peak_memory: u64,
 }
 
 impl ShardWorker {
@@ -401,6 +407,7 @@ impl ShardWorker {
             shard_senders,
             registry,
             EvictionConfig::default(),
+            Arc::new(crate::noop::NoopMetricsRecorder::new()),
         )
     }
 
@@ -413,6 +420,7 @@ impl ShardWorker {
         shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
         registry: Arc<CommandRegistry>,
         eviction_config: EvictionConfig,
+        metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
     ) -> Self {
         // Try to create script executor
         let script_executor = ScriptExecutor::new(ScriptingConfig::default())
@@ -445,6 +453,8 @@ impl ShardWorker {
             eviction_config,
             eviction_pool: EvictionPool::new(),
             memory_limit,
+            metrics_recorder,
+            peak_memory: 0,
         }
     }
 
@@ -462,8 +472,14 @@ impl ShardWorker {
         wal_config: WalConfig,
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
         eviction_config: EvictionConfig,
+        metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
     ) -> Self {
-        let wal_writer = RocksWalWriter::new(rocks_store.clone(), shard_id, wal_config);
+        let wal_writer = RocksWalWriter::new(
+            rocks_store.clone(),
+            shard_id,
+            wal_config,
+            metrics_recorder.clone(),
+        );
 
         // Try to create script executor
         let script_executor = ScriptExecutor::new(ScriptingConfig::default())
@@ -496,6 +512,8 @@ impl ShardWorker {
             eviction_config,
             eviction_pool: EvictionPool::new(),
             memory_limit,
+            metrics_recorder,
+            peak_memory: 0,
         }
     }
 
@@ -530,6 +548,9 @@ impl ShardWorker {
 
         // Active expiry runs every 100ms
         let mut expiry_interval = tokio::time::interval(Duration::from_millis(100));
+
+        // Metrics collection runs every 10 seconds
+        let mut metrics_interval = tokio::time::interval(Duration::from_secs(10));
 
         loop {
             tokio::select! {
@@ -642,6 +663,11 @@ impl ShardWorker {
                     self.run_active_expiry();
                 }
 
+                // Periodic metrics collection
+                _ = metrics_interval.tick() => {
+                    self.collect_shard_metrics();
+                }
+
                 else => break,
             }
         }
@@ -666,7 +692,7 @@ impl ShardWorker {
         // Get expired keys from the expiry index
         if let Some(expiry_index) = self.store.expiry_index() {
             let expired = expiry_index.get_expired(now);
-            let mut any_deleted = false;
+            let mut deleted_count = 0u64;
 
             for key in expired {
                 if start.elapsed() > budget {
@@ -679,7 +705,7 @@ impl ShardWorker {
 
                 // Delete the key
                 if self.store.delete(&key) {
-                    any_deleted = true;
+                    deleted_count += 1;
                     tracing::trace!(
                         shard_id = self.shard_id,
                         key = %String::from_utf8_lossy(&key),
@@ -688,10 +714,72 @@ impl ShardWorker {
                 }
             }
 
-            // Increment version if any key was deleted by expiry
-            if any_deleted {
+            // Record expired keys metric and increment version
+            if deleted_count > 0 {
+                let shard_label = self.shard_id.to_string();
+                self.metrics_recorder.increment_counter(
+                    "frogdb_keys_expired_total",
+                    deleted_count,
+                    &[("shard", &shard_label)],
+                );
                 self.increment_version();
             }
+        }
+    }
+
+    /// Collect and emit shard metrics periodically.
+    fn collect_shard_metrics(&mut self) {
+        let shard_label = self.shard_id.to_string();
+        let memory_used = self.store.memory_used() as u64;
+
+        // Update peak memory if current exceeds it
+        if memory_used > self.peak_memory {
+            self.peak_memory = memory_used;
+        }
+
+        // Memory used by this shard
+        self.metrics_recorder.record_gauge(
+            "frogdb_shard_memory_bytes",
+            memory_used as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // Per-shard memory metrics
+        self.metrics_recorder.record_gauge(
+            "frogdb_memory_used_bytes",
+            memory_used as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // Peak memory for this shard
+        self.metrics_recorder.record_gauge(
+            "frogdb_memory_peak_bytes",
+            self.peak_memory as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // Keyspace metrics: key count
+        let key_count = self.store.len() as f64;
+
+        self.metrics_recorder.record_gauge(
+            "frogdb_shard_keys",
+            key_count,
+            &[("shard", &shard_label)],
+        );
+
+        self.metrics_recorder.record_gauge(
+            "frogdb_keys_total",
+            key_count,
+            &[("shard", &shard_label)],
+        );
+
+        // Keys with expiry
+        if let Some(expiry_index) = self.store.expiry_index() {
+            self.metrics_recorder.record_gauge(
+                "frogdb_keys_with_expiry",
+                expiry_index.len() as f64,
+                &[("shard", &shard_label)],
+            );
         }
     }
 
@@ -730,6 +818,12 @@ impl ShardWorker {
                 memory_limit = self.memory_limit,
                 "OOM: no eviction policy configured"
             );
+            let shard_label = self.shard_id.to_string();
+            self.metrics_recorder.increment_counter(
+                "frogdb_eviction_oom_total",
+                1,
+                &[("shard", &shard_label)],
+            );
             return Err(CommandError::OutOfMemory);
         }
 
@@ -748,6 +842,12 @@ impl ShardWorker {
                     memory_limit = self.memory_limit,
                     "OOM: no keys available for eviction"
                 );
+                let shard_label = self.shard_id.to_string();
+                self.metrics_recorder.increment_counter(
+                    "frogdb_eviction_oom_total",
+                    1,
+                    &[("shard", &shard_label)],
+                );
                 return Err(CommandError::OutOfMemory);
             }
         }
@@ -759,6 +859,12 @@ impl ShardWorker {
                 memory_used = self.store.memory_used(),
                 memory_limit = self.memory_limit,
                 "OOM: still over limit after eviction attempts"
+            );
+            let shard_label = self.shard_id.to_string();
+            self.metrics_recorder.increment_counter(
+                "frogdb_eviction_oom_total",
+                1,
+                &[("shard", &shard_label)],
             );
             return Err(CommandError::OutOfMemory);
         }
@@ -924,6 +1030,20 @@ impl ShardWorker {
         if self.store.delete(key) {
             self.increment_version();
 
+            // Record eviction metrics
+            let shard_label = self.shard_id.to_string();
+            let policy_label = self.eviction_config.policy.to_string();
+            self.metrics_recorder.increment_counter(
+                "frogdb_eviction_keys_total",
+                1,
+                &[("shard", &shard_label), ("policy", &policy_label)],
+            );
+            self.metrics_recorder.increment_counter(
+                "frogdb_eviction_bytes_total",
+                memory_freed as u64,
+                &[("shard", &shard_label)],
+            );
+
             tracing::debug!(
                 shard_id = self.shard_id,
                 key = %String::from_utf8_lossy(key),
@@ -999,6 +1119,27 @@ impl ShardWorker {
             Ok(response) => response,
             Err(err) => err.to_response(),
         };
+
+        // Track keyspace hits/misses for GET-like commands
+        let is_get_command = matches!(
+            cmd_name_str.as_ref(),
+            "GET" | "GETEX" | "GETDEL" | "HGET" | "LINDEX"
+        );
+        if is_get_command {
+            if matches!(response, Response::Null) {
+                self.metrics_recorder.increment_counter(
+                    "frogdb_keyspace_misses_total",
+                    1,
+                    &[],
+                );
+            } else {
+                self.metrics_recorder.increment_counter(
+                    "frogdb_keyspace_hits_total",
+                    1,
+                    &[],
+                );
+            }
+        }
 
         // Increment version on write operations
         if is_write {

@@ -75,6 +75,8 @@ pub mod metric_names {
     // Memory/Eviction metrics
     pub const MEMORY_USED_BYTES: &str = "frogdb_memory_used_bytes";
     pub const MEMORY_MAXMEMORY_BYTES: &str = "frogdb_memory_maxmemory_bytes";
+    pub const MEMORY_PEAK_BYTES: &str = "frogdb_memory_peak_bytes";
+    pub const MEMORY_FRAGMENTATION_RATIO: &str = "frogdb_memory_fragmentation_ratio";
     pub const EVICTION_KEYS_TOTAL: &str = "frogdb_eviction_keys_total";
     pub const EVICTION_BYTES_TOTAL: &str = "frogdb_eviction_bytes_total";
     pub const EVICTION_SAMPLES_TOTAL: &str = "frogdb_eviction_samples_total";
@@ -159,6 +161,7 @@ impl CommandTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prometheus_recorder::PrometheusRecorder;
 
     #[test]
     fn test_create_noop_recorder_when_disabled() {
@@ -179,5 +182,27 @@ mod tests {
         };
         let recorder = create_metrics_recorder(&config);
         recorder.increment_counter("test", 1, &[]);
+    }
+
+    #[test]
+    fn test_command_timer_finish() {
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let timer = CommandTimer::new("GET".to_string(), recorder.clone());
+        timer.finish();
+        let output = recorder.encode();
+        assert!(output.contains("frogdb_commands_total"));
+        assert!(output.contains("frogdb_commands_duration_seconds"));
+        assert!(output.contains(r#"command="GET""#));
+    }
+
+    #[test]
+    fn test_command_timer_finish_with_error() {
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let timer = CommandTimer::new("SET".to_string(), recorder.clone());
+        timer.finish_with_error("oom");
+        let output = recorder.encode();
+        assert!(output.contains("frogdb_commands_errors_total"));
+        assert!(output.contains(r#"command="SET""#));
+        assert!(output.contains(r#"error="oom""#));
     }
 }

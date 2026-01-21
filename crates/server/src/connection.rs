@@ -213,7 +213,6 @@ pub struct ConnectionHandler {
     pubsub_rx: mpsc::UnboundedReceiver<PubSubMessage>,
 
     /// Metrics recorder.
-    #[allow(dead_code)]
     metrics_recorder: Arc<dyn MetricsRecorder>,
 
     /// ACL manager for authentication and authorization.
@@ -341,8 +340,23 @@ impl ConnectionHandler {
                     // Wait if server is paused (for non-exempt commands)
                     self.wait_if_paused(&cmd).await;
 
+                    // Start timing for metrics
+                    let cmd_name_for_metrics = String::from_utf8_lossy(&cmd.name).to_uppercase();
+                    let timer = frogdb_metrics::CommandTimer::new(
+                        cmd_name_for_metrics,
+                        self.metrics_recorder.clone(),
+                    );
+
                     // Route and execute (with transaction and pub/sub handling)
                     let responses = self.route_and_execute_with_transaction(&cmd).await;
+
+                    // Record metrics - check for errors in responses
+                    let has_error = responses.iter().any(|r| matches!(r, Response::Error(_)));
+                    if has_error {
+                        timer.finish_with_error("command_error");
+                    } else {
+                        timer.finish();
+                    }
 
                     // Send response(s)
                     for response in responses {

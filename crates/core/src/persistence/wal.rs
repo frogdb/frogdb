@@ -67,6 +67,7 @@ pub struct RocksWalWriter {
     pending_batch: Mutex<BatchState>,
     sequence: AtomicU64,
     config: WalConfig,
+    metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
 }
 
 struct BatchState {
@@ -77,7 +78,12 @@ struct BatchState {
 
 impl RocksWalWriter {
     /// Create a new WAL writer for a shard.
-    pub fn new(rocks: Arc<RocksStore>, shard_id: usize, config: WalConfig) -> Self {
+    pub fn new(
+        rocks: Arc<RocksStore>,
+        shard_id: usize,
+        config: WalConfig,
+        metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+    ) -> Self {
         Self {
             rocks,
             shard_id,
@@ -88,6 +94,7 @@ impl RocksWalWriter {
             }),
             sequence: AtomicU64::new(0),
             config,
+            metrics_recorder,
         }
     }
 
@@ -128,7 +135,21 @@ impl RocksWalWriter {
             .batch_put(&mut state.batch, self.shard_id, key, value)
             .map_err(std::io::Error::other)?;
 
-        state.size += key.len() + value.len() + 32; // Add overhead
+        let bytes_written = key.len() + value.len() + 32; // Add overhead
+        state.size += bytes_written;
+
+        // Record WAL metrics
+        let shard_label = self.shard_id.to_string();
+        self.metrics_recorder.increment_counter(
+            "frogdb_wal_writes_total",
+            1,
+            &[("shard", &shard_label)],
+        );
+        self.metrics_recorder.increment_counter(
+            "frogdb_wal_bytes_total",
+            bytes_written as u64,
+            &[("shard", &shard_label)],
+        );
 
         self.maybe_flush_locked(&mut state).await?;
 
@@ -153,6 +174,8 @@ impl RocksWalWriter {
             return Ok(());
         }
 
+        let start = Instant::now();
+
         let batch = std::mem::take(&mut state.batch);
         state.size = 0;
         state.last_flush = Instant::now();
@@ -172,6 +195,15 @@ impl RocksWalWriter {
         self.rocks
             .write_batch_opt(batch, &write_opts)
             .map_err(std::io::Error::other)?;
+
+        // Record flush duration
+        let duration = start.elapsed().as_secs_f64();
+        let shard_label = self.shard_id.to_string();
+        self.metrics_recorder.record_histogram(
+            "frogdb_wal_flush_duration_seconds",
+            duration,
+            &[("shard", &shard_label)],
+        );
 
         Ok(())
     }
@@ -304,6 +336,7 @@ pub fn spawn_periodic_sync(
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use crate::noop::NoopMetricsRecorder;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -312,6 +345,7 @@ mod unit_tests {
         let rocks = Arc::new(
             RocksStore::open(tmp.path(), 2, &super::super::rocks::RocksConfig::default()).unwrap(),
         );
+        let metrics = Arc::new(NoopMetricsRecorder::new());
 
         let wal = RocksWalWriter::new(
             rocks.clone(),
@@ -321,6 +355,7 @@ mod unit_tests {
                 batch_size_threshold: 1024 * 1024,
                 batch_timeout_ms: 1000,
             },
+            metrics,
         );
 
         let value = Value::string("test_value");
@@ -350,7 +385,8 @@ mod unit_tests {
         rocks.put(0, b"key", &serialized).unwrap();
 
         // Now delete via WAL
-        let wal = RocksWalWriter::new(rocks.clone(), 0, WalConfig::default());
+        let metrics = Arc::new(NoopMetricsRecorder::new());
+        let wal = RocksWalWriter::new(rocks.clone(), 0, WalConfig::default(), metrics);
 
         let seq = wal.write_delete(b"key").await.unwrap();
         assert_eq!(seq, 1);
@@ -368,6 +404,7 @@ mod unit_tests {
         let rocks = Arc::new(
             RocksStore::open(tmp.path(), 2, &super::super::rocks::RocksConfig::default()).unwrap(),
         );
+        let metrics = Arc::new(NoopMetricsRecorder::new());
 
         let wal = RocksWalWriter::new(
             rocks.clone(),
@@ -377,6 +414,7 @@ mod unit_tests {
                 batch_size_threshold: 100, // Very small threshold
                 batch_timeout_ms: 60000,   // Long timeout
             },
+            metrics,
         );
 
         // Write enough data to trigger threshold
@@ -396,8 +434,9 @@ mod unit_tests {
         let rocks = Arc::new(
             RocksStore::open(tmp.path(), 2, &super::super::rocks::RocksConfig::default()).unwrap(),
         );
+        let metrics = Arc::new(NoopMetricsRecorder::new());
 
-        let wal = RocksWalWriter::new(rocks, 0, WalConfig::default());
+        let wal = RocksWalWriter::new(rocks, 0, WalConfig::default(), metrics);
 
         assert_eq!(wal.sequence(), 0);
 
