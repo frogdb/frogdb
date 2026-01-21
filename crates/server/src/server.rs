@@ -6,7 +6,7 @@ use frogdb_core::persistence::{
     RocksConfig, RocksStore, SnapshotCoordinator, WalConfig,
 };
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
-use frogdb_core::{CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, ShardMessage, ShardWorker};
+use frogdb_core::{ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, ShardMessage, ShardWorker};
 use frogdb_metrics::{HealthChecker, MetricsServer, PrometheusRecorder, SystemMetricsCollector};
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -56,6 +56,9 @@ pub struct Server {
 
     /// Command registry.
     registry: Arc<CommandRegistry>,
+
+    /// Client registry for CLIENT commands.
+    client_registry: Arc<ClientRegistry>,
 
     /// Shard message senders.
     shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
@@ -121,6 +124,9 @@ impl Server {
         let mut registry = CommandRegistry::new();
         crate::register_commands(&mut registry);
         let registry = Arc::new(registry);
+
+        // Create client registry
+        let client_registry = Arc::new(ClientRegistry::new());
 
         // Determine number of shards
         let num_shards = if config.server.num_shards == 0 {
@@ -224,6 +230,7 @@ impl Server {
             config,
             listener,
             registry,
+            client_registry,
             shard_senders,
             new_conn_senders,
             shard_handles,
@@ -344,6 +351,7 @@ impl Server {
             self.new_conn_senders,
             self.shard_senders.clone(),
             self.registry.clone(),
+            self.client_registry.clone(),
             self.config.server.allow_cross_slot_standalone,
             self.config.server.scatter_gather_timeout_ms,
             self.metrics_recorder.clone(),
@@ -691,6 +699,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // Info command
     registry.register(crate::commands::info::InfoCommand);
+
+    // Client commands (handled specially in connection.rs, but registered for introspection)
+    registry.register(crate::commands::client::ClientCommand);
 }
 
 // Commands module

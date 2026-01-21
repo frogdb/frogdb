@@ -8,10 +8,11 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::Bytes;
 use frogdb_core::{
-    shard_for_key, CommandRegistry, GlobPattern, IntrospectionRequest, IntrospectionResponse,
-    MetricsRecorder, PartialResult, PubSubMessage, PubSubSender, ScatterOp, ShardMessage,
-    TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
+    shard_for_key, ClientHandle, ClientRegistry, CommandFlags, CommandRegistry, GlobPattern,
+    IntrospectionRequest, IntrospectionResponse, MetricsRecorder, PartialResult, PauseMode,
+    PubSubMessage, PubSubSender, ScatterOp, ShardMessage, TransactionResult,
+    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use futures::{SinkExt, StreamExt};
@@ -138,6 +139,12 @@ pub struct ConnectionHandler {
     /// Command registry.
     registry: Arc<CommandRegistry>,
 
+    /// Client registry for CLIENT commands.
+    client_registry: Arc<ClientRegistry>,
+
+    /// Client handle (auto-unregisters on drop).
+    client_handle: ClientHandle,
+
     /// Shard message senders.
     shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
 
@@ -168,6 +175,8 @@ impl ConnectionHandler {
         shard_id: usize,
         num_shards: usize,
         registry: Arc<CommandRegistry>,
+        client_registry: Arc<ClientRegistry>,
+        client_handle: ClientHandle,
         shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
         allow_cross_slot: bool,
         scatter_gather_timeout_ms: u64,
@@ -185,6 +194,8 @@ impl ConnectionHandler {
             shard_id,
             num_shards,
             registry,
+            client_registry,
+            client_handle,
             shard_senders,
             allow_cross_slot,
             scatter_gather_timeout: Duration::from_millis(scatter_gather_timeout_ms),
@@ -200,6 +211,12 @@ impl ConnectionHandler {
 
         loop {
             tokio::select! {
+                // Check for CLIENT KILL
+                _ = self.client_handle.killed() => {
+                    debug!(conn_id = self.state.id, "Killed by CLIENT KILL");
+                    break;
+                }
+
                 // Handle pub/sub messages from shards
                 Some(pubsub_msg) = self.pubsub_rx.recv() => {
                     let response = pubsub_msg.to_response();
@@ -249,6 +266,9 @@ impl ConnectionHandler {
                         "Received command"
                     );
 
+                    // Update last command time for idle tracking
+                    self.client_registry.update_last_command(self.state.id);
+
                     // Handle QUIT specially (also clears transaction state)
                     if cmd.name.eq_ignore_ascii_case(b"QUIT") {
                         // Clear transaction state before quitting
@@ -257,6 +277,9 @@ impl ConnectionHandler {
                         let _ = self.framed.send(response_frame).await;
                         break;
                     }
+
+                    // Wait if server is paused (for non-exempt commands)
+                    self.wait_if_paused(&cmd).await;
 
                     // Route and execute (with transaction and pub/sub handling)
                     let responses = self.route_and_execute_with_transaction(&cmd).await;
@@ -337,6 +360,11 @@ impl ConnectionHandler {
             "EVALSHA" => return vec![self.handle_evalsha(&cmd.args).await],
             "SCRIPT" => return vec![self.handle_script(&cmd.args).await],
             _ => {}
+        }
+
+        // Handle CLIENT commands specially (need access to client registry)
+        if cmd_name_str == "CLIENT" {
+            return vec![self.handle_client_command(&cmd.args).await];
         }
 
         // Handle server commands that need special routing
@@ -1980,5 +2008,398 @@ impl ConnectionHandler {
             args: args.to_vec(),
         };
         self.execute_on_shard(self.shard_id, &cmd).await
+    }
+
+    // =========================================================================
+    // CLIENT command handlers
+    // =========================================================================
+
+    /// Handle CLIENT command and dispatch to subcommands.
+    async fn handle_client_command(&mut self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'client' command");
+        }
+
+        let subcommand = args[0].to_ascii_uppercase();
+        let subcommand_str = String::from_utf8_lossy(&subcommand);
+
+        match subcommand_str.as_ref() {
+            "ID" => self.handle_client_id(),
+            "SETNAME" => self.handle_client_setname(&args[1..]),
+            "GETNAME" => self.handle_client_getname(),
+            "LIST" => self.handle_client_list(&args[1..]),
+            "INFO" => self.handle_client_info(),
+            "KILL" => self.handle_client_kill(&args[1..]),
+            "PAUSE" => self.handle_client_pause(&args[1..]),
+            "UNPAUSE" => self.handle_client_unpause(),
+            "HELP" => self.handle_client_help(),
+            _ => Response::error(format!(
+                "ERR unknown subcommand '{}'. Try CLIENT HELP.",
+                subcommand_str
+            )),
+        }
+    }
+
+    /// Handle CLIENT ID - return connection ID.
+    fn handle_client_id(&self) -> Response {
+        Response::Integer(self.state.id as i64)
+    }
+
+    /// Handle CLIENT SETNAME - set connection name.
+    fn handle_client_setname(&mut self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'client|setname' command");
+        }
+
+        let name = &args[0];
+
+        // Validate name: no spaces allowed
+        if name.iter().any(|&b| b == b' ') {
+            return Response::error("ERR Client names cannot contain spaces");
+        }
+
+        // Empty name clears the name
+        let name_opt = if name.is_empty() {
+            None
+        } else {
+            Some(name.clone())
+        };
+
+        // Update local state
+        self.state.name = name_opt.clone();
+
+        // Update in registry
+        self.client_registry.update_name(self.state.id, name_opt);
+
+        Response::ok()
+    }
+
+    /// Handle CLIENT GETNAME - get connection name.
+    fn handle_client_getname(&self) -> Response {
+        match &self.state.name {
+            Some(name) => Response::bulk(name.clone()),
+            None => Response::null(),
+        }
+    }
+
+    /// Handle CLIENT LIST - list all connections.
+    fn handle_client_list(&self, args: &[Bytes]) -> Response {
+        // Parse optional TYPE filter
+        let mut filter_type: Option<&str> = None;
+
+        let mut i = 0;
+        while i < args.len() {
+            let opt = args[i].to_ascii_uppercase();
+            match opt.as_slice() {
+                b"TYPE" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Response::error("ERR syntax error");
+                    }
+                    let type_str = String::from_utf8_lossy(&args[i]).to_lowercase();
+                    match type_str.as_str() {
+                        "normal" | "master" | "replica" | "pubsub" => {
+                            filter_type = match type_str.as_str() {
+                                "normal" => Some("normal"),
+                                "master" => Some("master"),
+                                "replica" => Some("replica"),
+                                "pubsub" => Some("pubsub"),
+                                _ => None,
+                            };
+                        }
+                        _ => {
+                            return Response::error(format!(
+                                "ERR Unknown client type '{}'",
+                                type_str
+                            ));
+                        }
+                    }
+                }
+                b"ID" => {
+                    // CLIENT LIST ID id1 id2 ... - not implemented yet
+                    return Response::error("ERR CLIENT LIST ID not implemented");
+                }
+                _ => {
+                    return Response::error(format!(
+                        "ERR syntax error, expected 'TYPE' but got '{}'",
+                        String::from_utf8_lossy(&opt)
+                    ));
+                }
+            }
+            i += 1;
+        }
+
+        // Get all clients from registry
+        let clients = self.client_registry.list();
+
+        // Build output
+        let mut output = String::new();
+        for info in clients {
+            // Apply type filter
+            if let Some(ft) = filter_type {
+                if info.client_type() != ft {
+                    continue;
+                }
+            }
+
+            output.push_str(&info.to_client_list_entry());
+            output.push('\n');
+        }
+
+        Response::bulk(Bytes::from(output))
+    }
+
+    /// Handle CLIENT INFO - get current connection info.
+    fn handle_client_info(&self) -> Response {
+        match self.client_registry.get(self.state.id) {
+            Some(info) => {
+                let entry = info.to_client_list_entry();
+                Response::bulk(Bytes::from(entry + "\n"))
+            }
+            None => Response::error("ERR client not found"),
+        }
+    }
+
+    /// Handle CLIENT KILL - terminate connections.
+    fn handle_client_kill(&self, args: &[Bytes]) -> Response {
+        use frogdb_core::KillFilter;
+        use std::net::SocketAddr;
+
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'client|kill' command");
+        }
+
+        // Old-style syntax: CLIENT KILL addr:port
+        if args.len() == 1 && !args[0].iter().any(|&b| b == b' ') {
+            let addr_str = String::from_utf8_lossy(&args[0]);
+            let addr: SocketAddr = match addr_str.parse() {
+                Ok(a) => a,
+                Err(_) => return Response::error("ERR Invalid IP:port pair"),
+            };
+
+            let filter = KillFilter {
+                addr: Some(addr),
+                skip_me: true,
+                current_conn_id: Some(self.state.id),
+                ..Default::default()
+            };
+
+            let killed = self.client_registry.kill_by_filter(&filter);
+            if killed > 0 {
+                return Response::ok();
+            } else {
+                return Response::error("ERR No such client");
+            }
+        }
+
+        // New-style syntax: CLIENT KILL [ID id] [ADDR ip:port] [LADDR ip:port] [TYPE type] [USER username] [SKIPME yes|no]
+        let mut filter = KillFilter {
+            skip_me: true, // Default is to skip ourselves
+            current_conn_id: Some(self.state.id),
+            ..Default::default()
+        };
+
+        let mut i = 0;
+        while i < args.len() {
+            let opt = args[i].to_ascii_uppercase();
+            match opt.as_slice() {
+                b"ID" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Response::error("ERR syntax error");
+                    }
+                    let id_str = String::from_utf8_lossy(&args[i]);
+                    filter.id = match id_str.parse() {
+                        Ok(id) => Some(id),
+                        Err(_) => return Response::error("ERR client-id is not an integer"),
+                    };
+                }
+                b"ADDR" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Response::error("ERR syntax error");
+                    }
+                    let addr_str = String::from_utf8_lossy(&args[i]);
+                    filter.addr = match addr_str.parse() {
+                        Ok(a) => Some(a),
+                        Err(_) => return Response::error("ERR Invalid IP:port pair"),
+                    };
+                }
+                b"LADDR" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Response::error("ERR syntax error");
+                    }
+                    let addr_str = String::from_utf8_lossy(&args[i]);
+                    filter.laddr = match addr_str.parse() {
+                        Ok(a) => Some(a),
+                        Err(_) => return Response::error("ERR Invalid IP:port pair"),
+                    };
+                }
+                b"TYPE" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Response::error("ERR syntax error");
+                    }
+                    let type_str = String::from_utf8_lossy(&args[i]).to_lowercase();
+                    match type_str.as_str() {
+                        "normal" | "master" | "replica" | "pubsub" => {
+                            filter.client_type = Some(type_str);
+                        }
+                        _ => {
+                            return Response::error(format!(
+                                "ERR Unknown client type '{}'",
+                                type_str
+                            ));
+                        }
+                    }
+                }
+                b"USER" => {
+                    // USER filter - noop for now (ACL not implemented)
+                    i += 1;
+                    if i >= args.len() {
+                        return Response::error("ERR syntax error");
+                    }
+                    // TODO: Implement in Phase 10.5 (ACL)
+                }
+                b"SKIPME" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Response::error("ERR syntax error");
+                    }
+                    let val = args[i].to_ascii_lowercase();
+                    match val.as_slice() {
+                        b"yes" => filter.skip_me = true,
+                        b"no" => filter.skip_me = false,
+                        _ => return Response::error("ERR syntax error"),
+                    }
+                }
+                _ => {
+                    return Response::error(format!(
+                        "ERR syntax error, expected filter but got '{}'",
+                        String::from_utf8_lossy(&opt)
+                    ));
+                }
+            }
+            i += 1;
+        }
+
+        // Must have at least one filter
+        if filter.id.is_none()
+            && filter.addr.is_none()
+            && filter.laddr.is_none()
+            && filter.client_type.is_none()
+        {
+            return Response::error("ERR syntax error");
+        }
+
+        let killed = self.client_registry.kill_by_filter(&filter);
+        Response::Integer(killed as i64)
+    }
+
+    /// Handle CLIENT PAUSE - pause command execution.
+    fn handle_client_pause(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'client|pause' command");
+        }
+
+        // Parse timeout in milliseconds
+        let timeout_str = String::from_utf8_lossy(&args[0]);
+        let timeout_ms: u64 = match timeout_str.parse() {
+            Ok(t) => t,
+            Err(_) => return Response::error("ERR timeout is not an integer or out of range"),
+        };
+
+        // Parse optional mode (WRITE or ALL)
+        let mode = if args.len() > 1 {
+            let mode_str = args[1].to_ascii_uppercase();
+            match mode_str.as_slice() {
+                b"WRITE" => PauseMode::Write,
+                b"ALL" => PauseMode::All,
+                _ => {
+                    return Response::error(
+                        "ERR pause mode must be either WRITE or ALL",
+                    );
+                }
+            }
+        } else {
+            PauseMode::Write // Default mode
+        };
+
+        self.client_registry.pause(mode, timeout_ms);
+        Response::ok()
+    }
+
+    /// Handle CLIENT UNPAUSE - resume command execution.
+    fn handle_client_unpause(&self) -> Response {
+        self.client_registry.unpause();
+        Response::ok()
+    }
+
+    /// Handle CLIENT HELP - show help.
+    fn handle_client_help(&self) -> Response {
+        let help = vec![
+            Response::bulk(Bytes::from_static(b"CLIENT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:")),
+            Response::bulk(Bytes::from_static(b"GETNAME")),
+            Response::bulk(Bytes::from_static(b"    Return the name of the current connection.")),
+            Response::bulk(Bytes::from_static(b"ID")),
+            Response::bulk(Bytes::from_static(b"    Return the ID of the current connection.")),
+            Response::bulk(Bytes::from_static(b"INFO")),
+            Response::bulk(Bytes::from_static(b"    Return information about the current connection.")),
+            Response::bulk(Bytes::from_static(b"KILL <ip:port>|<filter> [value] ... [<filter> [value] ...]")),
+            Response::bulk(Bytes::from_static(b"    Kill connection(s).")),
+            Response::bulk(Bytes::from_static(b"LIST [TYPE <normal|master|replica|pubsub>]")),
+            Response::bulk(Bytes::from_static(b"    Return information about client connections.")),
+            Response::bulk(Bytes::from_static(b"PAUSE <timeout> [WRITE|ALL]")),
+            Response::bulk(Bytes::from_static(b"    Suspend clients for specified time.")),
+            Response::bulk(Bytes::from_static(b"SETNAME <name>")),
+            Response::bulk(Bytes::from_static(b"    Set the name of the current connection.")),
+            Response::bulk(Bytes::from_static(b"UNPAUSE")),
+            Response::bulk(Bytes::from_static(b"    Resume processing commands.")),
+            Response::bulk(Bytes::from_static(b"HELP")),
+            Response::bulk(Bytes::from_static(b"    Print this help.")),
+        ];
+        Response::Array(help)
+    }
+
+    /// Wait if the server is paused (CLIENT PAUSE).
+    /// This queues commands (not drops them) by blocking until pause ends.
+    async fn wait_if_paused(&self, cmd: &ParsedCommand) {
+        // Get command flags to determine if this is a write command
+        let cmd_name = cmd.name_uppercase();
+        let cmd_name_str = String::from_utf8_lossy(&cmd_name);
+
+        let is_write_command = match self.registry.get(&cmd_name_str) {
+            Some(handler) => handler.flags().contains(CommandFlags::WRITE),
+            None => false, // Unknown commands treated as non-write
+        };
+
+        // Certain commands are always exempt from pause
+        let is_exempt = matches!(
+            cmd_name_str.as_ref(),
+            "CLIENT" | "PING" | "QUIT" | "RESET" | "INFO" | "CONFIG" | "DEBUG" | "SLOWLOG"
+        );
+
+        if is_exempt {
+            return;
+        }
+
+        // Check pause state and wait if necessary
+        loop {
+            match self.client_registry.check_pause() {
+                Some(PauseMode::All) => {
+                    // All commands are paused
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Some(PauseMode::Write) if is_write_command => {
+                    // Write commands are paused
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                _ => {
+                    // Not paused or this command is not affected
+                    return;
+                }
+            }
+        }
     }
 }

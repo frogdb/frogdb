@@ -3,6 +3,7 @@
 //! Core data structures, command traits, and storage implementations for FrogDB.
 //! This crate provides the foundational types used by the server.
 
+pub mod client_registry;
 pub mod command;
 pub mod error;
 pub mod eviction;
@@ -55,3 +56,6 @@ pub use eviction::{
     DEFAULT_LFU_DECAY_TIME, EVICTION_POOL_SIZE,
 };
 pub use glob::glob_match;
+pub use client_registry::{
+    ClientFlags, ClientHandle, ClientInfo, ClientRegistry, KillFilter, PauseMode,
+};

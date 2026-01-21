@@ -3,7 +3,7 @@
 use anyhow::Result;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use std::sync::atomic::AtomicI64;
-use frogdb_core::{shard::NewConnection, CommandRegistry, MetricsRecorder, ShardMessage};
+use frogdb_core::{shard::NewConnection, ClientRegistry, CommandRegistry, MetricsRecorder, ShardMessage};
 use frogdb_metrics::metric_names;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -48,6 +48,9 @@ pub struct Acceptor {
     /// Command registry.
     registry: Arc<CommandRegistry>,
 
+    /// Client registry for CLIENT commands.
+    client_registry: Arc<ClientRegistry>,
+
     /// Connection assigner.
     assigner: RoundRobinAssigner,
 
@@ -66,11 +69,13 @@ pub struct Acceptor {
 
 impl Acceptor {
     /// Create a new acceptor.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         listener: TcpListener,
         new_conn_senders: Vec<mpsc::Sender<NewConnection>>,
         shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
         registry: Arc<CommandRegistry>,
+        client_registry: Arc<ClientRegistry>,
         allow_cross_slot: bool,
         scatter_gather_timeout_ms: u64,
         metrics_recorder: Arc<dyn MetricsRecorder>,
@@ -81,6 +86,7 @@ impl Acceptor {
             new_conn_senders,
             shard_senders,
             registry,
+            client_registry,
             assigner: RoundRobinAssigner::new(num_shards),
             allow_cross_slot,
             scatter_gather_timeout_ms,
@@ -99,6 +105,12 @@ impl Acceptor {
                     let conn_id = next_conn_id();
                     let shard_id = self.assigner.assign();
 
+                    // Get local address
+                    let local_addr = socket.local_addr().ok();
+
+                    // Register connection with client registry
+                    let client_handle = self.client_registry.register(conn_id, addr, local_addr);
+
                     // Record connection metrics
                     self.metrics_recorder
                         .increment_counter(metric_names::CONNECTIONS_TOTAL, 1, &[]);
@@ -116,6 +128,7 @@ impl Acceptor {
                     // For simplicity, we spawn the connection handler directly
                     // instead of sending to the shard's new_conn channel
                     let registry = self.registry.clone();
+                    let client_registry = self.client_registry.clone();
                     let shard_senders = self.shard_senders.clone();
                     let num_shards = self.shard_senders.len();
                     let allow_cross_slot = self.allow_cross_slot;
@@ -131,6 +144,8 @@ impl Acceptor {
                             shard_id,
                             num_shards,
                             registry,
+                            client_registry,
+                            client_handle,
                             shard_senders,
                             allow_cross_slot,
                             scatter_gather_timeout_ms,

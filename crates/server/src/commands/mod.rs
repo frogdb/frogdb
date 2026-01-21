@@ -3,6 +3,7 @@
 //! This module contains all Redis-compatible command implementations,
 //! organized by category.
 
+pub mod client;
 pub mod expiry;
 pub mod generic;
 pub mod hash;
@@ -17,6 +18,7 @@ pub mod sorted_set;
 pub mod string;
 pub mod transaction;
 
+pub use client::*;
 pub use expiry::*;
 pub use generic::*;
 pub use hash::*;
