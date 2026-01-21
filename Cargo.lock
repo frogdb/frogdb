@@ -768,6 +768,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "bytes-utils",
+ "proptest",
  "redis-protocol",
  "thiserror 2.0.18",
  "tokio",
