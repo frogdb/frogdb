@@ -13,7 +13,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 10.6 (Memory Management) ✓
+**Phase**: 10.5 (ACL) ✓, 10.6 (Memory Management) ✓
 **Next Milestone**: Phase 10.1 completion (command metrics, keyspace metrics)
 
 ---
@@ -796,15 +796,22 @@ The following optimizations are deferred to a future phase:
 - [ ] `SLOWLOG LEN`
 - [ ] `SLOWLOG RESET`
 
-### 10.5 ACL
+### 10.5 ACL ✓
 
-- [ ] `AclManager`
-- [ ] `AUTH`
-- [ ] `ACL SETUSER`, `ACL DELUSER`
-- [ ] `ACL LIST`, `ACL GETUSER`
-- [ ] `ACL CAT`
-- [ ] `ACL WHOAMI`
-- [ ] Permission checking hooks
+- [x] `AclManager` - centralized user store with RwLock
+- [x] `AUTH` - authenticate with password or username/password
+- [x] `ACL SETUSER`, `ACL DELUSER` - create/modify/delete users
+- [x] `ACL LIST`, `ACL GETUSER` - inspect user configurations
+- [x] `ACL USERS` - list all usernames
+- [x] `ACL CAT [category]` - list command categories
+- [x] `ACL WHOAMI` - return current username
+- [x] `ACL GENPASS [bits]` - generate secure random password
+- [x] `ACL LOG [count|RESET]` - security event log
+- [x] `ACL SAVE`, `ACL LOAD` - persist/reload ACL file
+- [x] `ACL HELP` - show help
+- [x] Permission checking hooks (authentication check in connection handler)
+- [x] ACL rule parser (>password, ~pattern, +@category, etc.)
+- [x] Command categories (21 categories: admin, string, list, set, etc.)
 
 ### 10.6 Memory Management ✓
 
@@ -930,7 +937,7 @@ These must exist from Phase 1 to avoid refactoring:
 | `WalWriter` trait | Noop | RocksDB WAL (Phase 5) |
 | `ReplicationConfig` | Standalone | Primary/Replica (Phase 14) |
 | `ReplicationTracker` trait | Noop | WAL streaming (Phase 14) |
-| `AclChecker` trait | AlwaysAllow | Full ACL (Phase 10) |
+| `AclChecker` trait | AlwaysAllow | Full ACL ✓ (Phase 10.5) |
 | `MetricsRecorder` trait | Noop | Prometheus (Phase 10) |
 | `Tracer` trait | Noop | OpenTelemetry (Phase 10) |
 | Shard channels | 1 shard | N shards (Phase 4) |

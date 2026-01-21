@@ -3,6 +3,7 @@
 //! Core data structures, command traits, and storage implementations for FrogDB.
 //! This crate provides the foundational types used by the server.
 
+pub mod acl;
 pub mod client_registry;
 pub mod command;
 pub mod error;
@@ -20,8 +21,13 @@ pub mod types;
 
 pub use command::{Arity, Command, CommandContext, CommandFlags};
 pub use error::CommandError;
+pub use acl::{
+    AclChecker, AclConfig, AclError, AclLog, AclManager, AllowAllChecker, AuthenticatedUser,
+    CommandCategory, FullAclChecker, KeyAccessType, PermissionResult, User, UserPermissions,
+    generate_password, hash_password,
+};
 pub use noop::{
-    AclChecker, AclResult, AlwaysAllowAcl, ExpiryIndex, MetricsRecorder, NoopMetricsRecorder,
+    ExpiryIndex, MetricsRecorder, NoopMetricsRecorder,
     NoopReplicationTracker, NoopTracer, NoopWalWriter, ReplicationConfig, ReplicationTracker,
     Tracer, WalOperation, WalWriter,
 };
