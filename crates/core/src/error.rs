@@ -47,6 +47,15 @@ pub enum CommandError {
     #[error("BUSYKEY Target key name already exists")]
     BusyKey,
 
+    // === Stream Errors ===
+    /// Consumer group already exists.
+    #[error("BUSYGROUP Consumer Group name already exists")]
+    BusyGroup,
+
+    /// Consumer group doesn't exist.
+    #[error("NOGROUP No such consumer group")]
+    NoGroup,
+
     // === System Errors ===
     /// Out of memory.
     #[error("OOM command not allowed when used memory > 'maxmemory'")]
@@ -85,6 +94,10 @@ impl CommandError {
                 Bytes::from_static(b"CROSSSLOT Keys in request don't hash to the same slot")
             }
             Self::BusyKey => Bytes::from_static(b"BUSYKEY Target key name already exists"),
+            Self::BusyGroup => {
+                Bytes::from_static(b"BUSYGROUP Consumer Group name already exists")
+            }
+            Self::NoGroup => Bytes::from_static(b"NOGROUP No such consumer group"),
             Self::OutOfMemory => {
                 Bytes::from_static(b"OOM command not allowed when used memory > 'maxmemory'")
             }

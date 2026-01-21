@@ -340,6 +340,10 @@ impl Command for ObjectCommand {
                                     "hashtable"
                                 }
                             }
+                            Value::Stream(_) => {
+                                // Redis uses radix tree for streams
+                                "radix-tree"
+                            }
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }
@@ -485,6 +489,9 @@ impl Command for DebugCommand {
                                 } else {
                                     "hashtable"
                                 }
+                            }
+                            Value::Stream(_) => {
+                                "radix-tree"
                             }
                         };
                         let info = format!(

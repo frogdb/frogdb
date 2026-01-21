@@ -19,7 +19,7 @@ use bytes::Bytes;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StringValue, Value};
+use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec, StreamValue, StringValue, Value};
 
 /// Size of the serialization header in bytes.
 pub const HEADER_SIZE: usize = 24;
@@ -36,6 +36,8 @@ const TYPE_HASH: u8 = 3;
 const TYPE_LIST: u8 = 4;
 /// Marker for set type.
 const TYPE_SET: u8 = 5;
+/// Marker for stream type.
+const TYPE_STREAM: u8 = 6;
 
 /// Errors that can occur during deserialization.
 #[derive(Debug, Error)]
@@ -147,6 +149,7 @@ fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
         Value::Hash(hash) => serialize_hash(hash),
         Value::List(list) => serialize_list(list),
         Value::Set(set) => serialize_set(set),
+        Value::Stream(stream) => serialize_stream(stream),
     }
 }
 
@@ -265,6 +268,61 @@ fn serialize_set(set: &SetValue) -> (u8, Vec<u8>) {
     (TYPE_SET, payload)
 }
 
+/// Serialize a stream.
+///
+/// Format:
+/// - last_id_ms (8 bytes u64)
+/// - last_id_seq (8 bytes u64)
+/// - num_entries (4 bytes u32)
+/// - for each entry:
+///   - id_ms (8 bytes u64)
+///   - id_seq (8 bytes u64)
+///   - num_fields (4 bytes u32)
+///   - for each field:
+///     - field_len (4 bytes u32)
+///     - field bytes
+///     - value_len (4 bytes u32)
+///     - value bytes
+/// Note: Consumer groups are not persisted (they are ephemeral state)
+fn serialize_stream(stream: &StreamValue) -> (u8, Vec<u8>) {
+    let entries = stream.to_vec();
+    let last_id = stream.last_id();
+
+    // Calculate size
+    let mut payload_size = 8 + 8 + 4; // last_id_ms + last_id_seq + num_entries
+    for entry in &entries {
+        payload_size += 8 + 8 + 4; // id_ms + id_seq + num_fields
+        for (field, value) in &entry.fields {
+            payload_size += 4 + field.len() + 4 + value.len();
+        }
+    }
+
+    let mut payload = Vec::with_capacity(payload_size);
+
+    // Last ID
+    payload.extend_from_slice(&last_id.ms.to_le_bytes());
+    payload.extend_from_slice(&last_id.seq.to_le_bytes());
+
+    // Number of entries
+    payload.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+
+    // Each entry
+    for entry in entries {
+        payload.extend_from_slice(&entry.id.ms.to_le_bytes());
+        payload.extend_from_slice(&entry.id.seq.to_le_bytes());
+        payload.extend_from_slice(&(entry.fields.len() as u32).to_le_bytes());
+
+        for (field, value) in &entry.fields {
+            payload.extend_from_slice(&(field.len() as u32).to_le_bytes());
+            payload.extend_from_slice(field);
+            payload.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            payload.extend_from_slice(value);
+        }
+    }
+
+    (TYPE_STREAM, payload)
+}
+
 /// Deserialize a value from its type byte and payload.
 fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, SerializationError> {
     match type_byte {
@@ -298,6 +356,10 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
         TYPE_SET => {
             let set = deserialize_set(payload)?;
             Ok(Value::Set(set))
+        }
+        TYPE_STREAM => {
+            let stream = deserialize_stream(payload)?;
+            Ok(Value::Stream(stream))
         }
         _ => Err(SerializationError::UnknownType(type_byte)),
     }
@@ -476,6 +538,89 @@ fn deserialize_set(payload: &[u8]) -> Result<SetValue, SerializationError> {
     }
 
     Ok(set)
+}
+
+/// Deserialize a stream from payload.
+fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError> {
+    if payload.len() < 20 {
+        return Err(SerializationError::InvalidPayload(
+            "Stream payload too short for header".to_string(),
+        ));
+    }
+
+    // Read last ID
+    let last_id_ms = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+    let last_id_seq = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+    let _last_id = StreamId::new(last_id_ms, last_id_seq);
+
+    // Read number of entries
+    let num_entries = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
+    let mut offset = 20;
+    let mut stream = StreamValue::new();
+
+    for _ in 0..num_entries {
+        // Read entry ID
+        if offset + 20 > payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Stream payload truncated at entry header".to_string(),
+            ));
+        }
+        let id_ms = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+        let id_seq = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+        let id = StreamId::new(id_ms, id_seq);
+
+        // Read number of fields
+        let num_fields = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+
+        let mut fields = Vec::with_capacity(num_fields);
+        for _ in 0..num_fields {
+            // Read field length
+            if offset + 4 > payload.len() {
+                return Err(SerializationError::InvalidPayload(
+                    "Stream payload truncated at field length".to_string(),
+                ));
+            }
+            let field_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+
+            // Read field bytes
+            if offset + field_len > payload.len() {
+                return Err(SerializationError::InvalidPayload(
+                    "Stream payload truncated at field data".to_string(),
+                ));
+            }
+            let field = Bytes::copy_from_slice(&payload[offset..offset + field_len]);
+            offset += field_len;
+
+            // Read value length
+            if offset + 4 > payload.len() {
+                return Err(SerializationError::InvalidPayload(
+                    "Stream payload truncated at value length".to_string(),
+                ));
+            }
+            let value_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+
+            // Read value bytes
+            if offset + value_len > payload.len() {
+                return Err(SerializationError::InvalidPayload(
+                    "Stream payload truncated at value data".to_string(),
+                ));
+            }
+            let value = Bytes::copy_from_slice(&payload[offset..offset + value_len]);
+            offset += value_len;
+
+            fields.push((field, value));
+        }
+
+        // Add entry to stream with explicit ID
+        let _ = stream.add(StreamIdSpec::Explicit(id), fields);
+    }
+
+    Ok(stream)
 }
 
 /// Convert an Instant to Unix timestamp in milliseconds.
