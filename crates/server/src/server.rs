@@ -794,6 +794,13 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::bloom::BfCard);
     registry.register(crate::commands::bloom::BfScandump);
     registry.register(crate::commands::bloom::BfLoadchunk);
+
+    // HyperLogLog commands
+    registry.register(crate::commands::hyperloglog::PfaddCommand);
+    registry.register(crate::commands::hyperloglog::PfcountCommand);
+    registry.register(crate::commands::hyperloglog::PfmergeCommand);
+    registry.register(crate::commands::hyperloglog::PfdebugCommand);
+    registry.register(crate::commands::hyperloglog::PfselftestCommand);
 }
 
 // Commands module

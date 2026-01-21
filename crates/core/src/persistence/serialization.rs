@@ -20,6 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 use crate::bloom::{BloomFilterValue, BloomLayer};
+use crate::hyperloglog::{HyperLogLogValue, HLL_DENSE_SIZE};
 use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec, StreamValue, StringValue, Value};
 use bitvec::prelude::*;
 
@@ -42,6 +43,8 @@ const TYPE_SET: u8 = 5;
 const TYPE_STREAM: u8 = 6;
 /// Marker for bloom filter type.
 const TYPE_BLOOM: u8 = 7;
+/// Marker for HyperLogLog type.
+const TYPE_HYPERLOGLOG: u8 = 8;
 
 /// Errors that can occur during deserialization.
 #[derive(Debug, Error)]
@@ -155,6 +158,7 @@ fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
         Value::Set(set) => serialize_set(set),
         Value::Stream(stream) => serialize_stream(stream),
         Value::BloomFilter(bf) => serialize_bloom_filter(bf),
+        Value::HyperLogLog(hll) => serialize_hyperloglog(hll),
     }
 }
 
@@ -377,6 +381,51 @@ fn serialize_bloom_filter(bf: &BloomFilterValue) -> (u8, Vec<u8>) {
     (TYPE_BLOOM, payload)
 }
 
+/// Serialize a HyperLogLog.
+///
+/// Format:
+/// - encoding (1 byte): 0 = sparse, 1 = dense
+/// - if sparse:
+///   - num_entries (4 bytes u32)
+///   - for each entry: (index: u16, value: u8) = 3 bytes
+/// - if dense:
+///   - 12288 bytes raw packed registers
+fn serialize_hyperloglog(hll: &HyperLogLogValue) -> (u8, Vec<u8>) {
+    if let Some(pairs) = hll.as_sparse() {
+        // Sparse encoding
+        let payload_size = 1 + 4 + pairs.len() * 3;
+        let mut payload = Vec::with_capacity(payload_size);
+
+        // Encoding byte (0 = sparse)
+        payload.push(0);
+
+        // Number of entries
+        payload.extend_from_slice(&(pairs.len() as u32).to_le_bytes());
+
+        // Each entry: index (u16) + value (u8)
+        for (index, value) in pairs {
+            payload.extend_from_slice(&index.to_le_bytes());
+            payload.push(*value);
+        }
+
+        (TYPE_HYPERLOGLOG, payload)
+    } else if let Some(registers) = hll.as_dense() {
+        // Dense encoding
+        let mut payload = Vec::with_capacity(1 + HLL_DENSE_SIZE);
+
+        // Encoding byte (1 = dense)
+        payload.push(1);
+
+        // Raw registers
+        payload.extend_from_slice(registers.as_slice());
+
+        (TYPE_HYPERLOGLOG, payload)
+    } else {
+        // Shouldn't happen, but fallback to empty sparse
+        (TYPE_HYPERLOGLOG, vec![0, 0, 0, 0, 0])
+    }
+}
+
 /// Deserialize a value from its type byte and payload.
 fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, SerializationError> {
     match type_byte {
@@ -418,6 +467,10 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
         TYPE_BLOOM => {
             let bf = deserialize_bloom_filter(payload)?;
             Ok(Value::BloomFilter(bf))
+        }
+        TYPE_HYPERLOGLOG => {
+            let hll = deserialize_hyperloglog(payload)?;
+            Ok(Value::HyperLogLog(hll))
         }
         _ => Err(SerializationError::UnknownType(type_byte)),
     }
@@ -761,6 +814,66 @@ fn deserialize_bloom_filter(payload: &[u8]) -> Result<BloomFilterValue, Serializ
     Ok(BloomFilterValue::from_raw(layers, error_rate, expansion, non_scaling))
 }
 
+/// Deserialize a HyperLogLog from payload.
+fn deserialize_hyperloglog(payload: &[u8]) -> Result<HyperLogLogValue, SerializationError> {
+    if payload.is_empty() {
+        return Err(SerializationError::InvalidPayload(
+            "HyperLogLog payload empty".to_string(),
+        ));
+    }
+
+    let encoding = payload[0];
+
+    match encoding {
+        0 => {
+            // Sparse encoding
+            if payload.len() < 5 {
+                return Err(SerializationError::InvalidPayload(
+                    "HyperLogLog sparse payload too short".to_string(),
+                ));
+            }
+
+            let num_entries = u32::from_le_bytes(payload[1..5].try_into().unwrap()) as usize;
+
+            // Each entry is 3 bytes (u16 index + u8 value)
+            let expected_len = 5 + num_entries * 3;
+            if payload.len() < expected_len {
+                return Err(SerializationError::InvalidPayload(
+                    "HyperLogLog sparse payload truncated".to_string(),
+                ));
+            }
+
+            let mut pairs = Vec::with_capacity(num_entries);
+            let mut offset = 5;
+
+            for _ in 0..num_entries {
+                let index = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap());
+                let value = payload[offset + 2];
+                pairs.push((index, value));
+                offset += 3;
+            }
+
+            Ok(HyperLogLogValue::from_sparse(pairs))
+        }
+        1 => {
+            // Dense encoding
+            if payload.len() < 1 + HLL_DENSE_SIZE {
+                return Err(SerializationError::InvalidPayload(
+                    "HyperLogLog dense payload truncated".to_string(),
+                ));
+            }
+
+            let mut registers = Box::new([0u8; HLL_DENSE_SIZE]);
+            registers.copy_from_slice(&payload[1..1 + HLL_DENSE_SIZE]);
+
+            Ok(HyperLogLogValue::from_dense(registers))
+        }
+        _ => Err(SerializationError::InvalidPayload(
+            format!("Unknown HyperLogLog encoding: {}", encoding),
+        )),
+    }
+}
+
 /// Convert an Instant to Unix timestamp in milliseconds.
 ///
 /// This is tricky because Instant is monotonic and not tied to wall clock.
@@ -926,5 +1039,67 @@ mod unit_tests {
             future.duration_since(back)
         };
         assert!(diff.as_millis() < 100);
+    }
+
+    #[test]
+    fn test_serialize_deserialize_hyperloglog_sparse() {
+        let mut hll = HyperLogLogValue::new();
+        hll.add(b"test1");
+        hll.add(b"test2");
+        hll.add(b"test3");
+        let initial_count = hll.count();
+        assert!(hll.is_sparse());
+
+        let value = Value::HyperLogLog(hll);
+        let metadata = KeyMetadata::new(100);
+
+        let data = serialize(&value, &metadata);
+        let (value2, _) = deserialize(&data).unwrap();
+
+        let hll2 = value2.as_hyperloglog().unwrap();
+        assert!(hll2.is_sparse());
+        assert_eq!(hll2.count_no_cache(), initial_count);
+    }
+
+    #[test]
+    fn test_serialize_deserialize_hyperloglog_dense() {
+        let mut hll = HyperLogLogValue::new();
+        // Add enough elements to promote to dense
+        for i in 0..5000 {
+            hll.add(format!("element:{}", i).as_bytes());
+        }
+        assert!(!hll.is_sparse());
+        let initial_count = hll.count();
+
+        let value = Value::HyperLogLog(hll);
+        let metadata = KeyMetadata::new(12500);
+
+        let data = serialize(&value, &metadata);
+        let (value2, _) = deserialize(&data).unwrap();
+
+        let hll2 = value2.as_hyperloglog().unwrap();
+        assert!(!hll2.is_sparse());
+        // Allow some tolerance due to floating point calculations
+        let count2 = hll2.count_no_cache();
+        assert!(
+            count2 >= initial_count - 50 && count2 <= initial_count + 50,
+            "Count {} not in expected range around {}",
+            count2,
+            initial_count
+        );
+    }
+
+    #[test]
+    fn test_serialize_deserialize_hyperloglog_empty() {
+        let hll = HyperLogLogValue::new();
+        let value = Value::HyperLogLog(hll);
+        let metadata = KeyMetadata::new(0);
+
+        let data = serialize(&value, &metadata);
+        let (value2, _) = deserialize(&data).unwrap();
+
+        let hll2 = value2.as_hyperloglog().unwrap();
+        assert!(hll2.is_sparse());
+        assert_eq!(hll2.count_no_cache(), 0);
     }
 }

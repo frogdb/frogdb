@@ -348,6 +348,14 @@ impl Command for ObjectCommand {
                                 // Bloom filters use a custom scalable structure
                                 "bloom"
                             }
+                            Value::HyperLogLog(hll) => {
+                                // HyperLogLog can be sparse or dense
+                                if hll.is_sparse() {
+                                    "sparse"
+                                } else {
+                                    "dense"
+                                }
+                            }
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }
@@ -499,6 +507,13 @@ impl Command for DebugCommand {
                             }
                             Value::BloomFilter(_) => {
                                 "bloom"
+                            }
+                            Value::HyperLogLog(hll) => {
+                                if hll.is_sparse() {
+                                    "sparse"
+                                } else {
+                                    "dense"
+                                }
                             }
                         };
                         let info = format!(

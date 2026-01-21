@@ -12,6 +12,7 @@ pub mod error;
 pub mod eviction;
 pub mod geo;
 pub mod glob;
+pub mod hyperloglog;
 pub mod noop;
 pub mod persistence;
 pub mod pubsub;
@@ -82,3 +83,4 @@ pub use geo::{
     geohash_to_string, haversine_distance, is_within_box, is_within_radius, score_to_geohash,
 };
 pub use bloom::{BloomFilterValue, BloomLayer};
+pub use hyperloglog::{HyperLogLogValue, HLL_DENSE_SIZE, HLL_REGISTERS};
