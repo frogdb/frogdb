@@ -13,8 +13,8 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 10.1 (Metrics) ✓, 10.2 (Configuration) ✓, 10.4 (SLOWLOG) ✓, 10.5 (ACL) ✓, 10.6 (Memory Management) ✓
-**Next Milestone**: Phase 10.7 (Testing)
+**Phase**: 5 (Persistence) ~95% ✓, 10.1-10.6 ✓, 11 (Blocking Commands) ✓, 12 (RESP3) ✓
+**Next Milestone**: Phase 10.7 (Testing), Phase 13 (Streams)
 
 ---
 
@@ -499,10 +499,10 @@ Implementation:
 
 ### 5.1 RocksDB Setup
 
-- [ ] Add `rust-rocksdb` dependency
-- [ ] Data directory structure
-- [ ] One column family per shard
-- [ ] RocksDB options (write buffer, compression)
+- [x] Add `rust-rocksdb` dependency
+- [x] Data directory structure
+- [x] One column family per shard
+- [x] RocksDB options (write buffer, compression)
 
 ### 5.2 Value Serialization
 
@@ -515,14 +515,14 @@ Implementation:
 
 ### 5.3 WAL Integration
 
-- [ ] Real `WalWriter` implementation
-- [ ] WriteBatch accumulator
-- [ ] Batch triggers: size threshold, time interval
-- [ ] Durability modes:
-  - [ ] Async (batch, no fsync)
-  - [ ] Periodic (fsync every N ms)
-  - [ ] Sync (fsync every write)
-- [ ] Hook into command execution (write commands append to WAL)
+- [x] Real `WalWriter` implementation
+- [x] WriteBatch accumulator
+- [x] Batch triggers: size threshold, time interval
+- [x] Durability modes:
+  - [x] Async (batch, no fsync)
+  - [x] Periodic (fsync every N ms)
+  - [x] Sync (fsync every write)
+- [x] Hook into command execution (write commands append to WAL)
 
 ### 5.4 Recovery ✓
 
@@ -536,21 +536,21 @@ Implementation:
 
 ### 5.5 Snapshots
 
-- [ ] Snapshot coordinator
-- [ ] Forkless snapshot (iterate + COW for concurrent writes)
-- [ ] Snapshot metadata (epoch, timestamp)
-- [ ] `BGSAVE` command
-- [ ] `LASTSAVE` command
+- [x] Snapshot coordinator
+- [x] Forkless snapshot (iterate + COW for concurrent writes)
+- [x] Snapshot metadata (epoch, timestamp)
+- [ ] `BGSAVE` command (stub - needs wiring to snapshot coordinator)
+- [x] `LASTSAVE` command
 
 ### 5.6 Backup/Restore
 
-- [ ] `DUMP` command (serialize single key)
-- [ ] `RESTORE` command (deserialize single key)
+- [x] `DUMP` command (serialize single key)
+- [x] `RESTORE` command (deserialize single key)
 
 ### 5.7 Testing
 
-- [ ] Test: write, kill, restart, verify data present
-- [ ] Test: recovery with expired keys (should not load)
+- [x] Test: write, kill, restart, verify data present
+- [x] Test: recovery with expired keys (should not load)
 - [ ] Test: snapshot during writes
 - [ ] Stress test: persistence under load
 
@@ -832,7 +832,7 @@ The following optimizations are deferred to a future phase:
 
 ---
 
-## Phase 11: Blocking Commands
+## Phase 11: Blocking Commands ✓
 
 **Goal**: BLPOP, BRPOP, and blocking sorted set operations.
 
@@ -840,34 +840,34 @@ The following optimizations are deferred to a future phase:
 
 ### 11.1 Infrastructure
 
-- [ ] `BlockedState` in ConnectionState
-- [ ] Blocking key registry per shard
-- [ ] Timeout handling
+- [x] `BlockedState` in ConnectionState
+- [x] Blocking key registry per shard
+- [x] Timeout handling
 
 ### 11.2 Commands
 
-- [ ] `BLPOP`, `BRPOP`
-- [ ] `BLMOVE`
-- [ ] `BLMPOP`
-- [ ] `BZPOPMIN`, `BZPOPMAX`
-- [ ] `BZMPOP`
+- [x] `BLPOP`, `BRPOP`
+- [x] `BLMOVE`
+- [x] `BLMPOP`
+- [x] `BZPOPMIN`, `BZPOPMAX`
+- [x] `BZMPOP`
 
 ### 11.3 Unblocking
 
-- [ ] Notify on key modification
-- [ ] Timeout expiration
-- [ ] Client disconnect handling
+- [x] Notify on key modification
+- [x] Timeout expiration
+- [x] Client disconnect handling
 
 ### 11.4 Testing
 
-- [ ] Test basic blocking
-- [ ] Test timeout
-- [ ] Test concurrent blocking
-- [ ] Test same-shard requirement
+- [x] Test basic blocking
+- [x] Test timeout
+- [x] Test concurrent blocking
+- [x] Test same-shard requirement
 
 ---
 
-## Phase 12: RESP3 Protocol
+## Phase 12: RESP3 Protocol ✓
 
 **Goal**: RESP3 support for modern clients.
 
@@ -875,29 +875,29 @@ The following optimizations are deferred to a future phase:
 
 ### 12.1 Protocol Negotiation
 
-- [ ] `HELLO` command
-- [ ] Protocol version tracking per connection
+- [x] `HELLO` command
+- [x] Protocol version tracking per connection
 
 ### 12.2 RESP3 Types
 
-- [ ] Null encoding
-- [ ] Double encoding
-- [ ] Boolean encoding
-- [ ] Map encoding
-- [ ] Set encoding
-- [ ] Push encoding (pub/sub)
+- [x] Null encoding
+- [x] Double encoding
+- [x] Boolean encoding
+- [x] Map encoding
+- [x] Set encoding
+- [x] Push encoding (pub/sub)
 
 ### 12.3 Response Updates
 
-- [ ] HGETALL returns Map in RESP3
-- [ ] SMEMBERS returns Set in RESP3
-- [ ] Scores return Double in RESP3
+- [x] HGETALL returns Map in RESP3
+- [x] SMEMBERS returns Set in RESP3
+- [x] Scores return Double in RESP3
 
 ### 12.4 Testing
 
-- [ ] Test HELLO negotiation
-- [ ] Test RESP3 responses
-- [ ] Test RESP2 backwards compatibility
+- [x] Test HELLO negotiation
+- [x] Test RESP3 responses
+- [x] Test RESP2 backwards compatibility
 
 ---
 
@@ -915,7 +915,7 @@ The following optimizations are deferred to a future phase:
 - [ ] Failover
 
 ### Phase 15: Advanced Testing
-- [ ] Shuttle concurrency tests
+- [x] Shuttle concurrency tests (30+ tests)
 - [ ] Loom primitive tests
 - [ ] Jepsen integration
 - [ ] Redis compatibility suite
@@ -944,7 +944,7 @@ These must exist from Phase 1 to avoid refactoring:
 | `Tracer` trait | Noop | OpenTelemetry (Phase 10) |
 | Shard channels | 1 shard | N shards (Phase 4) |
 | `ExpiryIndex` | Empty | Functional (Phase 2) |
-| `ProtocolVersion` | Resp2 only | Resp2 + Resp3 (Phase 12) |
+| `ProtocolVersion` | Resp2 only | Resp2 + Resp3 ✓ |
 | `Config` + Figment | Full (CLI + TOML + env) | CONFIG GET/SET (Phase 10) |
 | Logging format | pretty + json | Same |
 
