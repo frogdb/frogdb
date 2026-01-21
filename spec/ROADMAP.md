@@ -825,7 +825,7 @@ The following optimizations are deferred to a future phase:
 
 ### 10.7 Testing
 
-- [ ] Test metrics accuracy
+- [x] Test metrics accuracy
 - [ ] Test ACL enforcement
 - [x] Test eviction behavior (unit tests for eviction module)
 - [ ] Load test with monitoring

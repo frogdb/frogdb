@@ -38,3 +38,4 @@ futures.workspace = true
 shuttle.workspace = true
 tempfile.workspace = true
 reqwest = { version = "0.12", features = ["json"] }
+proptest.workspace = true

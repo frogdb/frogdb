@@ -3196,4 +3196,199 @@ mod tests {
         // Test key_type
         assert_eq!(value.key_type(), KeyType::Stream);
     }
+
+    // ==================== Property Tests for INCR/DECR ====================
+
+    mod proptest_increment {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Strategy for i64 values with room for operations (avoid overflow in tests)
+        fn safe_i64() -> impl Strategy<Value = i64> {
+            (i64::MIN / 2)..=(i64::MAX / 2)
+        }
+
+        /// Strategy for delta values that won't cause immediate overflow
+        fn safe_delta() -> impl Strategy<Value = i64> {
+            -1_000_000i64..=1_000_000i64
+        }
+
+        /// Strategy for small f64 values
+        fn small_f64() -> impl Strategy<Value = f64> {
+            -1e10f64..1e10f64
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            /// Roundtrip invariant: increment(d) followed by increment(-d) returns to original
+            #[test]
+            fn test_increment_roundtrip(initial in safe_i64(), delta in safe_delta()) {
+                let mut sv = StringValue::from_integer(initial);
+
+                // Skip if delta would cause overflow
+                if initial.checked_add(delta).is_none() {
+                    return Ok(());
+                }
+
+                let after_inc = sv.increment(delta).unwrap();
+                prop_assert_eq!(after_inc, initial + delta);
+
+                let after_dec = sv.increment(-delta).unwrap();
+                prop_assert_eq!(after_dec, initial);
+                prop_assert_eq!(sv.as_integer(), Some(initial));
+            }
+
+            /// Overflow at MAX: increment(+n) on values near i64::MAX returns Overflow error
+            #[test]
+            fn test_increment_overflow_at_max(n in 1i64..=1000i64) {
+                let mut sv = StringValue::from_integer(i64::MAX);
+                let result = sv.increment(n);
+                prop_assert_eq!(result, Err(IncrementError::Overflow));
+            }
+
+            /// Underflow at MIN: increment(-n) on values near i64::MIN returns Overflow error
+            #[test]
+            fn test_increment_underflow_at_min(n in 1i64..=1000i64) {
+                let mut sv = StringValue::from_integer(i64::MIN);
+                let result = sv.increment(-n);
+                prop_assert_eq!(result, Err(IncrementError::Overflow));
+            }
+
+            /// Type preservation: Integer encoding stays Integer after increment
+            #[test]
+            fn test_increment_type_preservation(initial in safe_i64(), delta in safe_delta()) {
+                let mut sv = StringValue::from_integer(initial);
+
+                // Skip if delta would cause overflow
+                if initial.checked_add(delta).is_none() {
+                    return Ok(());
+                }
+
+                sv.increment(delta).unwrap();
+
+                // After increment, the value should still be accessible as an integer
+                prop_assert!(sv.as_integer().is_some());
+            }
+
+            /// Commutativity: Order of increments doesn't affect final result
+            #[test]
+            fn test_increment_commutativity(
+                initial in safe_i64(),
+                delta1 in -10_000i64..=10_000i64,
+                delta2 in -10_000i64..=10_000i64
+            ) {
+                // Skip if any operation would overflow
+                let Some(step1) = initial.checked_add(delta1) else { return Ok(()); };
+                let Some(final1) = step1.checked_add(delta2) else { return Ok(()); };
+
+                let Some(step2) = initial.checked_add(delta2) else { return Ok(()); };
+                let Some(final2) = step2.checked_add(delta1) else { return Ok(()); };
+
+                let mut sv1 = StringValue::from_integer(initial);
+                sv1.increment(delta1).unwrap();
+                sv1.increment(delta2).unwrap();
+
+                let mut sv2 = StringValue::from_integer(initial);
+                sv2.increment(delta2).unwrap();
+                sv2.increment(delta1).unwrap();
+
+                prop_assert_eq!(sv1.as_integer(), sv2.as_integer());
+                prop_assert_eq!(sv1.as_integer(), Some(final1));
+                prop_assert_eq!(final1, final2);
+            }
+
+            /// Associativity: increment(n) == increment(1) repeated n times (for small n)
+            #[test]
+            fn test_increment_associativity(initial in safe_i64(), n in 1i64..=100i64) {
+                // Skip if operations would overflow
+                if initial.checked_add(n).is_none() {
+                    return Ok(());
+                }
+
+                // Single increment by n
+                let mut sv1 = StringValue::from_integer(initial);
+                let result1 = sv1.increment(n).unwrap();
+
+                // n increments by 1
+                let mut sv2 = StringValue::from_integer(initial);
+                for _ in 0..n {
+                    sv2.increment(1).unwrap();
+                }
+
+                prop_assert_eq!(result1, sv2.as_integer().unwrap());
+            }
+
+            /// Float roundtrip: increment_float(d) followed by increment_float(-d) within epsilon
+            #[test]
+            fn test_increment_float_roundtrip(initial in small_f64(), delta in small_f64()) {
+                // Skip zero delta to avoid precision issues
+                if delta.abs() < 1e-15 {
+                    return Ok(());
+                }
+
+                let mut sv = StringValue::new(initial.to_string());
+
+                // Do increment and decrement
+                let after_inc = sv.increment_float(delta);
+                if after_inc.is_err() {
+                    // Skip if increment causes overflow (infinity)
+                    return Ok(());
+                }
+
+                let after_dec = sv.increment_float(-delta);
+                if after_dec.is_err() {
+                    return Ok(());
+                }
+
+                let result = after_dec.unwrap();
+
+                // Check within epsilon (relative for large values, absolute for small)
+                let epsilon = if initial.abs() > 1.0 {
+                    initial.abs() * 1e-10
+                } else {
+                    1e-10
+                };
+
+                prop_assert!(
+                    (result - initial).abs() < epsilon,
+                    "Expected {} to be within {} of {}, but difference was {}",
+                    result, epsilon, initial, (result - initial).abs()
+                );
+            }
+
+            /// NaN rejection: increment_float rejects NaN input
+            #[test]
+            fn test_increment_float_rejects_nan(_dummy in 0i32..1i32) {
+                let mut sv = StringValue::new("nan");
+                let result = sv.increment_float(1.0);
+                // NaN values should fail to parse as float
+                prop_assert!(result.is_err());
+            }
+
+            /// Infinity rejection: increment_float rejects infinity result
+            #[test]
+            fn test_increment_float_rejects_infinity_result(_dummy in 0i32..1i32) {
+                let mut sv = StringValue::new(f64::MAX.to_string());
+                let result = sv.increment_float(f64::MAX);
+                prop_assert_eq!(result, Err(IncrementError::Overflow));
+            }
+
+            /// NotInteger error: Non-numeric strings return NotInteger error
+            #[test]
+            fn test_increment_not_integer(s in "[a-zA-Z]{1,10}") {
+                let mut sv = StringValue::new(s.clone());
+                let result = sv.increment(1);
+                prop_assert_eq!(result, Err(IncrementError::NotInteger));
+            }
+
+            /// NotFloat error: Non-numeric strings return NotFloat error for float increment
+            #[test]
+            fn test_increment_float_not_float(s in "[a-zA-Z]{1,10}") {
+                let mut sv = StringValue::new(s.clone());
+                let result = sv.increment_float(1.0);
+                prop_assert_eq!(result, Err(IncrementError::NotFloat));
+            }
+        }
+    }
 }
