@@ -77,7 +77,7 @@ pub struct Coordinates {
 impl Coordinates {
     /// Create new coordinates.
     pub fn new(lon: f64, lat: f64) -> Option<Self> {
-        if lon < LON_MIN || lon > LON_MAX || lat < LAT_MIN || lat > LAT_MAX {
+        if !(LON_MIN..=LON_MAX).contains(&lon) || !(LAT_MIN..=LAT_MAX).contains(&lat) {
             return None;
         }
         Some(Self { lon, lat })
@@ -232,8 +232,8 @@ pub fn score_to_geohash(score: f64) -> u64 {
 /// This is a simplification - for production use, consider using
 /// multiple ranges to cover the area more precisely.
 pub fn geohash_range_for_bbox(bbox: &BoundingBox) -> (u64, u64) {
-    let min_hash = geohash_encode(bbox.min_lon, bbox.min_lat);
-    let max_hash = geohash_encode(bbox.max_lon, bbox.max_lat);
+    let _min_hash = geohash_encode(bbox.min_lon, bbox.min_lat);
+    let _max_hash = geohash_encode(bbox.max_lon, bbox.max_lat);
 
     // Due to geohash interleaving, we can't simply use min/max
     // Instead, we need to consider all corners and find the actual range

@@ -364,14 +364,14 @@ impl ConnectionHandler {
                 self.framed
                     .send(frame)
                     .await
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                    .map_err(std::io::Error::other)
             }
             ProtocolVersion::Resp3 => {
                 // Manually encode RESP3 and write to socket
                 let frame = response.to_resp3_frame();
                 let mut buf = BytesMut::new();
                 redis_protocol::resp3::encode::complete::extend_encode(&mut buf, &frame)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
                 self.framed.get_mut().write_all(&buf).await?;
                 self.framed.get_mut().flush().await
             }
@@ -625,15 +625,13 @@ impl ConnectionHandler {
         // Check command ACL permission (for commands not routed to route_and_execute)
         // Note: ACL command is exempt (users need ACL WHOAMI to check their identity)
         if let Some(user) = self.state.auth.user() {
-            if cmd_name_str != "ACL" {
-                if !user.check_command(&cmd_name_str, None) {
-                    let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                    self.acl_manager.log().log_command_denied(&user.username, &client_info, &cmd_name_str);
-                    return vec![Response::error(format!(
-                        "NOPERM this user has no permissions to run the '{}' command",
-                        cmd_name_str.to_lowercase()
-                    ))];
-                }
+            if cmd_name_str != "ACL" && !user.check_command(&cmd_name_str, None) {
+                let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                self.acl_manager.log().log_command_denied(&user.username, &client_info, &cmd_name_str);
+                return vec![Response::error(format!(
+                    "NOPERM this user has no permissions to run the '{}' command",
+                    cmd_name_str.to_lowercase()
+                ))];
             }
         }
 
@@ -943,7 +941,7 @@ impl ConnectionHandler {
 
         // Handle protocol version
         if let Some(version) = requested_version {
-            if version < 2 || version > 3 {
+            if !(2..=3).contains(&version) {
                 // Return NOPROTO error for unsupported versions
                 return Response::error("NOPROTO sorry, this protocol version is not supported");
             }
@@ -3474,7 +3472,7 @@ impl ConnectionHandler {
                 let args: Vec<Response> = entry
                     .command
                     .into_iter()
-                    .map(|arg| Response::bulk(arg))
+                    .map(Response::bulk)
                     .collect();
 
                 Response::Array(vec![

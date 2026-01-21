@@ -134,7 +134,7 @@ impl Command for GeoaddCommand {
 
         // Parse coordinate-member triplets
         let remaining = &args[i..];
-        if remaining.len() < 3 || remaining.len() % 3 != 0 {
+        if remaining.len() < 3 || !remaining.len().is_multiple_of(3) {
             return Err(CommandError::WrongArity { command: "GEOADD" });
         }
 
@@ -520,8 +520,7 @@ impl Command for GeoradiusCommand {
 
         // Parse options
         let extra_opts = &args[5..];
-        let (with_coord, with_dist, with_hash, count, asc, desc, _store, _store_dist) =
-            parse_georadius_options(extra_opts)?;
+        let radius_opts = parse_georadius_options(extra_opts)?;
 
         let coords = Coordinates::new(lon, lat).ok_or_else(|| CommandError::InvalidArgument {
             message: format!("invalid longitude,latitude pair {},{}", lon, lat),
@@ -533,13 +532,13 @@ impl Command for GeoradiusCommand {
             width_m: None,
             height_m: None,
             unit,
-            with_coord,
-            with_dist,
-            with_hash,
-            count,
+            with_coord: radius_opts.with_coord,
+            with_dist: radius_opts.with_dist,
+            with_hash: radius_opts.with_hash,
+            count: radius_opts.count,
             any: false,
-            asc,
-            desc,
+            asc: radius_opts.asc,
+            desc: radius_opts.desc,
             store_dist: false,
         };
 
@@ -612,8 +611,7 @@ impl Command for GeoradiusbymemberCommand {
 
         // Parse options
         let extra_opts = &args[4..];
-        let (with_coord, with_dist, with_hash, count, asc, desc, _store, _store_dist) =
-            parse_georadius_options(extra_opts)?;
+        let radius_opts = parse_georadius_options(extra_opts)?;
 
         let opts = GeoSearchOptions {
             center: coords,
@@ -621,13 +619,13 @@ impl Command for GeoradiusbymemberCommand {
             width_m: None,
             height_m: None,
             unit,
-            with_coord,
-            with_dist,
-            with_hash,
-            count,
+            with_coord: radius_opts.with_coord,
+            with_dist: radius_opts.with_dist,
+            with_hash: radius_opts.with_hash,
+            count: radius_opts.count,
             any: false,
-            asc,
-            desc,
+            asc: radius_opts.asc,
+            desc: radius_opts.desc,
             store_dist: false,
         };
 
@@ -647,6 +645,19 @@ impl Command for GeoradiusbymemberCommand {
 // ============================================================================
 // Helper structs and functions
 // ============================================================================
+
+/// Options for GEORADIUS command.
+#[allow(dead_code)]
+struct GeoRadiusOptions {
+    with_coord: bool,
+    with_dist: bool,
+    with_hash: bool,
+    count: Option<usize>,
+    asc: bool,
+    desc: bool,
+    store: Option<Bytes>,
+    store_dist: bool,
+}
 
 /// Options for GEOSEARCH command.
 struct GeoSearchOptions {
@@ -819,9 +830,7 @@ fn parse_geosearch_options(
 }
 
 /// Parse legacy GEORADIUS options.
-fn parse_georadius_options(
-    args: &[Bytes],
-) -> Result<(bool, bool, bool, Option<usize>, bool, bool, Option<Bytes>, bool), CommandError> {
+fn parse_georadius_options(args: &[Bytes]) -> Result<GeoRadiusOptions, CommandError> {
     let mut with_coord = false;
     let mut with_dist = false;
     let mut with_hash = false;
@@ -879,7 +888,16 @@ fn parse_georadius_options(
         }
     }
 
-    Ok((with_coord, with_dist, with_hash, count, asc, desc, store, store_dist))
+    Ok(GeoRadiusOptions {
+        with_coord,
+        with_dist,
+        with_hash,
+        count,
+        asc,
+        desc,
+        store,
+        store_dist,
+    })
 }
 
 /// Execute a geo search and return results.

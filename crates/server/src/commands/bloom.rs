@@ -735,7 +735,7 @@ impl Command for BfLoadchunk {
             let bits_len = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap()) as usize;
             offset += 8;
 
-            let bytes_needed = (bits_len + 7) / 8;
+            let bytes_needed = bits_len.div_ceil(8);
             if offset + bytes_needed > data.len() {
                 return Err(CommandError::InvalidArgument {
                     message: "Data truncated at bits".to_string(),

@@ -333,7 +333,7 @@ impl Command for PfselftestCommand {
             hll3.add(format!("item:{}", i).as_bytes());
         }
         let estimate = hll3.count();
-        if estimate < 90 || estimate > 110 {
+        if !(90..=110).contains(&estimate) {
             return Err(CommandError::InvalidArgument {
                 message: format!(
                     "PFSELFTEST failed: estimate {} not in expected range [90, 110]",

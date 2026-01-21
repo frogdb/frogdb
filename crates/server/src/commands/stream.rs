@@ -676,7 +676,7 @@ impl Command for XreadCommand {
                     block_ms as f64 / 1000.0
                 };
                 return Ok(Response::BlockingNeeded {
-                    keys: keys.iter().cloned().collect(),
+                    keys: keys.to_vec(),
                     timeout,
                     op: BlockingOp::XRead {
                         after_ids: resolved_ids,
@@ -1089,7 +1089,7 @@ impl Command for XreadgroupCommand {
                         block_ms as f64 / 1000.0
                     };
                     return Ok(Response::BlockingNeeded {
-                        keys: keys.iter().cloned().collect(),
+                        keys: keys.to_vec(),
                         timeout,
                         op: BlockingOp::XReadGroup {
                             group: group_name,
