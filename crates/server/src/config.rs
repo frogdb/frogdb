@@ -982,4 +982,101 @@ mod tests {
         config.memory.maxmemory_samples = 0;
         assert!(config.validate().is_err());
     }
+
+    // ===== LoggingConfig Tests =====
+
+    #[test]
+    fn test_logging_config_defaults() {
+        let config = LoggingConfig::default();
+        assert_eq!(config.level, "info");
+        assert_eq!(config.format, "pretty");
+        assert_eq!(config.output, "stdout");
+        assert!(config.file_path.is_none());
+        assert_eq!(config.max_size_mb, 100);
+        assert_eq!(config.max_files, 5);
+        assert!(!config.compress);
+    }
+
+    #[test]
+    fn test_logging_config_validate_stdout_no_path_ok() {
+        let config = LoggingConfig {
+            output: "stdout".to_string(),
+            file_path: None,
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_logging_config_validate_file_requires_path() {
+        let config = LoggingConfig {
+            output: "file".to_string(),
+            file_path: None,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_logging_config_validate_both_requires_path() {
+        let config = LoggingConfig {
+            output: "both".to_string(),
+            file_path: None,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_logging_config_validate_file_with_path_ok() {
+        let config = LoggingConfig {
+            output: "file".to_string(),
+            file_path: Some(PathBuf::from("/tmp/test.log")),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_logging_config_validate_both_with_path_ok() {
+        let config = LoggingConfig {
+            output: "both".to_string(),
+            file_path: Some(PathBuf::from("/tmp/test.log")),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_logging_config_validate_invalid_output() {
+        let config = LoggingConfig {
+            output: "invalid".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_logging_config_validate_case_insensitive() {
+        // Test that output validation is case-insensitive
+        let config = LoggingConfig {
+            output: "STDOUT".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+
+        let config = LoggingConfig {
+            output: "FILE".to_string(),
+            file_path: Some(PathBuf::from("/tmp/test.log")),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+
+        let config = LoggingConfig {
+            output: "BOTH".to_string(),
+            file_path: Some(PathBuf::from("/tmp/test.log")),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
 }

@@ -20,6 +20,7 @@ use tokio_util::codec::Framed;
 /// Helper struct for managing a test server.
 struct TestServer {
     addr: SocketAddr,
+    metrics_addr: SocketAddr,
     shutdown_tx: oneshot::Sender<()>,
     handle: JoinHandle<()>,
     #[allow(dead_code)]
@@ -32,10 +33,15 @@ impl TestServer {
         // Create a unique temp directory for this test's data
         let temp_dir = TempDir::new().unwrap();
 
-        // Find an available port
+        // Find an available port for the main server
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
+
+        // Find an available port for the metrics server
+        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let metrics_addr = metrics_listener.local_addr().unwrap();
+        drop(metrics_listener);
 
         // Create config with the chosen port and temp data dir
         let mut config = Config::default();
@@ -44,6 +50,8 @@ impl TestServer {
         config.server.num_shards = 1;
         config.logging.level = "warn".to_string(); // Reduce noise during tests
         config.persistence.data_dir = temp_dir.path().to_path_buf();
+        config.metrics.bind = "127.0.0.1".to_string();
+        config.metrics.port = metrics_addr.port();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -67,6 +75,7 @@ impl TestServer {
 
         TestServer {
             addr,
+            metrics_addr,
             shutdown_tx,
             handle,
             temp_dir,
@@ -80,6 +89,11 @@ impl TestServer {
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
+        // Find an available port for the metrics server
+        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let metrics_addr = metrics_listener.local_addr().unwrap();
+        drop(metrics_listener);
+
         let mut config = Config::default();
         config.server.bind = "127.0.0.1".to_string();
         config.server.port = addr.port();
@@ -87,6 +101,8 @@ impl TestServer {
         config.logging.level = "warn".to_string();
         config.persistence.data_dir = temp_dir.path().to_path_buf();
         config.security.requirepass = requirepass.to_string();
+        config.metrics.bind = "127.0.0.1".to_string();
+        config.metrics.port = metrics_addr.port();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -110,6 +126,7 @@ impl TestServer {
 
         TestServer {
             addr,
+            metrics_addr,
             shutdown_tx,
             handle,
             temp_dir,
@@ -121,6 +138,11 @@ impl TestServer {
         let stream = TcpStream::connect(self.addr).await.unwrap();
         let framed = Framed::new(stream, Resp2);
         TestClient { framed }
+    }
+
+    /// Get the metrics server address.
+    fn metrics_addr(&self) -> SocketAddr {
+        self.metrics_addr
     }
 
     /// Shutdown the test server.
@@ -3599,6 +3621,158 @@ async fn test_bgsave_concurrent_returns_already_in_progress() {
         }
         _ => panic!("Expected simple string response for second BGSAVE"),
     }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// HTTP Metrics and Health Endpoint Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_metrics_endpoint_returns_prometheus_format() {
+    let server = TestServer::start().await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{}/metrics", server.metrics_addr()))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let content_type = response.headers().get("content-type").unwrap();
+    assert!(content_type.to_str().unwrap().contains("text/plain"));
+
+    let body = response.text().await.unwrap();
+    // Metrics endpoint should return valid content (may be empty or have metrics)
+    // Prometheus format uses # for comments/metadata
+    assert!(body.is_empty() || body.contains("frogdb_") || body.starts_with("#"));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_metrics_include_command_counters() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Execute commands to generate metrics
+    client.command(&["SET", "key1", "value1"]).await;
+    client.command(&["GET", "key1"]).await;
+    client.command(&["GET", "nonexistent"]).await;
+
+    // Give the server a moment to record metrics
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Fetch metrics
+    let http_client = reqwest::Client::new();
+    let response = http_client
+        .get(format!("http://{}/metrics", server.metrics_addr()))
+        .send()
+        .await
+        .unwrap();
+
+    let body = response.text().await.unwrap();
+    // Should contain command-related metrics
+    assert!(
+        body.contains("frogdb_commands_total") || body.contains("commands"),
+        "Metrics should contain command counters: {}",
+        body
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_health_live_endpoint() {
+    let server = TestServer::start().await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{}/health/live", server.metrics_addr()))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_health_ready_endpoint() {
+    let server = TestServer::start().await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{}/health/ready", server.metrics_addr()))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_healthz_alias_endpoint() {
+    let server = TestServer::start().await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{}/healthz", server.metrics_addr()))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_readyz_alias_endpoint() {
+    let server = TestServer::start().await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{}/readyz", server.metrics_addr()))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_metrics_404_on_unknown_path() {
+    let server = TestServer::start().await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{}/unknown", server.metrics_addr()))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 404);
 
     server.shutdown().await;
 }
