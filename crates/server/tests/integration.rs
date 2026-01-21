@@ -3150,3 +3150,317 @@ async fn test_acl_help() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// SLOWLOG tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_slowlog_get_empty() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Initially the slowlog should be empty
+    let response = client.command(&["SLOWLOG", "GET"]).await;
+    match response {
+        Response::Array(entries) => {
+            assert!(entries.is_empty(), "Slowlog should be empty initially");
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_slowlog_len_empty() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Initially the slowlog length should be 0
+    let response = client.command(&["SLOWLOG", "LEN"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_slowlog_reset() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Reset should always succeed
+    let response = client.command(&["SLOWLOG", "RESET"]).await;
+    match response {
+        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
+        _ => panic!("Expected OK response, got {:?}", response),
+    }
+
+    // After reset, length should be 0
+    let response = client.command(&["SLOWLOG", "LEN"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_slowlog_help() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["SLOWLOG", "HELP"]).await;
+    match response {
+        Response::Array(items) => {
+            // Should return help text
+            assert!(!items.is_empty(), "Help should not be empty");
+            // First item should mention SLOWLOG
+            if let Some(Response::Bulk(Some(first))) = items.first() {
+                let text = String::from_utf8_lossy(first);
+                assert!(
+                    text.to_uppercase().contains("SLOWLOG"),
+                    "Help should mention SLOWLOG"
+                );
+            }
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_slowlog_threshold_disabled() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Disable slowlog
+    let response = client
+        .command(&["CONFIG", "SET", "slowlog-log-slower-than", "-1"])
+        .await;
+    match response {
+        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
+        _ => panic!("Expected OK response, got {:?}", response),
+    }
+
+    // Run a command
+    let _ = client.command(&["SET", "key1", "value1"]).await;
+
+    // Slowlog should still be empty because logging is disabled
+    let response = client.command(&["SLOWLOG", "LEN"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_slowlog_threshold_log_all() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Set threshold to 0 to log all commands
+    let response = client
+        .command(&["CONFIG", "SET", "slowlog-log-slower-than", "0"])
+        .await;
+    match response {
+        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
+        _ => panic!("Expected OK response, got {:?}", response),
+    }
+
+    // Reset slowlog first
+    let _ = client.command(&["SLOWLOG", "RESET"]).await;
+
+    // Run a few commands
+    let _ = client.command(&["SET", "key1", "value1"]).await;
+    let _ = client.command(&["GET", "key1"]).await;
+    let _ = client.command(&["DEL", "key1"]).await;
+
+    // Slowlog should have entries now
+    let response = client.command(&["SLOWLOG", "LEN"]).await;
+    match response {
+        Response::Integer(len) => {
+            assert!(len >= 3, "Expected at least 3 entries, got {}", len);
+        }
+        _ => panic!("Expected integer response, got {:?}", response),
+    }
+
+    // Get entries and verify structure
+    let response = client.command(&["SLOWLOG", "GET", "10"]).await;
+    match response {
+        Response::Array(entries) => {
+            assert!(
+                entries.len() >= 3,
+                "Expected at least 3 entries, got {}",
+                entries.len()
+            );
+
+            // Check structure of first entry
+            if let Response::Array(ref entry) = entries[0] {
+                assert_eq!(entry.len(), 6, "Entry should have 6 fields");
+
+                // Field 0: ID (integer)
+                assert!(matches!(entry[0], Response::Integer(_)));
+
+                // Field 1: timestamp (integer)
+                assert!(matches!(entry[1], Response::Integer(_)));
+
+                // Field 2: duration_us (integer)
+                assert!(matches!(entry[2], Response::Integer(_)));
+
+                // Field 3: command args (array)
+                assert!(matches!(entry[3], Response::Array(_)));
+
+                // Field 4: client_addr (bulk string)
+                assert!(matches!(entry[4], Response::Bulk(Some(_))));
+
+                // Field 5: client_name (bulk string)
+                assert!(matches!(entry[5], Response::Bulk(_)));
+            } else {
+                panic!("Expected array entry, got {:?}", entries[0]);
+            }
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_slowlog_get_count_limit() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Set threshold to 0 to log all commands
+    let _ = client
+        .command(&["CONFIG", "SET", "slowlog-log-slower-than", "0"])
+        .await;
+
+    // Reset slowlog first
+    let _ = client.command(&["SLOWLOG", "RESET"]).await;
+
+    // Run many commands
+    for i in 0..20 {
+        let _ = client
+            .command(&["SET", &format!("key{}", i), &format!("value{}", i)])
+            .await;
+    }
+
+    // Get only 5 entries
+    let response = client.command(&["SLOWLOG", "GET", "5"]).await;
+    match response {
+        Response::Array(entries) => {
+            assert_eq!(
+                entries.len(),
+                5,
+                "Expected exactly 5 entries when count=5"
+            );
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_slowlog_skip_slowlog_command() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Set threshold to 0 to log all commands
+    let _ = client
+        .command(&["CONFIG", "SET", "slowlog-log-slower-than", "0"])
+        .await;
+
+    // Reset slowlog
+    let _ = client.command(&["SLOWLOG", "RESET"]).await;
+
+    // Run SLOWLOG commands
+    let _ = client.command(&["SLOWLOG", "GET"]).await;
+    let _ = client.command(&["SLOWLOG", "LEN"]).await;
+    let _ = client.command(&["SLOWLOG", "HELP"]).await;
+
+    // SLOWLOG commands should not be logged (SKIP_SLOWLOG flag)
+    let response = client.command(&["SLOWLOG", "LEN"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_slowlog_config_get() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Get slowlog configuration
+    let response = client.command(&["CONFIG", "GET", "slowlog-*"]).await;
+    match response {
+        Response::Array(items) => {
+            // Should have at least 3 params (log-slower-than, max-len, max-arg-len)
+            // Each param is name, value pair so 6 items minimum
+            assert!(
+                items.len() >= 6,
+                "Expected at least 6 items for slowlog config, got {}",
+                items.len()
+            );
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_slowlog_unknown_subcommand() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["SLOWLOG", "INVALID"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("unknown subcommand"),
+                "Error should mention unknown subcommand"
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_slowlog_get_default_count() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Set threshold to 0 to log all commands
+    let _ = client
+        .command(&["CONFIG", "SET", "slowlog-log-slower-than", "0"])
+        .await;
+
+    // Reset slowlog
+    let _ = client.command(&["SLOWLOG", "RESET"]).await;
+
+    // Run many commands
+    for i in 0..15 {
+        let _ = client
+            .command(&["SET", &format!("key{}", i), &format!("value{}", i)])
+            .await;
+    }
+
+    // GET without count should return default (10)
+    let response = client.command(&["SLOWLOG", "GET"]).await;
+    match response {
+        Response::Array(entries) => {
+            assert_eq!(
+                entries.len(),
+                10,
+                "Default count should be 10, got {}",
+                entries.len()
+            );
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}

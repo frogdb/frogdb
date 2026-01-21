@@ -62,6 +62,11 @@ pub struct RuntimeConfig {
 
     // Server settings
     pub scatter_gather_timeout_ms: u64,
+
+    // Slowlog settings
+    pub slowlog_log_slower_than: i64,
+    pub slowlog_max_len: usize,
+    pub slowlog_max_arg_len: usize,
 }
 
 impl RuntimeConfig {
@@ -78,6 +83,9 @@ impl RuntimeConfig {
             sync_interval_ms: config.persistence.sync_interval_ms,
             batch_timeout_ms: config.persistence.batch_timeout_ms,
             scatter_gather_timeout_ms: config.server.scatter_gather_timeout_ms,
+            slowlog_log_slower_than: config.slowlog.log_slower_than,
+            slowlog_max_len: config.slowlog.max_len,
+            slowlog_max_arg_len: config.slowlog.max_arg_len,
         }
     }
 }
@@ -333,6 +341,46 @@ impl ConfigManager {
                     Ok(())
                 }),
             },
+            // Slowlog parameters
+            ParamMeta {
+                name: "slowlog-log-slower-than",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().slowlog_log_slower_than.to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: i64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "slowlog-log-slower-than".to_string(),
+                        message: "must be an integer".to_string(),
+                    })?;
+                    mgr.runtime.write().unwrap().slowlog_log_slower_than = parsed;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "slowlog-max-len",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().slowlog_max_len.to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: usize = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "slowlog-max-len".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.runtime.write().unwrap().slowlog_max_len = parsed;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "slowlog-max-arg-len",
+                mutable: true,
+                getter: |mgr| mgr.runtime.read().unwrap().slowlog_max_arg_len.to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: usize = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "slowlog-max-arg-len".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.runtime.write().unwrap().slowlog_max_arg_len = parsed;
+                    Ok(())
+                }),
+            },
             // Immutable parameters
             ParamMeta {
                 name: "bind",
@@ -466,6 +514,22 @@ impl ConfigManager {
         self.runtime.read().unwrap().maxmemory_policy.clone()
     }
 
+    /// Get the slowlog threshold in microseconds.
+    /// Returns -1 if disabled, 0 to log all, or positive value for threshold.
+    pub fn slowlog_log_slower_than(&self) -> i64 {
+        self.runtime.read().unwrap().slowlog_log_slower_than
+    }
+
+    /// Get the slowlog max entries per shard.
+    pub fn slowlog_max_len(&self) -> usize {
+        self.runtime.read().unwrap().slowlog_max_len
+    }
+
+    /// Get the slowlog max argument length.
+    pub fn slowlog_max_arg_len(&self) -> usize {
+        self.runtime.read().unwrap().slowlog_max_arg_len
+    }
+
     /// Generate CONFIG HELP output.
     pub fn help_text() -> Vec<String> {
         vec![
@@ -477,7 +541,7 @@ impl ConfigManager {
             "HELP".to_string(),
             "    Print this help.".to_string(),
             String::new(),
-            "Mutable parameters: maxmemory, maxmemory-policy, maxmemory-samples, lfu-log-factor, lfu-decay-time, loglevel, durability-mode, sync-interval-ms, batch-timeout-ms, scatter-gather-timeout-ms".to_string(),
+            "Mutable parameters: maxmemory, maxmemory-policy, maxmemory-samples, lfu-log-factor, lfu-decay-time, loglevel, durability-mode, sync-interval-ms, batch-timeout-ms, scatter-gather-timeout-ms, slowlog-log-slower-than, slowlog-max-len, slowlog-max-arg-len".to_string(),
             String::new(),
             "Immutable parameters (require restart): bind, port, num-shards, dir, persistence-enabled, metrics-enabled, metrics-port".to_string(),
         ]
