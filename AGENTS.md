@@ -26,3 +26,4 @@
 - When renaming markdown files/moving content, fix any links that point to the affected file/section.
 - When non-trivial functionality is required, evaluate if a Rust Crate is available which can help solve the issue.
 - When a library is of use that has a copyleft license like GPL, AGPL, prompt before including it.
+- When adding new development tools or dependencies (e.g., cargo plugins, CLI tools for testing), update both `Brewfile` (for macOS) and `shell.nix` (for Linux/Nix) to keep the development environments in sync.

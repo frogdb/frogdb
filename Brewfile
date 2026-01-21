@@ -1,4 +1,5 @@
-# FrogDB Development Dependencies
+# FrogDB Development Dependencies (macOS)
+# For Linux/WSL, use shell.nix instead: nix-shell
 
 # Rust toolchain (via rustup for version management)
 brew "rustup"
