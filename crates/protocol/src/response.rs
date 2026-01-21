@@ -67,6 +67,24 @@ pub enum BlockingOp {
         /// Number of elements to pop.
         count: usize,
     },
+    /// XREAD blocking operation.
+    XRead {
+        /// Stream IDs to read after (ms, seq) tuples - resolved from $ at block time.
+        after_ids: Vec<(u64, u64)>,
+        /// Maximum entries per stream.
+        count: Option<usize>,
+    },
+    /// XREADGROUP blocking operation.
+    XReadGroup {
+        /// Consumer group name.
+        group: bytes::Bytes,
+        /// Consumer name.
+        consumer: bytes::Bytes,
+        /// Skip PEL updates (NOACK flag).
+        noack: bool,
+        /// Maximum entries to return.
+        count: Option<usize>,
+    },
 }
 
 /// Response types that can be sent to clients.
