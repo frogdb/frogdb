@@ -38,8 +38,9 @@ pub use noop::{
 };
 pub use persistence::{
     deserialize, recover_all_shards, recover_shard, serialize, spawn_periodic_sync, CompressionType,
-    DurabilityMode, NoopSnapshotCoordinator, OnWriteHook, RecoveryStats, RocksConfig, RocksStore,
-    RocksWalWriter, SerializationError, SnapshotCoordinator, SnapshotHandle, SnapshotMetadata,
+    DurabilityMode, NoopSnapshotCoordinator, OnWriteHook, RecoveryStats, RocksConfig,
+    RocksSnapshotCoordinator, RocksStore, RocksWalWriter, SerializationError, SnapshotConfig,
+    SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata, SnapshotMetadataFile,
     WalConfig, HEADER_SIZE,
 };
 pub use registry::CommandRegistry;

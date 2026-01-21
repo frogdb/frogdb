@@ -3,7 +3,10 @@
 use anyhow::Result;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use std::sync::atomic::AtomicI64;
-use frogdb_core::{shard::NewConnection, AclManager, ClientRegistry, CommandRegistry, MetricsRecorder, ShardMessage};
+use frogdb_core::{
+    persistence::SnapshotCoordinator, shard::NewConnection, AclManager, ClientRegistry,
+    CommandRegistry, MetricsRecorder, ShardMessage,
+};
 use frogdb_metrics::metric_names;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -72,6 +75,9 @@ pub struct Acceptor {
 
     /// ACL manager for authentication and authorization.
     acl_manager: Arc<AclManager>,
+
+    /// Snapshot coordinator for BGSAVE/LASTSAVE commands.
+    snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
 }
 
 impl Acceptor {
@@ -88,6 +94,7 @@ impl Acceptor {
         scatter_gather_timeout_ms: u64,
         metrics_recorder: Arc<dyn MetricsRecorder>,
         acl_manager: Arc<AclManager>,
+        snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -103,6 +110,7 @@ impl Acceptor {
             metrics_recorder,
             current_connections: Arc::new(AtomicI64::new(0)),
             acl_manager,
+            snapshot_coordinator,
         }
     }
 
@@ -148,6 +156,7 @@ impl Acceptor {
                     let metrics_recorder = self.metrics_recorder.clone();
                     let current_connections = self.current_connections.clone();
                     let acl_manager = self.acl_manager.clone();
+                    let snapshot_coordinator = self.snapshot_coordinator.clone();
 
                     tokio::spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -165,6 +174,7 @@ impl Acceptor {
                             scatter_gather_timeout_ms,
                             metrics_recorder.clone(),
                             acl_manager,
+                            snapshot_coordinator,
                         );
 
                         if let Err(e) = handler.run().await {

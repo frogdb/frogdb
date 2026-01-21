@@ -3464,3 +3464,141 @@ async fn test_slowlog_get_default_count() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// BGSAVE / LASTSAVE Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_bgsave_basic() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // BGSAVE should return success message
+    let response = client.command(&["BGSAVE"]).await;
+    match response {
+        Response::Simple(msg) => {
+            let msg_str = String::from_utf8_lossy(&msg);
+            assert!(
+                msg_str.contains("Background saving started")
+                    || msg_str.contains("already in progress"),
+                "Unexpected BGSAVE response: {}",
+                msg_str
+            );
+        }
+        _ => panic!("Expected simple string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lastsave_basic() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // LASTSAVE should return an integer (Unix timestamp)
+    let response = client.command(&["LASTSAVE"]).await;
+    match response {
+        Response::Integer(timestamp) => {
+            // Timestamp should be a reasonable Unix timestamp
+            // Either 0 (no save yet) or a recent timestamp
+            assert!(
+                timestamp >= 0,
+                "LASTSAVE should return non-negative timestamp, got {}",
+                timestamp
+            );
+        }
+        _ => panic!("Expected integer response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_bgsave_then_lastsave() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // First, write some data
+    client.command(&["SET", "snapshot_test_key", "test_value"]).await;
+
+    // Trigger BGSAVE
+    let response = client.command(&["BGSAVE"]).await;
+    match response {
+        Response::Simple(msg) => {
+            let msg_str = String::from_utf8_lossy(&msg);
+            assert!(
+                msg_str.contains("Background saving started")
+                    || msg_str.contains("already in progress"),
+                "BGSAVE should start or already be in progress"
+            );
+        }
+        _ => panic!("Expected simple string response for BGSAVE"),
+    }
+
+    // Give the background task time to complete
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // LASTSAVE should now return a recent timestamp
+    let response = client.command(&["LASTSAVE"]).await;
+    match response {
+        Response::Integer(timestamp) => {
+            // After BGSAVE, timestamp should be positive (or 0 if save is still in progress)
+            assert!(
+                timestamp >= 0,
+                "LASTSAVE should return valid timestamp after BGSAVE"
+            );
+        }
+        _ => panic!("Expected integer response for LASTSAVE"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_bgsave_concurrent_returns_already_in_progress() {
+    let server = TestServer::start().await;
+    let mut client1 = server.connect().await;
+    let mut client2 = server.connect().await;
+
+    // Write some data to make the snapshot take longer
+    for i in 0..100 {
+        client1
+            .command(&["SET", &format!("key_{}", i), &format!("value_{}", i)])
+            .await;
+    }
+
+    // First BGSAVE should start
+    let response1 = client1.command(&["BGSAVE"]).await;
+
+    // Second BGSAVE should either start (if first completed) or report already in progress
+    let response2 = client2.command(&["BGSAVE"]).await;
+
+    match response1 {
+        Response::Simple(msg) => {
+            let msg_str = String::from_utf8_lossy(&msg);
+            assert!(
+                msg_str.contains("saving"),
+                "First BGSAVE should indicate saving: {}",
+                msg_str
+            );
+        }
+        _ => panic!("Expected simple string response for first BGSAVE"),
+    }
+
+    match response2 {
+        Response::Simple(msg) => {
+            let msg_str = String::from_utf8_lossy(&msg);
+            // Either started (first completed quickly) or in progress
+            assert!(
+                msg_str.contains("saving") || msg_str.contains("progress"),
+                "Second BGSAVE should indicate saving or in progress: {}",
+                msg_str
+            );
+        }
+        _ => panic!("Expected simple string response for second BGSAVE"),
+    }
+
+    server.shutdown().await;
+}

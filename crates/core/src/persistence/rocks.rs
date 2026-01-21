@@ -309,6 +309,30 @@ impl RocksStore {
         }
         Ok(())
     }
+
+    /// Create a checkpoint (point-in-time snapshot) at the given path.
+    ///
+    /// NOTE: This uses RocksDB's Checkpoint API which creates hard links to
+    /// immutable SST files, making it very fast and space-efficient.
+    /// Must be called from a spawn_blocking context as Checkpoint is !Send.
+    pub fn create_checkpoint(&self, path: &Path) -> Result<(), RocksError> {
+        let checkpoint = rocksdb::checkpoint::Checkpoint::new(&self.db)?;
+        checkpoint.create_checkpoint(path)?;
+        Ok(())
+    }
+
+    /// Get the latest RocksDB sequence number.
+    ///
+    /// This number increases monotonically with each write operation and can
+    /// be used to track the exact point-in-time of a snapshot.
+    pub fn latest_sequence_number(&self) -> u64 {
+        self.db.latest_sequence_number()
+    }
+
+    /// Get the path to the RocksDB database directory.
+    pub fn path(&self) -> &Path {
+        self.db.path()
+    }
 }
 
 /// Iterator over RocksDB key-value pairs.
