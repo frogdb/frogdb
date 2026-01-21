@@ -44,13 +44,19 @@ Root document located in `spec/INDEX.md`. Supplemental documents describing vari
 - Rust 1.75+ (2024 edition)
 - [just](https://github.com/casey/just) - Command runner
 
-Install dependencies via Homebrew:
+**Using Homebrew (macOS):**
 
 ```bash
 brew bundle
 ```
 
-Or install just manually:
+**Using Nix (Linux/macOS/WSL):**
+
+```bash
+nix-shell  # Enter development environment with all dependencies
+```
+
+**Or install just manually:**
 
 ```bash
 brew install just
