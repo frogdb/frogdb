@@ -5,6 +5,7 @@
 
 pub mod command;
 pub mod error;
+pub mod glob;
 pub mod noop;
 pub mod persistence;
 pub mod pubsub;
@@ -47,3 +48,4 @@ pub use scripting::{
     CachedScript, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig, ScriptRoute,
     ScriptRouter, SingleShardRouter, LuaVm,
 };
+pub use glob::glob_match;

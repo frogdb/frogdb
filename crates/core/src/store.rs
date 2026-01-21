@@ -4,6 +4,7 @@ use bytes::Bytes;
 use griddle::HashMap;
 use std::time::Instant;
 
+use crate::glob::glob_match;
 use crate::noop::ExpiryIndex;
 use crate::types::{KeyMetadata, KeyType, SetCondition, SetOptions, SetResult, Value};
 
@@ -37,6 +38,25 @@ pub trait Store: Send {
 
     /// Iterate keys (for SCAN).
     fn scan(&self, cursor: u64, count: usize, pattern: Option<&[u8]>) -> (u64, Vec<Bytes>);
+
+    /// Iterate keys with type filter (for SCAN with TYPE option).
+    fn scan_filtered(
+        &self,
+        cursor: u64,
+        count: usize,
+        pattern: Option<&[u8]>,
+        key_type: Option<KeyType>,
+    ) -> (u64, Vec<Bytes>) {
+        // Default implementation ignores type filter
+        let _ = key_type;
+        self.scan(cursor, count, pattern)
+    }
+
+    /// Clear all keys from the store.
+    fn clear(&mut self);
+
+    /// Get all keys in the store.
+    fn all_keys(&self) -> Vec<Bytes>;
 
     // ========================================================================
     // Expiry-aware methods (added in Phase 2)
@@ -260,6 +280,16 @@ impl Store for HashMapStore {
     }
 
     fn scan(&self, cursor: u64, count: usize, pattern: Option<&[u8]>) -> (u64, Vec<Bytes>) {
+        self.scan_filtered(cursor, count, pattern, None)
+    }
+
+    fn scan_filtered(
+        &self,
+        cursor: u64,
+        count: usize,
+        pattern: Option<&[u8]>,
+        key_type: Option<KeyType>,
+    ) -> (u64, Vec<Bytes>) {
         // Simple implementation: cursor is just an index
         let keys: Vec<_> = self.data.keys().cloned().collect();
         let start = cursor as usize;
@@ -274,13 +304,25 @@ impl Store for HashMapStore {
         while results.len() < count && current < keys.len() {
             let key = &keys[current];
 
-            // Pattern matching (simple glob)
-            let matches = match pattern {
+            // Pattern matching (full glob)
+            let pattern_matches = match pattern {
                 Some(p) => glob_match(p, key),
                 None => true,
             };
 
-            if matches {
+            // Type filtering
+            let type_matches = match key_type {
+                Some(filter_type) => {
+                    if let Some(entry) = self.data.get(key) {
+                        entry.value.key_type() == filter_type
+                    } else {
+                        false
+                    }
+                }
+                None => true,
+            };
+
+            if pattern_matches && type_matches {
                 results.push(key.clone());
             }
             current += 1;
@@ -289,6 +331,16 @@ impl Store for HashMapStore {
         let next_cursor = if current >= keys.len() { 0 } else { current as u64 };
 
         (next_cursor, results)
+    }
+
+    fn clear(&mut self) {
+        self.data.clear();
+        self.expiry_index = ExpiryIndex::new();
+        self.memory_used = 0;
+    }
+
+    fn all_keys(&self) -> Vec<Bytes> {
+        self.data.keys().cloned().collect()
     }
 
     // ========================================================================
@@ -449,23 +501,6 @@ impl Store for HashMapStore {
     }
 }
 
-/// Simple glob pattern matching for SCAN.
-fn glob_match(pattern: &[u8], key: &[u8]) -> bool {
-    // Very simple implementation - only supports * at start/end
-    if pattern == b"*" {
-        return true;
-    }
-
-    if pattern.starts_with(b"*") {
-        return key.ends_with(&pattern[1..]);
-    }
-
-    if pattern.ends_with(b"*") {
-        return key.starts_with(&pattern[..pattern.len() - 1]);
-    }
-
-    pattern == key
-}
 
 #[cfg(test)]
 mod tests {

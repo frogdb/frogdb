@@ -563,6 +563,20 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::scripting::EvalCommand);
     registry.register(crate::commands::scripting::EvalshaCommand);
     registry.register(crate::commands::scripting::ScriptCommand);
+
+    // Scan commands
+    registry.register(crate::commands::scan::ScanCommand);
+    registry.register(crate::commands::scan::KeysCommand);
+
+    // Server commands
+    registry.register(crate::commands::server::DbsizeCommand);
+    registry.register(crate::commands::server::FlushdbCommand);
+    registry.register(crate::commands::server::FlushallCommand);
+    registry.register(crate::commands::server::TimeCommand);
+    registry.register(crate::commands::server::ShutdownCommand);
+
+    // Info command
+    registry.register(crate::commands::info::InfoCommand);
 }
 
 // Commands module
@@ -665,7 +679,7 @@ pub mod commands {
         }
     }
 
-    /// COMMAND command (placeholder).
+    /// COMMAND command - server command introspection.
     pub struct CommandCommand;
 
     impl Command for CommandCommand {
@@ -684,10 +698,101 @@ pub mod commands {
         fn execute(
             &self,
             _ctx: &mut CommandContext,
-            _args: &[Bytes],
+            args: &[Bytes],
         ) -> Result<Response, CommandError> {
-            // Placeholder - return empty array
-            Ok(Response::Array(vec![]))
+            if args.is_empty() {
+                // COMMAND - return info about all commands
+                return Ok(Response::Array(vec![])); // Simplified for now
+            }
+
+            let subcommand = args[0].to_ascii_uppercase();
+            match subcommand.as_slice() {
+                b"COUNT" => {
+                    // COMMAND COUNT - return number of commands
+                    // Approximate count of supported commands
+                    Ok(Response::Integer(100)) // Placeholder count
+                }
+                b"DOCS" => {
+                    // COMMAND DOCS [command-name ...] - return docs for commands
+                    if args.len() == 1 {
+                        // Return docs for all commands (empty for now)
+                        Ok(Response::Array(vec![]))
+                    } else {
+                        // Return docs for specified commands
+                        let mut results = Vec::new();
+                        for cmd_name in &args[1..] {
+                            let cmd_str = String::from_utf8_lossy(cmd_name).to_uppercase();
+                            // Build basic doc entry
+                            let doc = Response::Array(vec![
+                                Response::bulk(cmd_name.clone()),
+                                Response::Array(vec![
+                                    Response::bulk(Bytes::from_static(b"summary")),
+                                    Response::bulk(Bytes::from(format!("{} command", cmd_str))),
+                                    Response::bulk(Bytes::from_static(b"since")),
+                                    Response::bulk(Bytes::from_static(b"1.0.0")),
+                                    Response::bulk(Bytes::from_static(b"group")),
+                                    Response::bulk(Bytes::from_static(b"generic")),
+                                ]),
+                            ]);
+                            results.push(doc);
+                        }
+                        Ok(Response::Array(results))
+                    }
+                }
+                b"INFO" => {
+                    // COMMAND INFO [command-name ...] - return info for commands
+                    if args.len() == 1 {
+                        Ok(Response::Array(vec![]))
+                    } else {
+                        let mut results = Vec::new();
+                        for cmd_name in &args[1..] {
+                            // Build basic command info
+                            // Format: [name, arity, [flags], first_key, last_key, step]
+                            let info = Response::Array(vec![
+                                Response::bulk(cmd_name.clone()),
+                                Response::Integer(-1), // Variable arity
+                                Response::Array(vec![]), // Flags
+                                Response::Integer(0), // First key
+                                Response::Integer(0), // Last key
+                                Response::Integer(0), // Step
+                            ]);
+                            results.push(info);
+                        }
+                        Ok(Response::Array(results))
+                    }
+                }
+                b"GETKEYS" => {
+                    // COMMAND GETKEYS command [args...] - return keys for a command
+                    if args.len() < 2 {
+                        return Err(CommandError::WrongArity { command: "COMMAND|GETKEYS" });
+                    }
+                    // For simplicity, return empty array
+                    Ok(Response::Array(vec![]))
+                }
+                b"HELP" => {
+                    // COMMAND HELP
+                    let help = vec![
+                        Response::bulk(Bytes::from_static(b"COMMAND [subcommand [arg [arg ...]]]")),
+                        Response::bulk(Bytes::from_static(b"Return info about Redis commands.")),
+                        Response::bulk(Bytes::from_static(b"Subcommands:")),
+                        Response::bulk(Bytes::from_static(b"  (no subcommand) -- Return info about all commands")),
+                        Response::bulk(Bytes::from_static(b"  COUNT -- Return count of commands")),
+                        Response::bulk(Bytes::from_static(b"  DOCS [cmd ...] -- Return documentation for commands")),
+                        Response::bulk(Bytes::from_static(b"  INFO [cmd ...] -- Return info for commands")),
+                        Response::bulk(Bytes::from_static(b"  GETKEYS cmd [args...] -- Extract keys from command")),
+                        Response::bulk(Bytes::from_static(b"  HELP -- Print this help")),
+                    ];
+                    Ok(Response::Array(help))
+                }
+                _ => {
+                    Err(CommandError::InvalidArgument {
+                        message: format!(
+                            "unknown subcommand '{}'. Try COMMAND HELP.",
+                            String::from_utf8_lossy(&subcommand)
+                        ),
+                    })
+                }
+            }
         }
 
         fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {

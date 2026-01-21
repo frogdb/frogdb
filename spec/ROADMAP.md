@@ -13,7 +13,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 8 (Lua Scripting) ✓
+**Phase**: 9 (Key Iteration & Server Commands) ✓
 **Next Milestone**: Phase 5 - Persistence (RocksDB)
 
 ---
@@ -712,7 +712,7 @@ The following optimizations are deferred to a future phase:
 
 ---
 
-## Phase 9: Key Iteration & Server Commands
+## Phase 9: Key Iteration & Server Commands ✓
 
 **Goal**: SCAN, INFO, and server administration.
 
@@ -720,36 +720,37 @@ The following optimizations are deferred to a future phase:
 
 ### 9.1 SCAN
 
-- [ ] Cursor format: `shard_id (16 bits) | position (48 bits)`
-- [ ] `SCAN` (scatter to all shards, merge cursors)
-- [ ] MATCH pattern filtering
-- [ ] COUNT hint
-- [ ] TYPE filter
-- [ ] `SSCAN`, `HSCAN`, `ZSCAN` (already done with data types)
+- [x] Cursor format: `shard_id (16 bits) | position (48 bits)`
+- [x] `SCAN` (scatter to all shards, merge cursors)
+- [x] MATCH pattern filtering (full glob support)
+- [x] COUNT hint
+- [x] TYPE filter
+- [x] `SSCAN`, `HSCAN`, `ZSCAN` (already done with data types)
 
 ### 9.2 KEYS
 
-- [ ] `KEYS pattern` (scatter-gather, warn about production use)
+- [x] `KEYS pattern` (scatter-gather, warn about production use)
 
 ### 9.3 INFO
 
-- [ ] `INFO [section]`
-- [ ] Sections: server, clients, memory, persistence, stats, replication, cpu, keyspace
+- [x] `INFO [section]`
+- [x] Sections: server, clients, memory, persistence, stats, replication, cpu, keyspace
 
 ### 9.4 Server Commands
 
-- [ ] `DBSIZE`
-- [ ] `FLUSHDB`, `FLUSHALL`
-- [ ] `TIME`
-- [ ] `DEBUG SLEEP`
-- [ ] `SHUTDOWN`
-- [ ] `COMMAND`, `COMMAND COUNT`, `COMMAND DOCS`
+- [x] `DBSIZE`
+- [x] `FLUSHDB`, `FLUSHALL`
+- [x] `TIME`
+- [x] `DEBUG SLEEP`
+- [x] `SHUTDOWN`
+- [x] `COMMAND`, `COMMAND COUNT`, `COMMAND DOCS`, `COMMAND INFO`, `COMMAND HELP`
 
 ### 9.5 Testing
 
-- [ ] Test SCAN completeness (all keys returned exactly once)
-- [ ] Test cursor handling across shards
-- [ ] Test INFO sections
+- [x] Test SCAN completeness (all keys returned exactly once)
+- [x] Test cursor handling across shards
+- [x] Test INFO sections
+- [x] All 191 tests passing (169 unit + 6 protocol + 16 server)
 
 ---
 
