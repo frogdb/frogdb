@@ -4,6 +4,7 @@ members = [
     "crates/protocol",
     "crates/core",
     "crates/server",
+    "crates/metrics",
 ]
 
 [workspace.package]
@@ -67,6 +68,7 @@ linked-hash-map = "0.5"
 # Internal crates
 frogdb-protocol = { path = "crates/protocol" }
 frogdb-core = { path = "crates/core" }
+frogdb-metrics = { path = "crates/metrics" }
 
 [profile.release]
 lto = true

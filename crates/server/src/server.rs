@@ -6,7 +6,9 @@ use frogdb_core::persistence::{
     RocksConfig, RocksStore, SnapshotCoordinator, WalConfig,
 };
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
-use frogdb_core::{CommandRegistry, ShardMessage, ShardWorker};
+use frogdb_core::{CommandRegistry, MetricsRecorder, ShardMessage, ShardWorker};
+use frogdb_metrics::{HealthChecker, MetricsServer, PrometheusRecorder, SystemMetricsCollector};
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::mpsc;
@@ -72,11 +74,41 @@ pub struct Server {
 
     /// Snapshot coordinator (shared across all shards).
     snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+
+    /// Metrics recorder.
+    metrics_recorder: Arc<dyn MetricsRecorder>,
+
+    /// Prometheus recorder (for HTTP endpoint).
+    prometheus_recorder: Option<Arc<PrometheusRecorder>>,
+
+    /// Health checker.
+    health_checker: HealthChecker,
 }
 
 impl Server {
     /// Create a new server instance.
     pub async fn new(config: Config) -> Result<Self> {
+        // Initialize metrics
+        let health_checker = HealthChecker::new();
+        let (metrics_recorder, prometheus_recorder): (
+            Arc<dyn MetricsRecorder>,
+            Option<Arc<PrometheusRecorder>>,
+        ) = if config.metrics.enabled {
+            let recorder = Arc::new(PrometheusRecorder::new());
+            // Record server info
+            recorder.record_gauge(
+                frogdb_metrics::metric_names::INFO,
+                1.0,
+                &[
+                    ("version", env!("CARGO_PKG_VERSION")),
+                    ("mode", "standalone"),
+                ],
+            );
+            (recorder.clone(), Some(recorder))
+        } else {
+            (Arc::new(frogdb_core::NoopMetricsRecorder::new()), None)
+        };
+
         // Bind TCP listener
         let listener = TcpListener::bind(config.bind_addr()).await?;
 
@@ -193,6 +225,9 @@ impl Server {
             rocks_store,
             periodic_sync_handle,
             snapshot_coordinator,
+            metrics_recorder,
+            prometheus_recorder,
+            health_checker,
         })
     }
 
@@ -262,6 +297,43 @@ impl Server {
 
     /// Run the server.
     pub async fn run(self) -> Result<()> {
+        // Start metrics server if enabled
+        let metrics_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
+            let metrics_config = frogdb_metrics::MetricsConfig {
+                enabled: self.config.metrics.enabled,
+                bind: self.config.metrics.bind.clone(),
+                port: self.config.metrics.port,
+                otlp_enabled: self.config.metrics.otlp_enabled,
+                otlp_endpoint: self.config.metrics.otlp_endpoint.clone(),
+                otlp_interval_secs: self.config.metrics.otlp_interval_secs,
+            };
+
+            let server = MetricsServer::new(
+                metrics_config,
+                prometheus.clone(),
+                self.health_checker.clone(),
+            );
+
+            info!(
+                addr = %self.config.metrics.bind_addr(),
+                "Metrics server starting"
+            );
+
+            Some(server.spawn())
+        } else {
+            None
+        };
+
+        // Start system metrics collector if metrics enabled
+        let system_collector_handle = if self.prometheus_recorder.is_some() {
+            Some(SystemMetricsCollector::spawn_collector(
+                self.metrics_recorder.clone(),
+                Duration::from_secs(15),
+            ))
+        } else {
+            None
+        };
+
         let acceptor = Acceptor::new(
             self.listener,
             self.new_conn_senders,
@@ -269,6 +341,7 @@ impl Server {
             self.registry.clone(),
             self.config.server.allow_cross_slot_standalone,
             self.config.server.scatter_gather_timeout_ms,
+            self.metrics_recorder.clone(),
         );
 
         // Spawn acceptor task
@@ -277,6 +350,9 @@ impl Server {
                 error!(error = %e, "Acceptor error");
             }
         });
+
+        // Mark server as ready
+        self.health_checker.set_ready();
 
         info!(
             addr = %self.config.bind_addr(),
@@ -287,6 +363,9 @@ impl Server {
         shutdown_signal().await;
 
         info!("Shutdown signal received, stopping server...");
+
+        // Mark server as not ready during shutdown
+        self.health_checker.shutdown();
 
         // Send shutdown to all shards
         for sender in self.shard_senders.iter() {
@@ -300,6 +379,14 @@ impl Server {
 
         // Stop periodic sync task if running
         if let Some(handle) = self.periodic_sync_handle {
+            handle.abort();
+        }
+
+        // Stop metrics server and system collector
+        if let Some(handle) = metrics_server_handle {
+            handle.abort();
+        }
+        if let Some(handle) = system_collector_handle {
             handle.abort();
         }
 

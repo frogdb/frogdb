@@ -9,9 +9,9 @@ use anyhow::Result;
 use bytes::Bytes;
 use frogdb_core::{
     shard_for_key, CommandRegistry, GlobPattern, IntrospectionRequest, IntrospectionResponse,
-    PartialResult, PubSubMessage, PubSubSender, ScatterOp, ShardMessage, TransactionResult,
-    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SUBSCRIPTIONS_PER_CONNECTION,
+    MetricsRecorder, PartialResult, PubSubMessage, PubSubSender, ScatterOp, ShardMessage,
+    TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use futures::{SinkExt, StreamExt};
@@ -152,6 +152,10 @@ pub struct ConnectionHandler {
 
     /// Receiver for pub/sub messages from shards.
     pubsub_rx: mpsc::UnboundedReceiver<PubSubMessage>,
+
+    /// Metrics recorder.
+    #[allow(dead_code)]
+    metrics_recorder: Arc<dyn MetricsRecorder>,
 }
 
 impl ConnectionHandler {
@@ -167,6 +171,7 @@ impl ConnectionHandler {
         shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
         allow_cross_slot: bool,
         scatter_gather_timeout_ms: u64,
+        metrics_recorder: Arc<dyn MetricsRecorder>,
     ) -> Self {
         let framed = Framed::new(socket, Resp2);
         let state = ConnectionState::new(conn_id, addr);
@@ -185,6 +190,7 @@ impl ConnectionHandler {
             scatter_gather_timeout: Duration::from_millis(scatter_gather_timeout_ms),
             pubsub_tx,
             pubsub_rx,
+            metrics_recorder,
         }
     }
 

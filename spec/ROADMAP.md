@@ -13,8 +13,8 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 9 (Key Iteration & Server Commands) ✓
-**Next Milestone**: Phase 5 - Persistence (RocksDB)
+**Phase**: 10.1 (Metrics - partial) ✓
+**Next Milestone**: Phase 10.1 completion (command metrics, keyspace metrics)
 
 ---
 
@@ -762,8 +762,11 @@ The following optimizations are deferred to a future phase:
 
 ### 10.1 Metrics
 
-- [ ] Prometheus endpoint (`:9090/metrics` or configurable)
-- [ ] Connection metrics (total, current, rejected)
+- [x] Prometheus endpoint (`:9090/metrics` or configurable)
+- [x] Health check endpoints (`/health/live`, `/health/ready`)
+- [x] Connection metrics (total, current)
+- [x] System metrics (uptime, memory RSS)
+- [x] Metrics configuration (bind, port, OTLP optional)
 - [ ] Command metrics (per-command counters, latency histograms)
 - [ ] Memory metrics (used, peak, fragmentation)
 - [ ] Keyspace metrics (keys per DB/shard)

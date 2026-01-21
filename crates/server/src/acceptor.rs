@@ -2,7 +2,9 @@
 
 use anyhow::Result;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
-use frogdb_core::{shard::NewConnection, CommandRegistry, ShardMessage};
+use std::sync::atomic::AtomicI64;
+use frogdb_core::{shard::NewConnection, CommandRegistry, MetricsRecorder, ShardMessage};
+use frogdb_metrics::metric_names;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -54,6 +56,12 @@ pub struct Acceptor {
 
     /// Scatter-gather timeout in milliseconds.
     scatter_gather_timeout_ms: u64,
+
+    /// Metrics recorder.
+    metrics_recorder: Arc<dyn MetricsRecorder>,
+
+    /// Current connection count (shared for decrement on drop).
+    current_connections: Arc<AtomicI64>,
 }
 
 impl Acceptor {
@@ -65,6 +73,7 @@ impl Acceptor {
         registry: Arc<CommandRegistry>,
         allow_cross_slot: bool,
         scatter_gather_timeout_ms: u64,
+        metrics_recorder: Arc<dyn MetricsRecorder>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -75,6 +84,8 @@ impl Acceptor {
             assigner: RoundRobinAssigner::new(num_shards),
             allow_cross_slot,
             scatter_gather_timeout_ms,
+            metrics_recorder,
+            current_connections: Arc::new(AtomicI64::new(0)),
         }
     }
 
@@ -87,6 +98,13 @@ impl Acceptor {
                 Ok((socket, addr)) => {
                     let conn_id = next_conn_id();
                     let shard_id = self.assigner.assign();
+
+                    // Record connection metrics
+                    self.metrics_recorder
+                        .increment_counter(metric_names::CONNECTIONS_TOTAL, 1, &[]);
+                    let current = self.current_connections.fetch_add(1, Ordering::SeqCst) + 1;
+                    self.metrics_recorder
+                        .record_gauge(metric_names::CONNECTIONS_CURRENT, current as f64, &[]);
 
                     debug!(
                         conn_id,
@@ -102,6 +120,8 @@ impl Acceptor {
                     let num_shards = self.shard_senders.len();
                     let allow_cross_slot = self.allow_cross_slot;
                     let scatter_gather_timeout_ms = self.scatter_gather_timeout_ms;
+                    let metrics_recorder = self.metrics_recorder.clone();
+                    let current_connections = self.current_connections.clone();
 
                     tokio::spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -114,11 +134,17 @@ impl Acceptor {
                             shard_senders,
                             allow_cross_slot,
                             scatter_gather_timeout_ms,
+                            metrics_recorder.clone(),
                         );
 
                         if let Err(e) = handler.run().await {
                             debug!(conn_id, error = %e, "Connection ended with error");
                         }
+
+                        // Decrement connection count when handler finishes
+                        let current = current_connections.fetch_sub(1, Ordering::SeqCst) - 1;
+                        metrics_recorder
+                            .record_gauge(metric_names::CONNECTIONS_CURRENT, current as f64, &[]);
                     });
                 }
                 Err(e) => {
