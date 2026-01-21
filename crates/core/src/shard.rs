@@ -15,6 +15,7 @@ use crate::pubsub::{
     ConnId, IntrospectionRequest, IntrospectionResponse, PubSubSender, ShardSubscriptions,
 };
 use crate::registry::CommandRegistry;
+use crate::scripting::{ScriptExecutor, ScriptingConfig};
 use crate::store::{HashMapStore, Store};
 
 /// Messages sent to shard workers.
@@ -123,6 +124,66 @@ pub enum ShardMessage {
     /// Connection closed - clean up subscriptions.
     ConnectionClosed {
         conn_id: ConnId,
+    },
+
+    // =========================================================================
+    // Scripting messages
+    // =========================================================================
+
+    /// Execute a Lua script (EVAL).
+    EvalScript {
+        /// Script source code.
+        script_source: Bytes,
+        /// Keys passed to the script.
+        keys: Vec<Bytes>,
+        /// Additional arguments.
+        argv: Vec<Bytes>,
+        /// Connection ID.
+        conn_id: u64,
+        /// Response channel.
+        response_tx: oneshot::Sender<Response>,
+    },
+
+    /// Execute a cached Lua script (EVALSHA).
+    EvalScriptSha {
+        /// SHA1 hash of the script (hex string).
+        script_sha: Bytes,
+        /// Keys passed to the script.
+        keys: Vec<Bytes>,
+        /// Additional arguments.
+        argv: Vec<Bytes>,
+        /// Connection ID.
+        conn_id: u64,
+        /// Response channel.
+        response_tx: oneshot::Sender<Response>,
+    },
+
+    /// Load a script into the cache (SCRIPT LOAD).
+    ScriptLoad {
+        /// Script source code.
+        script_source: Bytes,
+        /// Response channel (returns SHA1 hex).
+        response_tx: oneshot::Sender<String>,
+    },
+
+    /// Check if scripts exist (SCRIPT EXISTS).
+    ScriptExists {
+        /// SHA1 hashes to check (hex strings).
+        shas: Vec<Bytes>,
+        /// Response channel.
+        response_tx: oneshot::Sender<Vec<bool>>,
+    },
+
+    /// Flush the script cache (SCRIPT FLUSH).
+    ScriptFlush {
+        /// Response channel.
+        response_tx: oneshot::Sender<()>,
+    },
+
+    /// Kill the running script (SCRIPT KILL).
+    ScriptKill {
+        /// Response channel.
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
 
     /// Shutdown signal.
@@ -285,6 +346,9 @@ pub struct ShardWorker {
 
     /// Pub/Sub subscriptions for this shard.
     subscriptions: ShardSubscriptions,
+
+    /// Script executor for this shard.
+    script_executor: Option<ScriptExecutor>,
 }
 
 impl ShardWorker {
@@ -297,6 +361,13 @@ impl ShardWorker {
         shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
         registry: Arc<CommandRegistry>,
     ) -> Self {
+        // Try to create script executor
+        let script_executor = ScriptExecutor::new(ScriptingConfig::default())
+            .map_err(|e| {
+                tracing::warn!(shard_id, error = %e, "Failed to initialize script executor");
+            })
+            .ok();
+
         Self {
             shard_id,
             num_shards,
@@ -310,6 +381,7 @@ impl ShardWorker {
             snapshot_coordinator: Arc::new(NoopSnapshotCoordinator::new()),
             shard_version: 0,
             subscriptions: ShardSubscriptions::new(),
+            script_executor,
         }
     }
 
@@ -328,6 +400,14 @@ impl ShardWorker {
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
     ) -> Self {
         let wal_writer = RocksWalWriter::new(rocks_store.clone(), shard_id, wal_config);
+
+        // Try to create script executor
+        let script_executor = ScriptExecutor::new(ScriptingConfig::default())
+            .map_err(|e| {
+                tracing::warn!(shard_id, error = %e, "Failed to initialize script executor");
+            })
+            .ok();
+
         Self {
             shard_id,
             num_shards,
@@ -341,6 +421,7 @@ impl ShardWorker {
             snapshot_coordinator,
             shard_version: 0,
             subscriptions: ShardSubscriptions::new(),
+            script_executor,
         }
     }
 
@@ -441,6 +522,32 @@ impl ShardWorker {
                         }
                         ShardMessage::ConnectionClosed { conn_id } => {
                             self.subscriptions.remove_connection(conn_id);
+                        }
+
+                        // Scripting message handlers
+                        ShardMessage::EvalScript { script_source, keys, argv, conn_id, response_tx } => {
+                            let response = self.handle_eval_script(&script_source, &keys, &argv, conn_id);
+                            let _ = response_tx.send(response);
+                        }
+                        ShardMessage::EvalScriptSha { script_sha, keys, argv, conn_id, response_tx } => {
+                            let response = self.handle_evalsha(&script_sha, &keys, &argv, conn_id);
+                            let _ = response_tx.send(response);
+                        }
+                        ShardMessage::ScriptLoad { script_source, response_tx } => {
+                            let sha = self.handle_script_load(&script_source);
+                            let _ = response_tx.send(sha);
+                        }
+                        ShardMessage::ScriptExists { shas, response_tx } => {
+                            let results = self.handle_script_exists(&shas);
+                            let _ = response_tx.send(results);
+                        }
+                        ShardMessage::ScriptFlush { response_tx } => {
+                            self.handle_script_flush();
+                            let _ = response_tx.send(());
+                        }
+                        ShardMessage::ScriptKill { response_tx } => {
+                            let result = self.handle_script_kill();
+                            let _ = response_tx.send(result);
                         }
 
                         ShardMessage::Shutdown => {
@@ -808,6 +915,109 @@ impl ShardWorker {
                 let counts = self.subscriptions.shard_numsub(&channels);
                 IntrospectionResponse::NumSub(counts)
             }
+        }
+    }
+
+    // =========================================================================
+    // Scripting helpers
+    // =========================================================================
+
+    /// Handle EVAL - execute a Lua script.
+    fn handle_eval_script(
+        &mut self,
+        script_source: &Bytes,
+        keys: &[Bytes],
+        argv: &[Bytes],
+        conn_id: u64,
+    ) -> Response {
+        let executor = match &mut self.script_executor {
+            Some(e) => e,
+            None => {
+                return Response::error("ERR scripting not available");
+            }
+        };
+
+        let store = &mut self.store as &mut dyn Store;
+        let mut ctx = CommandContext::new(
+            store,
+            &self.shard_senders,
+            self.shard_id,
+            self.num_shards,
+            conn_id,
+        );
+
+        match executor.eval(script_source, keys, argv, &mut ctx, &self.registry) {
+            Ok(response) => response,
+            Err(e) => Response::error(e.to_string()),
+        }
+    }
+
+    /// Handle EVALSHA - execute a cached Lua script by SHA.
+    fn handle_evalsha(
+        &mut self,
+        script_sha: &Bytes,
+        keys: &[Bytes],
+        argv: &[Bytes],
+        conn_id: u64,
+    ) -> Response {
+        let executor = match &mut self.script_executor {
+            Some(e) => e,
+            None => {
+                return Response::error("ERR scripting not available");
+            }
+        };
+
+        let store = &mut self.store as &mut dyn Store;
+        let mut ctx = CommandContext::new(
+            store,
+            &self.shard_senders,
+            self.shard_id,
+            self.num_shards,
+            conn_id,
+        );
+
+        match executor.evalsha(script_sha, keys, argv, &mut ctx, &self.registry) {
+            Ok(response) => response,
+            Err(e) => Response::error(e.to_string()),
+        }
+    }
+
+    /// Handle SCRIPT LOAD - load a script into the cache.
+    fn handle_script_load(&mut self, script_source: &Bytes) -> String {
+        match &mut self.script_executor {
+            Some(executor) => executor.load_script(script_source.clone()),
+            None => String::new(),
+        }
+    }
+
+    /// Handle SCRIPT EXISTS - check if scripts are cached.
+    fn handle_script_exists(&self, shas: &[Bytes]) -> Vec<bool> {
+        match &self.script_executor {
+            Some(executor) => {
+                let sha_refs: Vec<&[u8]> = shas.iter().map(|s| s.as_ref()).collect();
+                executor.scripts_exist(&sha_refs)
+            }
+            None => vec![false; shas.len()],
+        }
+    }
+
+    /// Handle SCRIPT FLUSH - clear the script cache.
+    fn handle_script_flush(&mut self) {
+        if let Some(ref mut executor) = self.script_executor {
+            executor.flush_scripts();
+        }
+    }
+
+    /// Handle SCRIPT KILL - kill the running script.
+    fn handle_script_kill(&self) -> Result<(), String> {
+        match &self.script_executor {
+            Some(executor) => {
+                if !executor.is_running() {
+                    return Err("NOTBUSY No scripts in execution right now.".to_string());
+                }
+                executor.kill_script().map_err(|e| e.to_string())
+            }
+            None => Err("ERR scripting not available".to_string()),
         }
     }
 }
