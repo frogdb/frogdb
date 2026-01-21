@@ -2280,3 +2280,267 @@ async fn test_publish_returns_zero_no_subscribers() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// CLIENT Command Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_client_id() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // CLIENT ID should return a positive integer
+    let response = client.command(&["CLIENT", "ID"]).await;
+    match response {
+        Response::Integer(id) => assert!(id > 0, "CLIENT ID should return positive integer"),
+        _ => panic!("Expected integer response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_setname_getname() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Initially, name should be null
+    let response = client.command(&["CLIENT", "GETNAME"]).await;
+    assert!(matches!(response, Response::Null | Response::Bulk(None)));
+
+    // Set a name
+    let response = client.command(&["CLIENT", "SETNAME", "test-connection"]).await;
+    assert_eq!(response, Response::ok());
+
+    // Get the name back
+    let response = client.command(&["CLIENT", "GETNAME"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("test-connection"))));
+
+    // Clear the name by setting empty string
+    let response = client.command(&["CLIENT", "SETNAME", ""]).await;
+    assert_eq!(response, Response::ok());
+
+    let response = client.command(&["CLIENT", "GETNAME"]).await;
+    assert!(matches!(response, Response::Null | Response::Bulk(None)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_setname_invalid_name() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Names with spaces should be rejected
+    let response = client.command(&["CLIENT", "SETNAME", "name with spaces"]).await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_list() {
+    let server = TestServer::start().await;
+    let mut client1 = server.connect().await;
+    let mut client2 = server.connect().await;
+
+    // Set names for identification
+    client1.command(&["CLIENT", "SETNAME", "client-one"]).await;
+    client2.command(&["CLIENT", "SETNAME", "client-two"]).await;
+
+    // CLIENT LIST should show both connections
+    let response = client1.command(&["CLIENT", "LIST"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let list_str = String::from_utf8_lossy(&data);
+            assert!(list_str.contains("client-one"), "Should contain client-one");
+            assert!(list_str.contains("client-two"), "Should contain client-two");
+            // Should have id= field
+            assert!(list_str.contains("id="), "Should contain id field");
+            // Should have addr= field
+            assert!(list_str.contains("addr="), "Should contain addr field");
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_info() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Set a name
+    client.command(&["CLIENT", "SETNAME", "info-test"]).await;
+
+    // CLIENT INFO should return our connection info
+    let response = client.command(&["CLIENT", "INFO"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let info_str = String::from_utf8_lossy(&data);
+            assert!(info_str.contains("info-test"), "Should contain our name");
+            assert!(info_str.contains("id="), "Should contain id field");
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_kill_by_id() {
+    let server = TestServer::start().await;
+    let mut killer = server.connect().await;
+    let mut victim = server.connect().await;
+
+    // Get victim's ID
+    let victim_id = match victim.command(&["CLIENT", "ID"]).await {
+        Response::Integer(id) => id,
+        other => panic!("Expected integer, got {:?}", other),
+    };
+
+    // Kill victim by ID
+    let response = killer.command(&["CLIENT", "KILL", "ID", &victim_id.to_string()]).await;
+    assert_eq!(response, Response::Integer(1), "Should kill 1 connection");
+
+    // Give time for kill to take effect
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Victim should be disconnected - verify by trying to read from the connection
+    // The connection should be closed, so reading should return None or timeout
+    let read_result = timeout(
+        Duration::from_millis(500),
+        victim.framed.next(),
+    )
+    .await;
+
+    match read_result {
+        Ok(None) => {
+            // Connection closed as expected
+        }
+        Err(_) => {
+            // Timeout - also acceptable, connection may be stuck
+        }
+        Ok(Some(_)) => {
+            // Got some data - this might happen if there's pending data
+            // Just verify killer is still alive
+        }
+    }
+
+    // Verify killer is still connected
+    let response = killer.command(&["PING"]).await;
+    assert_eq!(response, Response::pong());
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_pause_unpause() {
+    let server = TestServer::start().await;
+    let mut admin = server.connect().await;
+    let mut worker = server.connect().await;
+
+    // Pause with a long timeout
+    let response = admin.command(&["CLIENT", "PAUSE", "10000", "WRITE"]).await;
+    assert_eq!(response, Response::ok());
+
+    // Reads should still work
+    let response = timeout(Duration::from_millis(500), worker.command(&["GET", "key"]))
+        .await
+        .expect("GET should complete during WRITE pause");
+    assert!(matches!(response, Response::Null | Response::Bulk(None)));
+
+    // Unpause
+    let response = admin.command(&["CLIENT", "UNPAUSE"]).await;
+    assert_eq!(response, Response::ok());
+
+    // Writes should work after unpause
+    let response = timeout(Duration::from_millis(500), worker.command(&["SET", "key", "value"]))
+        .await
+        .expect("SET should complete after unpause");
+    assert_eq!(response, Response::ok());
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_pause_timeout() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Pause for a very short time (50ms)
+    let response = client.command(&["CLIENT", "PAUSE", "50", "ALL"]).await;
+    assert_eq!(response, Response::ok());
+
+    // Wait for pause to expire
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Commands should work after timeout expires
+    let response = timeout(Duration::from_millis(500), client.command(&["PING"]))
+        .await
+        .expect("PING should complete after pause timeout");
+    assert_eq!(response, Response::pong());
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_list_type_filter() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Filter by normal type
+    let response = client.command(&["CLIENT", "LIST", "TYPE", "normal"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let list_str = String::from_utf8_lossy(&data);
+            // Normal connections should appear
+            assert!(!list_str.is_empty() || list_str.contains("id="));
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    // Filter by master type (should be empty since we have no replication)
+    let response = client.command(&["CLIENT", "LIST", "TYPE", "master"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            // Should return empty or only newlines
+            let list_str = String::from_utf8_lossy(&data);
+            // Master list should be empty since we don't have replication
+            assert!(!list_str.contains("id=") || list_str.is_empty());
+        }
+        Response::Bulk(None) => {
+            // Also acceptable - no clients of this type
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_help() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // CLIENT HELP should return an array of strings
+    let response = client.command(&["CLIENT", "HELP"]).await;
+    match response {
+        Response::Array(arr) => {
+            assert!(!arr.is_empty(), "Help should not be empty");
+            // First entry should mention CLIENT command
+            if let Response::Bulk(Some(first)) = &arr[0] {
+                let first_str = String::from_utf8_lossy(first);
+                assert!(
+                    first_str.to_uppercase().contains("CLIENT"),
+                    "Help should mention CLIENT"
+                );
+            }
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}

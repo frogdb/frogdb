@@ -780,14 +780,14 @@ The following optimizations are deferred to a future phase:
 - [ ] `CONFIG SET` (mutable parameters)
 - [ ] Document mutable vs immutable parameters
 
-### 10.3 Client Commands
+### 10.3 Client Commands ✓
 
-- [ ] `CLIENT LIST`
-- [ ] `CLIENT ID`
-- [ ] `CLIENT SETNAME`, `CLIENT GETNAME`
-- [ ] `CLIENT KILL`
-- [ ] `CLIENT PAUSE`, `CLIENT UNPAUSE`
-- [ ] `CLIENT INFO`
+- [x] `CLIENT LIST`
+- [x] `CLIENT ID`
+- [x] `CLIENT SETNAME`, `CLIENT GETNAME`
+- [x] `CLIENT KILL`
+- [x] `CLIENT PAUSE`, `CLIENT UNPAUSE`
+- [x] `CLIENT INFO`
 
 ### 10.4 SLOWLOG
 
