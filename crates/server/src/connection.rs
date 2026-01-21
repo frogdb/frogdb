@@ -10,8 +10,8 @@ use bytes::{Bytes, BytesMut};
 use frogdb_core::{
     persistence::SnapshotCoordinator, shard_for_key, AclManager, AuthenticatedUser, ClientHandle,
     ClientRegistry, CommandCategory, CommandFlags, CommandRegistry, GlobPattern,
-    IntrospectionRequest, IntrospectionResponse, MetricsRecorder, PartialResult, PauseMode,
-    PubSubMessage, PubSubSender, ScatterOp, ShardMessage, StreamId, TransactionResult,
+    IntrospectionRequest, IntrospectionResponse, KeyAccessType, MetricsRecorder, PartialResult,
+    PauseMode, PubSubMessage, PubSubSender, ScatterOp, ShardMessage, StreamId, TransactionResult,
     MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
@@ -240,6 +240,18 @@ pub struct ConnectionHandler {
 
     /// Snapshot coordinator for BGSAVE/LASTSAVE commands.
     snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+}
+
+/// Determine key access type from command flags.
+fn key_access_type_for_flags(flags: CommandFlags) -> KeyAccessType {
+    if flags.contains(CommandFlags::READONLY) {
+        KeyAccessType::Read
+    } else if flags.contains(CommandFlags::WRITE) {
+        KeyAccessType::Write
+    } else {
+        // Commands with neither flag (admin commands, etc.) - check both
+        KeyAccessType::ReadWrite
+    }
 }
 
 /// Convert protocol BlockingOp to core BlockingOp.
@@ -610,6 +622,21 @@ impl ConnectionHandler {
             return vec![Response::error("NOAUTH Authentication required.")];
         }
 
+        // Check command ACL permission (for commands not routed to route_and_execute)
+        // Note: ACL command is exempt (users need ACL WHOAMI to check their identity)
+        if let Some(user) = self.state.auth.user() {
+            if cmd_name_str != "ACL" {
+                if !user.check_command(&cmd_name_str, None) {
+                    let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                    self.acl_manager.log().log_command_denied(&user.username, &client_info, &cmd_name_str);
+                    return vec![Response::error(format!(
+                        "NOPERM this user has no permissions to run the '{}' command",
+                        cmd_name_str.to_lowercase()
+                    ))];
+                }
+            }
+        }
+
         // Check pub/sub mode restrictions
         if self.state.pubsub.in_pubsub_mode() && !Self::is_allowed_in_pubsub_mode(&cmd_name_str) {
             return vec![Response::error(format!(
@@ -620,14 +647,111 @@ impl ConnectionHandler {
 
         // Handle pub/sub commands specially (they return multiple responses)
         match cmd_name_str.as_ref() {
-            "SUBSCRIBE" => return self.handle_subscribe(&cmd.args).await,
+            "SUBSCRIBE" => {
+                // Check channel permissions
+                if let Some(user) = self.state.auth.user() {
+                    for channel in &cmd.args {
+                        if !user.check_channel_access(channel) {
+                            let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                            let channel_str = String::from_utf8_lossy(channel);
+                            self.acl_manager.log().log_channel_denied(
+                                &user.username,
+                                &client_info,
+                                &channel_str,
+                            );
+                            return vec![Response::error(
+                                "NOPERM this user has no permissions to access one of the channels used as arguments"
+                            )];
+                        }
+                    }
+                }
+                return self.handle_subscribe(&cmd.args).await;
+            }
             "UNSUBSCRIBE" => return self.handle_unsubscribe(&cmd.args).await,
-            "PSUBSCRIBE" => return self.handle_psubscribe(&cmd.args).await,
+            "PSUBSCRIBE" => {
+                // Check channel permissions for patterns
+                if let Some(user) = self.state.auth.user() {
+                    for pattern in &cmd.args {
+                        if !user.check_channel_access(pattern) {
+                            let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                            let pattern_str = String::from_utf8_lossy(pattern);
+                            self.acl_manager.log().log_channel_denied(
+                                &user.username,
+                                &client_info,
+                                &pattern_str,
+                            );
+                            return vec![Response::error(
+                                "NOPERM this user has no permissions to access one of the channels used as arguments"
+                            )];
+                        }
+                    }
+                }
+                return self.handle_psubscribe(&cmd.args).await;
+            }
             "PUNSUBSCRIBE" => return self.handle_punsubscribe(&cmd.args).await,
-            "PUBLISH" => return vec![self.handle_publish(&cmd.args).await],
-            "SSUBSCRIBE" => return self.handle_ssubscribe(&cmd.args).await,
+            "PUBLISH" => {
+                // Check channel permission for the target channel
+                if let Some(user) = self.state.auth.user() {
+                    if !cmd.args.is_empty() {
+                        let channel = &cmd.args[0];
+                        if !user.check_channel_access(channel) {
+                            let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                            let channel_str = String::from_utf8_lossy(channel);
+                            self.acl_manager.log().log_channel_denied(
+                                &user.username,
+                                &client_info,
+                                &channel_str,
+                            );
+                            return vec![Response::error(
+                                "NOPERM this user has no permissions to access one of the channels used as arguments"
+                            )];
+                        }
+                    }
+                }
+                return vec![self.handle_publish(&cmd.args).await];
+            }
+            "SSUBSCRIBE" => {
+                // Check channel permissions for sharded channels
+                if let Some(user) = self.state.auth.user() {
+                    for channel in &cmd.args {
+                        if !user.check_channel_access(channel) {
+                            let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                            let channel_str = String::from_utf8_lossy(channel);
+                            self.acl_manager.log().log_channel_denied(
+                                &user.username,
+                                &client_info,
+                                &channel_str,
+                            );
+                            return vec![Response::error(
+                                "NOPERM this user has no permissions to access one of the channels used as arguments"
+                            )];
+                        }
+                    }
+                }
+                return self.handle_ssubscribe(&cmd.args).await;
+            }
             "SUNSUBSCRIBE" => return self.handle_sunsubscribe(&cmd.args).await,
-            "SPUBLISH" => return vec![self.handle_spublish(&cmd.args).await],
+            "SPUBLISH" => {
+                // Check channel permission for the target sharded channel
+                if let Some(user) = self.state.auth.user() {
+                    if !cmd.args.is_empty() {
+                        let channel = &cmd.args[0];
+                        if !user.check_channel_access(channel) {
+                            let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                            let channel_str = String::from_utf8_lossy(channel);
+                            self.acl_manager.log().log_channel_denied(
+                                &user.username,
+                                &client_info,
+                                &channel_str,
+                            );
+                            return vec![Response::error(
+                                "NOPERM this user has no permissions to access one of the channels used as arguments"
+                            )];
+                        }
+                    }
+                }
+                return vec![self.handle_spublish(&cmd.args).await];
+            }
             "PUBSUB" => return vec![self.handle_pubsub_command(&cmd.args).await],
             _ => {}
         }
@@ -1351,6 +1475,20 @@ impl ConnectionHandler {
         // Extract keys for same-slot validation
         let keys = handler.keys(&cmd.args);
 
+        // Check key permissions
+        if let Some(user) = self.state.auth.user() {
+            if !keys.is_empty() {
+                let access_type = key_access_type_for_flags(handler.flags());
+                for key in &keys {
+                    if !user.check_key_access(key, access_type) {
+                        return Response::error(
+                            "NOPERM this user has no permissions to access one of the keys used as arguments"
+                        );
+                    }
+                }
+            }
+        }
+
         // Check same-slot requirement
         for key in &keys {
             let shard = shard_for_key(key, self.num_shards);
@@ -1422,6 +1560,27 @@ impl ConnectionHandler {
 
         // Extract keys for routing
         let keys = handler.keys(&cmd.args);
+
+        // Check key permissions
+        if let Some(user) = self.state.auth.user() {
+            if !keys.is_empty() {
+                let access_type = key_access_type_for_flags(handler.flags());
+                for key in &keys {
+                    if !user.check_key_access(key, access_type) {
+                        let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                        let key_str = String::from_utf8_lossy(key);
+                        self.acl_manager.log().log_key_denied(
+                            &user.username,
+                            &client_info,
+                            &key_str,
+                        );
+                        return Response::error(
+                            "NOPERM this user has no permissions to access one of the keys used as arguments"
+                        );
+                    }
+                }
+            }
+        }
 
         // Keyless commands: execute on local shard
         if keys.is_empty() {

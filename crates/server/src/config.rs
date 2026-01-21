@@ -63,7 +63,7 @@ pub struct SecurityConfig {
 }
 
 /// ACL configuration.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AclFileConfig {
     /// Path to the ACL file for SAVE/LOAD operations.
     /// If empty, ACL SAVE/LOAD will return an error.
@@ -73,6 +73,15 @@ pub struct AclFileConfig {
     /// Maximum number of entries in the ACL LOG.
     #[serde(default = "default_acl_log_max_len")]
     pub log_max_len: usize,
+}
+
+impl Default for AclFileConfig {
+    fn default() -> Self {
+        Self {
+            aclfile: String::new(),
+            log_max_len: default_acl_log_max_len(),
+        }
+    }
 }
 
 fn default_acl_log_max_len() -> usize {

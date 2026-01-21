@@ -341,9 +341,10 @@ impl UserPermissions {
             return false;
         }
 
-        // Check denied categories
-        if let Some(category) = super::categories::CommandCategory::for_command(&cmd_lower) {
-            if self.denied_categories.contains(&category) && !self.allowed_commands.contains(&cmd_lower) {
+        // Check denied categories (check ALL categories a command belongs to)
+        let categories = super::categories::CommandCategory::all_for_command(&cmd_lower);
+        for category in &categories {
+            if self.denied_categories.contains(category) && !self.allowed_commands.contains(&cmd_lower) {
                 return false;
             }
         }
@@ -358,9 +359,9 @@ impl UserPermissions {
             return true;
         }
 
-        // Check allowed categories
-        if let Some(category) = super::categories::CommandCategory::for_command(&cmd_lower) {
-            if self.allowed_categories.contains(&category) {
+        // Check allowed categories (check ALL categories a command belongs to)
+        for category in &categories {
+            if self.allowed_categories.contains(category) {
                 return true;
             }
         }
