@@ -188,6 +188,30 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<Result<(), String>>,
     },
 
+    // =========================================================================
+    // Blocking commands messages
+    // =========================================================================
+
+    /// Register a blocking wait for keys.
+    BlockWait {
+        /// Connection ID of the blocked client.
+        conn_id: u64,
+        /// Keys to wait on.
+        keys: Vec<Bytes>,
+        /// The blocking operation type.
+        op: crate::types::BlockingOp,
+        /// Channel to send the response when data is available.
+        response_tx: oneshot::Sender<Response>,
+        /// Deadline for the blocking operation (None = indefinite).
+        deadline: Option<Instant>,
+    },
+
+    /// Cancel a blocking wait (timeout or disconnect).
+    UnregisterWait {
+        /// Connection ID to unregister.
+        conn_id: u64,
+    },
+
     /// Shutdown signal.
     Shutdown,
 }
@@ -311,6 +335,284 @@ impl TransactionQueue {
     }
 }
 
+// ============================================================================
+// Blocking commands wait queue infrastructure
+// ============================================================================
+
+use crate::types::{BlockingOp, Direction};
+use std::collections::{HashMap, VecDeque};
+
+/// Entry in the wait queue for blocking commands.
+pub struct WaitEntry {
+    /// Connection ID of the blocked client.
+    pub conn_id: u64,
+    /// Keys the client is waiting on.
+    pub keys: Vec<Bytes>,
+    /// The blocking operation type.
+    pub op: BlockingOp,
+    /// Channel to send the response when data is available.
+    pub response_tx: oneshot::Sender<Response>,
+    /// Deadline for the blocking operation (None = indefinite).
+    pub deadline: Option<Instant>,
+}
+
+impl std::fmt::Debug for WaitEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WaitEntry")
+            .field("conn_id", &self.conn_id)
+            .field("keys", &self.keys)
+            .field("op", &self.op)
+            .field("deadline", &self.deadline)
+            .finish()
+    }
+}
+
+/// Per-shard wait queue for blocked connections.
+///
+/// Maintains FIFO ordering per key - when a key gets data, the oldest
+/// waiter for that key is satisfied first.
+#[derive(Default)]
+pub struct ShardWaitQueue {
+    /// Waiters indexed by key. Each key maps to a list of entry indices (FIFO).
+    waiters_by_key: HashMap<Bytes, VecDeque<usize>>,
+    /// All wait entries indexed for O(1) access.
+    entries: Vec<Option<WaitEntry>>,
+    /// Free list of entry slot indices for reuse.
+    free_slots: Vec<usize>,
+    /// Index from conn_id to entry indices (for cleanup on disconnect).
+    conn_entries: HashMap<u64, Vec<usize>>,
+    /// Current number of active waiters.
+    waiter_count: usize,
+    /// Maximum waiters per key (0 = unlimited).
+    max_waiters_per_key: usize,
+    /// Maximum total blocked connections (0 = unlimited).
+    max_blocked_connections: usize,
+}
+
+impl ShardWaitQueue {
+    /// Create a new wait queue with default limits.
+    pub fn new() -> Self {
+        Self::with_limits(10000, 50000)
+    }
+
+    /// Create a new wait queue with specific limits.
+    pub fn with_limits(max_waiters_per_key: usize, max_blocked_connections: usize) -> Self {
+        Self {
+            waiters_by_key: HashMap::new(),
+            entries: Vec::new(),
+            free_slots: Vec::new(),
+            conn_entries: HashMap::new(),
+            waiter_count: 0,
+            max_waiters_per_key,
+            max_blocked_connections,
+        }
+    }
+
+    /// Register a new waiter.
+    ///
+    /// Returns Ok(()) if registered, Err with message if limits exceeded.
+    pub fn register(&mut self, entry: WaitEntry) -> Result<(), String> {
+        // Check global limit
+        if self.max_blocked_connections > 0 && self.waiter_count >= self.max_blocked_connections {
+            return Err("ERR max blocked connections limit reached".to_string());
+        }
+
+        // Check per-key limits
+        if self.max_waiters_per_key > 0 {
+            for key in &entry.keys {
+                if let Some(waiters) = self.waiters_by_key.get(key) {
+                    if waiters.len() >= self.max_waiters_per_key {
+                        return Err("ERR max waiters per key limit reached".to_string());
+                    }
+                }
+            }
+        }
+
+        let conn_id = entry.conn_id;
+        let keys = entry.keys.clone();
+
+        // Allocate a slot for the entry
+        let slot_idx = if let Some(idx) = self.free_slots.pop() {
+            self.entries[idx] = Some(entry);
+            idx
+        } else {
+            let idx = self.entries.len();
+            self.entries.push(Some(entry));
+            idx
+        };
+
+        // Index by each key
+        for key in &keys {
+            self.waiters_by_key
+                .entry(key.clone())
+                .or_default()
+                .push_back(slot_idx);
+        }
+
+        // Index by connection ID
+        self.conn_entries
+            .entry(conn_id)
+            .or_default()
+            .push(slot_idx);
+
+        self.waiter_count += 1;
+        Ok(())
+    }
+
+    /// Unregister all waiters for a connection (called on disconnect or timeout).
+    ///
+    /// Returns the entries that were removed.
+    pub fn unregister(&mut self, conn_id: u64) -> Vec<WaitEntry> {
+        let entry_indices = match self.conn_entries.remove(&conn_id) {
+            Some(indices) => indices,
+            None => return vec![],
+        };
+
+        let mut removed = Vec::new();
+
+        for idx in entry_indices {
+            if let Some(entry) = self.entries[idx].take() {
+                // Remove from key index
+                for key in &entry.keys {
+                    if let Some(waiters) = self.waiters_by_key.get_mut(key) {
+                        waiters.retain(|&i| i != idx);
+                        if waiters.is_empty() {
+                            self.waiters_by_key.remove(key);
+                        }
+                    }
+                }
+
+                self.free_slots.push(idx);
+                self.waiter_count -= 1;
+                removed.push(entry);
+            }
+        }
+
+        removed
+    }
+
+    /// Pop the oldest waiter for a key.
+    ///
+    /// Returns the WaitEntry if one exists, None otherwise.
+    pub fn pop_oldest_waiter(&mut self, key: &Bytes) -> Option<WaitEntry> {
+        // First, find and extract the entry without holding any borrows
+        let (idx, entry) = {
+            let waiters = self.waiters_by_key.get_mut(key)?;
+
+            loop {
+                let idx = waiters.pop_front()?;
+                if let Some(entry) = self.entries[idx].take() {
+                    break (idx, entry);
+                }
+                // Entry was already removed, continue to next
+            }
+        };
+
+        // Collect other keys to clean up (excluding the current key)
+        let other_keys: Vec<Bytes> = entry.keys.iter()
+            .filter(|k| *k != key)
+            .cloned()
+            .collect();
+
+        // Remove from all other key indices
+        for k in &other_keys {
+            if let Some(w) = self.waiters_by_key.get_mut(k) {
+                w.retain(|&i| i != idx);
+                if w.is_empty() {
+                    self.waiters_by_key.remove(k);
+                }
+            }
+        }
+
+        // Remove from conn_entries
+        if let Some(conn_entries) = self.conn_entries.get_mut(&entry.conn_id) {
+            conn_entries.retain(|&i| i != idx);
+            if conn_entries.is_empty() {
+                self.conn_entries.remove(&entry.conn_id);
+            }
+        }
+
+        self.free_slots.push(idx);
+        self.waiter_count -= 1;
+
+        // Clean up empty key entry for the primary key
+        if let Some(waiters) = self.waiters_by_key.get(key) {
+            if waiters.is_empty() {
+                self.waiters_by_key.remove(key);
+            }
+        }
+
+        Some(entry)
+    }
+
+    /// Collect all expired waiters (deadline has passed).
+    ///
+    /// Returns the expired WaitEntry objects.
+    pub fn collect_expired(&mut self, now: Instant) -> Vec<WaitEntry> {
+        let mut expired_indices = Vec::new();
+
+        // Find all expired entries
+        for (idx, entry) in self.entries.iter().enumerate() {
+            if let Some(ref e) = entry {
+                if let Some(deadline) = e.deadline {
+                    if deadline <= now {
+                        expired_indices.push(idx);
+                    }
+                }
+            }
+        }
+
+        let mut expired = Vec::new();
+
+        // Remove expired entries
+        for idx in expired_indices {
+            if let Some(entry) = self.entries[idx].take() {
+                // Remove from key index
+                for key in &entry.keys {
+                    if let Some(waiters) = self.waiters_by_key.get_mut(key) {
+                        waiters.retain(|&i| i != idx);
+                        if waiters.is_empty() {
+                            self.waiters_by_key.remove(key);
+                        }
+                    }
+                }
+
+                // Remove from conn_entries
+                if let Some(conn_entries) = self.conn_entries.get_mut(&entry.conn_id) {
+                    conn_entries.retain(|&i| i != idx);
+                    if conn_entries.is_empty() {
+                        self.conn_entries.remove(&entry.conn_id);
+                    }
+                }
+
+                self.free_slots.push(idx);
+                self.waiter_count -= 1;
+                expired.push(entry);
+            }
+        }
+
+        expired
+    }
+
+    /// Check if there are any waiters for a key.
+    pub fn has_waiters(&self, key: &Bytes) -> bool {
+        self.waiters_by_key
+            .get(key)
+            .map(|w| !w.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Get the number of active waiters.
+    pub fn waiter_count(&self) -> usize {
+        self.waiter_count
+    }
+
+    /// Get the number of keys with waiters.
+    pub fn blocked_keys_count(&self) -> usize {
+        self.waiters_by_key.len()
+    }
+}
+
 /// New connection to be handled by a shard.
 pub struct NewConnection {
     /// The TCP socket.
@@ -387,6 +689,9 @@ pub struct ShardWorker {
 
     /// Peak memory usage for this shard (high-water mark).
     peak_memory: u64,
+
+    /// Wait queue for blocking commands.
+    wait_queue: ShardWaitQueue,
 }
 
 impl ShardWorker {
@@ -455,6 +760,7 @@ impl ShardWorker {
             memory_limit,
             metrics_recorder,
             peak_memory: 0,
+            wait_queue: ShardWaitQueue::new(),
         }
     }
 
@@ -514,6 +820,7 @@ impl ShardWorker {
             memory_limit,
             metrics_recorder,
             peak_memory: 0,
+            wait_queue: ShardWaitQueue::new(),
         }
     }
 
@@ -551,6 +858,9 @@ impl ShardWorker {
 
         // Metrics collection runs every 10 seconds
         let mut metrics_interval = tokio::time::interval(Duration::from_secs(10));
+
+        // Blocking waiter timeout check runs every 100ms
+        let mut waiter_timeout_interval = tokio::time::interval(Duration::from_millis(100));
 
         loop {
             tokio::select! {
@@ -645,6 +955,14 @@ impl ShardWorker {
                             let _ = response_tx.send(result);
                         }
 
+                        // Blocking commands handlers
+                        ShardMessage::BlockWait { conn_id, keys, op, response_tx, deadline } => {
+                            self.handle_block_wait(conn_id, keys, op, response_tx, deadline);
+                        }
+                        ShardMessage::UnregisterWait { conn_id } => {
+                            self.handle_unregister_wait(conn_id);
+                        }
+
                         ShardMessage::Shutdown => {
                             tracing::info!(shard_id = self.shard_id, "Shard worker shutting down");
                             // Flush WAL before shutdown
@@ -666,6 +984,11 @@ impl ShardWorker {
                 // Periodic metrics collection
                 _ = metrics_interval.tick() => {
                     self.collect_shard_metrics();
+                }
+
+                // Blocking waiter timeout check
+                _ = waiter_timeout_interval.tick() => {
+                    self.check_waiter_timeouts();
                 }
 
                 else => break,
@@ -1144,6 +1467,26 @@ impl ShardWorker {
         // Increment version on write operations
         if is_write {
             self.increment_version();
+
+            // Try to satisfy any blocking waiters after list/zset write operations
+            let keys = handler.keys(&command.args);
+            match cmd_name_str.as_ref() {
+                // List push commands that may satisfy BLPOP/BRPOP/BLMOVE/BLMPOP waiters
+                "LPUSH" | "RPUSH" | "LPUSHX" | "RPUSHX" | "LINSERT" => {
+                    for key in keys {
+                        let key_bytes = Bytes::copy_from_slice(key);
+                        self.try_satisfy_list_waiters(&key_bytes);
+                    }
+                }
+                // Sorted set commands that may satisfy BZPOPMIN/BZPOPMAX/BZMPOP waiters
+                "ZADD" => {
+                    for key in keys {
+                        let key_bytes = Bytes::copy_from_slice(key);
+                        self.try_satisfy_zset_waiters(&key_bytes);
+                    }
+                }
+                _ => {}
+            }
         }
 
         response
@@ -1517,6 +1860,408 @@ impl ShardWorker {
                 executor.kill_script().map_err(|e| e.to_string())
             }
             None => Err("ERR scripting not available".to_string()),
+        }
+    }
+
+    // =========================================================================
+    // Blocking commands helpers
+    // =========================================================================
+
+    /// Handle a blocking wait request.
+    fn handle_block_wait(
+        &mut self,
+        conn_id: u64,
+        keys: Vec<Bytes>,
+        op: crate::types::BlockingOp,
+        response_tx: oneshot::Sender<Response>,
+        deadline: Option<Instant>,
+    ) {
+        let entry = WaitEntry {
+            conn_id,
+            keys,
+            op,
+            response_tx,
+            deadline,
+        };
+
+        if let Err(e) = self.wait_queue.register(entry) {
+            tracing::warn!(
+                shard_id = self.shard_id,
+                conn_id = conn_id,
+                error = %e,
+                "Failed to register blocking wait"
+            );
+            // The response_tx was moved into entry, so we can't send an error back here.
+            // The client will timeout.
+        } else {
+            tracing::trace!(
+                shard_id = self.shard_id,
+                conn_id = conn_id,
+                "Registered blocking wait"
+            );
+
+            // Update blocked clients metric
+            let shard_label = self.shard_id.to_string();
+            self.metrics_recorder.record_gauge(
+                "frogdb_blocked_clients",
+                self.wait_queue.waiter_count() as f64,
+                &[("shard", &shard_label)],
+            );
+        }
+    }
+
+    /// Handle unregistering a blocking wait (disconnect or explicit cancel).
+    fn handle_unregister_wait(&mut self, conn_id: u64) {
+        let removed = self.wait_queue.unregister(conn_id);
+        if !removed.is_empty() {
+            tracing::trace!(
+                shard_id = self.shard_id,
+                conn_id = conn_id,
+                count = removed.len(),
+                "Unregistered blocking waits on disconnect"
+            );
+
+            // Update blocked clients metric
+            let shard_label = self.shard_id.to_string();
+            self.metrics_recorder.record_gauge(
+                "frogdb_blocked_clients",
+                self.wait_queue.waiter_count() as f64,
+                &[("shard", &shard_label)],
+            );
+        }
+    }
+
+    /// Check for expired blocking waits and send nil responses.
+    fn check_waiter_timeouts(&mut self) {
+        let now = Instant::now();
+        let expired = self.wait_queue.collect_expired(now);
+
+        if !expired.is_empty() {
+            let shard_label = self.shard_id.to_string();
+
+            for entry in expired {
+                tracing::trace!(
+                    shard_id = self.shard_id,
+                    conn_id = entry.conn_id,
+                    "Blocking wait timed out"
+                );
+
+                // Send nil response for timeout
+                let _ = entry.response_tx.send(Response::Null);
+
+                // Increment timeout counter
+                self.metrics_recorder.increment_counter(
+                    "frogdb_blocked_timeout_total",
+                    1,
+                    &[("shard", &shard_label)],
+                );
+            }
+
+            // Update blocked clients gauge
+            self.metrics_recorder.record_gauge(
+                "frogdb_blocked_clients",
+                self.wait_queue.waiter_count() as f64,
+                &[("shard", &shard_label)],
+            );
+        }
+    }
+
+    /// Check if a list key has non-empty data.
+    fn list_is_non_empty(&self, key: &Bytes) -> bool {
+        use crate::store::Store;
+        if let Some(value) = self.store.get(key) {
+            if let Some(list) = value.as_list() {
+                return !list.is_empty();
+            }
+        }
+        false
+    }
+
+    /// Check if a sorted set key has non-empty data.
+    fn zset_is_non_empty(&self, key: &Bytes) -> bool {
+        use crate::store::Store;
+        if let Some(value) = self.store.get(key) {
+            if let Some(zset) = value.as_sorted_set() {
+                return !zset.is_empty();
+            }
+        }
+        false
+    }
+
+    /// Clean up an empty list key.
+    fn cleanup_empty_list(&mut self, key: &Bytes) {
+        use crate::store::Store;
+        if let Some(value) = self.store.get(key) {
+            if let Some(list) = value.as_list() {
+                if list.is_empty() {
+                    self.store.delete(key);
+                }
+            }
+        }
+    }
+
+    /// Clean up an empty sorted set key.
+    fn cleanup_empty_zset(&mut self, key: &Bytes) {
+        use crate::store::Store;
+        if let Some(value) = self.store.get(key) {
+            if let Some(zset) = value.as_sorted_set() {
+                if zset.is_empty() {
+                    self.store.delete(key);
+                }
+            }
+        }
+    }
+
+    /// Try to satisfy list waiters after a list write operation.
+    ///
+    /// Called after LPUSH, RPUSH, LPUSHX, RPUSHX operations.
+    pub fn try_satisfy_list_waiters(&mut self, key: &Bytes) {
+        use crate::store::Store;
+        use crate::types::BlockingOp;
+
+        while self.wait_queue.has_waiters(key) {
+            // Check if the list has data
+            let has_data = self.list_is_non_empty(key);
+
+            if !has_data {
+                break;
+            }
+
+            // Pop the oldest waiter
+            let entry = match self.wait_queue.pop_oldest_waiter(key) {
+                Some(e) => e,
+                None => break,
+            };
+
+            // Execute the blocking operation
+            let response = match &entry.op {
+                BlockingOp::BLPop => {
+                    // Pop from left and return [key, value]
+                    if let Some(value) = self.store.get_mut(key).and_then(|v| v.as_list_mut()).and_then(|l| l.pop_front()) {
+                        // Clean up empty list
+                        self.cleanup_empty_list(key);
+                        self.increment_version();
+                        Response::Array(vec![
+                            Response::bulk(key.clone()),
+                            Response::bulk(value),
+                        ])
+                    } else {
+                        continue; // List became empty, try next waiter
+                    }
+                }
+                BlockingOp::BRPop => {
+                    // Pop from right and return [key, value]
+                    if let Some(value) = self.store.get_mut(key).and_then(|v| v.as_list_mut()).and_then(|l| l.pop_back()) {
+                        // Clean up empty list
+                        self.cleanup_empty_list(key);
+                        self.increment_version();
+                        Response::Array(vec![
+                            Response::bulk(key.clone()),
+                            Response::bulk(value),
+                        ])
+                    } else {
+                        continue;
+                    }
+                }
+                BlockingOp::BLMove { dest, src_dir, dest_dir } => {
+                    // Pop from source direction
+                    let value = match src_dir {
+                        Direction::Left => self.store.get_mut(key).and_then(|v| v.as_list_mut()).and_then(|l| l.pop_front()),
+                        Direction::Right => self.store.get_mut(key).and_then(|v| v.as_list_mut()).and_then(|l| l.pop_back()),
+                    };
+
+                    if let Some(value) = value {
+                        // Clean up empty source list
+                        self.cleanup_empty_list(key);
+
+                        // Push to destination
+                        // Get or create dest list
+                        if self.store.get(dest).is_none() {
+                            self.store.set(dest.clone(), crate::types::Value::list());
+                        }
+
+                        if let Some(dest_list) = self.store.get_mut(dest).and_then(|v| v.as_list_mut()) {
+                            match dest_dir {
+                                Direction::Left => dest_list.push_front(value.clone()),
+                                Direction::Right => dest_list.push_back(value.clone()),
+                            }
+                        }
+
+                        self.increment_version();
+                        Response::bulk(value)
+                    } else {
+                        continue;
+                    }
+                }
+                BlockingOp::BLMPop { direction, count } => {
+                    let mut elements = Vec::new();
+                    if let Some(list) = self.store.get_mut(key).and_then(|v| v.as_list_mut()) {
+                        for _ in 0..*count {
+                            let elem = match direction {
+                                Direction::Left => list.pop_front(),
+                                Direction::Right => list.pop_back(),
+                            };
+                            match elem {
+                                Some(e) => elements.push(Response::bulk(e)),
+                                None => break,
+                            }
+                        }
+                    }
+
+                    if elements.is_empty() {
+                        continue;
+                    }
+
+                    // Clean up empty list
+                    self.cleanup_empty_list(key);
+
+                    self.increment_version();
+                    Response::Array(vec![
+                        Response::bulk(key.clone()),
+                        Response::Array(elements),
+                    ])
+                }
+                _ => continue, // Not a list operation
+            };
+
+            // Send response
+            let _ = entry.response_tx.send(response);
+
+            // Increment satisfied counter
+            let shard_label = self.shard_id.to_string();
+            self.metrics_recorder.increment_counter(
+                "frogdb_blocked_satisfied_total",
+                1,
+                &[("shard", &shard_label)],
+            );
+
+            // Update blocked clients gauge
+            self.metrics_recorder.record_gauge(
+                "frogdb_blocked_clients",
+                self.wait_queue.waiter_count() as f64,
+                &[("shard", &shard_label)],
+            );
+        }
+    }
+
+    /// Try to satisfy sorted set waiters after a sorted set write operation.
+    ///
+    /// Called after ZADD operations.
+    pub fn try_satisfy_zset_waiters(&mut self, key: &Bytes) {
+        use crate::store::Store;
+        use crate::types::BlockingOp;
+
+        while self.wait_queue.has_waiters(key) {
+            // Check if the zset has data
+            let has_data = self.zset_is_non_empty(key);
+
+            if !has_data {
+                break;
+            }
+
+            // Pop the oldest waiter
+            let entry = match self.wait_queue.pop_oldest_waiter(key) {
+                Some(e) => e,
+                None => break,
+            };
+
+            // Execute the blocking operation
+            let response = match &entry.op {
+                BlockingOp::BZPopMin => {
+                    // Pop minimum element
+                    if let Some(zset) = self.store.get_mut(key).and_then(|v| v.as_sorted_set_mut()) {
+                        let popped = zset.pop_min(1);
+                        let is_empty = zset.is_empty();
+                        if let Some((member, score)) = popped.into_iter().next() {
+                            // Clean up empty zset
+                            if is_empty {
+                                self.store.delete(key);
+                            }
+                            self.increment_version();
+                            Response::Array(vec![
+                                Response::bulk(key.clone()),
+                                Response::bulk(member),
+                                Response::bulk(Bytes::from(score.to_string())),
+                            ])
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+                BlockingOp::BZPopMax => {
+                    // Pop maximum element
+                    if let Some(zset) = self.store.get_mut(key).and_then(|v| v.as_sorted_set_mut()) {
+                        let popped = zset.pop_max(1);
+                        let is_empty = zset.is_empty();
+                        if let Some((member, score)) = popped.into_iter().next() {
+                            // Clean up empty zset
+                            if is_empty {
+                                self.store.delete(key);
+                            }
+                            self.increment_version();
+                            Response::Array(vec![
+                                Response::bulk(key.clone()),
+                                Response::bulk(member),
+                                Response::bulk(Bytes::from(score.to_string())),
+                            ])
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+                BlockingOp::BZMPop { min, count } => {
+                    let mut elements = Vec::new();
+                    if let Some(zset) = self.store.get_mut(key).and_then(|v| v.as_sorted_set_mut()) {
+                        let popped = if *min {
+                            zset.pop_min(*count)
+                        } else {
+                            zset.pop_max(*count)
+                        };
+                        for (member, score) in popped {
+                            elements.push(Response::Array(vec![
+                                Response::bulk(member),
+                                Response::bulk(Bytes::from(score.to_string())),
+                            ]));
+                        }
+                    }
+
+                    if elements.is_empty() {
+                        continue;
+                    }
+
+                    // Clean up empty zset
+                    self.cleanup_empty_zset(key);
+
+                    self.increment_version();
+                    Response::Array(vec![
+                        Response::bulk(key.clone()),
+                        Response::Array(elements),
+                    ])
+                }
+                _ => continue, // Not a zset operation
+            };
+
+            // Send response
+            let _ = entry.response_tx.send(response);
+
+            // Increment satisfied counter
+            let shard_label = self.shard_id.to_string();
+            self.metrics_recorder.increment_counter(
+                "frogdb_blocked_satisfied_total",
+                1,
+                &[("shard", &shard_label)],
+            );
+
+            // Update blocked clients gauge
+            self.metrics_recorder.record_gauge(
+                "frogdb_blocked_clients",
+                self.wait_queue.waiter_count() as f64,
+                &[("shard", &shard_label)],
+            );
         }
     }
 }

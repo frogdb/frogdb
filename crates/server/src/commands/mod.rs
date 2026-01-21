@@ -6,6 +6,7 @@
 pub mod acl;
 pub mod auth;
 pub mod bitmap;
+pub mod blocking;
 pub mod bloom;
 pub mod client;
 pub mod config;
@@ -28,6 +29,7 @@ pub mod transaction;
 pub use acl::*;
 pub use auth::*;
 pub use bitmap::*;
+pub use blocking::*;
 pub use bloom::*;
 pub use client::*;
 pub use config::*;

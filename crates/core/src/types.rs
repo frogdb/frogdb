@@ -509,6 +509,62 @@ impl KeyType {
     }
 }
 
+/// Direction for list operations (BLPOP, BRPOP, BLMOVE, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// Pop/push from the left (front).
+    Left,
+    /// Pop/push from the right (back).
+    Right,
+}
+
+impl Direction {
+    /// Parse direction from bytes (LEFT or RIGHT).
+    pub fn parse(arg: &[u8]) -> Option<Self> {
+        match arg.to_ascii_uppercase().as_slice() {
+            b"LEFT" => Some(Direction::Left),
+            b"RIGHT" => Some(Direction::Right),
+            _ => None,
+        }
+    }
+}
+
+/// Blocking operation type for wait queue entries.
+#[derive(Debug, Clone)]
+pub enum BlockingOp {
+    /// BLPOP operation.
+    BLPop,
+    /// BRPOP operation.
+    BRPop,
+    /// BLMOVE operation.
+    BLMove {
+        /// Destination key.
+        dest: Bytes,
+        /// Source direction (where to pop from).
+        src_dir: Direction,
+        /// Destination direction (where to push to).
+        dest_dir: Direction,
+    },
+    /// BLMPOP operation.
+    BLMPop {
+        /// Pop direction.
+        direction: Direction,
+        /// Number of elements to pop.
+        count: usize,
+    },
+    /// BZPOPMIN operation.
+    BZPopMin,
+    /// BZPOPMAX operation.
+    BZPopMax,
+    /// BZMPOP operation.
+    BZMPop {
+        /// Whether to pop minimum (true) or maximum (false).
+        min: bool,
+        /// Number of elements to pop.
+        count: usize,
+    },
+}
+
 /// Metadata tracked per key.
 #[derive(Debug, Clone)]
 pub struct KeyMetadata {

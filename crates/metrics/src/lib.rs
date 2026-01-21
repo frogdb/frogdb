@@ -81,6 +81,12 @@ pub mod metric_names {
     pub const EVICTION_BYTES_TOTAL: &str = "frogdb_eviction_bytes_total";
     pub const EVICTION_SAMPLES_TOTAL: &str = "frogdb_eviction_samples_total";
     pub const EVICTION_OOM_TOTAL: &str = "frogdb_eviction_oom_total";
+
+    // Blocking commands metrics
+    pub const BLOCKED_CLIENTS: &str = "frogdb_blocked_clients";
+    pub const BLOCKED_KEYS: &str = "frogdb_blocked_keys";
+    pub const BLOCKED_TIMEOUT_TOTAL: &str = "frogdb_blocked_timeout_total";
+    pub const BLOCKED_SATISFIED_TOTAL: &str = "frogdb_blocked_satisfied_total";
 }
 
 /// Create a metrics recorder based on configuration.

@@ -39,6 +39,10 @@ pub struct Config {
     /// ACL configuration.
     #[serde(default)]
     pub acl: AclFileConfig,
+
+    /// Blocking commands configuration.
+    #[serde(default)]
+    pub blocking: BlockingConfig,
 }
 
 /// Security configuration.
@@ -65,6 +69,35 @@ pub struct AclFileConfig {
 
 fn default_acl_log_max_len() -> usize {
     128
+}
+
+/// Blocking commands configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BlockingConfig {
+    /// Maximum waiters per key (0 = unlimited).
+    #[serde(default = "default_max_waiters_per_key")]
+    pub max_waiters_per_key: usize,
+
+    /// Maximum total blocked connections (0 = unlimited).
+    #[serde(default = "default_max_blocked_connections")]
+    pub max_blocked_connections: usize,
+}
+
+fn default_max_waiters_per_key() -> usize {
+    10000
+}
+
+fn default_max_blocked_connections() -> usize {
+    50000
+}
+
+impl Default for BlockingConfig {
+    fn default() -> Self {
+        Self {
+            max_waiters_per_key: default_max_waiters_per_key(),
+            max_blocked_connections: default_max_blocked_connections(),
+        }
+    }
 }
 
 /// Metrics configuration.
