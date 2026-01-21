@@ -524,15 +524,15 @@ Implementation:
   - [ ] Sync (fsync every write)
 - [ ] Hook into command execution (write commands append to WAL)
 
-### 5.4 Recovery
+### 5.4 Recovery ✓
 
-- [ ] Startup recovery sequence:
-  - [ ] Detect existing data directory
-  - [ ] Load from RocksDB column families
-  - [ ] Rebuild in-memory stores
-  - [ ] Rebuild expiry indexes
-- [ ] Skip expired keys on load
-- [ ] Log recovery statistics
+- [x] Startup recovery sequence:
+  - [x] Detect existing data directory
+  - [x] Load from RocksDB column families
+  - [x] Rebuild in-memory stores
+  - [x] Rebuild expiry indexes
+- [x] Skip expired keys on load
+- [x] Log recovery statistics
 
 ### 5.5 Snapshots
 
