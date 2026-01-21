@@ -71,6 +71,14 @@ pub mod metric_names {
     // Network metrics
     pub const NET_INPUT_BYTES: &str = "frogdb_net_input_bytes_total";
     pub const NET_OUTPUT_BYTES: &str = "frogdb_net_output_bytes_total";
+
+    // Memory/Eviction metrics
+    pub const MEMORY_USED_BYTES: &str = "frogdb_memory_used_bytes";
+    pub const MEMORY_MAXMEMORY_BYTES: &str = "frogdb_memory_maxmemory_bytes";
+    pub const EVICTION_KEYS_TOTAL: &str = "frogdb_eviction_keys_total";
+    pub const EVICTION_BYTES_TOTAL: &str = "frogdb_eviction_bytes_total";
+    pub const EVICTION_SAMPLES_TOTAL: &str = "frogdb_eviction_samples_total";
+    pub const EVICTION_OOM_TOTAL: &str = "frogdb_eviction_oom_total";
 }
 
 /// Create a metrics recorder based on configuration.

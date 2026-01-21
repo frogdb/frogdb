@@ -5,6 +5,7 @@
 
 pub mod command;
 pub mod error;
+pub mod eviction;
 pub mod glob;
 pub mod noop;
 pub mod persistence;
@@ -47,5 +48,10 @@ pub use types::{
 pub use scripting::{
     CachedScript, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig, ScriptRoute,
     ScriptRouter, SingleShardRouter, LuaVm,
+};
+pub use eviction::{
+    EvictionConfig, EvictionPolicy, EvictionPool, EvictionCandidate,
+    lfu_log_incr, lfu_decay, DEFAULT_MAXMEMORY_SAMPLES, DEFAULT_LFU_LOG_FACTOR,
+    DEFAULT_LFU_DECAY_TIME, EVICTION_POOL_SIZE,
 };
 pub use glob::glob_match;

@@ -6,6 +6,7 @@
 
 use bytes::Bytes;
 use griddle::HashMap;
+use rand::seq::IteratorRandom;
 use std::collections::BTreeMap;
 use std::time::Instant;
 
@@ -282,12 +283,17 @@ impl ExpiryIndex {
         expired
     }
 
-    /// Sample up to N keys that have expiry set.
+    /// Sample up to N random keys that have expiry set.
     ///
-    /// Used for probabilistic active expiry (Redis-style).
-    /// Returns keys in no particular order.
+    /// Used for probabilistic active expiry (Redis-style) and volatile eviction.
+    /// Returns keys in random order.
     pub fn sample(&self, n: usize) -> Vec<Bytes> {
-        self.by_key.keys().take(n).cloned().collect()
+        if self.by_key.is_empty() || n == 0 {
+            return vec![];
+        }
+
+        let mut rng = rand::thread_rng();
+        self.by_key.keys().choose_multiple(&mut rng, n).into_iter().cloned().collect()
     }
 
     /// Number of keys with expiry set.

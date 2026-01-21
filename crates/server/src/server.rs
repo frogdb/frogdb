@@ -6,7 +6,7 @@ use frogdb_core::persistence::{
     RocksConfig, RocksStore, SnapshotCoordinator, WalConfig,
 };
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
-use frogdb_core::{CommandRegistry, MetricsRecorder, ShardMessage, ShardWorker};
+use frogdb_core::{CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, ShardMessage, ShardWorker};
 use frogdb_metrics::{HealthChecker, MetricsServer, PrometheusRecorder, SystemMetricsCollector};
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::acceptor::Acceptor;
-use crate::config::{Config, PersistenceConfig};
+use crate::config::{Config, MemoryConfig, PersistenceConfig};
 
 /// Channel capacity for shard message queues.
 const SHARD_CHANNEL_CAPACITY: usize = 1024;
@@ -170,6 +170,9 @@ impl Server {
         let mut shard_handles = Vec::with_capacity(num_shards);
         let wal_config = build_wal_config(&config.persistence);
 
+        // Build eviction config from memory settings
+        let eviction_config = build_eviction_config(&config.memory);
+
         // Convert recovered stores to an iterator if available
         let mut recovered_iter = recovered_stores.map(|v| v.into_iter());
 
@@ -196,15 +199,17 @@ impl Server {
                     rocks.clone(),
                     wal_config.clone(),
                     snapshot_coordinator.clone(),
+                    eviction_config.clone(),
                 )
             } else {
-                ShardWorker::new(
+                ShardWorker::with_eviction(
                     shard_id,
                     num_shards,
                     msg_rx,
                     conn_rx,
                     shard_senders.clone(),
                     registry.clone(),
+                    eviction_config.clone(),
                 )
             };
 
@@ -441,6 +446,28 @@ fn build_wal_config(config: &PersistenceConfig) -> WalConfig {
         mode,
         batch_size_threshold: config.batch_size_threshold_kb * 1024,
         batch_timeout_ms: config.batch_timeout_ms,
+    }
+}
+
+/// Build eviction config from memory config.
+fn build_eviction_config(config: &MemoryConfig) -> EvictionConfig {
+    let policy = config
+        .maxmemory_policy
+        .parse::<EvictionPolicy>()
+        .unwrap_or_else(|_| {
+            warn!(
+                policy = %config.maxmemory_policy,
+                "Unknown eviction policy, using noeviction"
+            );
+            EvictionPolicy::NoEviction
+        });
+
+    EvictionConfig {
+        maxmemory: config.maxmemory,
+        policy,
+        maxmemory_samples: config.maxmemory_samples,
+        lfu_log_factor: config.lfu_log_factor,
+        lfu_decay_time: config.lfu_decay_time,
     }
 }
 
