@@ -7,6 +7,7 @@ pub mod command;
 pub mod error;
 pub mod noop;
 pub mod persistence;
+pub mod pubsub;
 pub mod registry;
 pub mod shard;
 pub mod store;
@@ -27,6 +28,11 @@ pub use persistence::{
     WalConfig, HEADER_SIZE,
 };
 pub use registry::CommandRegistry;
+pub use pubsub::{
+    ConnId, GlobPattern, IntrospectionRequest, IntrospectionResponse, PubSubMessage, PubSubSender,
+    ShardSubscriptions, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SUBSCRIPTIONS_PER_CONNECTION,
+};
 pub use shard::{
     shard_for_key, slot_for_key, PartialResult, ScatterOp, ShardMessage, ShardWorker,
     TransactionResult, REDIS_CLUSTER_SLOTS,

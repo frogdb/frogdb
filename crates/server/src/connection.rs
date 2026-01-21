@@ -1,13 +1,18 @@
 //! Connection handling.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, CommandRegistry, PartialResult, ScatterOp, ShardMessage, TransactionResult};
+use frogdb_core::{
+    shard_for_key, CommandRegistry, GlobPattern, IntrospectionRequest, IntrospectionResponse,
+    PartialResult, PubSubMessage, PubSubSender, ScatterOp, ShardMessage, TransactionResult,
+    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SUBSCRIPTIONS_PER_CONNECTION,
+};
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use futures::{SinkExt, StreamExt};
 use redis_protocol::bytes_utils::Str;
@@ -47,6 +52,36 @@ pub struct TransactionState {
     pub queued_errors: Vec<String>,
 }
 
+/// Pub/Sub state for a connection.
+#[derive(Debug, Default)]
+pub struct PubSubState {
+    /// Broadcast channel subscriptions.
+    pub subscriptions: HashSet<Bytes>,
+    /// Pattern subscriptions.
+    pub patterns: HashSet<Bytes>,
+    /// Sharded channel subscriptions.
+    pub sharded_subscriptions: HashSet<Bytes>,
+}
+
+impl PubSubState {
+    /// Check if connection is in pub/sub mode.
+    pub fn in_pubsub_mode(&self) -> bool {
+        !self.subscriptions.is_empty()
+            || !self.patterns.is_empty()
+            || !self.sharded_subscriptions.is_empty()
+    }
+
+    /// Get total subscription count.
+    pub fn total_count(&self) -> usize {
+        self.subscriptions.len() + self.patterns.len() + self.sharded_subscriptions.len()
+    }
+
+    /// Get subscription count (channels + patterns, not sharded).
+    pub fn sub_count(&self) -> usize {
+        self.subscriptions.len() + self.patterns.len()
+    }
+}
+
 /// Connection state.
 #[allow(dead_code)]
 pub struct ConnectionState {
@@ -67,6 +102,9 @@ pub struct ConnectionState {
 
     /// Transaction state for MULTI/EXEC.
     pub transaction: TransactionState,
+
+    /// Pub/Sub state.
+    pub pubsub: PubSubState,
 }
 
 impl ConnectionState {
@@ -78,6 +116,7 @@ impl ConnectionState {
             protocol_version: ProtocolVersion::default(),
             name: None,
             transaction: TransactionState::default(),
+            pubsub: PubSubState::default(),
         }
     }
 }
@@ -107,6 +146,12 @@ pub struct ConnectionHandler {
 
     /// Timeout for scatter-gather operations.
     scatter_gather_timeout: Duration,
+
+    /// Sender for pub/sub messages (cloned to shards when subscribing).
+    pubsub_tx: PubSubSender,
+
+    /// Receiver for pub/sub messages from shards.
+    pubsub_rx: mpsc::UnboundedReceiver<PubSubMessage>,
 }
 
 impl ConnectionHandler {
@@ -126,6 +171,9 @@ impl ConnectionHandler {
         let framed = Framed::new(socket, Resp2);
         let state = ConnectionState::new(conn_id, addr);
 
+        // Create pub/sub channel
+        let (pubsub_tx, pubsub_rx) = mpsc::unbounded_channel();
+
         Self {
             framed,
             state,
@@ -135,6 +183,8 @@ impl ConnectionHandler {
             shard_senders,
             allow_cross_slot,
             scatter_gather_timeout: Duration::from_millis(scatter_gather_timeout_ms),
+            pubsub_tx,
+            pubsub_rx,
         }
     }
 
@@ -143,90 +193,154 @@ impl ConnectionHandler {
         debug!(conn_id = self.state.id, "Connection handler started");
 
         loop {
-            // Read next frame from client
-            let frame = match self.framed.next().await {
-                Some(Ok(frame)) => frame,
-                Some(Err(e)) => {
-                    debug!(conn_id = self.state.id, error = %e, "Frame error");
-                    let error_frame = BytesFrame::Error(
-                        Str::from_inner(Bytes::from(format!("ERR {}", e)))
-                            .expect("error message must be valid UTF-8"),
+            tokio::select! {
+                // Handle pub/sub messages from shards
+                Some(pubsub_msg) = self.pubsub_rx.recv() => {
+                    let response = pubsub_msg.to_response();
+                    let response_frame: BytesFrame = response.into();
+                    if self.framed.send(response_frame).await.is_err() {
+                        debug!(conn_id = self.state.id, "Failed to send pub/sub message");
+                        break;
+                    }
+                }
+
+                // Handle client commands
+                frame_result = self.framed.next() => {
+                    let frame = match frame_result {
+                        Some(Ok(frame)) => frame,
+                        Some(Err(e)) => {
+                            debug!(conn_id = self.state.id, error = %e, "Frame error");
+                            let error_frame = BytesFrame::Error(
+                                Str::from_inner(Bytes::from(format!("ERR {}", e)))
+                                    .expect("error message must be valid UTF-8"),
+                            );
+                            let _ = self.framed.send(error_frame).await;
+                            continue;
+                        }
+                        None => {
+                            debug!(conn_id = self.state.id, "Client disconnected");
+                            break;
+                        }
+                    };
+
+                    // Parse frame into command
+                    let cmd = match ParsedCommand::try_from(frame) {
+                        Ok(cmd) => cmd,
+                        Err(e) => {
+                            let error_frame = BytesFrame::Error(
+                                Str::from_inner(Bytes::from(format!("ERR {}", e)))
+                                    .expect("error message must be valid UTF-8"),
+                            );
+                            let _ = self.framed.send(error_frame).await;
+                            continue;
+                        }
+                    };
+
+                    trace!(
+                        conn_id = self.state.id,
+                        cmd = %String::from_utf8_lossy(&cmd.name),
+                        args = cmd.args.len(),
+                        "Received command"
                     );
-                    let _ = self.framed.send(error_frame).await;
-                    continue;
+
+                    // Handle QUIT specially (also clears transaction state)
+                    if cmd.name.eq_ignore_ascii_case(b"QUIT") {
+                        // Clear transaction state before quitting
+                        self.state.transaction = TransactionState::default();
+                        let response_frame: BytesFrame = Response::ok().into();
+                        let _ = self.framed.send(response_frame).await;
+                        break;
+                    }
+
+                    // Route and execute (with transaction and pub/sub handling)
+                    let responses = self.route_and_execute_with_transaction(&cmd).await;
+
+                    // Send response(s)
+                    for response in responses {
+                        let response_frame: BytesFrame = response.into();
+                        if self.framed.send(response_frame).await.is_err() {
+                            debug!(conn_id = self.state.id, "Failed to send response");
+                            // Break out of the loop on send failure
+                            break;
+                        }
+                    }
                 }
-                None => {
-                    debug!(conn_id = self.state.id, "Client disconnected");
-                    break;
-                }
-            };
-
-            // Parse frame into command
-            let cmd = match ParsedCommand::try_from(frame) {
-                Ok(cmd) => cmd,
-                Err(e) => {
-                    let error_frame = BytesFrame::Error(
-                        Str::from_inner(Bytes::from(format!("ERR {}", e)))
-                            .expect("error message must be valid UTF-8"),
-                    );
-                    let _ = self.framed.send(error_frame).await;
-                    continue;
-                }
-            };
-
-            trace!(
-                conn_id = self.state.id,
-                cmd = %String::from_utf8_lossy(&cmd.name),
-                args = cmd.args.len(),
-                "Received command"
-            );
-
-            // Handle QUIT specially (also clears transaction state)
-            if cmd.name.eq_ignore_ascii_case(b"QUIT") {
-                // Clear transaction state before quitting
-                self.state.transaction = TransactionState::default();
-                let response_frame: BytesFrame = Response::ok().into();
-                let _ = self.framed.send(response_frame).await;
-                break;
-            }
-
-            // Route and execute (with transaction handling)
-            let response = self.route_and_execute_with_transaction(&cmd).await;
-
-            // Send response
-            let response_frame: BytesFrame = response.into();
-            if self.framed.send(response_frame).await.is_err() {
-                debug!(conn_id = self.state.id, "Failed to send response");
-                break;
             }
         }
+
+        // Cleanup: notify all shards that this connection is closed
+        self.notify_connection_closed().await;
 
         debug!(conn_id = self.state.id, "Connection handler finished");
         Ok(())
     }
 
-    /// Route and execute a command, handling transaction mode.
-    async fn route_and_execute_with_transaction(&mut self, cmd: &ParsedCommand) -> Response {
+    /// Notify all shards that this connection is closed.
+    async fn notify_connection_closed(&self) {
+        // Only notify if we had any subscriptions
+        if self.state.pubsub.in_pubsub_mode() {
+            for sender in self.shard_senders.iter() {
+                let _ = sender.send(ShardMessage::ConnectionClosed {
+                    conn_id: self.state.id,
+                }).await;
+            }
+        }
+    }
+
+    /// Route and execute a command, handling transaction and pub/sub modes.
+    /// Returns a Vec of responses since pub/sub commands can return multiple messages.
+    async fn route_and_execute_with_transaction(&mut self, cmd: &ParsedCommand) -> Vec<Response> {
         let cmd_name = cmd.name_uppercase();
         let cmd_name_str = String::from_utf8_lossy(&cmd_name);
 
+        // Check pub/sub mode restrictions
+        if self.state.pubsub.in_pubsub_mode() && !Self::is_allowed_in_pubsub_mode(&cmd_name_str) {
+            return vec![Response::error(format!(
+                "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
+                cmd_name_str
+            ))];
+        }
+
+        // Handle pub/sub commands specially (they return multiple responses)
+        match cmd_name_str.as_ref() {
+            "SUBSCRIBE" => return self.handle_subscribe(&cmd.args).await,
+            "UNSUBSCRIBE" => return self.handle_unsubscribe(&cmd.args).await,
+            "PSUBSCRIBE" => return self.handle_psubscribe(&cmd.args).await,
+            "PUNSUBSCRIBE" => return self.handle_punsubscribe(&cmd.args).await,
+            "PUBLISH" => return vec![self.handle_publish(&cmd.args).await],
+            "SSUBSCRIBE" => return self.handle_ssubscribe(&cmd.args).await,
+            "SUNSUBSCRIBE" => return self.handle_sunsubscribe(&cmd.args).await,
+            "SPUBLISH" => return vec![self.handle_spublish(&cmd.args).await],
+            "PUBSUB" => return vec![self.handle_pubsub_command(&cmd.args).await],
+            _ => {}
+        }
+
         // Handle transaction commands specially
         match cmd_name_str.as_ref() {
-            "MULTI" => return self.handle_multi(),
-            "EXEC" => return self.handle_exec().await,
-            "DISCARD" => return self.handle_discard(),
-            "WATCH" => return self.handle_watch(&cmd.args).await,
-            "UNWATCH" => return self.handle_unwatch(),
+            "MULTI" => return vec![self.handle_multi()],
+            "EXEC" => return vec![self.handle_exec().await],
+            "DISCARD" => return vec![self.handle_discard()],
+            "WATCH" => return vec![self.handle_watch(&cmd.args).await],
+            "UNWATCH" => return vec![self.handle_unwatch()],
             _ => {}
         }
 
         // If in transaction mode, queue the command instead of executing
         if self.state.transaction.queue.is_some() {
-            return self.queue_command(cmd);
+            return vec![self.queue_command(cmd)];
         }
 
         // Normal execution
-        self.route_and_execute(cmd).await
+        vec![self.route_and_execute(cmd).await]
+    }
+
+    /// Check if a command is allowed in pub/sub mode.
+    fn is_allowed_in_pubsub_mode(cmd: &str) -> bool {
+        matches!(
+            cmd,
+            "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE"
+                | "SSUBSCRIBE" | "SUNSUBSCRIBE" | "PING" | "QUIT" | "RESET"
+        )
     }
 
     /// Handle MULTI command - start a transaction.
@@ -682,5 +796,516 @@ impl ConnectionHandler {
             Ok(response) => response,
             Err(_) => Response::error("ERR shard dropped request"),
         }
+    }
+
+    // =========================================================================
+    // Pub/Sub command handlers
+    // =========================================================================
+
+    /// Handle SUBSCRIBE command.
+    async fn handle_subscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
+        if args.is_empty() {
+            return vec![Response::error("ERR wrong number of arguments for 'subscribe' command")];
+        }
+
+        // Check subscription limits
+        let new_count = self.state.pubsub.subscriptions.len() + args.len();
+        if new_count > MAX_SUBSCRIPTIONS_PER_CONNECTION {
+            return vec![Response::error("ERR max subscriptions reached")];
+        }
+
+        let mut responses = Vec::with_capacity(args.len());
+
+        // Fan out to all shards for broadcast subscriptions
+        for channel in args {
+            // Add to local tracking
+            self.state.pubsub.subscriptions.insert(channel.clone());
+
+            // Send to all shards
+            for sender in self.shard_senders.iter() {
+                let (response_tx, _response_rx) = oneshot::channel();
+                let _ = sender.send(ShardMessage::Subscribe {
+                    channels: vec![channel.clone()],
+                    conn_id: self.state.id,
+                    sender: self.pubsub_tx.clone(),
+                    response_tx,
+                }).await;
+            }
+
+            // Build subscription confirmation response
+            let count = self.state.pubsub.sub_count();
+            responses.push(Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"subscribe")),
+                Response::bulk(channel.clone()),
+                Response::Integer(count as i64),
+            ]));
+        }
+
+        responses
+    }
+
+    /// Handle UNSUBSCRIBE command.
+    async fn handle_unsubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
+        // If no args, unsubscribe from all channels
+        let channels: Vec<Bytes> = if args.is_empty() {
+            self.state.pubsub.subscriptions.iter().cloned().collect()
+        } else {
+            args.to_vec()
+        };
+
+        // Handle case where no channels to unsubscribe from
+        if channels.is_empty() {
+            return vec![Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"unsubscribe")),
+                Response::null(),
+                Response::Integer(0),
+            ])];
+        }
+
+        let mut responses = Vec::with_capacity(channels.len());
+
+        for channel in channels {
+            // Remove from local tracking
+            self.state.pubsub.subscriptions.remove(&channel);
+
+            // Send to all shards
+            for sender in self.shard_senders.iter() {
+                let (response_tx, _response_rx) = oneshot::channel();
+                let _ = sender.send(ShardMessage::Unsubscribe {
+                    channels: vec![channel.clone()],
+                    conn_id: self.state.id,
+                    response_tx,
+                }).await;
+            }
+
+            // Build unsubscription confirmation response
+            let count = self.state.pubsub.sub_count();
+            responses.push(Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"unsubscribe")),
+                Response::bulk(channel.clone()),
+                Response::Integer(count as i64),
+            ]));
+        }
+
+        responses
+    }
+
+    /// Handle PSUBSCRIBE command.
+    async fn handle_psubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
+        if args.is_empty() {
+            return vec![Response::error("ERR wrong number of arguments for 'psubscribe' command")];
+        }
+
+        // Check subscription limits
+        let new_count = self.state.pubsub.patterns.len() + args.len();
+        if new_count > MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION {
+            return vec![Response::error("ERR max pattern subscriptions reached")];
+        }
+
+        let mut responses = Vec::with_capacity(args.len());
+
+        for pattern in args {
+            // Add to local tracking
+            self.state.pubsub.patterns.insert(pattern.clone());
+
+            // Send to all shards
+            for sender in self.shard_senders.iter() {
+                let (response_tx, _response_rx) = oneshot::channel();
+                let _ = sender.send(ShardMessage::PSubscribe {
+                    patterns: vec![pattern.clone()],
+                    conn_id: self.state.id,
+                    sender: self.pubsub_tx.clone(),
+                    response_tx,
+                }).await;
+            }
+
+            // Build subscription confirmation response
+            let count = self.state.pubsub.sub_count();
+            responses.push(Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"psubscribe")),
+                Response::bulk(pattern.clone()),
+                Response::Integer(count as i64),
+            ]));
+        }
+
+        responses
+    }
+
+    /// Handle PUNSUBSCRIBE command.
+    async fn handle_punsubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
+        // If no args, unsubscribe from all patterns
+        let patterns: Vec<Bytes> = if args.is_empty() {
+            self.state.pubsub.patterns.iter().cloned().collect()
+        } else {
+            args.to_vec()
+        };
+
+        // Handle case where no patterns to unsubscribe from
+        if patterns.is_empty() {
+            return vec![Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"punsubscribe")),
+                Response::null(),
+                Response::Integer(0),
+            ])];
+        }
+
+        let mut responses = Vec::with_capacity(patterns.len());
+
+        for pattern in patterns {
+            // Remove from local tracking
+            self.state.pubsub.patterns.remove(&pattern);
+
+            // Send to all shards
+            for sender in self.shard_senders.iter() {
+                let (response_tx, _response_rx) = oneshot::channel();
+                let _ = sender.send(ShardMessage::PUnsubscribe {
+                    patterns: vec![pattern.clone()],
+                    conn_id: self.state.id,
+                    response_tx,
+                }).await;
+            }
+
+            // Build unsubscription confirmation response
+            let count = self.state.pubsub.sub_count();
+            responses.push(Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"punsubscribe")),
+                Response::bulk(pattern.clone()),
+                Response::Integer(count as i64),
+            ]));
+        }
+
+        responses
+    }
+
+    /// Handle PUBLISH command.
+    async fn handle_publish(&self, args: &[Bytes]) -> Response {
+        if args.len() != 2 {
+            return Response::error("ERR wrong number of arguments for 'publish' command");
+        }
+
+        let channel = &args[0];
+        let message = &args[1];
+
+        // Scatter to all shards and sum subscriber counts
+        let mut total_count = 0usize;
+        let mut handles = Vec::with_capacity(self.num_shards);
+
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let _ = sender.send(ShardMessage::Publish {
+                channel: channel.clone(),
+                message: message.clone(),
+                response_tx,
+            }).await;
+            handles.push(response_rx);
+        }
+
+        // Gather results
+        for rx in handles {
+            if let Ok(count) = rx.await {
+                total_count += count;
+            }
+        }
+
+        Response::Integer(total_count as i64)
+    }
+
+    /// Handle SSUBSCRIBE command (sharded subscriptions).
+    async fn handle_ssubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
+        if args.is_empty() {
+            return vec![Response::error("ERR wrong number of arguments for 'ssubscribe' command")];
+        }
+
+        // Check subscription limits
+        let new_count = self.state.pubsub.sharded_subscriptions.len() + args.len();
+        if new_count > MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION {
+            return vec![Response::error("ERR max sharded subscriptions reached")];
+        }
+
+        let mut responses = Vec::with_capacity(args.len());
+
+        for channel in args {
+            // Add to local tracking
+            self.state.pubsub.sharded_subscriptions.insert(channel.clone());
+
+            // Route to the owning shard only
+            let shard_id = shard_for_key(channel, self.num_shards);
+            let (response_tx, _response_rx) = oneshot::channel();
+            let _ = self.shard_senders[shard_id].send(ShardMessage::ShardedSubscribe {
+                channels: vec![channel.clone()],
+                conn_id: self.state.id,
+                sender: self.pubsub_tx.clone(),
+                response_tx,
+            }).await;
+
+            // Build subscription confirmation response
+            let count = self.state.pubsub.sharded_subscriptions.len();
+            responses.push(Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"ssubscribe")),
+                Response::bulk(channel.clone()),
+                Response::Integer(count as i64),
+            ]));
+        }
+
+        responses
+    }
+
+    /// Handle SUNSUBSCRIBE command (sharded subscriptions).
+    async fn handle_sunsubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
+        // If no args, unsubscribe from all sharded channels
+        let channels: Vec<Bytes> = if args.is_empty() {
+            self.state.pubsub.sharded_subscriptions.iter().cloned().collect()
+        } else {
+            args.to_vec()
+        };
+
+        // Handle case where no channels to unsubscribe from
+        if channels.is_empty() {
+            return vec![Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"sunsubscribe")),
+                Response::null(),
+                Response::Integer(0),
+            ])];
+        }
+
+        let mut responses = Vec::with_capacity(channels.len());
+
+        for channel in channels {
+            // Remove from local tracking
+            self.state.pubsub.sharded_subscriptions.remove(&channel);
+
+            // Route to the owning shard only
+            let shard_id = shard_for_key(&channel, self.num_shards);
+            let (response_tx, _response_rx) = oneshot::channel();
+            let _ = self.shard_senders[shard_id].send(ShardMessage::ShardedUnsubscribe {
+                channels: vec![channel.clone()],
+                conn_id: self.state.id,
+                response_tx,
+            }).await;
+
+            // Build unsubscription confirmation response
+            let count = self.state.pubsub.sharded_subscriptions.len();
+            responses.push(Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"sunsubscribe")),
+                Response::bulk(channel.clone()),
+                Response::Integer(count as i64),
+            ]));
+        }
+
+        responses
+    }
+
+    /// Handle SPUBLISH command (sharded publish).
+    async fn handle_spublish(&self, args: &[Bytes]) -> Response {
+        if args.len() != 2 {
+            return Response::error("ERR wrong number of arguments for 'spublish' command");
+        }
+
+        let channel = &args[0];
+        let message = &args[1];
+
+        // Route to the owning shard only
+        let shard_id = shard_for_key(channel, self.num_shards);
+        let (response_tx, response_rx) = oneshot::channel();
+        let _ = self.shard_senders[shard_id].send(ShardMessage::ShardedPublish {
+            channel: channel.clone(),
+            message: message.clone(),
+            response_tx,
+        }).await;
+
+        match response_rx.await {
+            Ok(count) => Response::Integer(count as i64),
+            Err(_) => Response::error("ERR shard dropped request"),
+        }
+    }
+
+    /// Handle PUBSUB subcommands.
+    async fn handle_pubsub_command(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'pubsub' command");
+        }
+
+        let subcommand = args[0].to_ascii_uppercase();
+        let subcommand_str = String::from_utf8_lossy(&subcommand);
+
+        match subcommand_str.as_ref() {
+            "CHANNELS" => self.handle_pubsub_channels(&args[1..]).await,
+            "NUMSUB" => self.handle_pubsub_numsub(&args[1..]).await,
+            "NUMPAT" => self.handle_pubsub_numpat().await,
+            "SHARDCHANNELS" => self.handle_pubsub_shardchannels(&args[1..]).await,
+            "SHARDNUMSUB" => self.handle_pubsub_shardnumsub(&args[1..]).await,
+            _ => Response::error(format!(
+                "ERR unknown subcommand '{}'. Try PUBSUB HELP.",
+                subcommand_str
+            )),
+        }
+    }
+
+    /// Handle PUBSUB CHANNELS [pattern].
+    async fn handle_pubsub_channels(&self, args: &[Bytes]) -> Response {
+        let pattern = if args.is_empty() {
+            None
+        } else {
+            Some(GlobPattern::new(args[0].clone()))
+        };
+
+        // Scatter to all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let _ = sender.send(ShardMessage::PubSubIntrospection {
+                request: IntrospectionRequest::Channels { pattern: pattern.clone() },
+                response_tx,
+            }).await;
+            handles.push(response_rx);
+        }
+
+        // Gather and deduplicate
+        let mut all_channels = HashSet::new();
+        for rx in handles {
+            if let Ok(IntrospectionResponse::Channels(channels)) = rx.await {
+                all_channels.extend(channels);
+            }
+        }
+
+        let mut channels: Vec<_> = all_channels.into_iter().collect();
+        channels.sort();
+        Response::Array(channels.into_iter().map(Response::bulk).collect())
+    }
+
+    /// Handle PUBSUB NUMSUB [channel ...].
+    async fn handle_pubsub_numsub(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::Array(vec![]);
+        }
+
+        let channels: Vec<Bytes> = args.to_vec();
+
+        // Scatter to all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let _ = sender.send(ShardMessage::PubSubIntrospection {
+                request: IntrospectionRequest::NumSub { channels: channels.clone() },
+                response_tx,
+            }).await;
+            handles.push(response_rx);
+        }
+
+        // Gather and sum counts per channel
+        let mut channel_counts: HashMap<Bytes, usize> = HashMap::new();
+        for rx in handles {
+            if let Ok(IntrospectionResponse::NumSub(counts)) = rx.await {
+                for (channel, count) in counts {
+                    *channel_counts.entry(channel).or_insert(0) += count;
+                }
+            }
+        }
+
+        // Build response: [channel1, count1, channel2, count2, ...]
+        let mut result = Vec::with_capacity(channels.len() * 2);
+        for channel in channels {
+            let count = channel_counts.get(&channel).copied().unwrap_or(0);
+            result.push(Response::bulk(channel));
+            result.push(Response::Integer(count as i64));
+        }
+
+        Response::Array(result)
+    }
+
+    /// Handle PUBSUB NUMPAT.
+    async fn handle_pubsub_numpat(&self) -> Response {
+        // Scatter to all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let _ = sender.send(ShardMessage::PubSubIntrospection {
+                request: IntrospectionRequest::NumPat,
+                response_tx,
+            }).await;
+            handles.push(response_rx);
+        }
+
+        // Sum all pattern counts
+        let mut total = 0usize;
+        for rx in handles {
+            if let Ok(IntrospectionResponse::NumPat(count)) = rx.await {
+                total += count;
+            }
+        }
+
+        Response::Integer(total as i64)
+    }
+
+    /// Handle PUBSUB SHARDCHANNELS [pattern].
+    async fn handle_pubsub_shardchannels(&self, args: &[Bytes]) -> Response {
+        let pattern = if args.is_empty() {
+            None
+        } else {
+            Some(GlobPattern::new(args[0].clone()))
+        };
+
+        // Scatter to all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let _ = sender.send(ShardMessage::PubSubIntrospection {
+                request: IntrospectionRequest::ShardChannels { pattern: pattern.clone() },
+                response_tx,
+            }).await;
+            handles.push(response_rx);
+        }
+
+        // Gather and deduplicate
+        let mut all_channels = HashSet::new();
+        for rx in handles {
+            if let Ok(IntrospectionResponse::Channels(channels)) = rx.await {
+                all_channels.extend(channels);
+            }
+        }
+
+        let mut channels: Vec<_> = all_channels.into_iter().collect();
+        channels.sort();
+        Response::Array(channels.into_iter().map(Response::bulk).collect())
+    }
+
+    /// Handle PUBSUB SHARDNUMSUB [channel ...].
+    async fn handle_pubsub_shardnumsub(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::Array(vec![]);
+        }
+
+        let channels: Vec<Bytes> = args.to_vec();
+
+        // Scatter to all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let _ = sender.send(ShardMessage::PubSubIntrospection {
+                request: IntrospectionRequest::ShardNumSub { channels: channels.clone() },
+                response_tx,
+            }).await;
+            handles.push(response_rx);
+        }
+
+        // Gather and sum counts per channel
+        let mut channel_counts: HashMap<Bytes, usize> = HashMap::new();
+        for rx in handles {
+            if let Ok(IntrospectionResponse::NumSub(counts)) = rx.await {
+                for (channel, count) in counts {
+                    *channel_counts.entry(channel).or_insert(0) += count;
+                }
+            }
+        }
+
+        // Build response: [channel1, count1, channel2, count2, ...]
+        let mut result = Vec::with_capacity(channels.len() * 2);
+        for channel in channels {
+            let count = channel_counts.get(&channel).copied().unwrap_or(0);
+            result.push(Response::bulk(channel));
+            result.push(Response::Integer(count as i64));
+        }
+
+        Response::Array(result)
     }
 }
