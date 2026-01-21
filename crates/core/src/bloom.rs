@@ -34,7 +34,7 @@ impl BloomLayer {
 
         // Calculate optimal number of hash functions: k = (m/n) * ln(2)
         let k = ((m as f64 / capacity as f64) * std::f64::consts::LN_2).ceil() as u32;
-        let k = k.max(1).min(32); // Reasonable bounds
+        let k = k.clamp(1, 32); // Reasonable bounds
 
         Self {
             bits: bitvec![u8, Lsb0; 0; m],

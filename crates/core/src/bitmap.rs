@@ -306,8 +306,9 @@ pub fn bitcount(data: &[u8], start: Option<i64>, end: Option<i64>, bit_mode: boo
     let start_byte = (start_pos / 8) as usize;
     let end_byte = (end_pos / 8) as usize;
 
-    for byte_idx in start_byte..=end_byte.min(data.len() - 1) {
-        let byte = data[byte_idx];
+    let end_index = end_byte.min(data.len() - 1);
+    for (i, &byte) in data[start_byte..=end_index].iter().enumerate() {
+        let byte_idx = start_byte + i;
 
         // Determine which bits in this byte are in range
         let byte_start_bit = byte_idx as u64 * 8;

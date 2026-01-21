@@ -795,7 +795,7 @@ fn deserialize_bloom_filter(payload: &[u8]) -> Result<BloomFilterValue, Serializ
         offset += 8;
 
         // Read bits bytes (bits_len / 8 rounded up)
-        let bytes_needed = (bits_len + 7) / 8;
+        let bytes_needed = bits_len.div_ceil(8);
         if offset + bytes_needed > payload.len() {
             return Err(SerializationError::InvalidPayload(
                 "Bloom filter payload truncated at bits data".to_string(),
