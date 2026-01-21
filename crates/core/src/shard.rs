@@ -8,6 +8,8 @@ use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::command::CommandContext;
+use crate::error::CommandError;
+use crate::eviction::{EvictionCandidate, EvictionConfig, EvictionPolicy, EvictionPool};
 use crate::persistence::{
     NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
 };
@@ -369,6 +371,16 @@ pub struct ShardWorker {
 
     /// Script executor for this shard.
     script_executor: Option<ScriptExecutor>,
+
+    /// Eviction configuration.
+    eviction_config: EvictionConfig,
+
+    /// Eviction pool for maintaining best eviction candidates.
+    eviction_pool: EvictionPool,
+
+    /// Current memory limit for this shard (0 = unlimited).
+    /// This is maxmemory / num_shards.
+    memory_limit: u64,
 }
 
 impl ShardWorker {
@@ -381,12 +393,40 @@ impl ShardWorker {
         shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
         registry: Arc<CommandRegistry>,
     ) -> Self {
+        Self::with_eviction(
+            shard_id,
+            num_shards,
+            message_rx,
+            new_conn_rx,
+            shard_senders,
+            registry,
+            EvictionConfig::default(),
+        )
+    }
+
+    /// Create a new shard worker without persistence but with eviction config.
+    pub fn with_eviction(
+        shard_id: usize,
+        num_shards: usize,
+        message_rx: mpsc::Receiver<ShardMessage>,
+        new_conn_rx: mpsc::Receiver<NewConnection>,
+        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        registry: Arc<CommandRegistry>,
+        eviction_config: EvictionConfig,
+    ) -> Self {
         // Try to create script executor
         let script_executor = ScriptExecutor::new(ScriptingConfig::default())
             .map_err(|e| {
                 tracing::warn!(shard_id, error = %e, "Failed to initialize script executor");
             })
             .ok();
+
+        // Calculate per-shard memory limit
+        let memory_limit = if eviction_config.maxmemory > 0 {
+            eviction_config.maxmemory / num_shards as u64
+        } else {
+            0
+        };
 
         Self {
             shard_id,
@@ -402,6 +442,9 @@ impl ShardWorker {
             shard_version: 0,
             subscriptions: ShardSubscriptions::new(),
             script_executor,
+            eviction_config,
+            eviction_pool: EvictionPool::new(),
+            memory_limit,
         }
     }
 
@@ -418,6 +461,7 @@ impl ShardWorker {
         rocks_store: Arc<RocksStore>,
         wal_config: WalConfig,
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+        eviction_config: EvictionConfig,
     ) -> Self {
         let wal_writer = RocksWalWriter::new(rocks_store.clone(), shard_id, wal_config);
 
@@ -427,6 +471,13 @@ impl ShardWorker {
                 tracing::warn!(shard_id, error = %e, "Failed to initialize script executor");
             })
             .ok();
+
+        // Calculate per-shard memory limit
+        let memory_limit = if eviction_config.maxmemory > 0 {
+            eviction_config.maxmemory / num_shards as u64
+        } else {
+            0
+        };
 
         Self {
             shard_id,
@@ -442,6 +493,9 @@ impl ShardWorker {
             shard_version: 0,
             subscriptions: ShardSubscriptions::new(),
             script_executor,
+            eviction_config,
+            eviction_pool: EvictionPool::new(),
+            memory_limit,
         }
     }
 
@@ -641,6 +695,249 @@ impl ShardWorker {
         }
     }
 
+    // ========================================================================
+    // Memory eviction methods
+    // ========================================================================
+
+    /// Check if we're over the memory limit.
+    fn is_over_memory_limit(&self) -> bool {
+        if self.memory_limit == 0 {
+            return false;
+        }
+        self.store.memory_used() as u64 > self.memory_limit
+    }
+
+    /// Check memory and evict if needed before a write operation.
+    ///
+    /// Returns Ok(()) if memory is available (or was freed via eviction),
+    /// Returns Err(CommandError::OutOfMemory) if write should be rejected.
+    fn check_memory_for_write(&mut self) -> Result<(), CommandError> {
+        // No limit configured
+        if self.memory_limit == 0 {
+            return Ok(());
+        }
+
+        // Check if we're over limit
+        if !self.is_over_memory_limit() {
+            return Ok(());
+        }
+
+        // Try to evict if policy allows
+        if self.eviction_config.policy == EvictionPolicy::NoEviction {
+            tracing::debug!(
+                shard_id = self.shard_id,
+                memory_used = self.store.memory_used(),
+                memory_limit = self.memory_limit,
+                "OOM: no eviction policy configured"
+            );
+            return Err(CommandError::OutOfMemory);
+        }
+
+        // Attempt eviction
+        let max_attempts = 10; // Limit attempts to avoid infinite loop
+        for _ in 0..max_attempts {
+            if !self.is_over_memory_limit() {
+                return Ok(());
+            }
+
+            if !self.evict_one() {
+                // No more keys to evict
+                tracing::debug!(
+                    shard_id = self.shard_id,
+                    memory_used = self.store.memory_used(),
+                    memory_limit = self.memory_limit,
+                    "OOM: no keys available for eviction"
+                );
+                return Err(CommandError::OutOfMemory);
+            }
+        }
+
+        // Still over limit after max attempts
+        if self.is_over_memory_limit() {
+            tracing::debug!(
+                shard_id = self.shard_id,
+                memory_used = self.store.memory_used(),
+                memory_limit = self.memory_limit,
+                "OOM: still over limit after eviction attempts"
+            );
+            return Err(CommandError::OutOfMemory);
+        }
+
+        Ok(())
+    }
+
+    /// Evict one key based on the configured policy.
+    ///
+    /// Returns true if a key was evicted, false if no suitable key found.
+    fn evict_one(&mut self) -> bool {
+        match self.eviction_config.policy {
+            EvictionPolicy::NoEviction => false,
+            EvictionPolicy::AllkeysRandom => self.evict_random(false),
+            EvictionPolicy::VolatileRandom => self.evict_random(true),
+            EvictionPolicy::AllkeysLru => self.evict_lru(false),
+            EvictionPolicy::VolatileLru => self.evict_lru(true),
+            EvictionPolicy::AllkeysLfu => self.evict_lfu(false),
+            EvictionPolicy::VolatileLfu => self.evict_lfu(true),
+            EvictionPolicy::VolatileTtl => self.evict_ttl(),
+        }
+    }
+
+    /// Evict a random key.
+    fn evict_random(&mut self, volatile_only: bool) -> bool {
+        let key = if volatile_only {
+            // Sample from keys with TTL
+            let keys = self.store.sample_volatile_keys(1);
+            keys.into_iter().next()
+        } else {
+            // Sample from all keys
+            self.store.random_key()
+        };
+
+        if let Some(key) = key {
+            self.delete_for_eviction(&key)
+        } else {
+            false
+        }
+    }
+
+    /// Evict the least recently used key.
+    fn evict_lru(&mut self, volatile_only: bool) -> bool {
+        // Sample keys and update pool
+        self.sample_for_eviction(volatile_only);
+
+        // Get worst candidate from pool
+        if let Some(candidate) = self.eviction_pool.pop_worst() {
+            self.delete_for_eviction(&candidate.key)
+        } else {
+            false
+        }
+    }
+
+    /// Evict the least frequently used key.
+    fn evict_lfu(&mut self, volatile_only: bool) -> bool {
+        // Sample keys and update pool with LFU ranking
+        self.sample_for_eviction_lfu(volatile_only);
+
+        // Get worst candidate from pool
+        if let Some(candidate) = self.eviction_pool.pop_worst() {
+            self.delete_for_eviction(&candidate.key)
+        } else {
+            false
+        }
+    }
+
+    /// Evict the key with shortest TTL.
+    fn evict_ttl(&mut self) -> bool {
+        // Sample volatile keys and update pool with TTL ranking
+        self.sample_for_eviction_ttl();
+
+        // Get worst candidate from pool
+        if let Some(candidate) = self.eviction_pool.pop_worst() {
+            self.delete_for_eviction(&candidate.key)
+        } else {
+            false
+        }
+    }
+
+    /// Sample keys and add to eviction pool for LRU.
+    fn sample_for_eviction(&mut self, volatile_only: bool) {
+        let samples = self.eviction_config.maxmemory_samples;
+        let now = Instant::now();
+
+        let keys = if volatile_only {
+            self.store.sample_volatile_keys(samples)
+        } else {
+            self.store.sample_keys(samples)
+        };
+
+        for key in keys {
+            if let Some(metadata) = self.store.get_metadata(&key) {
+                let candidate = EvictionCandidate::from_metadata(
+                    key,
+                    metadata.last_access,
+                    metadata.lfu_counter,
+                    metadata.expires_at,
+                    now,
+                );
+                self.eviction_pool.maybe_insert_lru(candidate);
+            }
+        }
+    }
+
+    /// Sample keys and add to eviction pool for LFU.
+    fn sample_for_eviction_lfu(&mut self, volatile_only: bool) {
+        let samples = self.eviction_config.maxmemory_samples;
+        let now = Instant::now();
+
+        let keys = if volatile_only {
+            self.store.sample_volatile_keys(samples)
+        } else {
+            self.store.sample_keys(samples)
+        };
+
+        for key in keys {
+            if let Some(metadata) = self.store.get_metadata(&key) {
+                let candidate = EvictionCandidate::from_metadata(
+                    key,
+                    metadata.last_access,
+                    metadata.lfu_counter,
+                    metadata.expires_at,
+                    now,
+                );
+                self.eviction_pool.maybe_insert_lfu(candidate);
+            }
+        }
+    }
+
+    /// Sample volatile keys and add to eviction pool for TTL.
+    fn sample_for_eviction_ttl(&mut self) {
+        let samples = self.eviction_config.maxmemory_samples;
+        let now = Instant::now();
+
+        let keys = self.store.sample_volatile_keys(samples);
+
+        for key in keys {
+            if let Some(metadata) = self.store.get_metadata(&key) {
+                let candidate = EvictionCandidate::from_metadata(
+                    key,
+                    metadata.last_access,
+                    metadata.lfu_counter,
+                    metadata.expires_at,
+                    now,
+                );
+                self.eviction_pool.maybe_insert_ttl(candidate);
+            }
+        }
+    }
+
+    /// Delete a key for eviction (updates metrics and pool).
+    fn delete_for_eviction(&mut self, key: &[u8]) -> bool {
+        // Get memory size before deletion for metrics
+        let memory_freed = self.store.get_metadata(key)
+            .map(|m| m.memory_size)
+            .unwrap_or(0);
+
+        // Remove from eviction pool
+        self.eviction_pool.remove(key);
+
+        // Delete the key
+        if self.store.delete(key) {
+            self.increment_version();
+
+            tracing::debug!(
+                shard_id = self.shard_id,
+                key = %String::from_utf8_lossy(key),
+                memory_freed = memory_freed,
+                policy = %self.eviction_config.policy,
+                "Evicted key"
+            );
+
+            true
+        } else {
+            false
+        }
+    }
+
     /// Handle a new connection assigned to this shard.
     async fn handle_new_connection(&self, new_conn: NewConnection) {
         tracing::debug!(
@@ -677,6 +974,14 @@ impl ShardWorker {
             ));
         }
 
+        // Check memory before write operations
+        let is_write = handler.flags().contains(crate::command::CommandFlags::WRITE);
+        if is_write {
+            if let Err(err) = self.check_memory_for_write() {
+                return err.to_response();
+            }
+        }
+
         // Create command context
         // Note: We need a mutable reference to the store, but we're inside ShardWorker
         // This is safe because each shard is single-threaded
@@ -696,7 +1001,7 @@ impl ShardWorker {
         };
 
         // Increment version on write operations
-        if handler.flags().contains(crate::command::CommandFlags::WRITE) {
+        if is_write {
             self.increment_version();
         }
 

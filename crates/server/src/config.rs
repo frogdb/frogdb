@@ -27,6 +27,10 @@ pub struct Config {
     /// Metrics configuration.
     #[serde(default)]
     pub metrics: MetricsConfig,
+
+    /// Memory configuration.
+    #[serde(default)]
+    pub memory: MemoryConfig,
 }
 
 /// Metrics configuration.
@@ -131,6 +135,33 @@ pub struct PersistenceConfig {
     pub batch_timeout_ms: u64,
 }
 
+/// Memory management configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MemoryConfig {
+    /// Maximum memory limit in bytes. 0 means unlimited.
+    /// Can use human-readable formats like "100mb", "1gb" in config files.
+    #[serde(default = "default_maxmemory")]
+    pub maxmemory: u64,
+
+    /// Eviction policy when maxmemory is reached.
+    /// Options: noeviction, volatile-lru, allkeys-lru, volatile-lfu, allkeys-lfu,
+    ///          volatile-random, allkeys-random, volatile-ttl
+    #[serde(default = "default_maxmemory_policy")]
+    pub maxmemory_policy: String,
+
+    /// Number of keys to sample when looking for eviction candidates.
+    #[serde(default = "default_maxmemory_samples")]
+    pub maxmemory_samples: usize,
+
+    /// LFU log factor - higher values make counter increment less likely.
+    #[serde(default = "default_lfu_log_factor")]
+    pub lfu_log_factor: u8,
+
+    /// LFU decay time in minutes - counter decays by 1 every N minutes.
+    #[serde(default = "default_lfu_decay_time")]
+    pub lfu_decay_time: u64,
+}
+
 fn default_bind() -> String {
     "127.0.0.1".to_string()
 }
@@ -211,6 +242,26 @@ fn default_otlp_interval_secs() -> u64 {
     15
 }
 
+fn default_maxmemory() -> u64 {
+    0 // Unlimited
+}
+
+fn default_maxmemory_policy() -> String {
+    "noeviction".to_string()
+}
+
+fn default_maxmemory_samples() -> usize {
+    5
+}
+
+fn default_lfu_log_factor() -> u8 {
+    10
+}
+
+fn default_lfu_decay_time() -> u64 {
+    1
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -257,6 +308,55 @@ impl Default for MetricsConfig {
             otlp_endpoint: default_otlp_endpoint(),
             otlp_interval_secs: default_otlp_interval_secs(),
         }
+    }
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            maxmemory: default_maxmemory(),
+            maxmemory_policy: default_maxmemory_policy(),
+            maxmemory_samples: default_maxmemory_samples(),
+            lfu_log_factor: default_lfu_log_factor(),
+            lfu_decay_time: default_lfu_decay_time(),
+        }
+    }
+}
+
+impl MemoryConfig {
+    /// Validate the memory configuration.
+    pub fn validate(&self) -> Result<()> {
+        // Validate policy string
+        let valid_policies = [
+            "noeviction",
+            "volatile-lru",
+            "allkeys-lru",
+            "volatile-lfu",
+            "allkeys-lfu",
+            "volatile-random",
+            "allkeys-random",
+            "volatile-ttl",
+        ];
+
+        if !valid_policies.contains(&self.maxmemory_policy.to_lowercase().as_str()) {
+            anyhow::bail!(
+                "invalid maxmemory_policy '{}', expected one of: {}",
+                self.maxmemory_policy,
+                valid_policies.join(", ")
+            );
+        }
+
+        // Validate samples
+        if self.maxmemory_samples == 0 {
+            anyhow::bail!("maxmemory_samples must be > 0");
+        }
+
+        Ok(())
+    }
+
+    /// Check if memory limit is enabled.
+    pub fn has_limit(&self) -> bool {
+        self.maxmemory > 0
     }
 }
 
@@ -400,6 +500,9 @@ impl Config {
         // Validate metrics config
         self.metrics.validate()?;
 
+        // Validate memory config
+        self.memory.validate()?;
+
         Ok(())
     }
 
@@ -498,6 +601,34 @@ otlp_endpoint = "http://localhost:4317"
 
 # OTLP push interval in seconds
 otlp_interval_secs = 15
+
+[memory]
+# Maximum memory limit in bytes. 0 means unlimited.
+# When exceeded, behavior depends on maxmemory_policy.
+maxmemory = 0
+
+# Eviction policy when maxmemory is reached:
+# - noeviction: Return OOM error on writes
+# - volatile-lru: Evict least recently used keys with TTL
+# - allkeys-lru: Evict least recently used keys (any)
+# - volatile-lfu: Evict least frequently used keys with TTL
+# - allkeys-lfu: Evict least frequently used keys (any)
+# - volatile-random: Evict random keys with TTL
+# - allkeys-random: Evict random keys (any)
+# - volatile-ttl: Evict keys with shortest TTL
+maxmemory_policy = "noeviction"
+
+# Number of keys to sample when looking for eviction candidates.
+# Higher values give better accuracy but cost more CPU.
+maxmemory_samples = 5
+
+# LFU log factor - higher values make counter increment less likely.
+# This affects how quickly the access counter grows.
+lfu_log_factor = 10
+
+# LFU decay time in minutes - counter decays by 1 every N minutes.
+# This allows old hot keys to eventually become evictable.
+lfu_decay_time = 1
 "#
         .to_string()
     }
@@ -579,6 +710,59 @@ mod tests {
         let mut config = Config::default();
         config.metrics.otlp_enabled = true;
         config.metrics.otlp_endpoint = String::new();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_default_memory_config() {
+        let config = MemoryConfig::default();
+        assert_eq!(config.maxmemory, 0);
+        assert_eq!(config.maxmemory_policy, "noeviction");
+        assert_eq!(config.maxmemory_samples, 5);
+        assert_eq!(config.lfu_log_factor, 10);
+        assert_eq!(config.lfu_decay_time, 1);
+    }
+
+    #[test]
+    fn test_memory_config_has_limit() {
+        let mut config = MemoryConfig::default();
+        assert!(!config.has_limit());
+
+        config.maxmemory = 1024 * 1024;
+        assert!(config.has_limit());
+    }
+
+    #[test]
+    fn test_validate_memory_invalid_policy() {
+        let mut config = Config::default();
+        config.memory.maxmemory_policy = "invalid".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_memory_valid_policies() {
+        let policies = [
+            "noeviction",
+            "volatile-lru",
+            "allkeys-lru",
+            "volatile-lfu",
+            "allkeys-lfu",
+            "volatile-random",
+            "allkeys-random",
+            "volatile-ttl",
+        ];
+
+        for policy in policies {
+            let mut config = Config::default();
+            config.memory.maxmemory_policy = policy.to_string();
+            assert!(config.validate().is_ok(), "Policy {} should be valid", policy);
+        }
+    }
+
+    #[test]
+    fn test_validate_memory_zero_samples() {
+        let mut config = Config::default();
+        config.memory.maxmemory_samples = 0;
         assert!(config.validate().is_err());
     }
 }

@@ -2,7 +2,8 @@
 
 use bytes::Bytes;
 use griddle::HashMap;
-use std::time::Instant;
+use rand::seq::IteratorRandom;
+use std::time::{Duration, Instant};
 
 use crate::glob::glob_match;
 use crate::noop::ExpiryIndex;
@@ -131,6 +132,64 @@ pub trait Store: Send {
 
     /// Access the expiry index mutably (for active expiry cleanup).
     fn expiry_index_mut(&mut self) -> Option<&mut ExpiryIndex> {
+        None
+    }
+
+    // ========================================================================
+    // Eviction support methods (added for Phase 10.6)
+    // ========================================================================
+
+    /// Get a random key from the store.
+    ///
+    /// Returns None if the store is empty.
+    fn random_key(&self) -> Option<Bytes> {
+        None
+    }
+
+    /// Sample up to N random keys from the store.
+    ///
+    /// May return fewer keys if the store has fewer than N keys.
+    fn sample_keys(&self, count: usize) -> Vec<Bytes> {
+        let _ = count;
+        vec![]
+    }
+
+    /// Sample up to N random keys that have TTL set (volatile keys).
+    ///
+    /// May return fewer keys if fewer volatile keys exist.
+    fn sample_volatile_keys(&self, count: usize) -> Vec<Bytes> {
+        let _ = count;
+        vec![]
+    }
+
+    /// Get metadata for a key (for eviction decision making).
+    ///
+    /// Returns None if key doesn't exist.
+    fn get_metadata(&self, key: &[u8]) -> Option<KeyMetadata> {
+        let _ = key;
+        None
+    }
+
+    /// Get the idle time (time since last access) for a key.
+    ///
+    /// Returns None if key doesn't exist.
+    fn idle_time(&self, key: &[u8]) -> Option<Duration> {
+        let _ = key;
+        None
+    }
+
+    /// Update LFU counter for a key (on access).
+    ///
+    /// Called when a key is accessed to update its frequency counter.
+    fn update_lfu_counter(&mut self, key: &[u8], log_factor: u8) {
+        let _ = (key, log_factor);
+    }
+
+    /// Decay LFU counter for a key based on idle time.
+    ///
+    /// Called during eviction to apply time-based decay.
+    fn get_lfu_value(&self, key: &[u8], decay_time: u64) -> Option<u8> {
+        let _ = (key, decay_time);
         None
     }
 }
@@ -498,6 +557,61 @@ impl Store for HashMapStore {
 
     fn expiry_index_mut(&mut self) -> Option<&mut ExpiryIndex> {
         Some(&mut self.expiry_index)
+    }
+
+    // ========================================================================
+    // Eviction support methods
+    // ========================================================================
+
+    fn random_key(&self) -> Option<Bytes> {
+        if self.data.is_empty() {
+            return None;
+        }
+
+        let mut rng = rand::thread_rng();
+        self.data.keys().choose(&mut rng).cloned()
+    }
+
+    fn sample_keys(&self, count: usize) -> Vec<Bytes> {
+        if self.data.is_empty() || count == 0 {
+            return vec![];
+        }
+
+        let mut rng = rand::thread_rng();
+        self.data.keys().choose_multiple(&mut rng, count).into_iter().cloned().collect()
+    }
+
+    fn sample_volatile_keys(&self, count: usize) -> Vec<Bytes> {
+        // Sample from the expiry index which only contains volatile keys
+        self.expiry_index.sample(count)
+    }
+
+    fn get_metadata(&self, key: &[u8]) -> Option<KeyMetadata> {
+        self.data.get(key).map(|e| e.metadata.clone())
+    }
+
+    fn idle_time(&self, key: &[u8]) -> Option<Duration> {
+        self.data.get(key).map(|e| {
+            Instant::now().duration_since(e.metadata.last_access)
+        })
+    }
+
+    fn update_lfu_counter(&mut self, key: &[u8], log_factor: u8) {
+        if let Some(entry) = self.data.get_mut(key) {
+            entry.metadata.lfu_counter = crate::eviction::lfu_log_incr(
+                entry.metadata.lfu_counter,
+                log_factor,
+            );
+        }
+    }
+
+    fn get_lfu_value(&self, key: &[u8], decay_time: u64) -> Option<u8> {
+        self.data.get(key).map(|e| {
+            let minutes_since = Instant::now()
+                .duration_since(e.metadata.last_access)
+                .as_secs() / 60;
+            crate::eviction::lfu_decay(e.metadata.lfu_counter, minutes_since, decay_time)
+        })
     }
 }
 

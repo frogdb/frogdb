@@ -13,7 +13,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 10.1 (Metrics - partial) ✓
+**Phase**: 10.6 (Memory Management) ✓
 **Next Milestone**: Phase 10.1 completion (command metrics, keyspace metrics)
 
 ---
@@ -806,18 +806,19 @@ The following optimizations are deferred to a future phase:
 - [ ] `ACL WHOAMI`
 - [ ] Permission checking hooks
 
-### 10.6 Memory Management
+### 10.6 Memory Management ✓
 
-- [ ] `max_memory` config
-- [ ] OOM error on writes when exceeded
-- [ ] Eviction policies: volatile-lru, allkeys-lru, volatile-lfu, allkeys-lfu, volatile-ttl
-- [ ] Eviction sampling
+- [x] `max_memory` config
+- [x] OOM error on writes when exceeded
+- [x] Eviction policies: noeviction, volatile-lru, allkeys-lru, volatile-lfu, allkeys-lfu, volatile-random, allkeys-random, volatile-ttl
+- [x] Eviction sampling (configurable maxmemory_samples)
+- [x] Eviction metrics (eviction_keys_total, eviction_bytes_total, eviction_oom_total)
 
 ### 10.7 Testing
 
 - [ ] Test metrics accuracy
 - [ ] Test ACL enforcement
-- [ ] Test eviction behavior
+- [x] Test eviction behavior (unit tests for eviction module)
 - [ ] Load test with monitoring
 
 ---
