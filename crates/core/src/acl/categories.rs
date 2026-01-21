@@ -3,6 +3,7 @@
 //! Redis command categories as defined in the ACL system.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::LazyLock;
 
 /// Command categories for ACL permissions.
@@ -108,7 +109,7 @@ impl CommandCategory {
     }
 
     /// Parse a category from string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "admin" => Some(CommandCategory::Admin),
             "bitmap" => Some(CommandCategory::Bitmap),
@@ -154,6 +155,14 @@ impl CommandCategory {
             .get(self)
             .cloned()
             .unwrap_or_default()
+    }
+}
+
+impl FromStr for CommandCategory {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        CommandCategory::parse(s).ok_or(())
     }
 }
 
@@ -548,9 +557,12 @@ mod tests {
 
     #[test]
     fn test_category_from_str() {
-        assert_eq!(CommandCategory::from_str("admin"), Some(CommandCategory::Admin));
-        assert_eq!(CommandCategory::from_str("WRITE"), Some(CommandCategory::Write));
-        assert_eq!(CommandCategory::from_str("invalid"), None);
+        assert_eq!(CommandCategory::parse("admin"), Some(CommandCategory::Admin));
+        assert_eq!(CommandCategory::parse("WRITE"), Some(CommandCategory::Write));
+        assert_eq!(CommandCategory::parse("invalid"), None);
+        // Test FromStr trait
+        assert_eq!("admin".parse::<CommandCategory>(), Ok(CommandCategory::Admin));
+        assert!("invalid".parse::<CommandCategory>().is_err());
     }
 
     #[test]

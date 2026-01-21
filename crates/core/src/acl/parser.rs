@@ -171,7 +171,7 @@ impl AclRule {
             if cmd.to_lowercase() == "all" {
                 return Ok(AclRule::AllCommands);
             }
-            let category = CommandCategory::from_str(cmd).ok_or_else(|| AclError::ParseError {
+            let category = CommandCategory::parse(cmd).ok_or_else(|| AclError::ParseError {
                 modifier: rule.to_string(),
                 reason: format!("Unknown category '{}'", cmd),
             })?;
@@ -182,7 +182,7 @@ impl AclRule {
             if cmd.to_lowercase() == "all" {
                 return Ok(AclRule::NoCommands);
             }
-            let category = CommandCategory::from_str(cmd).ok_or_else(|| AclError::ParseError {
+            let category = CommandCategory::parse(cmd).ok_or_else(|| AclError::ParseError {
                 modifier: rule.to_string(),
                 reason: format!("Unknown category '{}'", cmd),
             })?;

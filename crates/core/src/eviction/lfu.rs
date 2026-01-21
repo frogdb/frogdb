@@ -120,6 +120,7 @@ pub fn lfu_decay(counter: u8, minutes_since_access: u64, decay_time: u64) -> u8 
 /// # Returns
 ///
 /// Effective LFU value for eviction ranking.
+#[allow(dead_code)]
 pub fn lfu_get_effective_value(counter: u8, minutes_since_access: u64, decay_time: u64) -> u8 {
     lfu_decay(counter, minutes_since_access, decay_time)
 }
@@ -138,12 +139,13 @@ mod tests {
 
     #[test]
     fn test_lfu_log_incr_bounds() {
-        // Counter should never exceed 255
+        // Counter should eventually reach 255 (u8::MAX) after many increments
         let mut counter = 0u8;
         for _ in 0..10000 {
             counter = lfu_log_incr(counter, 10);
-            assert!(counter <= 255);
         }
+        // After many increments with low log_factor, counter should have increased
+        assert!(counter > 0, "Counter should have increased");
     }
 
     #[test]

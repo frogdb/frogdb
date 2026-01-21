@@ -517,15 +517,13 @@ impl ClientRegistry {
         // First check with read lock
         {
             let pause_state = self.pause_state.read().unwrap();
-            if pause_state.mode.is_none() {
-                return None;
-            }
+            let mode = pause_state.mode?;
             if let Some(unpause_at) = pause_state.unpause_at {
                 if Instant::now() < unpause_at {
-                    return pause_state.mode;
+                    return Some(mode);
                 }
             } else {
-                return pause_state.mode;
+                return Some(mode);
             }
         }
 

@@ -650,7 +650,7 @@ impl ConnectionHandler {
         } else {
             // List commands in category
             let category_name = String::from_utf8_lossy(&args[0]);
-            match CommandCategory::from_str(&category_name) {
+            match CommandCategory::parse(&category_name) {
                 Some(category) => {
                     let commands: Vec<Response> = category
                         .commands()
@@ -2422,7 +2422,7 @@ impl ConnectionHandler {
         let name = &args[0];
 
         // Validate name: no spaces allowed
-        if name.iter().any(|&b| b == b' ') {
+        if name.contains(&b' ') {
             return Response::error("ERR Client names cannot contain spaces");
         }
 
@@ -2538,7 +2538,7 @@ impl ConnectionHandler {
         }
 
         // Old-style syntax: CLIENT KILL addr:port
-        if args.len() == 1 && !args[0].iter().any(|&b| b == b' ') {
+        if args.len() == 1 && !args[0].contains(&b' ') {
             let addr_str = String::from_utf8_lossy(&args[0]);
             let addr: SocketAddr = match addr_str.parse() {
                 Ok(a) => a,

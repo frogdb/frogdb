@@ -6,9 +6,10 @@ use std::str::FromStr;
 /// Eviction policy for memory management.
 ///
 /// These policies determine which keys to evict when memory limit is exceeded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum EvictionPolicy {
     /// No eviction - reject writes with OOM error when memory limit exceeded.
+    #[default]
     NoEviction,
 
     /// Evict least recently used keys that have a TTL set.
@@ -33,11 +34,6 @@ pub enum EvictionPolicy {
     VolatileTtl,
 }
 
-impl Default for EvictionPolicy {
-    fn default() -> Self {
-        EvictionPolicy::NoEviction
-    }
-}
 
 impl EvictionPolicy {
     /// Returns true if this policy only evicts keys with TTL (volatile keys).

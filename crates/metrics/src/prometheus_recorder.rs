@@ -66,11 +66,7 @@ impl PrometheusRecorder {
 
         let opts = Opts::new(name, name);
         let counter = CounterVec::new(opts, label_names).expect("Failed to create counter");
-        self.registry
-            .register(Box::new(counter.clone()))
-            .unwrap_or_else(|_| {
-                // Already registered, try to get it again
-            });
+        let _ = self.registry.register(Box::new(counter.clone()));
         self.counters.insert(name.to_string(), counter.clone());
         counter
     }
@@ -83,11 +79,7 @@ impl PrometheusRecorder {
 
         let opts = Opts::new(name, name);
         let gauge = GaugeVec::new(opts, label_names).expect("Failed to create gauge");
-        self.registry
-            .register(Box::new(gauge.clone()))
-            .unwrap_or_else(|_| {
-                // Already registered
-            });
+        let _ = self.registry.register(Box::new(gauge.clone()));
         self.gauges.insert(name.to_string(), gauge.clone());
         gauge
     }
@@ -122,11 +114,7 @@ impl PrometheusRecorder {
 
         let opts = HistogramOpts::new(name, name).buckets(buckets);
         let histogram = HistogramVec::new(opts, label_names).expect("Failed to create histogram");
-        self.registry
-            .register(Box::new(histogram.clone()))
-            .unwrap_or_else(|_| {
-                // Already registered
-            });
+        let _ = self.registry.register(Box::new(histogram.clone()));
         self.histograms.insert(name.to_string(), histogram.clone());
         histogram
     }

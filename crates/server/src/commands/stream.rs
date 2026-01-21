@@ -250,7 +250,7 @@ impl Command for XaddCommand {
         i += 1;
 
         // Parse field-value pairs
-        if (args.len() - i) % 2 != 0 {
+        if !(args.len() - i).is_multiple_of(2) {
             return Err(CommandError::WrongArity { command: "XADD" });
         }
         if args.len() - i == 0 {
@@ -266,10 +266,8 @@ impl Command for XaddCommand {
         }
 
         // Check NOMKSTREAM
-        if nomkstream {
-            if ctx.store.get(key).is_none() {
-                return Ok(Response::null());
-            }
+        if nomkstream && ctx.store.get(key).is_none() {
+            return Ok(Response::null());
         }
 
         // Get or create stream
@@ -621,7 +619,7 @@ impl Command for XreadCommand {
 
         // Parse keys and IDs
         let remaining = args.len() - i;
-        if remaining == 0 || remaining % 2 != 0 {
+        if remaining == 0 || !remaining.is_multiple_of(2) {
             return Err(CommandError::SyntaxError);
         }
 
@@ -690,7 +688,7 @@ impl Command for XreadCommand {
         }
 
         let remaining = args.len() - i;
-        if remaining == 0 || remaining % 2 != 0 {
+        if remaining == 0 || !remaining.is_multiple_of(2) {
             return vec![];
         }
 
@@ -1022,7 +1020,7 @@ impl Command for XreadgroupCommand {
 
         // Parse keys and IDs
         let remaining = args.len() - i;
-        if remaining == 0 || remaining % 2 != 0 {
+        if remaining == 0 || !remaining.is_multiple_of(2) {
             return Err(CommandError::SyntaxError);
         }
 
@@ -1129,7 +1127,7 @@ impl Command for XreadgroupCommand {
         }
 
         let remaining = args.len() - i;
-        if remaining == 0 || remaining % 2 != 0 {
+        if remaining == 0 || !remaining.is_multiple_of(2) {
             return vec![];
         }
 
@@ -1234,7 +1232,7 @@ impl Command for XpendingCommand {
 
                     // Count pending per consumer
                     let mut consumer_counts: std::collections::HashMap<&Bytes, i64> = std::collections::HashMap::new();
-                    for (_, pe) in &group.pending {
+                    for pe in group.pending.values() {
                         *consumer_counts.entry(&pe.consumer).or_insert(0) += 1;
                     }
 
@@ -1299,8 +1297,8 @@ impl Command for XpendingCommand {
                         .filter(|(id, pe)| {
                             start.satisfies_min(id)
                                 && end.satisfies_max(id)
-                                && min_idle_ms.map_or(true, |min| pe.idle_ms() >= min)
-                                && consumer_filter.map_or(true, |c| &pe.consumer == c)
+                                && min_idle_ms.is_none_or(|min| pe.idle_ms() >= min)
+                                && consumer_filter.is_none_or(|c| pe.consumer == *c)
                         })
                         .take(count)
                         .map(|(id, pe)| {
