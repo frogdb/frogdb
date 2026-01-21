@@ -9,6 +9,7 @@ pub mod noop;
 pub mod persistence;
 pub mod pubsub;
 pub mod registry;
+pub mod scripting;
 pub mod shard;
 pub mod store;
 pub mod sync;
@@ -41,4 +42,8 @@ pub use store::{HashMapStore, Store};
 pub use types::{
     Expiry, HashValue, IncrementError, KeyMetadata, KeyType, LexBound, ListValue, ScoreBound,
     SetCondition, SetOptions, SetResult, SetValue, SortedSetValue, StringValue, Value, ZAddResult,
+};
+pub use scripting::{
+    CachedScript, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig, ScriptRoute,
+    ScriptRouter, SingleShardRouter, LuaVm,
 };

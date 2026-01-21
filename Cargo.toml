@@ -59,6 +59,11 @@ shuttle = { version = "0.8" }
 rocksdb = { version = "0.22", features = ["multi-threaded-cf"] }
 tempfile = "3"
 
+# Lua scripting
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
+sha1 = "0.10"
+linked-hash-map = "0.5"
+
 # Internal crates
 frogdb-protocol = { path = "crates/protocol" }
 frogdb-core = { path = "crates/core" }

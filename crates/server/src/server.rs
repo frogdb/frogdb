@@ -558,6 +558,11 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::transaction::DiscardCommand);
     registry.register(crate::commands::transaction::WatchCommand);
     registry.register(crate::commands::transaction::UnwatchCommand);
+
+    // Scripting commands
+    registry.register(crate::commands::scripting::EvalCommand);
+    registry.register(crate::commands::scripting::EvalshaCommand);
+    registry.register(crate::commands::scripting::ScriptCommand);
 }
 
 // Commands module

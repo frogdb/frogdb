@@ -13,7 +13,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 7 (Transactions & Pub/Sub) ✓
+**Phase**: 8 (Lua Scripting) ✓
 **Next Milestone**: Phase 5 - Persistence (RocksDB)
 
 ---
@@ -665,7 +665,7 @@ The following optimizations are deferred to a future phase:
 
 ---
 
-## Phase 8: Lua Scripting
+## Phase 8: Lua Scripting ✓
 
 **Goal**: Lua script execution with strict key validation.
 
@@ -673,37 +673,42 @@ The following optimizations are deferred to a future phase:
 
 ### 8.1 Lua VM
 
-- [ ] Add `mlua` dependency
-- [ ] Per-shard Lua VM instances
-- [ ] Resource limits (execution time, memory)
+- [x] Add `mlua` dependency (v0.10 with vendored Lua 5.4)
+- [x] Per-shard Lua VM instances
+- [x] Resource limits (execution time, memory)
+- [x] Sandboxing (remove dangerous functions: loadfile, dofile, io, os, debug, etc.)
+- [x] Timeout handling via Lua hooks (every 10k instructions)
 
 ### 8.2 Commands
 
-- [ ] `EVAL`
-- [ ] `EVALSHA`
-- [ ] `SCRIPT LOAD`
-- [ ] `SCRIPT EXISTS`
-- [ ] `SCRIPT FLUSH`
-- [ ] `SCRIPT KILL`
+- [x] `EVAL`
+- [x] `EVALSHA`
+- [x] `SCRIPT LOAD`
+- [x] `SCRIPT EXISTS`
+- [x] `SCRIPT FLUSH`
+- [x] `SCRIPT KILL`
 
 ### 8.3 Bindings
 
-- [ ] `redis.call()` - execute command, propagate errors
-- [ ] `redis.pcall()` - execute command, return errors
-- [ ] Strict key validation (keys must be in KEYS array)
-- [ ] Script routing to owner shard
+- [x] `redis.call()` - execute command, propagate errors
+- [x] `redis.pcall()` - execute command, return errors
+- [x] Strict key validation (keys must be in KEYS array)
+- [x] Script routing to owner shard (SingleShardRouter with CROSSSLOT error)
+- [x] Forbidden command checking (MULTI, EXEC, WATCH, blocking commands, nested scripts)
+- [x] KEYS and ARGV global tables
 
 ### 8.4 Caching
 
-- [ ] Script cache (SHA1 -> bytecode)
-- [ ] LRU eviction
+- [x] Script cache (SHA1 -> source)
+- [x] LRU eviction (by count and bytes)
 
 ### 8.5 Testing
 
-- [ ] Test basic script execution
-- [ ] Test strict key validation
-- [ ] Test script caching
-- [ ] Test timeout
+- [x] Test basic script execution
+- [x] Test strict key validation
+- [x] Test script caching
+- [x] Test timeout
+- [x] Unit tests (36 tests passing)
 
 ---
 
