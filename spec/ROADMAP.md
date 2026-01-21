@@ -13,7 +13,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Phase**: 5 (Persistence) ~95% ✓, 10.1-10.6 ✓, 11 (Blocking Commands) ✓, 12 (RESP3) ✓, 13 (Streams) ~95% ✓
+**Phase**: 5 (Persistence) ~95% ✓, 10.1-10.6 ✓, 11 (Blocking Commands) ✓, 12 (RESP3) ✓, 13 (Streams) ✓
 **Next Milestone**: Phase 10.7 (Testing), Phase 14 (Clustering)
 
 ---
@@ -903,11 +903,11 @@ The following optimizations are deferred to a future phase:
 
 ## Future Phases
 
-### Phase 13: Streams (~95% complete)
+### Phase 13: Streams (100% complete ✓)
 - [x] `Stream` data type in `crate::types` (StreamValue, StreamId, StreamEntry, ConsumerGroup)
 - [x] XADD, XREAD, XRANGE, XLEN, XREVRANGE, XINFO, XTRIM, XDEL, XSETID
 - [x] Consumer groups (XGROUP, XREADGROUP, XACK, XPENDING, XCLAIM, XAUTOCLAIM)
-- [ ] Blocking XREAD/XREADGROUP (BLOCK parameter parsed but not implemented)
+- [x] Blocking XREAD/XREADGROUP (BLOCK parameter)
 
 ### Phase 14: Clustering
 - [ ] Replication via WAL streaming

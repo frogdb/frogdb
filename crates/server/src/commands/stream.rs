@@ -21,7 +21,7 @@ use frogdb_core::{
     StreamGroupError, StreamId, StreamIdParseError, StreamTrimMode, StreamTrimOptions,
     StreamTrimStrategy, StreamValue, Value,
 };
-use frogdb_protocol::Response;
+use frogdb_protocol::{BlockingOp, Response};
 
 /// Parse a string as u64.
 fn parse_u64(arg: &[u8]) -> Result<u64, CommandError> {
@@ -584,7 +584,7 @@ impl Command for XreadCommand {
     ) -> Result<Response, CommandError> {
         let mut i = 0;
         let mut count: Option<usize> = None;
-        let mut _block_ms: Option<u64> = None;
+        let mut block_ms: Option<u64> = None;
 
         // Parse options
         while i < args.len() {
@@ -603,9 +603,8 @@ impl Command for XreadCommand {
                     if i >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    _block_ms = Some(parse_u64(&args[i])?);
+                    block_ms = Some(parse_u64(&args[i])?);
                     i += 1;
-                    // Note: Blocking is not yet implemented
                 }
                 b"STREAMS" => {
                     i += 1;
@@ -627,8 +626,9 @@ impl Command for XreadCommand {
         let keys = &args[i..i + num_streams];
         let ids = &args[i + num_streams..];
 
-        // Read from each stream
+        // Read from each stream, tracking resolved IDs for blocking
         let mut results = Vec::new();
+        let mut resolved_ids: Vec<(u64, u64)> = Vec::with_capacity(num_streams);
 
         for (key, id_arg) in keys.iter().zip(ids.iter()) {
             let after_id = if id_arg.as_ref() == b"$" {
@@ -643,6 +643,9 @@ impl Command for XreadCommand {
             } else {
                 StreamId::parse(id_arg).map_err(stream_id_error)?
             };
+
+            // Track resolved ID for blocking
+            resolved_ids.push((after_id.ms, after_id.seq));
 
             match ctx.store.get(key.as_ref()) {
                 Some(value) => {
@@ -665,11 +668,32 @@ impl Command for XreadCommand {
         }
 
         if results.is_empty() {
+            // Check if we should block
+            if let Some(block_ms) = block_ms {
+                let timeout = if block_ms == 0 {
+                    0.0
+                } else {
+                    block_ms as f64 / 1000.0
+                };
+                return Ok(Response::BlockingNeeded {
+                    keys: keys.iter().cloned().collect(),
+                    timeout,
+                    op: BlockingOp::XRead {
+                        after_ids: resolved_ids,
+                        count,
+                    },
+                });
+            }
             // For non-blocking XREAD, return null if no data
             Ok(Response::null())
         } else {
             Ok(Response::Array(results))
         }
+    }
+
+    fn requires_same_slot(&self) -> bool {
+        // Blocking XREAD requires all keys to be on the same shard
+        true
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -967,7 +991,7 @@ impl Command for XreadgroupCommand {
         let mut group_name: Option<Bytes> = None;
         let mut consumer_name: Option<Bytes> = None;
         let mut count: Option<usize> = None;
-        let mut _block_ms: Option<u64> = None;
+        let mut block_ms: Option<u64> = None;
         let mut noack = false;
 
         // Parse options
@@ -997,9 +1021,8 @@ impl Command for XreadgroupCommand {
                     if i >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    _block_ms = Some(parse_u64(&args[i])?);
+                    block_ms = Some(parse_u64(&args[i])?);
                     i += 1;
-                    // Note: Blocking not yet implemented
                 }
                 b"NOACK" => {
                     noack = true;
@@ -1057,6 +1080,28 @@ impl Command for XreadgroupCommand {
             let last_delivered = group.last_delivered_id;
             let new_entries = stream.read_after(&last_delivered, count);
 
+            if new_entries.is_empty() {
+                // No new entries - check if we should block
+                if let Some(block_ms) = block_ms {
+                    let timeout = if block_ms == 0 {
+                        0.0
+                    } else {
+                        block_ms as f64 / 1000.0
+                    };
+                    return Ok(Response::BlockingNeeded {
+                        keys: keys.iter().cloned().collect(),
+                        timeout,
+                        op: BlockingOp::XReadGroup {
+                            group: group_name,
+                            consumer: consumer_name,
+                            noack,
+                            count,
+                        },
+                    });
+                }
+                return Ok(Response::null());
+            }
+
             // Update last_delivered_id and add to PEL
             if let Some(last) = new_entries.last() {
                 // Need to re-get the group after using stream
@@ -1072,7 +1117,7 @@ impl Command for XreadgroupCommand {
 
             new_entries
         } else {
-            // Re-read from PEL (for retry)
+            // Re-read from PEL (for retry) - never blocks
             let start_id = if id_arg.as_ref() == b"0" || id_arg.as_ref() == b"0-0" {
                 StreamId::default()
             } else {

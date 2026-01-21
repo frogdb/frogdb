@@ -11,7 +11,7 @@ use frogdb_core::{
     persistence::SnapshotCoordinator, shard_for_key, AclManager, AuthenticatedUser, ClientHandle,
     ClientRegistry, CommandCategory, CommandFlags, CommandRegistry, GlobPattern,
     IntrospectionRequest, IntrospectionResponse, MetricsRecorder, PartialResult, PauseMode,
-    PubSubMessage, PubSubSender, ScatterOp, ShardMessage, TransactionResult,
+    PubSubMessage, PubSubSender, ScatterOp, ShardMessage, StreamId, TransactionResult,
     MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
@@ -264,6 +264,23 @@ fn convert_blocking_op(op: frogdb_protocol::BlockingOp) -> frogdb_core::Blocking
         frogdb_protocol::BlockingOp::BZPopMax => frogdb_core::BlockingOp::BZPopMax,
         frogdb_protocol::BlockingOp::BZMPop { min, count } => {
             frogdb_core::BlockingOp::BZMPop { min, count }
+        }
+        frogdb_protocol::BlockingOp::XRead { after_ids, count } => {
+            frogdb_core::BlockingOp::XRead {
+                after_ids: after_ids
+                    .into_iter()
+                    .map(|(ms, seq)| StreamId::new(ms, seq))
+                    .collect(),
+                count,
+            }
+        }
+        frogdb_protocol::BlockingOp::XReadGroup { group, consumer, noack, count } => {
+            frogdb_core::BlockingOp::XReadGroup {
+                group,
+                consumer,
+                noack,
+                count,
+            }
         }
     }
 }

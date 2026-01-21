@@ -592,6 +592,24 @@ pub enum BlockingOp {
         /// Number of elements to pop.
         count: usize,
     },
+    /// XREAD blocking operation.
+    XRead {
+        /// Stream IDs to read after (resolved from $ at block time).
+        after_ids: Vec<StreamId>,
+        /// Maximum entries per stream.
+        count: Option<usize>,
+    },
+    /// XREADGROUP blocking operation.
+    XReadGroup {
+        /// Consumer group name.
+        group: Bytes,
+        /// Consumer name.
+        consumer: Bytes,
+        /// Skip PEL updates (NOACK flag).
+        noack: bool,
+        /// Maximum entries to return.
+        count: Option<usize>,
+    },
 }
 
 /// Metadata tracked per key.

@@ -1708,6 +1708,13 @@ impl ShardWorker {
                         self.try_satisfy_zset_waiters(&key_bytes);
                     }
                 }
+                // Stream commands that may satisfy XREAD/XREADGROUP waiters
+                "XADD" => {
+                    for key in keys {
+                        let key_bytes = Bytes::copy_from_slice(key);
+                        self.try_satisfy_stream_waiters(&key_bytes);
+                    }
+                }
                 _ => {}
             }
 
@@ -2495,6 +2502,151 @@ impl ShardWorker {
             );
         }
     }
+
+    /// Try to satisfy stream waiters after a stream write operation.
+    ///
+    /// Called after XADD operations.
+    pub fn try_satisfy_stream_waiters(&mut self, key: &Bytes) {
+        use crate::store::Store;
+        use crate::types::{BlockingOp, StreamEntry};
+
+        while self.wait_queue.has_waiters(key) {
+            // Check if the stream exists
+            let stream_exists = self
+                .store
+                .get(key)
+                .map(|v| v.as_stream().is_some())
+                .unwrap_or(false);
+            if !stream_exists {
+                break;
+            }
+
+            // Pop the oldest waiter
+            let entry = match self.wait_queue.pop_oldest_waiter(key) {
+                Some(e) => e,
+                None => break,
+            };
+
+            // Execute the blocking operation
+            let response = match &entry.op {
+                BlockingOp::XRead { after_ids, count } => {
+                    // Find key index and read after that ID
+                    let key_idx = entry.keys.iter().position(|k| k == key).unwrap_or(0);
+                    let after_id = &after_ids[key_idx];
+
+                    // Read entries from stream
+                    let entries: Vec<StreamEntry> = match self.store.get(key) {
+                        Some(value) => match value.as_stream() {
+                            Some(stream) => stream.read_after(after_id, *count),
+                            None => Vec::new(),
+                        },
+                        None => Vec::new(),
+                    };
+
+                    if entries.is_empty() {
+                        // No new entries yet, continue to next waiter
+                        continue;
+                    }
+
+                    // Format: [[key, [[id, [field, value, ...]], ...]]]
+                    format_xread_response(key, &entries)
+                }
+
+                BlockingOp::XReadGroup {
+                    group,
+                    consumer,
+                    noack,
+                    count,
+                } => {
+                    // Read new entries and update PEL
+                    let result: Option<Vec<crate::types::StreamEntry>> =
+                        self.read_group_entries(key, group, consumer, *noack, *count);
+                    match result {
+                        Some(entries) if !entries.is_empty() => {
+                            format_xread_response(key, &entries)
+                        }
+                        _ => continue,
+                    }
+                }
+
+                _ => continue, // Not a stream operation
+            };
+
+            // Send response
+            let _ = entry.response_tx.send(response);
+
+            // Increment satisfied counter
+            let shard_label = self.shard_id.to_string();
+            self.metrics_recorder.increment_counter(
+                "frogdb_blocked_satisfied_total",
+                1,
+                &[("shard", &shard_label)],
+            );
+
+            // Update blocked clients gauge
+            self.metrics_recorder.record_gauge(
+                "frogdb_blocked_clients",
+                self.wait_queue.waiter_count() as f64,
+                &[("shard", &shard_label)],
+            );
+        }
+    }
+
+    /// Read entries for XREADGROUP and update group state.
+    fn read_group_entries(
+        &mut self,
+        key: &Bytes,
+        group_name: &Bytes,
+        consumer_name: &Bytes,
+        noack: bool,
+        count: Option<usize>,
+    ) -> Option<Vec<crate::types::StreamEntry>> {
+
+        let stream = self.store.get_mut(key)?.as_stream_mut()?;
+        let group = stream.get_group_mut(group_name)?;
+
+        let last_delivered = group.last_delivered_id;
+        let new_entries = stream.read_after(&last_delivered, count);
+
+        if new_entries.is_empty() {
+            return None;
+        }
+
+        // Update last_delivered_id and add to PEL
+        if let Some(last) = new_entries.last() {
+            let group = stream.get_group_mut(group_name)?;
+            group.last_delivered_id = last.id;
+
+            if !noack {
+                for entry in &new_entries {
+                    group.add_pending(entry.id, consumer_name.clone());
+                }
+            }
+        }
+
+        Some(new_entries)
+    }
+}
+
+/// Format XREAD response for a single stream.
+fn format_xread_response(key: &Bytes, entries: &[crate::types::StreamEntry]) -> Response {
+    let entry_responses: Vec<Response> = entries
+        .iter()
+        .map(|entry| {
+            let id = Response::bulk(Bytes::from(entry.id.to_string()));
+            let fields: Vec<Response> = entry
+                .fields
+                .iter()
+                .flat_map(|(k, v)| vec![Response::bulk(k.clone()), Response::bulk(v.clone())])
+                .collect();
+            Response::Array(vec![id, Response::Array(fields)])
+        })
+        .collect();
+
+    Response::Array(vec![Response::Array(vec![
+        Response::bulk(key.clone()),
+        Response::Array(entry_responses),
+    ])])
 }
 
 /// Extract hash tag from a key (Redis-compatible).
