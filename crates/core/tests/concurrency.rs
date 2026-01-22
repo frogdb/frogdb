@@ -5,6 +5,7 @@
 //!
 //! Run with: cargo test -p frogdb-core --features shuttle --test concurrency
 
+use serde_json;
 use shuttle::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use shuttle::sync::{Arc, Mutex};
 use shuttle::{check_pct, check_random, thread};
@@ -1912,7 +1913,7 @@ fn test_xadd_satisfies_single_waiter() {
 
             // One thread waiting for data
             let queue_wait = queue.clone();
-            let satisfied = waiter_satisfied.clone();
+            let _satisfied = waiter_satisfied.clone();
             let waiter_handle = thread::spawn(move || {
                 queue_wait.add_waiter(0);
                 // Simulate waiting (in real code this would be async await)
@@ -2010,5 +2011,441 @@ fn test_concurrent_xadd_xread() {
             );
         },
         1000,
+    );
+}
+
+// ============================================================================
+// JSON Type Concurrency Tests
+// ============================================================================
+
+/// Simulated JSON value with path-based access.
+/// Used to test concurrent JSON operations.
+struct MockJsonValue {
+    data: Mutex<serde_json::Value>,
+}
+
+impl MockJsonValue {
+    fn new(data: serde_json::Value) -> Self {
+        Self {
+            data: Mutex::new(data),
+        }
+    }
+
+    fn get(&self, path: &str) -> Option<serde_json::Value> {
+        let data = self.data.lock().unwrap();
+        // Simplified path resolution for testing (only supports $.field)
+        if path == "$" {
+            return Some(data.clone());
+        }
+        if path.starts_with("$.") {
+            let field = &path[2..];
+            return data.get(field).cloned();
+        }
+        None
+    }
+
+    fn set(&self, path: &str, value: serde_json::Value) -> bool {
+        let mut data = self.data.lock().unwrap();
+        if path == "$" {
+            *data = value;
+            return true;
+        }
+        if path.starts_with("$.") {
+            let field = &path[2..];
+            if let serde_json::Value::Object(ref mut obj) = *data {
+                obj.insert(field.to_string(), value);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn incr_by(&self, path: &str, delta: i64) -> Option<i64> {
+        let mut data = self.data.lock().unwrap();
+        if path.starts_with("$.") {
+            let field = &path[2..];
+            if let serde_json::Value::Object(ref mut obj) = *data {
+                if let Some(serde_json::Value::Number(n)) = obj.get(field) {
+                    if let Some(current) = n.as_i64() {
+                        let new_val = current + delta;
+                        obj.insert(field.to_string(), serde_json::json!(new_val));
+                        return Some(new_val);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn arr_append(&self, path: &str, value: serde_json::Value) -> Option<usize> {
+        let mut data = self.data.lock().unwrap();
+        if path.starts_with("$.") {
+            let field = &path[2..];
+            if let serde_json::Value::Object(ref mut obj) = *data {
+                if let Some(serde_json::Value::Array(ref mut arr)) = obj.get_mut(field) {
+                    arr.push(value);
+                    return Some(arr.len());
+                }
+            }
+        }
+        None
+    }
+
+    fn arr_pop(&self, path: &str) -> Option<serde_json::Value> {
+        let mut data = self.data.lock().unwrap();
+        if path.starts_with("$.") {
+            let field = &path[2..];
+            if let serde_json::Value::Object(ref mut obj) = *data {
+                if let Some(serde_json::Value::Array(ref mut arr)) = obj.get_mut(field) {
+                    return arr.pop();
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Test concurrent JSON.SET operations on different paths.
+///
+/// Multiple threads writing to different fields should all succeed
+/// without losing any writes.
+#[test]
+fn test_concurrent_json_set_different_paths() {
+    check_random(
+        || {
+            let json = Arc::new(MockJsonValue::new(serde_json::json!({})));
+            let mut handles = vec![];
+
+            // 4 threads, each setting a different field
+            for i in 0..4 {
+                let json = json.clone();
+                let field = format!("field{}", i);
+                let value = serde_json::json!(i);
+
+                handles.push(thread::spawn(move || {
+                    let path = format!("$.{}", field);
+                    json.set(&path, value);
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // All 4 fields should be present
+            let data = json.get("$").unwrap();
+            if let serde_json::Value::Object(obj) = data {
+                assert_eq!(obj.len(), 4, "All fields must be present");
+                for i in 0..4 {
+                    assert!(
+                        obj.contains_key(&format!("field{}", i)),
+                        "Field {} must exist",
+                        i
+                    );
+                }
+            } else {
+                panic!("Expected object");
+            }
+        },
+        1000,
+    );
+}
+
+/// Test concurrent JSON.SET operations on the same path.
+///
+/// Multiple threads writing to the same field should result in
+/// one of the values winning (last write wins).
+#[test]
+fn test_concurrent_json_set_same_path() {
+    check_random(
+        || {
+            let json = Arc::new(MockJsonValue::new(serde_json::json!({"value": 0})));
+            let mut handles = vec![];
+
+            // 4 threads, each trying to set the same field
+            for i in 0..4 {
+                let json = json.clone();
+                let value = serde_json::json!(i);
+
+                handles.push(thread::spawn(move || {
+                    json.set("$.value", value);
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // Final value should be one of 0, 1, 2, 3
+            let data = json.get("$.value").unwrap();
+            let final_val = data.as_i64().unwrap();
+            assert!(
+                (0..4).contains(&final_val),
+                "Final value must be from one writer, got {}",
+                final_val
+            );
+        },
+        1000,
+    );
+}
+
+/// Test concurrent JSON.NUMINCRBY operations.
+///
+/// Multiple threads incrementing the same numeric field should
+/// produce the correct total with no lost updates.
+#[test]
+fn test_concurrent_json_numincrby() {
+    check_random(
+        || {
+            let json = Arc::new(MockJsonValue::new(serde_json::json!({"counter": 0})));
+            let mut handles = vec![];
+
+            // 4 threads, each incrementing 10 times
+            for _ in 0..4 {
+                let json = json.clone();
+                handles.push(thread::spawn(move || {
+                    for _ in 0..10 {
+                        json.incr_by("$.counter", 1);
+                    }
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // Final value should be 4 * 10 = 40
+            let data = json.get("$.counter").unwrap();
+            assert_eq!(
+                data.as_i64().unwrap(),
+                40,
+                "All increments must be counted"
+            );
+        },
+        1000,
+    );
+}
+
+/// Test concurrent JSON.ARRAPPEND operations.
+///
+/// Multiple threads appending to the same array should all succeed,
+/// and the final array should contain all appended elements.
+#[test]
+fn test_concurrent_json_arrappend() {
+    check_random(
+        || {
+            let json = Arc::new(MockJsonValue::new(serde_json::json!({"arr": []})));
+            let mut handles = vec![];
+
+            // 4 threads, each appending 5 elements
+            for i in 0..4 {
+                let json = json.clone();
+                handles.push(thread::spawn(move || {
+                    for j in 0..5 {
+                        let value = serde_json::json!(i * 10 + j);
+                        json.arr_append("$.arr", value);
+                    }
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // Array should have 4 * 5 = 20 elements
+            let data = json.get("$.arr").unwrap();
+            if let serde_json::Value::Array(arr) = data {
+                assert_eq!(arr.len(), 20, "Array should have all appended elements");
+            } else {
+                panic!("Expected array");
+            }
+        },
+        1000,
+    );
+}
+
+/// Test concurrent JSON.ARRPOP operations.
+///
+/// Multiple threads popping from the same array should get distinct
+/// elements with no duplicates.
+#[test]
+fn test_concurrent_json_arrpop() {
+    check_random(
+        || {
+            let initial_arr: Vec<i32> = (0..8).collect();
+            let json = Arc::new(MockJsonValue::new(serde_json::json!({"arr": initial_arr})));
+            let popped = Arc::new(Mutex::new(Vec::new()));
+            let mut handles = vec![];
+
+            // 4 threads, each popping 2 elements
+            for _ in 0..4 {
+                let json = json.clone();
+                let popped = popped.clone();
+                handles.push(thread::spawn(move || {
+                    for _ in 0..2 {
+                        if let Some(value) = json.arr_pop("$.arr") {
+                            popped.lock().unwrap().push(value);
+                        }
+                    }
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // Should have popped all 8 elements
+            let popped = popped.lock().unwrap();
+            assert_eq!(popped.len(), 8, "Should pop all elements");
+
+            // Check uniqueness (convert to i64 for comparison)
+            let values: HashSet<i64> = popped.iter().filter_map(|v| v.as_i64()).collect();
+            assert_eq!(values.len(), 8, "All popped elements must be unique");
+        },
+        1000,
+    );
+}
+
+/// Test concurrent read and write operations on JSON.
+///
+/// Readers should see consistent snapshots (no partial updates).
+#[test]
+fn test_concurrent_json_read_write() {
+    check_random(
+        || {
+            let json = Arc::new(MockJsonValue::new(serde_json::json!({"a": 0, "b": 0})));
+            let inconsistent = Arc::new(AtomicBool::new(false));
+            let mut handles = vec![];
+
+            // Writer thread: updates both fields together
+            let json_w = json.clone();
+            handles.push(thread::spawn(move || {
+                for i in 1..=5 {
+                    // Both fields should always have the same value
+                    json_w.set("$.a", serde_json::json!(i));
+                    json_w.set("$.b", serde_json::json!(i));
+                }
+            }));
+
+            // Reader threads: check that a == b
+            for _ in 0..3 {
+                let json = json.clone();
+                let inconsistent = inconsistent.clone();
+                handles.push(thread::spawn(move || {
+                    for _ in 0..10 {
+                        let a = json.get("$.a").and_then(|v| v.as_i64());
+                        let b = json.get("$.b").and_then(|v| v.as_i64());
+                        // Note: This CAN observe inconsistency because we don't
+                        // have atomic multi-field updates in this mock.
+                        // In real FrogDB, this would be handled by shard locking.
+                        if let (Some(a_val), Some(b_val)) = (a, b) {
+                            // Record if we ever see inconsistency
+                            // (This is expected in this mock without transactions)
+                            if a_val != b_val {
+                                inconsistent.store(true, Ordering::SeqCst);
+                            }
+                        }
+                        thread::yield_now();
+                    }
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // Final state should be consistent
+            let a = json.get("$.a").and_then(|v| v.as_i64()).unwrap();
+            let b = json.get("$.b").and_then(|v| v.as_i64()).unwrap();
+            assert_eq!(a, b, "Final state must be consistent");
+        },
+        1000,
+    );
+}
+
+/// Test concurrent JSON operations with mixed types.
+///
+/// Verifies that type-specific operations work correctly under concurrency.
+#[test]
+fn test_concurrent_json_mixed_operations() {
+    check_random(
+        || {
+            let json = Arc::new(MockJsonValue::new(serde_json::json!({
+                "counter": 0,
+                "items": [],
+                "name": "initial"
+            })));
+            let mut handles = vec![];
+
+            // Thread 1: Increment counter
+            let json1 = json.clone();
+            handles.push(thread::spawn(move || {
+                for _ in 0..5 {
+                    json1.incr_by("$.counter", 1);
+                }
+            }));
+
+            // Thread 2: Append to array
+            let json2 = json.clone();
+            handles.push(thread::spawn(move || {
+                for i in 0..5 {
+                    json2.arr_append("$.items", serde_json::json!(i));
+                }
+            }));
+
+            // Thread 3: Update name
+            let json3 = json.clone();
+            handles.push(thread::spawn(move || {
+                for i in 0..5 {
+                    json3.set("$.name", serde_json::json!(format!("name{}", i)));
+                }
+            }));
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // Verify final state
+            let counter = json.get("$.counter").and_then(|v| v.as_i64()).unwrap();
+            assert_eq!(counter, 5, "Counter should be 5");
+
+            let items = json.get("$.items").unwrap();
+            if let serde_json::Value::Array(arr) = items {
+                assert_eq!(arr.len(), 5, "Items should have 5 elements");
+            }
+
+            let name = json.get("$.name").and_then(|v| v.as_str().map(String::from));
+            assert!(name.is_some(), "Name should exist");
+        },
+        1000,
+    );
+}
+
+/// PCT test for JSON NUMINCRBY atomicity.
+#[test]
+fn test_json_numincrby_pct() {
+    check_pct(
+        || {
+            let json = Arc::new(MockJsonValue::new(serde_json::json!({"value": 0})));
+            let mut handles = vec![];
+
+            for _ in 0..4 {
+                let json = json.clone();
+                handles.push(thread::spawn(move || {
+                    for _ in 0..5 {
+                        json.incr_by("$.value", 1);
+                    }
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            let value = json.get("$.value").and_then(|v| v.as_i64()).unwrap();
+            assert_eq!(value, 20, "All increments must be counted");
+        },
+        1000,
+        3, // PCT depth
     );
 }

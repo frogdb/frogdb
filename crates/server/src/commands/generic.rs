@@ -360,6 +360,10 @@ impl Command for ObjectCommand {
                                 // TimeSeries uses Gorilla compression
                                 "gorilla"
                             }
+                            Value::Json(_) => {
+                                // JSON documents use a tree structure
+                                "raw"
+                            }
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }
@@ -521,6 +525,9 @@ impl Command for DebugCommand {
                             }
                             Value::TimeSeries(_) => {
                                 "gorilla"
+                            }
+                            Value::Json(_) => {
+                                "raw"
                             }
                         };
                         let info = format!(

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::bloom::BloomFilterValue;
 use crate::hyperloglog::HyperLogLogValue;
+use crate::json::JsonValue;
 use crate::timeseries::TimeSeriesValue;
 
 /// Value types stored in FrogDB.
@@ -31,6 +32,8 @@ pub enum Value {
     HyperLogLog(HyperLogLogValue),
     /// Time series value.
     TimeSeries(TimeSeriesValue),
+    /// JSON document value.
+    Json(JsonValue),
 }
 
 impl Value {
@@ -79,6 +82,11 @@ impl Value {
         Value::TimeSeries(TimeSeriesValue::new())
     }
 
+    /// Create a JSON value.
+    pub fn json(data: serde_json::Value) -> Self {
+        Value::Json(JsonValue::new(data))
+    }
+
     /// Get the key type.
     pub fn key_type(&self) -> KeyType {
         match self {
@@ -91,6 +99,7 @@ impl Value {
             Value::BloomFilter(_) => KeyType::BloomFilter,
             Value::HyperLogLog(_) => KeyType::HyperLogLog,
             Value::TimeSeries(_) => KeyType::TimeSeries,
+            Value::Json(_) => KeyType::Json,
         }
     }
 
@@ -106,6 +115,7 @@ impl Value {
             Value::BloomFilter(bf) => bf.memory_size(),
             Value::HyperLogLog(hll) => hll.memory_size(),
             Value::TimeSeries(ts) => ts.memory_size(),
+            Value::Json(j) => j.memory_size(),
         }
     }
 
@@ -249,6 +259,22 @@ impl Value {
     pub fn as_timeseries_mut(&mut self) -> Option<&mut TimeSeriesValue> {
         match self {
             Value::TimeSeries(ts) => Some(ts),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a JSON value.
+    pub fn as_json(&self) -> Option<&JsonValue> {
+        match self {
+            Value::Json(j) => Some(j),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a mutable JSON value.
+    pub fn as_json_mut(&mut self) -> Option<&mut JsonValue> {
+        match self {
+            Value::Json(j) => Some(j),
             _ => None,
         }
     }
@@ -547,6 +573,8 @@ pub enum KeyType {
     HyperLogLog,
     /// Time series type.
     TimeSeries,
+    /// JSON type.
+    Json,
 }
 
 impl KeyType {
@@ -563,6 +591,7 @@ impl KeyType {
             KeyType::BloomFilter => "bloom",
             KeyType::HyperLogLog => "hyperloglog",
             KeyType::TimeSeries => "TSDB-TYPE",
+            KeyType::Json => "ReJSON-RL",
         }
     }
 }

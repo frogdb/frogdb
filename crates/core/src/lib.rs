@@ -13,6 +13,7 @@ pub mod eviction;
 pub mod geo;
 pub mod glob;
 pub mod hyperloglog;
+pub mod json;
 pub mod noop;
 pub mod persistence;
 pub mod slowlog;
@@ -87,6 +88,7 @@ pub use geo::{
 };
 pub use bloom::{BloomFilterValue, BloomLayer};
 pub use hyperloglog::{HyperLogLogValue, HLL_DENSE_SIZE, HLL_REGISTERS};
+pub use json::{JsonError, JsonLimits, JsonType, JsonValue, DEFAULT_JSON_MAX_DEPTH, DEFAULT_JSON_MAX_SIZE};
 pub use slowlog::{
     SlowLog, SlowLogEntry, DEFAULT_SLOWLOG_LOG_SLOWER_THAN, DEFAULT_SLOWLOG_MAX_ARG_LEN,
     DEFAULT_SLOWLOG_MAX_LEN,

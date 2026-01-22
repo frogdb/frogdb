@@ -31,9 +31,11 @@ hex.workspace = true
 linked-hash-map.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+jsonpath-rust.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
 shuttle.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
+serde_json.workspace = true
