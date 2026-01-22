@@ -2347,6 +2347,195 @@ async fn test_publish_returns_zero_no_subscribers() {
 }
 
 // ============================================================================
+// RESET Command Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_reset_basic() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // RESET should return "RESET" simple string
+    let response = client.command(&["RESET"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+
+    // RESET is idempotent - can be called multiple times
+    let response = client.command(&["RESET"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_reset_exits_pubsub_mode() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Enter pub/sub mode
+    client.command(&["SUBSCRIBE", "mychannel"]).await;
+
+    // Verify we're in pub/sub mode (GET should fail)
+    let response = client.command(&["GET", "foo"]).await;
+    assert!(matches!(response, Response::Error(ref e) if e.starts_with(b"ERR Can't execute")));
+
+    // RESET should exit pub/sub mode
+    let response = client.command(&["RESET"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+
+    // Now GET should work
+    let response = client.command(&["GET", "foo"]).await;
+    assert!(matches!(response, Response::Bulk(None))); // Key doesn't exist, but command works
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_reset_exits_pattern_pubsub_mode() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Enter pub/sub mode via pattern subscribe
+    client.command(&["PSUBSCRIBE", "chan*"]).await;
+
+    // RESET should exit pub/sub mode
+    let response = client.command(&["RESET"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+
+    // Now normal commands should work
+    let response = client.command(&["SET", "foo", "bar"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_reset_aborts_transaction() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Start a transaction
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Queue a SET command
+    let response = client.command(&["SET", "txkey", "txvalue"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    // RESET aborts the transaction
+    let response = client.command(&["RESET"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+
+    // Key should not exist (transaction was aborted)
+    let response = client.command(&["GET", "txkey"]).await;
+    assert!(matches!(response, Response::Bulk(None)));
+
+    // Should be able to start a new transaction
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_reset_clears_watches() {
+    let server = TestServer::start().await;
+    let mut client1 = server.connect().await;
+    let mut client2 = server.connect().await;
+
+    // Set initial value
+    client1.command(&["SET", "watchkey", "initial"]).await;
+
+    // Watch the key
+    client1.command(&["WATCH", "watchkey"]).await;
+
+    // RESET clears the watch
+    client1.command(&["RESET"]).await;
+
+    // Modify with client2
+    client2.command(&["SET", "watchkey", "modified"]).await;
+
+    // Client1's MULTI/EXEC should succeed (watch was cleared by RESET)
+    client1.command(&["MULTI"]).await;
+    client1.command(&["SET", "watchkey", "client1"]).await;
+    let response = client1.command(&["EXEC"]).await;
+
+    // EXEC should succeed (not return nil)
+    assert!(matches!(response, Response::Array(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_reset_clears_client_name() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Set client name
+    client.command(&["CLIENT", "SETNAME", "my-client"]).await;
+
+    // Verify name is set
+    let response = client.command(&["CLIENT", "GETNAME"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("my-client"))));
+
+    // RESET clears the name
+    client.command(&["RESET"]).await;
+
+    // Name should be cleared
+    let response = client.command(&["CLIENT", "GETNAME"]).await;
+    assert!(matches!(response, Response::Bulk(None)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_reset_unsubscribes_from_sharded_channels() {
+    let server = TestServer::start().await;
+    let mut subscriber = server.connect().await;
+    let mut publisher = server.connect().await;
+
+    // Subscribe to sharded channel
+    subscriber.command(&["SSUBSCRIBE", "sharded:chan"]).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // RESET unsubscribes
+    subscriber.command(&["RESET"]).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Publish should report 0 subscribers
+    let response = publisher.command(&["SPUBLISH", "sharded:chan", "msg"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_reset_publisher_still_reaches_other_subscribers() {
+    let server = TestServer::start().await;
+    let mut sub1 = server.connect().await;
+    let mut sub2 = server.connect().await;
+    let mut publisher = server.connect().await;
+
+    // Both subscribe
+    sub1.command(&["SUBSCRIBE", "channel"]).await;
+    sub2.command(&["SUBSCRIBE", "channel"]).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // sub1 RESETs (unsubscribes)
+    sub1.command(&["RESET"]).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Publish should reach sub2 only
+    let response = publisher.command(&["PUBLISH", "channel", "hello"]).await;
+    assert_eq!(response, Response::Integer(1)); // Only 1 subscriber remains
+
+    // sub2 should receive the message
+    let msg = sub2.read_message(Duration::from_secs(2)).await;
+    assert!(msg.is_some());
+
+    server.shutdown().await;
+}
+
+// ============================================================================
 // CLIENT Command Tests
 // ============================================================================
 

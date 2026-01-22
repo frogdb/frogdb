@@ -414,4 +414,68 @@ proptest! {
             Ok(())
         })?;
     }
+
+    // ==================== RESET Command Property Tests ====================
+
+    /// RESET is idempotent - multiple RESETs don't fail
+    #[test]
+    fn test_reset_idempotent(reset_count in 1usize..10) {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let server = TestServer::start().await;
+            let mut client = server.connect().await;
+
+            for _ in 0..reset_count {
+                let response = client.command(&["RESET"]).await;
+                prop_assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+            }
+
+            // Connection should still work
+            let response = client.command(&["PING"]).await;
+            prop_assert_eq!(response, Response::Simple(Bytes::from("PONG")));
+
+            server.shutdown().await;
+            Ok(())
+        })?;
+    }
+
+    /// RESET after any state modification returns connection to clean state
+    #[test]
+    fn test_reset_restores_clean_state(
+        client_name in "[a-z]{1,10}",
+        _channel in "[a-z]{1,10}"
+    ) {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let server = TestServer::start().await;
+            let mut client = server.connect().await;
+
+            // Set client name
+            client.command(&["CLIENT", "SETNAME", &client_name]).await;
+
+            // Start transaction
+            client.command(&["MULTI"]).await;
+            client.command(&["SET", "key", "value"]).await;
+
+            // RESET
+            let response = client.command(&["RESET"]).await;
+            prop_assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+
+            // Verify clean state: no name
+            let response = client.command(&["CLIENT", "GETNAME"]).await;
+            prop_assert!(matches!(response, Response::Bulk(None)));
+
+            // Verify clean state: not in transaction (can start new MULTI)
+            let response = client.command(&["MULTI"]).await;
+            prop_assert_eq!(response, Response::Simple(Bytes::from("OK")));
+            client.command(&["DISCARD"]).await;
+
+            // Verify clean state: key was not set
+            let response = client.command(&["GET", "key"]).await;
+            prop_assert!(matches!(response, Response::Bulk(None)));
+
+            server.shutdown().await;
+            Ok(())
+        })?;
+    }
 }

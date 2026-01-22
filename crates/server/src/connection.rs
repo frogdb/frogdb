@@ -751,6 +751,7 @@ impl ConnectionHandler {
                 return vec![self.handle_spublish(&cmd.args).await];
             }
             "PUBSUB" => return vec![self.handle_pubsub_command(&cmd.args).await],
+            "RESET" => return vec![self.handle_reset().await],
             _ => {}
         }
 
@@ -1377,6 +1378,37 @@ impl ConnectionHandler {
         // Clear all transaction state including watches (Redis behavior)
         self.state.transaction = TransactionState::default();
         Response::ok()
+    }
+
+    /// Handle RESET command - reset connection to initial state.
+    /// This exits pub/sub mode, clears transaction state, and resets protocol to RESP2.
+    async fn handle_reset(&mut self) -> Response {
+        // 1. Exit pub/sub mode - unsubscribe from all channels
+        if self.state.pubsub.in_pubsub_mode() {
+            // Clear local subscription tracking
+            self.state.pubsub.subscriptions.clear();
+            self.state.pubsub.patterns.clear();
+            self.state.pubsub.sharded_subscriptions.clear();
+
+            // Notify all shards to remove this connection's subscriptions
+            for sender in self.shard_senders.iter() {
+                let _ = sender.send(ShardMessage::ConnectionClosed {
+                    conn_id: self.state.id,
+                }).await;
+            }
+        }
+
+        // 2. Clear transaction state (abort any MULTI in progress)
+        self.state.transaction = TransactionState::default();
+
+        // 3. Reset protocol to RESP2 (per Redis behavior)
+        self.state.protocol_version = ProtocolVersion::Resp2;
+
+        // 4. Clear client name
+        self.state.name = None;
+
+        // Return RESET acknowledgment
+        Response::Simple(Bytes::from_static(b"RESET"))
     }
 
     /// Handle WATCH command - watch keys for modifications.
