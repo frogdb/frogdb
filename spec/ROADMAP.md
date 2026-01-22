@@ -31,6 +31,22 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 - [ ] `LATENCY` commands (DOCTOR, GRAPH, HISTOGRAM, HISTORY, LATEST, RESET)
 - [ ] `OBJECT HELP`
 - [ ] `DEBUG SLEEP`
+- [ ] `CLIENT` subcommands (ID, INFO, KILL, LIST, GETNAME, SETNAME, PAUSE, UNPAUSE, REPLY, SETINFO, NO-EVICT, NO-TOUCH, UNBLOCK)
+- [ ] `CONFIG HELP`
+- [ ] `SLOWLOG` subcommands (GET, LEN, RESET)
+- [ ] `MIGRATE` - Migrate keys between instances
+- [ ] `RESET` - Reset connection state
+- [ ] `LOLWUT` - Display Redis art (low priority)
+
+---
+
+## Phase 1.5: Protocol Completion
+
+**Goal**: Complete RESP3 protocol support.
+
+- [ ] RESP3 encoding for all response types
+- [ ] `HELLO` command - Full RESP3 protocol negotiation with AUTH support
+- [ ] Client protocol version tracking and response formatting
 
 ---
 
@@ -73,6 +89,8 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 - [ ] CLUSTER commands
 - [ ] Hash slot migration
 - [ ] Failover
+- [ ] `ROLE` - Report replication role (primary/replica)
+- [ ] `BGREWRITEAOF` - Stub returning appropriate message (N/A for RocksDB)
 
 ---
 
@@ -94,6 +112,37 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 - [ ] io_uring (optional)
 - [ ] Skip list for sorted sets (optional)
 - [ ] Connection pooling optimizations
+
+---
+
+## Phase 8: ACL Completion
+
+**Goal**: Full Redis ACL compatibility.
+
+- [ ] Subcommand-level ACL rules (e.g., allow CONFIG GET but deny CONFIG SET)
+- [ ] ACL selector syntax for granular key/channel permissions
+- [ ] Per-command ACL category enforcement
+
+---
+
+## Phase 9: Redis Functions
+
+**Goal**: Redis 7.0+ Functions support (alternative to Lua scripting).
+
+- [ ] `FUNCTION` command (LOAD, DELETE, DUMP, FLUSH, KILL, LIST, RESTORE, STATS)
+- [ ] `FCALL` - Execute function
+- [ ] `FCALL_RO` - Execute read-only function
+- [ ] Function library management and persistence
+
+---
+
+## Phase 10: Documentation & Polish
+
+**Goal**: Documentation accuracy and completeness.
+
+- [ ] Update COMPATIBILITY.md - Remove outdated "planned" status for Blocking Commands and Streams
+- [ ] Audit all spec files for accuracy against implementation
+- [ ] Add missing command documentation to types/*.md files
 
 ---
 
