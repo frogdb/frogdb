@@ -3591,16 +3591,19 @@ impl ConnectionHandler {
 
     /// Handle BGSAVE command - trigger a background snapshot.
     fn handle_bgsave(&self, args: &[Bytes]) -> Response {
-        // Check for SCHEDULE option (not yet supported)
+        // Check for SCHEDULE option
         if !args.is_empty() {
             let opt = args[0].to_ascii_uppercase();
             if opt.as_slice() == b"SCHEDULE" {
-                // BGSAVE SCHEDULE - schedule a save if not already running
+                // BGSAVE SCHEDULE - schedule a save if one is already running,
+                // otherwise start immediately
                 if self.snapshot_coordinator.in_progress() {
+                    self.snapshot_coordinator.schedule_snapshot();
                     return Response::Simple(Bytes::from_static(
                         b"Background saving scheduled",
                     ));
                 }
+                // No save in progress, fall through to start one immediately
             }
         }
 

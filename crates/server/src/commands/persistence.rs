@@ -17,7 +17,7 @@ impl Command for BgsaveCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Fixed(0)
+        Arity::Range { min: 0, max: 1 }
     }
 
     fn flags(&self) -> CommandFlags {

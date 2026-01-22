@@ -223,6 +223,13 @@ pub trait SnapshotCoordinator: Send + Sync {
 
     /// Get metadata about the last completed snapshot.
     fn last_snapshot_metadata(&self) -> Option<SnapshotMetadata>;
+
+    /// Schedule a snapshot to run after the current one completes.
+    /// Returns true if scheduled, false if no snapshot was in progress.
+    fn schedule_snapshot(&self) -> bool;
+
+    /// Check if a snapshot is scheduled to run.
+    fn is_scheduled(&self) -> bool;
 }
 
 /// Hook called on write operations for COW (Copy-on-Write) support.
@@ -255,6 +262,7 @@ pub struct NoopSnapshotCoordinator {
     last_save: RwLock<Option<Instant>>,
     in_progress: AtomicBool,
     epoch: AtomicU64,
+    scheduled: AtomicBool,
 }
 
 impl Default for NoopSnapshotCoordinator {
@@ -270,6 +278,7 @@ impl NoopSnapshotCoordinator {
             last_save: RwLock::new(None),
             in_progress: AtomicBool::new(false),
             epoch: AtomicU64::new(0),
+            scheduled: AtomicBool::new(false),
         }
     }
 }
@@ -333,6 +342,19 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
             size_bytes: 0,
         })
     }
+
+    fn schedule_snapshot(&self) -> bool {
+        // Only schedule if a snapshot is in progress
+        if !self.in_progress() {
+            return false;
+        }
+        self.scheduled.store(true, Ordering::SeqCst);
+        true
+    }
+
+    fn is_scheduled(&self) -> bool {
+        self.scheduled.load(Ordering::SeqCst)
+    }
 }
 
 // =============================================================================
@@ -352,9 +374,11 @@ pub struct RocksSnapshotCoordinator {
     /// Number of shards in the database.
     num_shards: usize,
     /// Current snapshot epoch (monotonically increasing).
-    epoch: AtomicU64,
+    epoch: Arc<AtomicU64>,
     /// Whether a snapshot is currently in progress.
     in_progress: Arc<AtomicBool>,
+    /// Whether a snapshot is scheduled to run after the current one completes.
+    scheduled: Arc<AtomicBool>,
     /// Time of the last completed snapshot.
     last_save_time: Arc<RwLock<Option<Instant>>>,
     /// Metadata of the last completed snapshot.
@@ -391,8 +415,9 @@ impl RocksSnapshotCoordinator {
             rocks_store,
             snapshot_dir: config.snapshot_dir,
             num_shards,
-            epoch: AtomicU64::new(initial_epoch),
+            epoch: Arc::new(AtomicU64::new(initial_epoch)),
             in_progress: Arc::new(AtomicBool::new(false)),
+            scheduled: Arc::new(AtomicBool::new(false)),
             last_save_time: Arc::new(RwLock::new(last_save_time)),
             last_metadata: Arc::new(RwLock::new(last_metadata)),
             max_snapshots: config.max_snapshots,
@@ -542,7 +567,7 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
         }
 
         // Increment epoch
-        let epoch = self.epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        let initial_epoch = self.epoch.fetch_add(1, Ordering::SeqCst) + 1;
 
         // Record that a snapshot is starting
         self.metrics_recorder.record_gauge(
@@ -552,16 +577,16 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
         );
         self.metrics_recorder.record_gauge(
             "frogdb_snapshot_epoch",
-            epoch as f64,
+            initial_epoch as f64,
             &[],
         );
-
-        let start = Instant::now();
 
         // Clone Arc handles for the spawned task
         let rocks_store = self.rocks_store.clone();
         let snapshot_dir = self.snapshot_dir.clone();
         let in_progress = self.in_progress.clone();
+        let scheduled = self.scheduled.clone();
+        let epoch_counter = self.epoch.clone();
         let last_save_time = self.last_save_time.clone();
         let last_metadata = self.last_metadata.clone();
         let metrics = self.metrics_recorder.clone();
@@ -570,117 +595,150 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
 
         // Spawn background task (returns immediately)
         tokio::spawn(async move {
-            // Use spawn_blocking for RocksDB Checkpoint (it's !Send)
-            let result = tokio::task::spawn_blocking(move || {
-                let snapshot_name = format!("snapshot_{:05}", epoch);
-                let temp_dir = snapshot_dir.join(format!(".snapshot_{:05}.tmp", epoch));
-                let final_dir = snapshot_dir.join(&snapshot_name);
-                let checkpoint_path = temp_dir.join("checkpoint");
+            let mut current_epoch = initial_epoch;
+            let mut start = Instant::now();
 
-                // Create temp directory structure
-                if let Err(e) = std::fs::create_dir_all(&checkpoint_path) {
-                    return Err(SnapshotError::Io(e));
+            loop {
+                // Clone values needed for the blocking task
+                let rocks_store_inner = rocks_store.clone();
+                let snapshot_dir_inner = snapshot_dir.clone();
+                let snapshot_epoch = current_epoch;
+
+                // Use spawn_blocking for RocksDB Checkpoint (it's !Send)
+                let result = tokio::task::spawn_blocking(move || {
+                    let snapshot_name = format!("snapshot_{:05}", snapshot_epoch);
+                    let temp_dir = snapshot_dir_inner.join(format!(".snapshot_{:05}.tmp", snapshot_epoch));
+                    let final_dir = snapshot_dir_inner.join(&snapshot_name);
+                    let checkpoint_path = temp_dir.join("checkpoint");
+
+                    // Create temp directory structure
+                    if let Err(e) = std::fs::create_dir_all(&checkpoint_path) {
+                        return Err(SnapshotError::Io(e));
+                    }
+
+                    // Capture sequence number atomically with checkpoint
+                    let sequence = rocks_store_inner.latest_sequence_number();
+
+                    // Create the RocksDB checkpoint
+                    if let Err(e) = rocks_store_inner.create_checkpoint(&checkpoint_path) {
+                        // Clean up temp directory on error
+                        let _ = std::fs::remove_dir_all(&temp_dir);
+                        return Err(SnapshotError::Internal(format!(
+                            "Failed to create checkpoint: {}",
+                            e
+                        )));
+                    }
+
+                    // Create metadata
+                    let mut metadata = SnapshotMetadataFile::new(snapshot_epoch, sequence, num_shards);
+
+                    // Calculate snapshot size
+                    let size_bytes = Self::calculate_dir_size(&checkpoint_path).unwrap_or(0);
+
+                    // Mark as complete (we don't have an accurate key count without scanning)
+                    metadata.mark_complete(0, size_bytes);
+
+                    // Write metadata to temp directory
+                    let metadata_path = temp_dir.join("metadata.json");
+                    let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| {
+                        SnapshotError::Internal(format!("Failed to serialize metadata: {}", e))
+                    })?;
+
+                    // Write metadata atomically using temp file + rename
+                    let metadata_tmp = temp_dir.join("metadata.json.tmp");
+                    std::fs::write(&metadata_tmp, &metadata_json)?;
+                    std::fs::rename(&metadata_tmp, &metadata_path)?;
+
+                    // Atomic rename of entire snapshot directory
+                    std::fs::rename(&temp_dir, &final_dir)?;
+
+                    // Update 'latest' symlink
+                    if let Err(e) = Self::update_latest_symlink(&snapshot_dir_inner, &snapshot_name) {
+                        tracing::warn!(error = %e, "Failed to update latest symlink");
+                    }
+
+                    // Clean up old snapshots
+                    if let Err(e) = Self::cleanup_old_snapshots(&snapshot_dir_inner, max_snapshots) {
+                        tracing::warn!(error = %e, "Failed to cleanup old snapshots");
+                    }
+
+                    Ok((metadata, sequence, final_dir))
+                })
+                .await;
+
+                match result {
+                    Ok(Ok((metadata, sequence, snapshot_path))) => {
+                        let elapsed = start.elapsed();
+
+                        // Update state
+                        *last_save_time.write().unwrap() = Some(Instant::now());
+                        *last_metadata.write().unwrap() = Some(metadata.clone());
+
+                        // Record metrics
+                        metrics.record_histogram(
+                            "frogdb_snapshot_duration_seconds",
+                            elapsed.as_secs_f64(),
+                            &[],
+                        );
+                        metrics.record_gauge(
+                            "frogdb_snapshot_size_bytes",
+                            metadata.size_bytes as f64,
+                            &[],
+                        );
+
+                        tracing::info!(
+                            epoch = current_epoch,
+                            sequence,
+                            path = %snapshot_path.display(),
+                            size_bytes = metadata.size_bytes,
+                            duration_ms = elapsed.as_millis(),
+                            "Snapshot completed"
+                        );
+                    }
+                    Ok(Err(e)) => {
+                        metrics.increment_counter("frogdb_snapshot_errors_total", 1, &[]);
+                        tracing::error!(epoch = current_epoch, error = %e, "Snapshot failed");
+                    }
+                    Err(e) => {
+                        metrics.increment_counter("frogdb_snapshot_errors_total", 1, &[]);
+                        tracing::error!(epoch = current_epoch, error = %e, "Snapshot task panicked");
+                    }
                 }
 
-                // Capture sequence number atomically with checkpoint
-                let sequence = rocks_store.latest_sequence_number();
+                // Clear in_progress
+                in_progress.store(false, Ordering::SeqCst);
 
-                // Create the RocksDB checkpoint
-                if let Err(e) = rocks_store.create_checkpoint(&checkpoint_path) {
-                    // Clean up temp directory on error
-                    let _ = std::fs::remove_dir_all(&temp_dir);
-                    return Err(SnapshotError::Internal(format!(
-                        "Failed to create checkpoint: {}",
-                        e
-                    )));
-                }
-
-                // Create metadata
-                let mut metadata = SnapshotMetadataFile::new(epoch, sequence, num_shards);
-
-                // Calculate snapshot size
-                let size_bytes = Self::calculate_dir_size(&checkpoint_path).unwrap_or(0);
-
-                // Mark as complete (we don't have an accurate key count without scanning)
-                metadata.mark_complete(0, size_bytes);
-
-                // Write metadata to temp directory
-                let metadata_path = temp_dir.join("metadata.json");
-                let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| {
-                    SnapshotError::Internal(format!("Failed to serialize metadata: {}", e))
-                })?;
-
-                // Write metadata atomically using temp file + rename
-                let metadata_tmp = temp_dir.join("metadata.json.tmp");
-                std::fs::write(&metadata_tmp, &metadata_json)?;
-                std::fs::rename(&metadata_tmp, &metadata_path)?;
-
-                // Atomic rename of entire snapshot directory
-                std::fs::rename(&temp_dir, &final_dir)?;
-
-                // Update 'latest' symlink
-                if let Err(e) = Self::update_latest_symlink(&snapshot_dir, &snapshot_name) {
-                    tracing::warn!(error = %e, "Failed to update latest symlink");
-                }
-
-                // Clean up old snapshots
-                if let Err(e) = Self::cleanup_old_snapshots(&snapshot_dir, max_snapshots) {
-                    tracing::warn!(error = %e, "Failed to cleanup old snapshots");
-                }
-
-                Ok((metadata, sequence, final_dir))
-            })
-            .await;
-
-            match result {
-                Ok(Ok((metadata, sequence, snapshot_path))) => {
-                    let elapsed = start.elapsed();
-
-                    // Update state
-                    *last_save_time.write().unwrap() = Some(Instant::now());
-                    *last_metadata.write().unwrap() = Some(metadata.clone());
-
-                    // Record metrics
-                    metrics.record_histogram(
-                        "frogdb_snapshot_duration_seconds",
-                        elapsed.as_secs_f64(),
-                        &[],
-                    );
-                    metrics.record_gauge(
-                        "frogdb_snapshot_size_bytes",
-                        metadata.size_bytes as f64,
-                        &[],
-                    );
+                // Check if another snapshot was scheduled
+                if !scheduled.swap(false, Ordering::SeqCst) {
+                    // No scheduled snapshot, we're done
                     metrics.record_gauge("frogdb_snapshot_in_progress", 0.0, &[]);
+                    break;
+                }
 
-                    tracing::info!(
-                        epoch,
-                        sequence,
-                        path = %snapshot_path.display(),
-                        size_bytes = metadata.size_bytes,
-                        duration_ms = elapsed.as_millis(),
-                        "Snapshot completed"
-                    );
-                }
-                Ok(Err(e)) => {
-                    metrics.increment_counter("frogdb_snapshot_errors_total", 1, &[]);
+                // Try to acquire in_progress for the scheduled snapshot
+                if in_progress
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_err()
+                {
+                    // Someone else started a snapshot, we're done
                     metrics.record_gauge("frogdb_snapshot_in_progress", 0.0, &[]);
-                    tracing::error!(epoch, error = %e, "Snapshot failed");
+                    break;
                 }
-                Err(e) => {
-                    metrics.increment_counter("frogdb_snapshot_errors_total", 1, &[]);
-                    metrics.record_gauge("frogdb_snapshot_in_progress", 0.0, &[]);
-                    tracing::error!(epoch, error = %e, "Snapshot task panicked");
-                }
+
+                // Increment epoch for the scheduled snapshot
+                current_epoch = epoch_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                start = Instant::now();
+
+                // Update metrics for the new snapshot
+                metrics.record_gauge("frogdb_snapshot_epoch", current_epoch as f64, &[]);
+
+                tracing::info!(epoch = current_epoch, "Starting scheduled snapshot");
             }
-
-            // Always clear in_progress
-            in_progress.store(false, Ordering::SeqCst);
         });
 
         // Return handle immediately (background task completes asynchronously)
         // The completion callback is empty since the background task manages state
-        Ok(SnapshotHandle::new(epoch, || {}))
+        Ok(SnapshotHandle::new(initial_epoch, || {}))
     }
 
     fn last_save_time(&self) -> Option<Instant> {
@@ -697,6 +755,19 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
             .unwrap()
             .as_ref()
             .map(|m| m.to_metadata())
+    }
+
+    fn schedule_snapshot(&self) -> bool {
+        // Only schedule if a snapshot is in progress
+        if !self.in_progress() {
+            return false;
+        }
+        self.scheduled.store(true, Ordering::SeqCst);
+        true
+    }
+
+    fn is_scheduled(&self) -> bool {
+        self.scheduled.load(Ordering::SeqCst)
     }
 }
 
@@ -771,6 +842,62 @@ mod tests {
         assert_eq!(metadata.epoch, 1);
         assert!(metadata.completed_at.is_some());
         assert_eq!(metadata.num_keys, 0);
+    }
+
+    // =========================================================================
+    // Snapshot scheduling tests
+    // =========================================================================
+
+    #[test]
+    fn test_noop_schedule_returns_false_when_no_save_in_progress() {
+        let coord = NoopSnapshotCoordinator::new();
+
+        // No save in progress, scheduling should return false
+        assert!(!coord.schedule_snapshot());
+        assert!(!coord.is_scheduled());
+    }
+
+    #[test]
+    fn test_noop_schedule_returns_true_when_save_in_progress() {
+        let coord = NoopSnapshotCoordinator::new();
+
+        // Start a snapshot to make one "in progress"
+        let _handle = coord.start_snapshot().unwrap();
+        assert!(coord.in_progress());
+
+        // Now scheduling should succeed
+        assert!(coord.schedule_snapshot());
+        assert!(coord.is_scheduled());
+    }
+
+    #[test]
+    fn test_noop_is_scheduled_returns_correct_state() {
+        let coord = NoopSnapshotCoordinator::new();
+
+        // Initially not scheduled
+        assert!(!coord.is_scheduled());
+
+        // Start a snapshot and schedule another
+        let _handle = coord.start_snapshot().unwrap();
+        coord.schedule_snapshot();
+
+        // Should be scheduled
+        assert!(coord.is_scheduled());
+    }
+
+    #[test]
+    fn test_noop_schedule_multiple_times() {
+        let coord = NoopSnapshotCoordinator::new();
+
+        let _handle = coord.start_snapshot().unwrap();
+
+        // Schedule multiple times - all should succeed
+        assert!(coord.schedule_snapshot());
+        assert!(coord.schedule_snapshot());
+        assert!(coord.schedule_snapshot());
+
+        // Should still be scheduled
+        assert!(coord.is_scheduled());
     }
 
     // =========================================================================
