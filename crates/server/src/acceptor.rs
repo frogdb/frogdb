@@ -8,11 +8,11 @@ use frogdb_core::{
     CommandRegistry, MetricsRecorder, ShardMessage,
 };
 use frogdb_metrics::metric_names;
-use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::connection::ConnectionHandler;
+use crate::net::{spawn, TcpListener};
 use crate::runtime_config::ConfigManager;
 use crate::server::next_conn_id;
 
@@ -158,7 +158,7 @@ impl Acceptor {
                     let acl_manager = self.acl_manager.clone();
                     let snapshot_coordinator = self.snapshot_coordinator.clone();
 
-                    tokio::spawn(async move {
+                    spawn(async move {
                         let handler = ConnectionHandler::new(
                             socket,
                             addr,

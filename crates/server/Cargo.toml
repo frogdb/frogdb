@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [features]
 shuttle = ["dep:shuttle", "frogdb-core/shuttle"]
+turmoil = ["dep:turmoil"]
 
 [dependencies]
 frogdb-protocol.workspace = true
@@ -31,11 +32,14 @@ anyhow.workspace = true
 futures.workspace = true
 bitvec.workspace = true
 shuttle = { workspace = true, optional = true }
+turmoil = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 futures.workspace = true
 shuttle.workspace = true
+turmoil.workspace = true
 tempfile.workspace = true
 reqwest = { version = "0.12", features = ["json"] }
 proptest.workspace = true
+frogdb-testing.workspace = true

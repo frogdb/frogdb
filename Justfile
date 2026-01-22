@@ -30,6 +30,21 @@ proptest:
 concurrency:
     cargo test -p frogdb-core --features shuttle --test concurrency
 
+# Run Shuttle concurrency tests (alias for concurrency)
+test-shuttle:
+    cargo test -p frogdb-core --features shuttle --test concurrency
+
+# Run Turmoil simulation tests
+test-turmoil:
+    cargo test -p frogdb-server --features turmoil --test simulation
+
+# Run all deterministic simulation tests (Shuttle + Turmoil)
+test-dst: test-shuttle test-turmoil
+
+# Run linearizability checker tests
+test-linearizability:
+    cargo test -p frogdb-testing
+
 # Run all benchmarks
 bench:
     cargo bench -p frogdb-benches

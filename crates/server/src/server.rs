@@ -9,13 +9,13 @@ use frogdb_core::sync::{Arc, AtomicU64, Ordering};
 use frogdb_core::{AclManager, ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, ShardMessage, ShardWorker};
 use frogdb_metrics::{HealthChecker, MetricsServer, PrometheusRecorder, SystemMetricsCollector};
 use std::time::Duration;
-use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::acceptor::Acceptor;
 use crate::config::{Config, MemoryConfig, PersistenceConfig};
+use crate::net::{spawn, TcpListener};
 use crate::runtime_config::ConfigManager;
 
 /// Channel capacity for shard message queues.
@@ -44,7 +44,7 @@ pub fn next_txid() -> u64 {
 type PersistenceInitResult = (
     Arc<RocksStore>,
     Vec<(frogdb_core::HashMapStore, frogdb_core::ExpiryIndex)>,
-    Option<tokio::task::JoinHandle<()>>,
+    Option<crate::net::JoinHandle<()>>,
 );
 
 /// FrogDB server.
@@ -71,16 +71,16 @@ pub struct Server {
     new_conn_senders: Vec<mpsc::Sender<frogdb_core::shard::NewConnection>>,
 
     /// Shard worker handles.
-    shard_handles: Vec<tokio::task::JoinHandle<()>>,
+    shard_handles: Vec<crate::net::JoinHandle<()>>,
 
     /// Optional RocksDB store for persistence.
     rocks_store: Option<Arc<RocksStore>>,
 
     /// Optional periodic sync task handle.
-    periodic_sync_handle: Option<tokio::task::JoinHandle<()>>,
+    periodic_sync_handle: Option<crate::net::JoinHandle<()>>,
 
     /// Optional periodic snapshot task handle.
-    periodic_snapshot_handle: Option<tokio::task::JoinHandle<()>>,
+    periodic_snapshot_handle: Option<crate::net::JoinHandle<()>>,
 
     /// Snapshot coordinator (shared across all shards).
     snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
@@ -174,7 +174,7 @@ impl Server {
         // Create snapshot coordinator
         let (snapshot_coordinator, periodic_snapshot_handle): (
             Arc<dyn SnapshotCoordinator>,
-            Option<tokio::task::JoinHandle<()>>,
+            Option<crate::net::JoinHandle<()>>,
         ) = if let Some(ref rocks) = rocks_store {
             // Real snapshot coordinator with RocksDB
             match RocksSnapshotCoordinator::new(
@@ -279,7 +279,7 @@ impl Server {
                 )
             };
 
-            let handle = tokio::spawn(async move {
+            let handle = spawn(async move {
                 worker.run().await;
             });
 
@@ -313,13 +313,13 @@ impl Server {
     fn spawn_periodic_snapshot_task(
         coordinator: Arc<dyn SnapshotCoordinator>,
         interval_secs: u64,
-    ) -> tokio::task::JoinHandle<()> {
+    ) -> crate::net::JoinHandle<()> {
         info!(
             interval_secs,
             "Starting periodic snapshot task"
         );
 
-        tokio::spawn(async move {
+        spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
 
             loop {
@@ -461,7 +461,7 @@ impl Server {
         );
 
         // Spawn acceptor task
-        let acceptor_handle = tokio::spawn(async move {
+        let acceptor_handle = spawn(async move {
             if let Err(e) = acceptor.run().await {
                 error!(error = %e, "Acceptor error");
             }

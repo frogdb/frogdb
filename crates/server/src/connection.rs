@@ -19,11 +19,11 @@ use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use futures::{SinkExt, StreamExt};
 use redis_protocol::codec::Resp2;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Framed;
 use tracing::{debug, trace, warn};
 
+use crate::net::TcpStream;
 use crate::runtime_config::ConfigManager;
 use crate::server::next_txid;
 
