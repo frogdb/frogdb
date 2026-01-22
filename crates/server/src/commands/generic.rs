@@ -666,3 +666,39 @@ impl Command for CopyCommand {
         }
     }
 }
+
+// ============================================================================
+// RANDOMKEY - Return a random key from the database
+// ============================================================================
+
+pub struct RandomkeyCommand;
+
+impl Command for RandomkeyCommand {
+    fn name(&self) -> &'static str {
+        "RANDOMKEY"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(0)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY | CommandFlags::RANDOM
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        // This command is handled specially in connection.rs via scatter-gather
+        // It should never reach here in a multi-shard setup
+        Err(CommandError::InvalidArgument {
+            message: "RANDOMKEY should be handled by connection handler".to_string(),
+        })
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![] // Keyless command
+    }
+}

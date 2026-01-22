@@ -18,6 +18,7 @@ frogdb-protocol.workspace = true
 frogdb-core.workspace = true
 frogdb-metrics.workspace = true
 bytes.workspace = true
+rand.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 redis-protocol.workspace = true

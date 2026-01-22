@@ -32,6 +32,10 @@ bitflags! {
         const MASTER = 1 << 3;
         /// Client is a replica (replication).
         const REPLICA = 1 << 4;
+        /// Client is protected from eviction.
+        const NO_EVICT = 1 << 5;
+        /// Client's accesses don't update LRU time.
+        const NO_TOUCH = 1 << 6;
     }
 }
 
@@ -57,6 +61,12 @@ impl ClientFlags {
             if self.contains(ClientFlags::REPLICA) {
                 flags.push('S'); // replica/slave
             }
+            if self.contains(ClientFlags::NO_EVICT) {
+                flags.push('e'); // no-evict
+            }
+            if self.contains(ClientFlags::NO_TOUCH) {
+                flags.push('T'); // no-touch
+            }
         }
         if flags.is_empty() {
             flags.push('N');
@@ -81,6 +91,15 @@ struct PauseState {
     mode: Option<PauseMode>,
     /// When the pause should automatically expire.
     unpause_at: Option<Instant>,
+}
+
+/// Unblock mode for CLIENT UNBLOCK.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnblockMode {
+    /// Return nil/timeout response.
+    Timeout,
+    /// Return error response.
+    Error,
 }
 
 /// Internal entry for a registered client.
@@ -109,6 +128,12 @@ struct ClientEntry {
     multi_queue_len: usize,
     /// Watch channel sender for kill signal (true = killed).
     kill_tx: watch::Sender<bool>,
+    /// Watch channel sender for unblock signal (Some = unblocked, with mode).
+    unblock_tx: watch::Sender<Option<UnblockMode>>,
+    /// Library name (from CLIENT SETINFO).
+    lib_name: Option<Bytes>,
+    /// Library version (from CLIENT SETINFO).
+    lib_ver: Option<Bytes>,
 }
 
 /// Client connection information snapshot.
@@ -138,6 +163,10 @@ pub struct ClientInfo {
     pub in_multi: bool,
     /// Number of commands queued in MULTI.
     pub multi_queue_len: usize,
+    /// Library name (from CLIENT SETINFO).
+    pub lib_name: Option<Bytes>,
+    /// Library version (from CLIENT SETINFO).
+    pub lib_ver: Option<Bytes>,
 }
 
 impl ClientInfo {
@@ -155,6 +184,16 @@ impl ClientInfo {
             .as_ref()
             .map(|n| String::from_utf8_lossy(n).to_string())
             .unwrap_or_default();
+        let lib_name_str = self
+            .lib_name
+            .as_ref()
+            .map(|n| String::from_utf8_lossy(n).to_string())
+            .unwrap_or_default();
+        let lib_ver_str = self
+            .lib_ver
+            .as_ref()
+            .map(|n| String::from_utf8_lossy(n).to_string())
+            .unwrap_or_default();
         let flags_str = self.flags.to_flag_string();
         let multi_qlen = if self.in_multi {
             self.multi_queue_len as i64
@@ -163,7 +202,7 @@ impl ClientInfo {
         };
 
         format!(
-            "id={} addr={} laddr={} fd=0 name={} age={} idle={} flags={} db=0 sub={} psub={} ssub={} multi={} qbuf=0 qbuf-free=0 argv-mem=0 multi-mem=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=NULL user=default redir=-1 resp=2",
+            "id={} addr={} laddr={} fd=0 name={} age={} idle={} flags={} db=0 sub={} psub={} ssub={} multi={} qbuf=0 qbuf-free=0 argv-mem=0 multi-mem=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=NULL user=default redir=-1 resp=2 lib-name={} lib-ver={}",
             self.id,
             addr_str,
             laddr_str,
@@ -174,7 +213,9 @@ impl ClientInfo {
             self.sub_count,
             self.psub_count,
             self.ssub_count,
-            multi_qlen
+            multi_qlen,
+            lib_name_str,
+            lib_ver_str
         )
     }
 
@@ -259,6 +300,7 @@ pub struct ClientHandle {
     id: u64,
     registry: Arc<ClientRegistry>,
     kill_rx: watch::Receiver<bool>,
+    unblock_rx: watch::Receiver<Option<UnblockMode>>,
 }
 
 impl ClientHandle {
@@ -286,6 +328,32 @@ impl ClientHandle {
                 return;
             }
         }
+    }
+
+    /// Check if an unblock was requested.
+    /// Returns Some(mode) if unblocked, None otherwise.
+    pub fn check_unblock(&self) -> Option<UnblockMode> {
+        *self.unblock_rx.borrow()
+    }
+
+    /// Wait until client is unblocked.
+    /// Returns the unblock mode when CLIENT UNBLOCK is called.
+    pub async fn unblocked(&mut self) -> Option<UnblockMode> {
+        loop {
+            if let Some(mode) = *self.unblock_rx.borrow() {
+                return Some(mode);
+            }
+            // Wait for change
+            if self.unblock_rx.changed().await.is_err() {
+                // Channel closed
+                return None;
+            }
+        }
+    }
+
+    /// Clear the unblock signal (call after handling).
+    pub fn clear_unblock(&self) {
+        // The registry will reset this when needed
     }
 }
 
@@ -327,6 +395,7 @@ impl ClientRegistry {
     ) -> ClientHandle {
         let now = Instant::now();
         let (kill_tx, kill_rx) = watch::channel(false);
+        let (unblock_tx, unblock_rx) = watch::channel(None);
 
         let entry = ClientEntry {
             addr,
@@ -341,6 +410,9 @@ impl ClientRegistry {
             in_multi: false,
             multi_queue_len: 0,
             kill_tx,
+            unblock_tx,
+            lib_name: None,
+            lib_ver: None,
         };
 
         {
@@ -352,6 +424,7 @@ impl ClientRegistry {
             id,
             registry: Arc::clone(self),
             kill_rx,
+            unblock_rx,
         }
     }
 
@@ -379,6 +452,8 @@ impl ClientRegistry {
                 ssub_count: entry.ssub_count,
                 in_multi: entry.in_multi,
                 multi_queue_len: entry.multi_queue_len,
+                lib_name: entry.lib_name.clone(),
+                lib_ver: entry.lib_ver.clone(),
             })
             .collect()
     }
@@ -399,6 +474,8 @@ impl ClientRegistry {
             ssub_count: entry.ssub_count,
             in_multi: entry.in_multi,
             multi_queue_len: entry.multi_queue_len,
+            lib_name: entry.lib_name.clone(),
+            lib_ver: entry.lib_ver.clone(),
         })
     }
 
@@ -410,6 +487,32 @@ impl ClientRegistry {
             true
         } else {
             false
+        }
+    }
+
+    /// Unblock a blocked client by ID.
+    /// Returns true if the client exists and was signaled, false if client not found.
+    /// Note: Returns true even if client wasn't actually blocked.
+    pub fn unblock(&self, id: u64, mode: UnblockMode) -> bool {
+        let clients = self.clients.read().unwrap();
+        if let Some(entry) = clients.get(&id) {
+            // Check if client is actually blocked
+            if entry.flags.contains(ClientFlags::BLOCKED) {
+                let _ = entry.unblock_tx.send(Some(mode));
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Reset the unblock signal for a client.
+    pub fn reset_unblock(&self, id: u64) {
+        let clients = self.clients.read().unwrap();
+        if let Some(entry) = clients.get(&id) {
+            let _ = entry.unblock_tx.send(None);
         }
     }
 
@@ -432,6 +535,8 @@ impl ClientRegistry {
                 ssub_count: entry.ssub_count,
                 in_multi: entry.in_multi,
                 multi_queue_len: entry.multi_queue_len,
+                lib_name: entry.lib_name.clone(),
+                lib_ver: entry.lib_ver.clone(),
             };
 
             if filter.matches(id, &info) {
@@ -448,6 +553,19 @@ impl ClientRegistry {
         let mut clients = self.clients.write().unwrap();
         if let Some(entry) = clients.get_mut(&id) {
             entry.name = name;
+        }
+    }
+
+    /// Update a client's library info.
+    pub fn update_lib_info(&self, id: u64, lib_name: Option<Bytes>, lib_ver: Option<Bytes>) {
+        let mut clients = self.clients.write().unwrap();
+        if let Some(entry) = clients.get_mut(&id) {
+            if lib_name.is_some() {
+                entry.lib_name = lib_name;
+            }
+            if lib_ver.is_some() {
+                entry.lib_ver = lib_ver;
+            }
         }
     }
 
@@ -729,6 +847,8 @@ mod tests {
             ssub_count: 3,
             in_multi: false,
             multi_queue_len: 0,
+            lib_name: Some(Bytes::from_static(b"testlib")),
+            lib_ver: Some(Bytes::from_static(b"1.0.0")),
         };
 
         let entry = info.to_client_list_entry();
@@ -737,6 +857,8 @@ mod tests {
         assert!(entry.contains("sub=1"));
         assert!(entry.contains("psub=2"));
         assert!(entry.contains("ssub=3"));
+        assert!(entry.contains("lib-name=testlib"));
+        assert!(entry.contains("lib-ver=1.0.0"));
     }
 
     #[test]

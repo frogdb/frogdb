@@ -75,7 +75,7 @@ pub use eviction::{
 };
 pub use glob::glob_match;
 pub use client_registry::{
-    ClientFlags, ClientHandle, ClientInfo, ClientRegistry, KillFilter, PauseMode,
+    ClientFlags, ClientHandle, ClientInfo, ClientRegistry, KillFilter, PauseMode, UnblockMode,
 };
 pub use bitmap::{
     BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, OverflowMode,

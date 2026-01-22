@@ -132,6 +132,16 @@ pub struct BlockedState {
     pub keys: Vec<Bytes>,
 }
 
+/// Reply mode for CLIENT REPLY command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReplyMode {
+    /// Normal reply mode (default).
+    #[default]
+    On,
+    /// No replies to client commands.
+    Off,
+}
+
 /// Connection state.
 #[allow(dead_code)]
 pub struct ConnectionState {
@@ -167,6 +177,12 @@ pub struct ConnectionState {
 
     /// Blocked state for blocking commands (None = not blocked).
     pub blocked: Option<BlockedState>,
+
+    /// Reply mode (from CLIENT REPLY).
+    pub reply_mode: ReplyMode,
+
+    /// Skip the next reply (for CLIENT REPLY SKIP).
+    pub skip_next_reply: bool,
 }
 
 impl ConnectionState {
@@ -187,6 +203,8 @@ impl ConnectionState {
                 AuthState::default()
             },
             blocked: None,
+            reply_mode: ReplyMode::default(),
+            skip_next_reply: false,
         }
     }
 }
@@ -469,12 +487,25 @@ impl ConnectionHandler {
                     // Log to slowlog if threshold exceeded and command not exempt
                     self.maybe_log_slow_query(&cmd, elapsed_us).await;
 
-                    // Send response(s)
-                    for response in responses {
-                        if self.send_response(response).await.is_err() {
-                            debug!(conn_id = self.state.id, "Failed to send response");
-                            // Break out of the loop on send failure
-                            break;
+                    // Send response(s) based on reply mode
+                    match self.state.reply_mode {
+                        ReplyMode::On => {
+                            // Check for SKIP mode
+                            if self.state.skip_next_reply {
+                                self.state.skip_next_reply = false;
+                                // Skip sending this response
+                            } else {
+                                for response in responses {
+                                    if self.send_response(response).await.is_err() {
+                                        debug!(conn_id = self.state.id, "Failed to send response");
+                                        // Break out of the loop on send failure
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        ReplyMode::Off => {
+                            // Don't send any replies
                         }
                     }
                 }
@@ -801,6 +832,7 @@ impl ConnectionHandler {
             "SCAN" => return vec![self.handle_scan(&cmd.args).await],
             "KEYS" => return vec![self.handle_keys(&cmd.args).await],
             "DBSIZE" => return vec![self.handle_dbsize().await],
+            "RANDOMKEY" => return vec![self.handle_randomkey().await],
             "FLUSHDB" => return vec![self.handle_flushdb(&cmd.args).await],
             "FLUSHALL" => return vec![self.handle_flushall(&cmd.args).await],
             "DEBUG" => {
@@ -1810,6 +1842,10 @@ impl ConnectionHandler {
             ScatterOp::Copy { .. } | ScatterOp::CopySet { .. } => {
                 // These are handled specially in execute_cross_shard_copy
                 Response::error("ERR COPY scatter-gather not supported through this path")
+            }
+            ScatterOp::RandomKey => {
+                // This is handled specially in handle_randomkey
+                Response::error("ERR RANDOMKEY scatter-gather not supported through this path")
             }
         }
     }
@@ -3002,6 +3038,105 @@ impl ConnectionHandler {
         Response::Integer(total)
     }
 
+    /// Handle RANDOMKEY command - return a random key using weighted shard selection.
+    async fn handle_randomkey(&self) -> Response {
+        use rand::Rng;
+
+        // Phase 1: Get key counts from all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::DbSize,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        // Collect key counts per shard
+        let mut shard_counts: Vec<(usize, i64)> = Vec::with_capacity(self.num_shards);
+        let mut total_keys: i64 = 0;
+
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    for (_, response) in partial.results {
+                        if let Response::Integer(count) = response {
+                            shard_counts.push((shard_id, count));
+                            total_keys += count;
+                        }
+                    }
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped DBSIZE request for RANDOMKEY");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "DBSIZE timeout for RANDOMKEY");
+                    return Response::error("ERR timeout");
+                }
+            }
+        }
+
+        // If database is empty, return nil
+        if total_keys == 0 {
+            return Response::null();
+        }
+
+        // Phase 2: Select shard probabilistically (weighted by key count)
+        let selected_shard = {
+            let mut rng = rand::thread_rng();
+            let selection = rng.gen_range(0..total_keys);
+            let mut cumulative: i64 = 0;
+            let mut selected: usize = 0;
+
+            for (shard_id, count) in &shard_counts {
+                cumulative += count;
+                if selection < cumulative {
+                    selected = *shard_id;
+                    break;
+                }
+            }
+            selected
+        };
+
+        // Phase 3: Request random key from selected shard
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::ScatterRequest {
+            request_id: next_txid(),
+            keys: vec![],
+            operation: ScatterOp::RandomKey,
+            response_tx,
+        };
+
+        if self.shard_senders[selected_shard].send(msg).await.is_err() {
+            return Response::error("ERR shard unavailable");
+        }
+
+        match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
+            Ok(Ok(partial)) => {
+                // Return the random key (or null if shard is now empty)
+                for (_, response) in partial.results {
+                    return response;
+                }
+                Response::null()
+            }
+            Ok(Err(_)) => {
+                warn!(selected_shard, "Shard dropped RANDOMKEY request");
+                Response::error("ERR shard dropped request")
+            }
+            Err(_) => {
+                warn!(selected_shard, "RANDOMKEY timeout");
+                Response::error("ERR timeout")
+            }
+        }
+    }
+
     /// Handle FLUSHDB command - clear all shards.
     async fn handle_flushdb(&self, args: &[Bytes]) -> Response {
         // Parse optional ASYNC/SYNC argument (we only support SYNC for now)
@@ -3118,6 +3253,14 @@ impl ConnectionHandler {
             "KILL" => self.handle_client_kill(&args[1..]),
             "PAUSE" => self.handle_client_pause(&args[1..]),
             "UNPAUSE" => self.handle_client_unpause(),
+            "SETINFO" => self.handle_client_setinfo(&args[1..]),
+            "NO-EVICT" => self.handle_client_no_evict(&args[1..]),
+            "NO-TOUCH" => self.handle_client_no_touch(&args[1..]),
+            "TRACKINGINFO" => self.handle_client_trackinginfo(),
+            "GETREDIR" => self.handle_client_getredir(),
+            "CACHING" => self.handle_client_caching(&args[1..]),
+            "REPLY" => self.handle_client_reply(&args[1..]),
+            "UNBLOCK" => self.handle_client_unblock(&args[1..]),
             "HELP" => self.handle_client_help(),
             _ => Response::error(format!(
                 "ERR unknown subcommand '{}'. Try CLIENT HELP.",
@@ -3422,12 +3565,210 @@ impl ConnectionHandler {
         Response::ok()
     }
 
+    /// Handle CLIENT SETINFO - set client library info.
+    fn handle_client_setinfo(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'client|setinfo' command");
+        }
+
+        let attr = args[0].to_ascii_uppercase();
+        let value = &args[1];
+
+        match attr.as_slice() {
+            b"LIB-NAME" => {
+                // Validate: no spaces or newlines allowed
+                if value.iter().any(|&b| b == b' ' || b == b'\n' || b == b'\r') {
+                    return Response::error("ERR lib-name cannot contain spaces, newlines or special characters");
+                }
+                self.client_registry.update_lib_info(self.state.id, Some(value.clone()), None);
+                Response::ok()
+            }
+            b"LIB-VER" => {
+                // Validate: no spaces or newlines allowed
+                if value.iter().any(|&b| b == b' ' || b == b'\n' || b == b'\r') {
+                    return Response::error("ERR lib-ver cannot contain spaces, newlines or special characters");
+                }
+                self.client_registry.update_lib_info(self.state.id, None, Some(value.clone()));
+                Response::ok()
+            }
+            _ => Response::error(format!(
+                "ERR unknown attribute '{}'",
+                String::from_utf8_lossy(&attr)
+            )),
+        }
+    }
+
+    /// Handle CLIENT NO-EVICT - protect client from eviction.
+    fn handle_client_no_evict(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'client|no-evict' command");
+        }
+
+        let mode = args[0].to_ascii_uppercase();
+        let info = match self.client_registry.get(self.state.id) {
+            Some(info) => info,
+            None => return Response::error("ERR client not found"),
+        };
+
+        let mut flags = info.flags;
+
+        match mode.as_slice() {
+            b"ON" => {
+                flags |= frogdb_core::ClientFlags::NO_EVICT;
+            }
+            b"OFF" => {
+                flags.remove(frogdb_core::ClientFlags::NO_EVICT);
+            }
+            _ => {
+                return Response::error("ERR argument must be 'ON' or 'OFF'");
+            }
+        }
+
+        self.client_registry.update_flags(self.state.id, flags);
+        Response::ok()
+    }
+
+    /// Handle CLIENT NO-TOUCH - don't update LRU time on access.
+    fn handle_client_no_touch(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'client|no-touch' command");
+        }
+
+        let mode = args[0].to_ascii_uppercase();
+        let info = match self.client_registry.get(self.state.id) {
+            Some(info) => info,
+            None => return Response::error("ERR client not found"),
+        };
+
+        let mut flags = info.flags;
+
+        match mode.as_slice() {
+            b"ON" => {
+                flags |= frogdb_core::ClientFlags::NO_TOUCH;
+            }
+            b"OFF" => {
+                flags.remove(frogdb_core::ClientFlags::NO_TOUCH);
+            }
+            _ => {
+                return Response::error("ERR argument must be 'ON' or 'OFF'");
+            }
+        }
+
+        self.client_registry.update_flags(self.state.id, flags);
+        Response::ok()
+    }
+
+    /// Handle CLIENT TRACKINGINFO - return tracking state (stub).
+    fn handle_client_trackinginfo(&self) -> Response {
+        // Tracking not yet implemented, return "off" state
+        Response::Array(vec![
+            Response::bulk(Bytes::from_static(b"flags")),
+            Response::Array(vec![Response::bulk(Bytes::from_static(b"off"))]),
+            Response::bulk(Bytes::from_static(b"redirect")),
+            Response::Integer(-1),
+            Response::bulk(Bytes::from_static(b"prefixes")),
+            Response::Array(vec![]),
+        ])
+    }
+
+    /// Handle CLIENT GETREDIR - return tracking redirect ID (stub).
+    fn handle_client_getredir(&self) -> Response {
+        // Tracking not yet implemented, return -1 (not tracking)
+        Response::Integer(-1)
+    }
+
+    /// Handle CLIENT CACHING - control client-side caching (stub).
+    fn handle_client_caching(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'client|caching' command");
+        }
+
+        let mode = args[0].to_ascii_uppercase();
+        match mode.as_slice() {
+            b"YES" | b"NO" => {
+                // Tracking not yet implemented, accept but ignore
+                Response::ok()
+            }
+            _ => {
+                Response::error("ERR argument must be 'YES' or 'NO'")
+            }
+        }
+    }
+
+    /// Handle CLIENT REPLY - control reply mode.
+    fn handle_client_reply(&mut self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'client|reply' command");
+        }
+
+        let mode = args[0].to_ascii_uppercase();
+        match mode.as_slice() {
+            b"ON" => {
+                self.state.reply_mode = ReplyMode::On;
+                Response::ok()
+            }
+            b"OFF" => {
+                self.state.reply_mode = ReplyMode::Off;
+                // Note: This command itself should still return OK
+                Response::ok()
+            }
+            b"SKIP" => {
+                self.state.skip_next_reply = true;
+                Response::ok()
+            }
+            _ => {
+                Response::error("ERR argument must be 'ON', 'OFF' or 'SKIP'")
+            }
+        }
+    }
+
+    /// Handle CLIENT UNBLOCK - unblock a blocked client.
+    fn handle_client_unblock(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'client|unblock' command");
+        }
+
+        // Parse client ID
+        let id_str = String::from_utf8_lossy(&args[0]);
+        let client_id: u64 = match id_str.parse() {
+            Ok(id) => id,
+            Err(_) => return Response::error("ERR client ID is not an integer or out of range"),
+        };
+
+        // Parse optional mode (TIMEOUT or ERROR)
+        let mode = if args.len() > 1 {
+            let mode_str = args[1].to_ascii_uppercase();
+            match mode_str.as_slice() {
+                b"TIMEOUT" => frogdb_core::UnblockMode::Timeout,
+                b"ERROR" => frogdb_core::UnblockMode::Error,
+                _ => {
+                    return Response::error(
+                        "ERR unblock mode must be either TIMEOUT or ERROR",
+                    );
+                }
+            }
+        } else {
+            frogdb_core::UnblockMode::Timeout // Default mode
+        };
+
+        // Try to unblock the client
+        if self.client_registry.unblock(client_id, mode) {
+            Response::Integer(1)
+        } else {
+            Response::Integer(0)
+        }
+    }
+
     /// Handle CLIENT HELP - show help.
     fn handle_client_help(&self) -> Response {
         let help = vec![
             Response::bulk(Bytes::from_static(b"CLIENT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:")),
+            Response::bulk(Bytes::from_static(b"CACHING <YES|NO>")),
+            Response::bulk(Bytes::from_static(b"    Control client-side caching for the current connection.")),
             Response::bulk(Bytes::from_static(b"GETNAME")),
             Response::bulk(Bytes::from_static(b"    Return the name of the current connection.")),
+            Response::bulk(Bytes::from_static(b"GETREDIR")),
+            Response::bulk(Bytes::from_static(b"    Return the client tracking redirection ID (-1 if not tracking).")),
             Response::bulk(Bytes::from_static(b"ID")),
             Response::bulk(Bytes::from_static(b"    Return the ID of the current connection.")),
             Response::bulk(Bytes::from_static(b"INFO")),
@@ -3436,10 +3777,22 @@ impl ConnectionHandler {
             Response::bulk(Bytes::from_static(b"    Kill connection(s).")),
             Response::bulk(Bytes::from_static(b"LIST [TYPE <normal|master|replica|pubsub>]")),
             Response::bulk(Bytes::from_static(b"    Return information about client connections.")),
+            Response::bulk(Bytes::from_static(b"NO-EVICT <ON|OFF>")),
+            Response::bulk(Bytes::from_static(b"    Protect client from eviction.")),
+            Response::bulk(Bytes::from_static(b"NO-TOUCH <ON|OFF>")),
+            Response::bulk(Bytes::from_static(b"    Don't update LRU time on key access.")),
             Response::bulk(Bytes::from_static(b"PAUSE <timeout> [WRITE|ALL]")),
             Response::bulk(Bytes::from_static(b"    Suspend clients for specified time.")),
+            Response::bulk(Bytes::from_static(b"REPLY <ON|OFF|SKIP>")),
+            Response::bulk(Bytes::from_static(b"    Control server replies.")),
+            Response::bulk(Bytes::from_static(b"SETINFO <LIB-NAME|LIB-VER> <value>")),
+            Response::bulk(Bytes::from_static(b"    Set client library info.")),
             Response::bulk(Bytes::from_static(b"SETNAME <name>")),
             Response::bulk(Bytes::from_static(b"    Set the name of the current connection.")),
+            Response::bulk(Bytes::from_static(b"TRACKINGINFO")),
+            Response::bulk(Bytes::from_static(b"    Return tracking state for the current connection.")),
+            Response::bulk(Bytes::from_static(b"UNBLOCK <client-id> [TIMEOUT|ERROR]")),
+            Response::bulk(Bytes::from_static(b"    Unblock a blocked client.")),
             Response::bulk(Bytes::from_static(b"UNPAUSE")),
             Response::bulk(Bytes::from_static(b"    Resume processing commands.")),
             Response::bulk(Bytes::from_static(b"HELP")),

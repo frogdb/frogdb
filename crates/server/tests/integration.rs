@@ -1621,6 +1621,145 @@ async fn test_wrongtype_hash_list_set() {
 }
 
 // ============================================================================
+// LCS Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_lcs_basic() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "a", "ohmytext"]).await;
+    client.command(&["SET", "b", "mynewtext"]).await;
+
+    let response = client.command(&["LCS", "a", "b"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("mytext"))));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lcs_len() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "a", "ohmytext"]).await;
+    client.command(&["SET", "b", "mynewtext"]).await;
+
+    let response = client.command(&["LCS", "a", "b", "LEN"]).await;
+    assert_eq!(response, Response::Integer(6));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lcs_idx() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "a", "ohmytext"]).await;
+    client.command(&["SET", "b", "mynewtext"]).await;
+
+    let response = client.command(&["LCS", "a", "b", "IDX"]).await;
+    match response {
+        Response::Array(arr) => {
+            // Should have "matches" and "len" keys
+            assert!(!arr.is_empty(), "IDX response should not be empty");
+        }
+        _ => panic!("Expected array response for IDX mode, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lcs_minmatchlen() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "a", "ohmytext"]).await;
+    client.command(&["SET", "b", "mynewtext"]).await;
+
+    // With MINMATCHLEN 4, should filter short matches
+    let response = client
+        .command(&["LCS", "a", "b", "IDX", "MINMATCHLEN", "4"])
+        .await;
+    match response {
+        Response::Array(_) => {}
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lcs_withmatchlen() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "a", "ohmytext"]).await;
+    client.command(&["SET", "b", "mynewtext"]).await;
+
+    let response = client
+        .command(&["LCS", "a", "b", "IDX", "WITHMATCHLEN"])
+        .await;
+    match response {
+        Response::Array(_) => {}
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lcs_nonexistent_keys() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Non-existent keys treated as empty strings
+    let response = client
+        .command(&["LCS", "nonexistent1", "nonexistent2"])
+        .await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from(""))));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lcs_identical_strings() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "a", "identical"]).await;
+    client.command(&["SET", "b", "identical"]).await;
+
+    let response = client.command(&["LCS", "a", "b"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("identical"))));
+
+    let response = client.command(&["LCS", "a", "b", "LEN"]).await;
+    assert_eq!(response, Response::Integer(9));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_lcs_no_common() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "a", "abc"]).await;
+    client.command(&["SET", "b", "xyz"]).await;
+
+    let response = client.command(&["LCS", "a", "b"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from(""))));
+
+    let response = client.command(&["LCS", "a", "b", "LEN"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    server.shutdown().await;
+}
+
+// ============================================================================
 // Transaction tests (MULTI/EXEC/DISCARD/WATCH/UNWATCH)
 // ============================================================================
 
@@ -2795,6 +2934,199 @@ async fn test_client_help() {
         }
         _ => panic!("Expected array response, got {:?}", response),
     }
+
+    server.shutdown().await;
+}
+
+// CLIENT SETINFO tests
+#[tokio::test]
+async fn test_client_setinfo_lib_name() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["CLIENT", "SETINFO", "LIB-NAME", "my-test-lib"])
+        .await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Verify it appears in CLIENT INFO
+    let response = client.command(&["CLIENT", "INFO"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let info_str = String::from_utf8_lossy(&data);
+            assert!(
+                info_str.contains("lib-name=my-test-lib"),
+                "Should contain lib-name"
+            );
+        }
+        _ => panic!("Expected bulk response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_setinfo_lib_ver() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["CLIENT", "SETINFO", "LIB-VER", "1.2.3"])
+        .await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Verify it appears in CLIENT INFO
+    let response = client.command(&["CLIENT", "INFO"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let info_str = String::from_utf8_lossy(&data);
+            assert!(info_str.contains("lib-ver=1.2.3"), "Should contain lib-ver");
+        }
+        _ => panic!("Expected bulk response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+// CLIENT NO-EVICT tests
+#[tokio::test]
+async fn test_client_no_evict() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Enable NO-EVICT
+    let response = client.command(&["CLIENT", "NO-EVICT", "ON"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Disable NO-EVICT
+    let response = client.command(&["CLIENT", "NO-EVICT", "OFF"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Invalid argument
+    let response = client.command(&["CLIENT", "NO-EVICT", "INVALID"]).await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+// CLIENT NO-TOUCH tests
+#[tokio::test]
+async fn test_client_no_touch() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Enable NO-TOUCH
+    let response = client.command(&["CLIENT", "NO-TOUCH", "ON"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Disable NO-TOUCH
+    let response = client.command(&["CLIENT", "NO-TOUCH", "OFF"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    server.shutdown().await;
+}
+
+// CLIENT REPLY tests
+#[tokio::test]
+async fn test_client_reply_on() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // CLIENT REPLY ON should be accepted (normal mode)
+    let response = client.command(&["CLIENT", "REPLY", "ON"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Verify commands still work
+    let response = client.command(&["PING"]).await;
+    assert_eq!(response, Response::pong());
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_reply_invalid() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Invalid argument should return error
+    let response = client.command(&["CLIENT", "REPLY", "INVALID"]).await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+// CLIENT TRACKINGINFO tests
+#[tokio::test]
+async fn test_client_trackinginfo() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["CLIENT", "TRACKINGINFO"]).await;
+    match response {
+        Response::Array(arr) => {
+            // Should return tracking info structure (flags, redirect, prefixes)
+            assert!(!arr.is_empty());
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+// CLIENT GETREDIR tests
+#[tokio::test]
+async fn test_client_getredir() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Without tracking, should return -1
+    let response = client.command(&["CLIENT", "GETREDIR"]).await;
+    assert_eq!(response, Response::Integer(-1));
+
+    server.shutdown().await;
+}
+
+// CLIENT CACHING tests
+#[tokio::test]
+async fn test_client_caching() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Caching commands should be accepted (stubs for now)
+    let response = client.command(&["CLIENT", "CACHING", "YES"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    let response = client.command(&["CLIENT", "CACHING", "NO"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Invalid argument
+    let response = client.command(&["CLIENT", "CACHING", "INVALID"]).await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+// CLIENT UNBLOCK tests
+#[tokio::test]
+async fn test_client_unblock_not_blocked() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Get our own ID
+    let client_id = match client.command(&["CLIENT", "ID"]).await {
+        Response::Integer(id) => id,
+        other => panic!("Expected integer, got {:?}", other),
+    };
+
+    // Unblocking a client that isn't blocked should return 0
+    let response = client
+        .command(&["CLIENT", "UNBLOCK", &client_id.to_string()])
+        .await;
+    assert_eq!(response, Response::Integer(0));
+
+    // Non-existent client ID should also return 0
+    let response = client.command(&["CLIENT", "UNBLOCK", "999999"]).await;
+    assert_eq!(response, Response::Integer(0));
 
     server.shutdown().await;
 }
@@ -6478,6 +6810,69 @@ async fn test_copy_db_option_ignored() {
     // Verify copy succeeded in same DB
     let dst_val = client.command(&["GET", "dst"]).await;
     assert_eq!(dst_val, Response::Bulk(Some(Bytes::from("hello"))));
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// RANDOMKEY Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_randomkey_empty_database() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Empty database should return nil
+    let response = client.command(&["RANDOMKEY"]).await;
+    assert_eq!(response, Response::Bulk(None));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_randomkey_single_key() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "only-key", "value"]).await;
+
+    // Should always return the only key
+    let response = client.command(&["RANDOMKEY"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("only-key"))));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_randomkey_multiple_keys() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Add multiple keys of different types
+    client.command(&["SET", "str-key", "value"]).await;
+    client.command(&["HSET", "hash-key", "field", "value"]).await;
+    client.command(&["LPUSH", "list-key", "item"]).await;
+    client.command(&["SADD", "set-key", "member"]).await;
+    client.command(&["ZADD", "zset-key", "1", "member"]).await;
+
+    let valid_keys = ["str-key", "hash-key", "list-key", "set-key", "zset-key"];
+
+    // Run multiple times to verify randomness returns valid keys
+    for _ in 0..10 {
+        let response = client.command(&["RANDOMKEY"]).await;
+        match response {
+            Response::Bulk(Some(key)) => {
+                let key_str = String::from_utf8_lossy(&key);
+                assert!(
+                    valid_keys.contains(&key_str.as_ref()),
+                    "RANDOMKEY returned unexpected key: {}",
+                    key_str
+                );
+            }
+            _ => panic!("Expected bulk response, got {:?}", response),
+        }
+    }
 
     server.shutdown().await;
 }
