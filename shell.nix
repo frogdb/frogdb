@@ -16,6 +16,12 @@ pkgs.mkShell {
 
     # Testing
     redis
+
+    # Profiling
+    cargo-flamegraph
+    samply
+    heaptrack           # Linux only
+    linuxPackages.perf  # Linux only
   ];
 
   # Environment setup

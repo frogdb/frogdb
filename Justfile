@@ -114,3 +114,28 @@ redis-compat-clean:
 # Show Redis compatibility coverage
 redis-compat-coverage:
     uv run compat/redis-compat/coverage.py
+
+# =============================================================================
+# Profiling (requires: cargo-flamegraph, samply, heaptrack)
+# Install: brew bundle / nix-shell
+# =============================================================================
+
+# Build with profiling symbols
+build-profile:
+    cargo build --profile profiling
+
+# Generate CPU flamegraph (requires cargo-flamegraph)
+profile-flamegraph *args:
+    cargo flamegraph --profile profiling --bin frogdb-server -- {{args}}
+
+# Profile with samply (requires samply)
+profile-samply *args:
+    samply record ./target/profiling/frogdb-server {{args}}
+
+# Profile with perf (Linux only, requires perf)
+profile-perf *args:
+    perf record -g --call-graph dwarf ./target/profiling/frogdb-server {{args}}
+
+# Memory profiling with heaptrack (Linux only, requires heaptrack)
+profile-heap *args:
+    heaptrack ./target/profiling/frogdb-server {{args}}
