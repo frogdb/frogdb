@@ -22,6 +22,7 @@ pub mod scripting;
 pub mod shard;
 pub mod store;
 pub mod sync;
+pub mod timeseries;
 pub mod types;
 
 pub use command::{Arity, Command, CommandContext, CommandFlags};
@@ -89,4 +90,8 @@ pub use hyperloglog::{HyperLogLogValue, HLL_DENSE_SIZE, HLL_REGISTERS};
 pub use slowlog::{
     SlowLog, SlowLogEntry, DEFAULT_SLOWLOG_LOG_SLOWER_THAN, DEFAULT_SLOWLOG_MAX_ARG_LEN,
     DEFAULT_SLOWLOG_MAX_LEN,
+};
+pub use timeseries::{
+    Aggregation, CompressedChunk, DownsampleError, DownsampleManager, DownsampleRule,
+    DuplicatePolicy, LabelFilter, LabelIndex, NoopDownsampleManager, TimeSeriesValue,
 };

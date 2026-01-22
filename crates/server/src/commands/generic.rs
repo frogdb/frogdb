@@ -356,6 +356,10 @@ impl Command for ObjectCommand {
                                     "dense"
                                 }
                             }
+                            Value::TimeSeries(_) => {
+                                // TimeSeries uses Gorilla compression
+                                "gorilla"
+                            }
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }
@@ -514,6 +518,9 @@ impl Command for DebugCommand {
                                 } else {
                                     "dense"
                                 }
+                            }
+                            Value::TimeSeries(_) => {
+                                "gorilla"
                             }
                         };
                         let info = format!(

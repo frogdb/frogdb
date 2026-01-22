@@ -953,6 +953,19 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::stub::BgrewriteaofCommand);
     registry.register(crate::commands::stub::LolwutCommand);
     registry.register(crate::commands::stub::RoleCommand);
+
+    // TimeSeries commands
+    registry.register(crate::commands::timeseries::TsCreateCommand);
+    registry.register(crate::commands::timeseries::TsAlterCommand);
+    registry.register(crate::commands::timeseries::TsAddCommand);
+    registry.register(crate::commands::timeseries::TsMaddCommand);
+    registry.register(crate::commands::timeseries::TsIncrbyCommand);
+    registry.register(crate::commands::timeseries::TsDecrbyCommand);
+    registry.register(crate::commands::timeseries::TsDelCommand);
+    registry.register(crate::commands::timeseries::TsGetCommand);
+    registry.register(crate::commands::timeseries::TsRangeCommand);
+    registry.register(crate::commands::timeseries::TsRevrangeCommand);
+    registry.register(crate::commands::timeseries::TsInfoCommand);
 }
 
 // Commands module
