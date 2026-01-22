@@ -13,6 +13,7 @@
 - if making changes to the design or architecture during the implementation, update the relevant specs in the spec/ directory with the change.
 - Before finishing a task, ensure all tests pass (`just test`) and there are no clippy
   errors/warnings (`just lint`)
+- The `target/` directory can grow large (10GB+) due to debug symbols, incremental compilation cache, and multiple profiles. Use `just target-size` to check its size and `just clean` to reclaim disk space when needed.
 
 ## Specs/Docs
 
