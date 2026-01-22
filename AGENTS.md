@@ -11,8 +11,8 @@
 - Follow idiomatic Rust patterns and use best practices
 - update the state of tasks in ROADMAP.md as they are completed.
 - if making changes to the design or architecture during the implementation, update the relevant specs in the spec/ directory with the change.
-- Before finishing a task, ensure all tests pass `cargo test --all` and there are no clippy
-  errors/warnings `cargo clippy --all-targets --all-features`
+- Before finishing a task, ensure all tests pass (`just test`) and there are no clippy
+  errors/warnings (`just lint`)
 
 ## Specs/Docs
 

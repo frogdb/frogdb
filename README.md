@@ -85,6 +85,9 @@ just run --port 6380  # Run with arguments
 just clean        # Clean build artifacts
 just watch        # Watch for changes and run tests
 just doc          # Generate and open documentation
+just proptest     # Run property-based tests
+just concurrency  # Run Shuttle concurrency tests
+just bench        # Run all benchmarks
 ```
 
 ### Build
@@ -126,7 +129,7 @@ just test-crate frogdb-core
 just test-one test_set_get
 
 # Concurrency tests (using Shuttle for deterministic testing)
-cargo test -p frogdb-core --features shuttle --test concurrency
+just concurrency
 ```
 
 #### Concurrency Testing
@@ -135,9 +138,9 @@ FrogDB uses [Shuttle](https://github.com/awslabs/shuttle) for deterministic conc
 
 ```bash
 # Run all shuttle concurrency tests (1000 iterations each)
-cargo test -p frogdb-core --features shuttle --test concurrency
+just concurrency
 
-# Run a specific concurrency test
+# Run a specific concurrency test (use cargo directly for filtering)
 cargo test -p frogdb-core --features shuttle --test concurrency test_read_your_writes
 ```
 
