@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::bloom::BloomFilterValue;
 use crate::hyperloglog::HyperLogLogValue;
+use crate::timeseries::TimeSeriesValue;
 
 /// Value types stored in FrogDB.
 #[derive(Debug, Clone)]
@@ -28,6 +29,8 @@ pub enum Value {
     BloomFilter(BloomFilterValue),
     /// HyperLogLog value.
     HyperLogLog(HyperLogLogValue),
+    /// Time series value.
+    TimeSeries(TimeSeriesValue),
 }
 
 impl Value {
@@ -71,6 +74,11 @@ impl Value {
         Value::HyperLogLog(HyperLogLogValue::new())
     }
 
+    /// Create a time series value.
+    pub fn timeseries() -> Self {
+        Value::TimeSeries(TimeSeriesValue::new())
+    }
+
     /// Get the key type.
     pub fn key_type(&self) -> KeyType {
         match self {
@@ -82,6 +90,7 @@ impl Value {
             Value::Stream(_) => KeyType::Stream,
             Value::BloomFilter(_) => KeyType::BloomFilter,
             Value::HyperLogLog(_) => KeyType::HyperLogLog,
+            Value::TimeSeries(_) => KeyType::TimeSeries,
         }
     }
 
@@ -96,6 +105,7 @@ impl Value {
             Value::Stream(st) => st.memory_size(),
             Value::BloomFilter(bf) => bf.memory_size(),
             Value::HyperLogLog(hll) => hll.memory_size(),
+            Value::TimeSeries(ts) => ts.memory_size(),
         }
     }
 
@@ -223,6 +233,22 @@ impl Value {
     pub fn as_hyperloglog_mut(&mut self) -> Option<&mut HyperLogLogValue> {
         match self {
             Value::HyperLogLog(hll) => Some(hll),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a time series value.
+    pub fn as_timeseries(&self) -> Option<&TimeSeriesValue> {
+        match self {
+            Value::TimeSeries(ts) => Some(ts),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a mutable time series value.
+    pub fn as_timeseries_mut(&mut self) -> Option<&mut TimeSeriesValue> {
+        match self {
+            Value::TimeSeries(ts) => Some(ts),
             _ => None,
         }
     }
@@ -519,6 +545,8 @@ pub enum KeyType {
     BloomFilter,
     /// HyperLogLog type.
     HyperLogLog,
+    /// Time series type.
+    TimeSeries,
 }
 
 impl KeyType {
@@ -534,6 +562,7 @@ impl KeyType {
             KeyType::Stream => "stream",
             KeyType::BloomFilter => "bloom",
             KeyType::HyperLogLog => "hyperloglog",
+            KeyType::TimeSeries => "TSDB-TYPE",
         }
     }
 }

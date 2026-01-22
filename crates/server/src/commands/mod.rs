@@ -28,6 +28,7 @@ pub mod sorted_set;
 pub mod stream;
 pub mod string;
 pub mod stub;
+pub mod timeseries;
 pub mod transaction;
 
 pub use acl::*;
@@ -55,4 +56,5 @@ pub use sorted_set::*;
 pub use stream::*;
 pub use string::*;
 pub use stub::*;
+pub use timeseries::*;
 pub use transaction::*;
