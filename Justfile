@@ -22,6 +22,18 @@ test-crate crate:
 test-one name:
     cargo test {{name}} -- --nocapture
 
+# Run property-based tests (proptest)
+proptest:
+    cargo test proptest --all
+
+# Run concurrency tests (requires shuttle feature)
+concurrency:
+    cargo test -p frogdb-core --features shuttle --test concurrency
+
+# Run all benchmarks
+bench:
+    cargo bench -p frogdb-benches
+
 # Format code
 fmt:
     cargo fmt --all
