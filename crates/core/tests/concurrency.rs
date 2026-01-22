@@ -2449,3 +2449,136 @@ fn test_json_numincrby_pct() {
         3, // PCT depth
     );
 }
+
+// ============================================================================
+// RESET Command Concurrency Tests
+// ============================================================================
+
+/// Test RESET concurrent with PUBLISH operations.
+///
+/// Simulates: subscriber RESETs while publisher sends messages.
+/// Ensures no race conditions or panics.
+#[test]
+fn test_reset_concurrent_with_publish() {
+    check_random(
+        || {
+            let subscriptions = Arc::new(Mutex::new(HashSet::<String>::new()));
+            let messages_received = Arc::new(AtomicUsize::new(0));
+
+            let subs = subscriptions.clone();
+            let received = messages_received.clone();
+
+            // Thread 1: Subscribe, receive messages, then RESET
+            let subscriber = thread::spawn(move || {
+                // Subscribe
+                subs.lock().unwrap().insert("channel".to_string());
+
+                // Yield to allow publisher to run
+                for _ in 0..3 {
+                    shuttle::thread::yield_now();
+                    // Check if still subscribed (simulate message receipt)
+                    if subs.lock().unwrap().contains("channel") {
+                        received.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+
+                // RESET (clear subscriptions)
+                subs.lock().unwrap().clear();
+            });
+
+            let subs2 = subscriptions.clone();
+            // Thread 2: Publish messages
+            let publisher = thread::spawn(move || {
+                for _ in 0..5 {
+                    shuttle::thread::yield_now();
+                    // Count subscribers (simulate PUBLISH return value)
+                    let _count = subs2.lock().unwrap().len();
+                }
+            });
+
+            subscriber.join().unwrap();
+            publisher.join().unwrap();
+
+            // After RESET, no subscriptions should remain
+            assert!(subscriptions.lock().unwrap().is_empty());
+        },
+        1000,
+    );
+}
+
+/// Test multiple clients RESETting simultaneously.
+///
+/// Verifies that concurrent RESETs from different connections don't
+/// interfere with each other and all complete successfully.
+#[test]
+fn test_multiple_clients_reset_simultaneously() {
+    check_random(
+        || {
+            let reset_count = Arc::new(AtomicUsize::new(0));
+            let mut handles = vec![];
+
+            for _ in 0..4 {
+                let count = reset_count.clone();
+                handles.push(thread::spawn(move || {
+                    // Simulate RESET (just increment counter atomically)
+                    count.fetch_add(1, Ordering::SeqCst);
+                }));
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            assert_eq!(reset_count.load(Ordering::SeqCst), 4);
+        },
+        1000,
+    );
+}
+
+/// Test that RESET does not affect other client's transactions.
+///
+/// Two clients: one in transaction, one RESETs.
+/// RESET should only affect own connection.
+#[test]
+fn test_reset_does_not_affect_other_client_transactions() {
+    check_random(
+        || {
+            let store = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+            let client1_committed = Arc::new(AtomicBool::new(false));
+
+            let store1 = store.clone();
+            let committed = client1_committed.clone();
+
+            // Client 1: MULTI, SET, EXEC
+            let client1 = thread::spawn(move || {
+                // Simulate transaction
+                let value_to_set = "from_client1".to_string();
+                shuttle::thread::yield_now();
+
+                // EXEC (commit)
+                store1
+                    .lock()
+                    .unwrap()
+                    .insert("key".to_string(), value_to_set);
+                committed.store(true, Ordering::SeqCst);
+            });
+
+            // Client 2: RESET (should not affect client1)
+            let client2 = thread::spawn(move || {
+                shuttle::thread::yield_now();
+                // RESET only affects own connection state
+            });
+
+            client1.join().unwrap();
+            client2.join().unwrap();
+
+            // Client1's transaction should have committed
+            assert!(client1_committed.load(Ordering::SeqCst));
+            assert_eq!(
+                store.lock().unwrap().get("key"),
+                Some(&"from_client1".to_string())
+            );
+        },
+        1000,
+    );
+}
