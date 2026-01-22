@@ -989,3 +989,279 @@ impl Command for MsetnxCommand {
         true
     }
 }
+
+// ============================================================================
+// LCS - Longest Common Subsequence
+// ============================================================================
+
+pub struct LcsCommand;
+
+/// Options for the LCS command.
+struct LcsOptions {
+    /// Return only the length of the LCS, not the string.
+    len_only: bool,
+    /// Return match positions (IDX mode).
+    idx: bool,
+    /// Minimum match length to report (for IDX mode).
+    min_match_len: usize,
+    /// Include match lengths in output (for IDX mode).
+    with_match_len: bool,
+}
+
+impl Default for LcsOptions {
+    fn default() -> Self {
+        Self {
+            len_only: false,
+            idx: false,
+            min_match_len: 0,
+            with_match_len: false,
+        }
+    }
+}
+
+/// Represents a match in the IDX output.
+#[derive(Debug)]
+struct LcsMatch {
+    /// Start and end positions in the first string.
+    a_range: (usize, usize),
+    /// Start and end positions in the second string.
+    b_range: (usize, usize),
+    /// Length of the match.
+    len: usize,
+}
+
+impl Command for LcsCommand {
+    fn name(&self) -> &'static str {
+        "LCS"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execute(
+        &self,
+        ctx: &mut CommandContext,
+        args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        let key1 = &args[0];
+        let key2 = &args[1];
+
+        // Parse options
+        let mut opts = LcsOptions::default();
+        let mut i = 2;
+        while i < args.len() {
+            let opt = args[i].to_ascii_uppercase();
+            match opt.as_slice() {
+                b"LEN" => {
+                    opts.len_only = true;
+                    i += 1;
+                }
+                b"IDX" => {
+                    opts.idx = true;
+                    i += 1;
+                }
+                b"MINMATCHLEN" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Err(CommandError::InvalidArgument {
+                            message: "MINMATCHLEN requires an argument".to_string(),
+                        });
+                    }
+                    opts.min_match_len = parse_u64(&args[i])? as usize;
+                    i += 1;
+                }
+                b"WITHMATCHLEN" => {
+                    opts.with_match_len = true;
+                    i += 1;
+                }
+                _ => {
+                    return Err(CommandError::InvalidArgument {
+                        message: format!(
+                            "Unknown option '{}'",
+                            String::from_utf8_lossy(&opt)
+                        ),
+                    });
+                }
+            }
+        }
+
+        // WITHMATCHLEN requires IDX
+        if opts.with_match_len && !opts.idx {
+            return Err(CommandError::InvalidArgument {
+                message: "WITHMATCHLEN requires IDX".to_string(),
+            });
+        }
+
+        // Get the two strings (missing keys treated as empty)
+        let s1 = ctx
+            .store
+            .get(key1)
+            .and_then(|v| v.as_string().map(|sv| sv.as_bytes().to_vec()))
+            .unwrap_or_default();
+        let s2 = ctx
+            .store
+            .get(key2)
+            .and_then(|v| v.as_string().map(|sv| sv.as_bytes().to_vec()))
+            .unwrap_or_default();
+
+        // Handle empty strings
+        if s1.is_empty() || s2.is_empty() {
+            if opts.idx {
+                // Return empty matches structure
+                let response = vec![
+                    Response::bulk(Bytes::from_static(b"matches")),
+                    Response::Array(vec![]),
+                    Response::bulk(Bytes::from_static(b"len")),
+                    Response::Integer(0),
+                ];
+                return Ok(Response::Array(response));
+            } else if opts.len_only {
+                return Ok(Response::Integer(0));
+            } else {
+                return Ok(Response::bulk(Bytes::new()));
+            }
+        }
+
+        // Build DP table
+        let m = s1.len();
+        let n = s2.len();
+        let mut dp = vec![vec![0usize; n + 1]; m + 1];
+
+        for i in 1..=m {
+            for j in 1..=n {
+                if s1[i - 1] == s2[j - 1] {
+                    dp[i][j] = dp[i - 1][j - 1] + 1;
+                } else {
+                    dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
+                }
+            }
+        }
+
+        let lcs_len = dp[m][n];
+
+        // If only length is needed
+        if opts.len_only {
+            return Ok(Response::Integer(lcs_len as i64));
+        }
+
+        // If IDX mode - extract match positions
+        if opts.idx {
+            let matches = extract_lcs_matches(&s1, &s2, &dp, opts.min_match_len);
+
+            // Build response
+            let mut matches_arr = Vec::with_capacity(matches.len());
+            for m in matches {
+                let match_entry = if opts.with_match_len {
+                    Response::Array(vec![
+                        Response::Array(vec![
+                            Response::Integer(m.a_range.0 as i64),
+                            Response::Integer(m.a_range.1 as i64),
+                        ]),
+                        Response::Array(vec![
+                            Response::Integer(m.b_range.0 as i64),
+                            Response::Integer(m.b_range.1 as i64),
+                        ]),
+                        Response::Integer(m.len as i64),
+                    ])
+                } else {
+                    Response::Array(vec![
+                        Response::Array(vec![
+                            Response::Integer(m.a_range.0 as i64),
+                            Response::Integer(m.a_range.1 as i64),
+                        ]),
+                        Response::Array(vec![
+                            Response::Integer(m.b_range.0 as i64),
+                            Response::Integer(m.b_range.1 as i64),
+                        ]),
+                    ])
+                };
+                matches_arr.push(match_entry);
+            }
+
+            let response = vec![
+                Response::bulk(Bytes::from_static(b"matches")),
+                Response::Array(matches_arr),
+                Response::bulk(Bytes::from_static(b"len")),
+                Response::Integer(lcs_len as i64),
+            ];
+            return Ok(Response::Array(response));
+        }
+
+        // Default: return the LCS string via backtracking
+        let mut lcs = Vec::with_capacity(lcs_len);
+        let mut i = m;
+        let mut j = n;
+        while i > 0 && j > 0 {
+            if s1[i - 1] == s2[j - 1] {
+                lcs.push(s1[i - 1]);
+                i -= 1;
+                j -= 1;
+            } else if dp[i - 1][j] > dp[i][j - 1] {
+                i -= 1;
+            } else {
+                j -= 1;
+            }
+        }
+        lcs.reverse();
+
+        Ok(Response::bulk(Bytes::from(lcs)))
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.len() < 2 {
+            vec![]
+        } else {
+            vec![&args[0], &args[1]]
+        }
+    }
+}
+
+/// Extract match ranges from the LCS DP table.
+/// Returns matches in reverse order (from end to start).
+fn extract_lcs_matches(s1: &[u8], s2: &[u8], dp: &[Vec<usize>], min_len: usize) -> Vec<LcsMatch> {
+    let m = s1.len();
+    let n = s2.len();
+
+    let mut matches = Vec::new();
+    let mut i = m;
+    let mut j = n;
+
+    while i > 0 && j > 0 {
+        if s1[i - 1] == s2[j - 1] {
+            // Found a matching character, trace back the contiguous match
+            let match_end_i = i - 1;
+            let match_end_j = j - 1;
+            let mut match_len = 1;
+
+            i -= 1;
+            j -= 1;
+
+            // Continue while characters match and we're still in the LCS path
+            while i > 0 && j > 0 && s1[i - 1] == s2[j - 1] && dp[i][j] == dp[i - 1][j - 1] + 1 {
+                match_len += 1;
+                i -= 1;
+                j -= 1;
+            }
+
+            // Only include if meets minimum length
+            if match_len >= min_len {
+                matches.push(LcsMatch {
+                    a_range: (i, match_end_i),
+                    b_range: (j, match_end_j),
+                    len: match_len,
+                });
+            }
+        } else if dp[i - 1][j] > dp[i][j - 1] {
+            i -= 1;
+        } else {
+            j -= 1;
+        }
+    }
+
+    matches
+}

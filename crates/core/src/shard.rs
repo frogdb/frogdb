@@ -318,6 +318,8 @@ pub enum ScatterOp {
         /// Whether to replace existing key.
         replace: bool,
     },
+    /// RANDOMKEY operation - get a random key from the shard.
+    RandomKey,
 }
 
 /// Result from a shard for scatter-gather operations.
@@ -1983,6 +1985,13 @@ impl ShardWorker {
                             Response::error("ERR failed to deserialize value for COPY"),
                         )]
                     }
+                }
+            }
+            ScatterOp::RandomKey => {
+                // Return a random key from this shard
+                match self.store.random_key() {
+                    Some(key) => vec![(Bytes::from_static(b"__randomkey__"), Response::bulk(key))],
+                    None => vec![(Bytes::from_static(b"__randomkey__"), Response::null())],
                 }
             }
         };

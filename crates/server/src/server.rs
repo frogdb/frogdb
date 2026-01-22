@@ -938,9 +938,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // Generic/Keys
     registry.register(crate::commands::generic::CopyCommand);
+    registry.register(crate::commands::generic::RandomkeyCommand);
     registry.register(crate::commands::stub::SortCommand);
     registry.register(crate::commands::stub::SortRoCommand);
-    registry.register(crate::commands::stub::RandomkeyCommand);
     registry.register(crate::commands::stub::MigrateCommand);
     registry.register(crate::commands::stub::MoveCommand);
 
@@ -958,7 +958,7 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // String (deprecated/missing)
     registry.register(crate::commands::stub::GetsetCommand);
-    registry.register(crate::commands::stub::LcsCommand);
+    registry.register(crate::commands::string::LcsCommand);
     registry.register(crate::commands::stub::SubstrCommand);
 
     // List (deprecated)

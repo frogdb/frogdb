@@ -263,13 +263,6 @@ stub_command!(
 );
 
 stub_command!(
-    RandomkeyCommand,
-    "RANDOMKEY",
-    Arity::Fixed(0),
-    CommandFlags::READONLY | CommandFlags::RANDOM
-);
-
-stub_command!(
     MigrateCommand,
     "MIGRATE",
     Arity::AtLeast(5),
@@ -356,13 +349,6 @@ stub_command!(
     "GETSET",
     Arity::Fixed(2),
     CommandFlags::WRITE | CommandFlags::FAST
-);
-
-stub_command!(
-    LcsCommand,
-    "LCS",
-    Arity::AtLeast(2),
-    CommandFlags::READONLY
 );
 
 stub_command!(

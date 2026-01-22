@@ -792,6 +792,7 @@ dependencies = [
  "frogdb-testing",
  "futures",
  "proptest",
+ "rand 0.8.5",
  "redis-protocol",
  "reqwest",
  "serde",
