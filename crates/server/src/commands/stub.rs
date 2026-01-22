@@ -249,13 +249,6 @@ stub_command!(
 // =============================================================================
 
 stub_command!(
-    CopyCommand,
-    "COPY",
-    Arity::AtLeast(2),
-    CommandFlags::WRITE
-);
-
-stub_command!(
     SortCommand,
     "SORT",
     Arity::AtLeast(1),

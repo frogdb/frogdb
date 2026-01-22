@@ -297,6 +297,73 @@ impl HyperLogLogValue {
             HllEncoding::Dense(registers) => Some(registers),
         }
     }
+
+    /// Serialize the HyperLogLog for cross-shard copy.
+    /// Format: encoding_byte || data
+    /// - encoding_byte: 0 = sparse, 1 = dense
+    /// - For sparse: num_pairs(4 bytes) || (index(2 bytes) || value(1 byte))*
+    /// - For dense: 12288 bytes of register data
+    pub fn serialize(&self) -> Vec<u8> {
+        match &self.encoding {
+            HllEncoding::Sparse(pairs) => {
+                let mut buf = Vec::with_capacity(1 + 4 + pairs.len() * 3);
+                buf.push(0); // sparse encoding
+                buf.extend_from_slice(&(pairs.len() as u32).to_le_bytes());
+                for (index, value) in pairs {
+                    buf.extend_from_slice(&index.to_le_bytes());
+                    buf.push(*value);
+                }
+                buf
+            }
+            HllEncoding::Dense(registers) => {
+                let mut buf = Vec::with_capacity(1 + HLL_DENSE_SIZE);
+                buf.push(1); // dense encoding
+                buf.extend_from_slice(registers.as_ref());
+                buf
+            }
+        }
+    }
+
+    /// Deserialize a HyperLogLog from cross-shard copy data.
+    pub fn deserialize(data: &[u8]) -> Option<Self> {
+        if data.is_empty() {
+            return None;
+        }
+
+        match data[0] {
+            0 => {
+                // Sparse encoding
+                if data.len() < 5 {
+                    return None;
+                }
+                let num_pairs = u32::from_le_bytes(data[1..5].try_into().ok()?) as usize;
+                let expected_len = 5 + num_pairs * 3;
+                if data.len() < expected_len {
+                    return None;
+                }
+
+                let mut pairs = Vec::with_capacity(num_pairs);
+                let mut pos = 5;
+                for _ in 0..num_pairs {
+                    let index = u16::from_le_bytes(data[pos..pos + 2].try_into().ok()?);
+                    let value = data[pos + 2];
+                    pairs.push((index, value));
+                    pos += 3;
+                }
+                Some(Self::from_sparse(pairs))
+            }
+            1 => {
+                // Dense encoding
+                if data.len() < 1 + HLL_DENSE_SIZE {
+                    return None;
+                }
+                let mut registers = Box::new([0u8; HLL_DENSE_SIZE]);
+                registers.copy_from_slice(&data[1..1 + HLL_DENSE_SIZE]);
+                Some(Self::from_dense(registers))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Default for HyperLogLogValue {

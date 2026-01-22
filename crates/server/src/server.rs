@@ -937,7 +937,7 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::stub::FcallRoCommand);
 
     // Generic/Keys
-    registry.register(crate::commands::stub::CopyCommand);
+    registry.register(crate::commands::generic::CopyCommand);
     registry.register(crate::commands::stub::SortCommand);
     registry.register(crate::commands::stub::SortRoCommand);
     registry.register(crate::commands::stub::RandomkeyCommand);
