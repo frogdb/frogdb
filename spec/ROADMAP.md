@@ -14,7 +14,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 ## Current Status
 
 **Completed**: Foundation, Sorted Sets, Multi-Shard Operations, Hash/List/Set Types, Transactions & Pub/Sub, Lua Scripting, Key Iteration & Server Commands, Blocking Commands, RESP3 Protocol, Streams, String Commands & TTL, Persistence, Production Readiness, Property Testing, Protocol Completion
-**In Progress**: Phase 1 (Remaining Commands)
+**In Progress**: Phase 1 (SORT only remaining)
 **Next Milestone**: Complete Phase 1, 3-4, then Phase 5 (Clustering)
 
 ---
@@ -23,19 +23,8 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 **Goal**: Complete missing non-cluster commands.
 
-- [ ] `COPY` - Copy key to another key
 - [ ] `SORT` / `SORT_RO` - Sort lists/sets/zsets
-- [ ] `RANDOMKEY` - Random key selection
-- [ ] `LCS` - Longest common subsequence
-- [ ] `OBJECT HELP`
-- [ ] `DEBUG SLEEP`
-- [ ] `CONFIG HELP`
 - [ ] `LOLWUT` - Display Redis art (low priority)
-
-### Part 1: Client subcommands
-
-- [ ] `CLIENT` subcommands (ID, INFO, KILL, LIST, GETNAME, SETNAME, PAUSE, UNPAUSE, REPLY, SETINFO, NO-EVICT, NO-TOUCH, UNBLOCK)
-- [ ] `RESET` - Reset connection state
 
 ### Part 2: Performance commands
 
