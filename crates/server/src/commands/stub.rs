@@ -339,3 +339,64 @@ stub_command!(
     Arity::Fixed(0),
     CommandFlags::READONLY | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::FAST | CommandFlags::NOSCRIPT
 );
+
+stub_command!(
+    SaveCommand,
+    "SAVE",
+    Arity::Fixed(0),
+    CommandFlags::ADMIN | CommandFlags::NOSCRIPT
+);
+
+stub_command!(
+    MonitorCommand,
+    "MONITOR",
+    Arity::Fixed(0),
+    CommandFlags::ADMIN | CommandFlags::NOSCRIPT
+);
+
+// =============================================================================
+// String Commands (deprecated/missing)
+// =============================================================================
+
+stub_command!(
+    GetsetCommand,
+    "GETSET",
+    Arity::Fixed(2),
+    CommandFlags::WRITE | CommandFlags::FAST
+);
+
+stub_command!(
+    LcsCommand,
+    "LCS",
+    Arity::AtLeast(2),
+    CommandFlags::READONLY
+);
+
+stub_command!(
+    SubstrCommand,
+    "SUBSTR",
+    Arity::Fixed(3),
+    CommandFlags::READONLY
+);
+
+// =============================================================================
+// List Commands (deprecated)
+// =============================================================================
+
+stub_command!(
+    RpoplpushCommand,
+    "RPOPLPUSH",
+    Arity::Fixed(2),
+    CommandFlags::WRITE
+);
+
+// =============================================================================
+// Replication Commands (additional)
+// =============================================================================
+
+stub_command!(
+    SyncCommand,
+    "SYNC",
+    Arity::Fixed(0),
+    CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::READONLY
+);
