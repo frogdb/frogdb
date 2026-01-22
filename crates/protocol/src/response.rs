@@ -109,7 +109,7 @@ pub enum Response {
     /// Array (*2\r\n...)
     Array(Vec<Response>),
 
-    // === RESP3 Types (Defined, Not Yet Serialized) ===
+    // === RESP3 Types ===
     /// Null (_\r\n)
     Null,
 

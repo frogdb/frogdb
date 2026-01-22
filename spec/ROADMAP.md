@@ -13,9 +13,9 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Completed**: Foundation, Sorted Sets, Multi-Shard Operations, Hash/List/Set Types, Transactions & Pub/Sub, Lua Scripting, Key Iteration & Server Commands, Blocking Commands, RESP3 Protocol, Streams, String Commands & TTL, Persistence, Production Readiness, Property Testing
+**Completed**: Foundation, Sorted Sets, Multi-Shard Operations, Hash/List/Set Types, Transactions & Pub/Sub, Lua Scripting, Key Iteration & Server Commands, Blocking Commands, RESP3 Protocol, Streams, String Commands & TTL, Persistence, Production Readiness, Property Testing, Protocol Completion
 **In Progress**: Phase 1 (Remaining Commands)
-**Next Milestone**: Complete Phase 1, 1.5, 3-4, then Phase 5 (Clustering)
+**Next Milestone**: Complete Phase 1, 3-4, then Phase 5 (Clustering)
 
 ---
 
@@ -46,16 +46,6 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 ### Part 3: Key migration
 
 - [ ] `MIGRATE` - Migrate keys between instances
-
----
-
-## Phase 1.5: Protocol Completion
-
-**Goal**: Complete RESP3 protocol support.
-
-- [ ] RESP3 encoding for all response types
-- [ ] `HELLO` command - Full RESP3 protocol negotiation with AUTH support
-- [ ] Client protocol version tracking and response formatting
 
 ---
 
