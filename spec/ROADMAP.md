@@ -13,9 +13,9 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Current Status
 
-**Completed**: Foundation, Sorted Sets, Multi-Shard Operations, Hash/List/Set Types, Transactions & Pub/Sub, Lua Scripting, Key Iteration & Server Commands, Blocking Commands, RESP3 Protocol, Streams, String Commands & TTL, Persistence, Production Readiness
+**Completed**: Foundation, Sorted Sets, Multi-Shard Operations, Hash/List/Set Types, Transactions & Pub/Sub, Lua Scripting, Key Iteration & Server Commands, Blocking Commands, RESP3 Protocol, Streams, String Commands & TTL, Persistence, Production Readiness, Property Testing
 **In Progress**: Phase 1 (Remaining Commands)
-**Next Milestone**: Complete Phase 1-4, then Phase 5 (Clustering)
+**Next Milestone**: Complete Phase 1, 1.5, 3-4, then Phase 5 (Clustering)
 
 ---
 
@@ -27,16 +27,25 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 - [ ] `SORT` / `SORT_RO` - Sort lists/sets/zsets
 - [ ] `RANDOMKEY` - Random key selection
 - [ ] `LCS` - Longest common subsequence
-- [ ] `MEMORY` commands (DOCTOR, MALLOC-SIZE, PURGE, STATS, USAGE)
-- [ ] `LATENCY` commands (DOCTOR, GRAPH, HISTOGRAM, HISTORY, LATEST, RESET)
 - [ ] `OBJECT HELP`
 - [ ] `DEBUG SLEEP`
-- [ ] `CLIENT` subcommands (ID, INFO, KILL, LIST, GETNAME, SETNAME, PAUSE, UNPAUSE, REPLY, SETINFO, NO-EVICT, NO-TOUCH, UNBLOCK)
 - [ ] `CONFIG HELP`
-- [ ] `SLOWLOG` subcommands (GET, LEN, RESET)
-- [ ] `MIGRATE` - Migrate keys between instances
-- [ ] `RESET` - Reset connection state
 - [ ] `LOLWUT` - Display Redis art (low priority)
+
+### Part 1: Client subcommands
+
+- [ ] `CLIENT` subcommands (ID, INFO, KILL, LIST, GETNAME, SETNAME, PAUSE, UNPAUSE, REPLY, SETINFO, NO-EVICT, NO-TOUCH, UNBLOCK)
+- [ ] `RESET` - Reset connection state
+
+### Part 2: Performance commands
+
+- [ ] `MEMORY` commands (DOCTOR, MALLOC-SIZE, PURGE, STATS, USAGE)
+- [ ] `LATENCY` commands (DOCTOR, GRAPH, HISTOGRAM, HISTORY, LATEST, RESET)
+- [ ] `SLOWLOG` subcommands (GET, LEN, RESET)
+
+### Part 3: Key migration
+
+- [ ] `MIGRATE` - Migrate keys between instances
 
 ---
 
@@ -47,15 +56,6 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 - [ ] RESP3 encoding for all response types
 - [ ] `HELLO` command - Full RESP3 protocol negotiation with AUTH support
 - [ ] Client protocol version tracking and response formatting
-
----
-
-## Phase 2: Property Testing
-
-**Goal**: Property-based test coverage.
-
-- [ ] Property tests: INCR/DECR roundtrip
-- [ ] Test: snapshot during writes
 
 ---
 
@@ -142,7 +142,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 - [ ] Update COMPATIBILITY.md - Remove outdated "planned" status for Blocking Commands and Streams
 - [ ] Audit all spec files for accuracy against implementation
-- [ ] Add missing command documentation to types/*.md files
+- [ ] Add missing command documentation to types/\*.md files
 
 ---
 
@@ -150,22 +150,22 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 These must exist from the initial foundation to avoid refactoring:
 
-| Abstraction | Initial | Full Implementation |
-|-------------|---------|---------------------|
-| `Store` trait | HashMapStore | Same |
-| `Command` trait | Full | Same |
-| `Value` enum | StringValue only | All types ✓ |
-| `WalWriter` trait | Noop | RocksDB WAL ✓ |
-| `ReplicationConfig` | Standalone | Primary/Replica (Phase 5) |
-| `ReplicationTracker` trait | Noop | WAL streaming (Phase 5) |
-| `AclChecker` trait | AlwaysAllow | Full ACL ✓ |
-| `MetricsRecorder` trait | Noop | Prometheus ✓ |
-| `Tracer` trait | Noop | OpenTelemetry ✓ |
-| Shard channels | 1 shard | N shards ✓ |
-| `ExpiryIndex` | Empty | Functional ✓ |
-| `ProtocolVersion` | Resp2 only | Resp2 + Resp3 ✓ |
-| `Config` + Figment | Full (CLI + TOML + env) | CONFIG GET/SET ✓ |
-| Logging format | pretty + json | Same |
+| Abstraction                | Initial                 | Full Implementation       |
+| -------------------------- | ----------------------- | ------------------------- |
+| `Store` trait              | HashMapStore            | Same                      |
+| `Command` trait            | Full                    | Same                      |
+| `Value` enum               | StringValue only        | All types ✓               |
+| `WalWriter` trait          | Noop                    | RocksDB WAL ✓             |
+| `ReplicationConfig`        | Standalone              | Primary/Replica (Phase 5) |
+| `ReplicationTracker` trait | Noop                    | WAL streaming (Phase 5)   |
+| `AclChecker` trait         | AlwaysAllow             | Full ACL ✓                |
+| `MetricsRecorder` trait    | Noop                    | Prometheus ✓              |
+| `Tracer` trait             | Noop                    | OpenTelemetry ✓           |
+| Shard channels             | 1 shard                 | N shards ✓                |
+| `ExpiryIndex`              | Empty                   | Functional ✓              |
+| `ProtocolVersion`          | Resp2 only              | Resp2 + Resp3 ✓           |
+| `Config` + Figment         | Full (CLI + TOML + env) | CONFIG GET/SET ✓          |
+| Logging format             | pretty + json           | Same                      |
 
 ---
 
