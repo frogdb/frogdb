@@ -249,20 +249,6 @@ stub_command!(
 // =============================================================================
 
 stub_command!(
-    SortCommand,
-    "SORT",
-    Arity::AtLeast(1),
-    CommandFlags::WRITE
-);
-
-stub_command!(
-    SortRoCommand,
-    "SORT_RO",
-    Arity::AtLeast(1),
-    CommandFlags::READONLY
-);
-
-stub_command!(
     MigrateCommand,
     "MIGRATE",
     Arity::AtLeast(5),
