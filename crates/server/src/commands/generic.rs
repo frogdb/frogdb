@@ -561,3 +561,108 @@ impl Command for DebugCommand {
         vec![]
     }
 }
+
+// ============================================================================
+// COPY - Copy key value to another key
+// ============================================================================
+
+pub struct CopyCommand;
+
+impl Command for CopyCommand {
+    fn name(&self) -> &'static str {
+        "COPY"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn execute(
+        &self,
+        ctx: &mut CommandContext,
+        args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        let source = &args[0];
+        let dest = &args[1];
+
+        // Parse optional arguments
+        let mut replace = false;
+        let mut i = 2;
+        while i < args.len() {
+            let arg = args[i].to_ascii_uppercase();
+            match arg.as_slice() {
+                b"REPLACE" => {
+                    replace = true;
+                    i += 1;
+                }
+                b"DB" => {
+                    // DB option is accepted but ignored
+                    if i + 1 >= args.len() {
+                        return Err(CommandError::InvalidArgument {
+                            message: "DB requires an argument".to_string(),
+                        });
+                    }
+                    tracing::warn!("COPY DB option not supported, ignoring");
+                    i += 2; // Skip DB and its argument
+                }
+                _ => {
+                    return Err(CommandError::InvalidArgument {
+                        message: format!("Unknown option: {}", String::from_utf8_lossy(&arg)),
+                    });
+                }
+            }
+        }
+
+        // Check if keys are on the same shard
+        let source_shard = shard_for_key(source, ctx.num_shards);
+        let dest_shard = shard_for_key(dest, ctx.num_shards);
+
+        if source_shard != dest_shard {
+            // Cross-shard copy will be handled by the connection layer
+            return Err(CommandError::CrossSlot);
+        }
+
+        // Same-shard copy: handle directly
+
+        // Check if destination exists (when not using REPLACE)
+        if !replace && ctx.store.contains(dest) {
+            return Ok(Response::Integer(0));
+        }
+
+        // Get source value
+        let value = match ctx.store.get(source) {
+            Some(v) => v,
+            None => return Ok(Response::Integer(0)), // Source doesn't exist
+        };
+
+        // Get source expiry
+        let expiry = ctx.store.get_expiry(source);
+
+        // If REPLACE, delete the destination first
+        if replace {
+            ctx.store.delete(dest);
+        }
+
+        // Clone and set the value
+        ctx.store.set(dest.clone(), value);
+
+        // Copy expiry if source had one
+        if let Some(expires_at) = expiry {
+            ctx.store.set_expiry(dest, expires_at);
+        }
+
+        Ok(Response::Integer(1))
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.len() < 2 {
+            vec![]
+        } else {
+            vec![&args[0], &args[1]]
+        }
+    }
+}

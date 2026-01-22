@@ -1645,6 +1645,11 @@ impl ConnectionHandler {
             return Response::error("CROSSSLOT Keys in request don't hash to the same slot");
         }
 
+        // Special handling for COPY - it's a two-phase operation (read + write)
+        if cmd_name_str == "COPY" {
+            return self.execute_cross_shard_copy(&cmd.args).await;
+        }
+
         // Determine the scatter operation based on command name
         let scatter_op = match cmd_name_str.as_ref() {
             "MGET" => Some(ScatterOp::MGet),
@@ -1802,6 +1807,132 @@ impl ConnectionHandler {
                 // Scan results are handled specially in handle_scan
                 Response::error("ERR SCAN scatter-gather not supported through this path")
             }
+            ScatterOp::Copy { .. } | ScatterOp::CopySet { .. } => {
+                // These are handled specially in execute_cross_shard_copy
+                Response::error("ERR COPY scatter-gather not supported through this path")
+            }
+        }
+    }
+
+    /// Execute a cross-shard COPY operation.
+    /// This is a two-phase operation: read from source shard, write to destination shard.
+    async fn execute_cross_shard_copy(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'copy' command");
+        }
+
+        let source = &args[0];
+        let dest = &args[1];
+
+        // Parse optional arguments
+        let mut replace = false;
+        let mut i = 2;
+        while i < args.len() {
+            let arg = args[i].to_ascii_uppercase();
+            match arg.as_slice() {
+                b"REPLACE" => {
+                    replace = true;
+                    i += 1;
+                }
+                b"DB" => {
+                    // DB option is accepted but ignored
+                    if i + 1 >= args.len() {
+                        return Response::error("ERR DB requires an argument");
+                    }
+                    tracing::warn!("COPY DB option not supported, ignoring");
+                    i += 2; // Skip DB and its argument
+                }
+                _ => {
+                    return Response::error(format!(
+                        "ERR Unknown option: {}",
+                        String::from_utf8_lossy(&arg)
+                    ));
+                }
+            }
+        }
+
+        let source_shard = shard_for_key(source, self.num_shards);
+        let dest_shard = shard_for_key(dest, self.num_shards);
+
+        // Phase 1: Read from source shard using ScatterOp::Copy
+        let (tx1, rx1) = oneshot::channel();
+        let copy_request = ShardMessage::ScatterRequest {
+            request_id: next_txid(),
+            keys: vec![source.clone()],
+            operation: ScatterOp::Copy {
+                source_key: source.clone(),
+            },
+            response_tx: tx1,
+        };
+
+        if self.shard_senders[source_shard].send(copy_request).await.is_err() {
+            return Response::error("ERR source shard unavailable");
+        }
+
+        // Await response from source shard
+        let source_result = match tokio::time::timeout(self.scatter_gather_timeout, rx1).await {
+            Ok(Ok(partial)) => partial,
+            Ok(Err(_)) => return Response::error("ERR source shard dropped request"),
+            Err(_) => return Response::error("ERR scatter-gather timeout"),
+        };
+
+        // Parse the source shard response
+        let source_data = source_result.results.into_iter().next();
+        let (value_type, value_data, expiry_ms) = match source_data {
+            Some((_, Response::Array(arr))) if arr.len() == 3 => {
+                // Extract type, data, and expiry from the response
+                let type_bytes = match &arr[0] {
+                    Response::Bulk(Some(b)) => b.clone(),
+                    _ => return Response::error("ERR invalid response from source shard"),
+                };
+                let data_bytes = match &arr[1] {
+                    Response::Bulk(Some(b)) => b.clone(),
+                    _ => return Response::error("ERR invalid response from source shard"),
+                };
+                let expiry = match &arr[2] {
+                    Response::Integer(ms) => Some(*ms),
+                    Response::Null | Response::Bulk(None) => None,
+                    _ => return Response::error("ERR invalid response from source shard"),
+                };
+                (type_bytes, data_bytes, expiry)
+            }
+            Some((_, Response::Null)) | Some((_, Response::Bulk(None))) => {
+                // Source key doesn't exist
+                return Response::Integer(0);
+            }
+            _ => return Response::error("ERR invalid response from source shard"),
+        };
+
+        // Phase 2: Write to destination shard using ScatterOp::CopySet
+        let (tx2, rx2) = oneshot::channel();
+        let copy_set_request = ShardMessage::ScatterRequest {
+            request_id: next_txid(),
+            keys: vec![dest.clone()],
+            operation: ScatterOp::CopySet {
+                dest_key: dest.clone(),
+                value_type,
+                value_data,
+                expiry_ms,
+                replace,
+            },
+            response_tx: tx2,
+        };
+
+        if self.shard_senders[dest_shard].send(copy_set_request).await.is_err() {
+            return Response::error("ERR destination shard unavailable");
+        }
+
+        // Await response from destination shard
+        let dest_result = match tokio::time::timeout(self.scatter_gather_timeout, rx2).await {
+            Ok(Ok(partial)) => partial,
+            Ok(Err(_)) => return Response::error("ERR destination shard dropped request"),
+            Err(_) => return Response::error("ERR scatter-gather timeout"),
+        };
+
+        // Return the response from the destination shard
+        match dest_result.results.into_iter().next() {
+            Some((_, response)) => response,
+            None => Response::error("ERR no response from destination shard"),
         }
     }
 

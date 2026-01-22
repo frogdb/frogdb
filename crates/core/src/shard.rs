@@ -300,6 +300,24 @@ pub enum ScatterOp {
         /// Optional type filter.
         key_type: Option<crate::types::KeyType>,
     },
+    /// COPY operation - retrieve value and expiry from source key for cross-shard copy.
+    Copy {
+        /// The source key to copy from.
+        source_key: Bytes,
+    },
+    /// COPY set operation - write a value from cross-shard copy to destination key.
+    CopySet {
+        /// The destination key to write to.
+        dest_key: Bytes,
+        /// The value type (e.g., "string", "hash", "list", "set", "zset", "hll", "json").
+        value_type: Bytes,
+        /// The serialized value data.
+        value_data: Bytes,
+        /// TTL in milliseconds (None = no expiry).
+        expiry_ms: Option<i64>,
+        /// Whether to replace existing key.
+        replace: bool,
+    },
 }
 
 /// Result from a shard for scatter-gather operations.
@@ -1870,6 +1888,102 @@ impl ShardWorker {
                     results.push((key.clone(), Response::bulk(key)));
                 }
                 results
+            }
+            ScatterOp::Copy { source_key } => {
+                // Get the value and expiry from source key for cross-shard copy.
+                // Returns an array with: [value_type, serialized_value, expiry_ms_or_nil]
+                match self.store.get(source_key) {
+                    Some(value) => {
+                        // Get expiry if any
+                        let expiry = self.store.get_expiry(source_key);
+                        let expiry_ms = expiry.map(|exp| {
+                            exp.duration_since(std::time::Instant::now())
+                                .as_millis() as i64
+                        });
+
+                        // Serialize the value based on its type
+                        let (type_str, serialized) = value.serialize_for_copy();
+
+                        let expiry_resp = match expiry_ms {
+                            Some(ms) if ms > 0 => Response::Integer(ms),
+                            _ => Response::null(),
+                        };
+
+                        vec![(
+                            source_key.clone(),
+                            Response::Array(vec![
+                                Response::bulk(Bytes::from(type_str)),
+                                Response::bulk(serialized),
+                                expiry_resp,
+                            ]),
+                        )]
+                    }
+                    None => {
+                        // Source key doesn't exist
+                        vec![(source_key.clone(), Response::null())]
+                    }
+                }
+            }
+            ScatterOp::CopySet {
+                dest_key,
+                value_type,
+                value_data,
+                expiry_ms,
+                replace,
+            } => {
+                // Write a value from cross-shard copy to destination key.
+                // Check if destination exists (when not using REPLACE)
+                if !replace && self.store.contains(dest_key) {
+                    return PartialResult {
+                        results: vec![(dest_key.clone(), Response::Integer(0))],
+                    };
+                }
+
+                // Deserialize the value
+                match Value::deserialize_for_copy(value_type, value_data) {
+                    Some(value) => {
+                        // If REPLACE, delete existing first
+                        if *replace {
+                            self.store.delete(dest_key);
+                        }
+
+                        // Set the value
+                        self.store.set(dest_key.clone(), value.clone());
+
+                        // Set expiry if provided
+                        if let Some(ms) = expiry_ms {
+                            if *ms > 0 {
+                                let expires_at =
+                                    Instant::now() + Duration::from_millis(*ms as u64);
+                                self.store.set_expiry(dest_key, expires_at);
+                            }
+                        }
+
+                        // Persist to WAL if enabled
+                        if let Some(ref wal) = self.wal_writer {
+                            let metadata = KeyMetadata::new(value.memory_size());
+                            if let Err(e) = wal.write_set(dest_key, &value, &metadata).await {
+                                tracing::error!(
+                                    key = %String::from_utf8_lossy(dest_key),
+                                    error = %e,
+                                    "Failed to persist COPY"
+                                );
+                            }
+                        }
+
+                        // Increment version
+                        self.increment_version();
+
+                        vec![(dest_key.clone(), Response::Integer(1))]
+                    }
+                    None => {
+                        // Failed to deserialize value
+                        vec![(
+                            dest_key.clone(),
+                            Response::error("ERR failed to deserialize value for COPY"),
+                        )]
+                    }
+                }
             }
         };
 

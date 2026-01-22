@@ -278,6 +278,222 @@ impl Value {
             _ => None,
         }
     }
+
+    /// Serialize this value for cross-shard copy operations.
+    /// Returns (type_string, serialized_bytes).
+    pub fn serialize_for_copy(&self) -> (&'static str, Bytes) {
+        match self {
+            Value::String(s) => ("string", s.as_bytes()),
+            Value::Hash(h) => {
+                // Serialize as: num_fields || (key_len || key || value_len || value)*
+                let mut buf = Vec::new();
+                let fields: Vec<_> = h.iter().collect();
+                buf.extend_from_slice(&(fields.len() as u32).to_le_bytes());
+                for (k, v) in fields {
+                    buf.extend_from_slice(&(k.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(k);
+                    buf.extend_from_slice(&(v.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(v);
+                }
+                ("hash", Bytes::from(buf))
+            }
+            Value::List(l) => {
+                // Serialize as: num_elements || (element_len || element)*
+                let mut buf = Vec::new();
+                let elements: Vec<_> = l.iter().collect();
+                buf.extend_from_slice(&(elements.len() as u32).to_le_bytes());
+                for elem in elements {
+                    buf.extend_from_slice(&(elem.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(elem);
+                }
+                ("list", Bytes::from(buf))
+            }
+            Value::Set(s) => {
+                // Serialize as: num_members || (member_len || member)*
+                let mut buf = Vec::new();
+                let members: Vec<_> = s.members().collect();
+                buf.extend_from_slice(&(members.len() as u32).to_le_bytes());
+                for member in members {
+                    buf.extend_from_slice(&(member.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(member);
+                }
+                ("set", Bytes::from(buf))
+            }
+            Value::SortedSet(z) => {
+                // Serialize as: num_members || (member_len || member || score)*
+                let mut buf = Vec::new();
+                let members: Vec<(&Bytes, f64)> = z.iter().collect();
+                buf.extend_from_slice(&(members.len() as u32).to_le_bytes());
+                for (member, score) in members {
+                    buf.extend_from_slice(&(member.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(member);
+                    buf.extend_from_slice(&score.to_le_bytes());
+                }
+                ("zset", Bytes::from(buf))
+            }
+            Value::Stream(_) => {
+                // Streams are complex - for now return empty
+                // TODO: implement proper stream serialization
+                ("stream", Bytes::new())
+            }
+            Value::BloomFilter(_) => {
+                // Bloom filters have internal state that's hard to serialize simply
+                // TODO: implement proper bloom filter serialization
+                ("bloom", Bytes::new())
+            }
+            Value::HyperLogLog(hll) => {
+                // Serialize the raw registers
+                ("hll", Bytes::from(hll.serialize()))
+            }
+            Value::TimeSeries(_) => {
+                // Time series has complex state
+                // TODO: implement proper time series serialization
+                ("timeseries", Bytes::new())
+            }
+            Value::Json(j) => {
+                // Serialize JSON to string using serde_json
+                let json_str = serde_json::to_string(j.data()).unwrap_or_default();
+                ("json", Bytes::from(json_str))
+            }
+        }
+    }
+
+    /// Deserialize a value from cross-shard copy data.
+    /// Returns None if deserialization fails.
+    pub fn deserialize_for_copy(type_str: &[u8], data: &[u8]) -> Option<Self> {
+        match type_str {
+            b"string" => Some(Value::String(StringValue::new(Bytes::copy_from_slice(data)))),
+            b"hash" => {
+                if data.len() < 4 {
+                    return None;
+                }
+                let mut pos = 0;
+                let num_fields = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut hash = HashValue::new();
+                for _ in 0..num_fields {
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
+                    let key_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    if pos + key_len > data.len() {
+                        return None;
+                    }
+                    let key = Bytes::copy_from_slice(&data[pos..pos + key_len]);
+                    pos += key_len;
+
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
+                    let value_len =
+                        u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    if pos + value_len > data.len() {
+                        return None;
+                    }
+                    let value = Bytes::copy_from_slice(&data[pos..pos + value_len]);
+                    pos += value_len;
+
+                    hash.set(key, value);
+                }
+                Some(Value::Hash(hash))
+            }
+            b"list" => {
+                if data.len() < 4 {
+                    return None;
+                }
+                let mut pos = 0;
+                let num_elements =
+                    u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut list = ListValue::new();
+                for _ in 0..num_elements {
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
+                    let elem_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    if pos + elem_len > data.len() {
+                        return None;
+                    }
+                    let elem = Bytes::copy_from_slice(&data[pos..pos + elem_len]);
+                    pos += elem_len;
+                    list.push_back(elem);
+                }
+                Some(Value::List(list))
+            }
+            b"set" => {
+                if data.len() < 4 {
+                    return None;
+                }
+                let mut pos = 0;
+                let num_members = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut set = SetValue::new();
+                for _ in 0..num_members {
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
+                    let member_len =
+                        u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    if pos + member_len > data.len() {
+                        return None;
+                    }
+                    let member = Bytes::copy_from_slice(&data[pos..pos + member_len]);
+                    pos += member_len;
+                    set.add(member);
+                }
+                Some(Value::Set(set))
+            }
+            b"zset" => {
+                if data.len() < 4 {
+                    return None;
+                }
+                let mut pos = 0;
+                let num_members = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut zset = SortedSetValue::new();
+                for _ in 0..num_members {
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
+                    let member_len =
+                        u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    if pos + member_len > data.len() {
+                        return None;
+                    }
+                    let member = Bytes::copy_from_slice(&data[pos..pos + member_len]);
+                    pos += member_len;
+
+                    if pos + 8 > data.len() {
+                        return None;
+                    }
+                    let score = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    zset.add(member, score);
+                }
+                Some(Value::SortedSet(zset))
+            }
+            b"hll" => {
+                let hll = HyperLogLogValue::deserialize(data)?;
+                Some(Value::HyperLogLog(hll))
+            }
+            b"json" => {
+                let json_str = std::str::from_utf8(data).ok()?;
+                let json_value: serde_json::Value = serde_json::from_str(json_str).ok()?;
+                Some(Value::Json(JsonValue::new(json_value)))
+            }
+            // Stream, bloom filter, and time series are not yet supported for cross-shard copy
+            _ => None,
+        }
+    }
 }
 
 /// String value with optional integer encoding.
