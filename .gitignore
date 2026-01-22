@@ -34,3 +34,6 @@ dist/
 
 # RocksDB data directories (created during testing/development)
 frogdb-data/
+
+# Redis compatibility test cache
+.redis-tests/
