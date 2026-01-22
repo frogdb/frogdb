@@ -966,6 +966,28 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::timeseries::TsRangeCommand);
     registry.register(crate::commands::timeseries::TsRevrangeCommand);
     registry.register(crate::commands::timeseries::TsInfoCommand);
+
+    // JSON commands
+    registry.register(crate::commands::json::JsonSetCommand);
+    registry.register(crate::commands::json::JsonGetCommand);
+    registry.register(crate::commands::json::JsonDelCommand);
+    registry.register(crate::commands::json::JsonMgetCommand);
+    registry.register(crate::commands::json::JsonTypeCommand);
+    registry.register(crate::commands::json::JsonNumIncrByCommand);
+    registry.register(crate::commands::json::JsonNumMultByCommand);
+    registry.register(crate::commands::json::JsonStrAppendCommand);
+    registry.register(crate::commands::json::JsonStrLenCommand);
+    registry.register(crate::commands::json::JsonArrAppendCommand);
+    registry.register(crate::commands::json::JsonArrIndexCommand);
+    registry.register(crate::commands::json::JsonArrInsertCommand);
+    registry.register(crate::commands::json::JsonArrLenCommand);
+    registry.register(crate::commands::json::JsonArrPopCommand);
+    registry.register(crate::commands::json::JsonArrTrimCommand);
+    registry.register(crate::commands::json::JsonObjKeysCommand);
+    registry.register(crate::commands::json::JsonObjLenCommand);
+    registry.register(crate::commands::json::JsonClearCommand);
+    registry.register(crate::commands::json::JsonToggleCommand);
+    registry.register(crate::commands::json::JsonMergeCommand);
 }
 
 // Commands module

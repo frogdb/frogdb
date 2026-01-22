@@ -21,6 +21,7 @@ use thiserror::Error;
 
 use crate::bloom::{BloomFilterValue, BloomLayer};
 use crate::hyperloglog::{HyperLogLogValue, HLL_DENSE_SIZE};
+use crate::json::JsonValue;
 use crate::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
 use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec, StreamValue, StringValue, Value};
 use bitvec::prelude::*;
@@ -48,6 +49,8 @@ const TYPE_BLOOM: u8 = 7;
 const TYPE_HYPERLOGLOG: u8 = 8;
 /// Marker for TimeSeries type.
 const TYPE_TIMESERIES: u8 = 9;
+/// Marker for JSON type.
+const TYPE_JSON: u8 = 10;
 
 /// Errors that can occur during deserialization.
 #[derive(Debug, Error)]
@@ -163,6 +166,7 @@ fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
         Value::BloomFilter(bf) => serialize_bloom_filter(bf),
         Value::HyperLogLog(hll) => serialize_hyperloglog(hll),
         Value::TimeSeries(ts) => serialize_timeseries(ts),
+        Value::Json(json) => serialize_json(json),
     }
 }
 
@@ -553,6 +557,10 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
         TYPE_TIMESERIES => {
             let ts = deserialize_timeseries(payload)?;
             Ok(Value::TimeSeries(ts))
+        }
+        TYPE_JSON => {
+            let json = deserialize_json(payload)?;
+            Ok(Value::Json(json))
         }
         _ => Err(SerializationError::UnknownType(type_byte)),
     }
@@ -1108,6 +1116,17 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
         policy,
         chunk_size,
     ))
+}
+
+/// Serialize a JSON value.
+fn serialize_json(json: &JsonValue) -> (u8, Vec<u8>) {
+    let payload = json.to_bytes();
+    (TYPE_JSON, payload)
+}
+
+/// Deserialize a JSON value.
+fn deserialize_json(payload: &[u8]) -> Result<JsonValue, SerializationError> {
+    JsonValue::parse(payload).map_err(|e| SerializationError::InvalidPayload(e.to_string()))
 }
 
 /// Convert an Instant to Unix timestamp in milliseconds.

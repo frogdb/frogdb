@@ -51,6 +51,10 @@ pub struct Config {
     /// Slow query log configuration.
     #[serde(default)]
     pub slowlog: SlowlogConfig,
+
+    /// JSON configuration.
+    #[serde(default)]
+    pub json: JsonConfig,
 }
 
 /// Security configuration.
@@ -152,6 +156,45 @@ impl Default for SlowlogConfig {
             log_slower_than: default_slowlog_log_slower_than(),
             max_len: default_slowlog_max_len(),
             max_arg_len: default_slowlog_max_arg_len(),
+        }
+    }
+}
+
+/// JSON configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct JsonConfig {
+    /// Maximum nesting depth for JSON documents.
+    #[serde(default = "default_json_max_depth")]
+    pub max_depth: usize,
+
+    /// Maximum size in bytes for JSON documents.
+    #[serde(default = "default_json_max_size")]
+    pub max_size: usize,
+}
+
+fn default_json_max_depth() -> usize {
+    frogdb_core::DEFAULT_JSON_MAX_DEPTH
+}
+
+fn default_json_max_size() -> usize {
+    frogdb_core::DEFAULT_JSON_MAX_SIZE
+}
+
+impl Default for JsonConfig {
+    fn default() -> Self {
+        Self {
+            max_depth: default_json_max_depth(),
+            max_size: default_json_max_size(),
+        }
+    }
+}
+
+impl JsonConfig {
+    /// Convert to JsonLimits.
+    pub fn to_limits(&self) -> frogdb_core::JsonLimits {
+        frogdb_core::JsonLimits {
+            max_depth: self.max_depth,
+            max_size: self.max_size,
         }
     }
 }
@@ -836,6 +879,13 @@ max_len = 128
 
 # Maximum characters per argument before truncation.
 max_arg_len = 128
+
+[json]
+# Maximum nesting depth for JSON documents.
+max_depth = 128
+
+# Maximum size in bytes for JSON documents (64MB).
+max_size = 67108864
 "#
         .to_string()
     }
