@@ -79,3 +79,23 @@ watch:
 # Generate documentation
 doc:
     cargo doc --all --no-deps --open
+
+# =============================================================================
+# Redis Compatibility Testing
+# =============================================================================
+
+# Run Redis compatibility tests
+redis-compat *args:
+    uv run compat/redis-compat/run_tests.py {{args}}
+
+# Run specific Redis test unit
+redis-compat-unit unit *args:
+    uv run compat/redis-compat/run_tests.py --single unit/{{unit}} {{args}}
+
+# Clean Redis test cache
+redis-compat-clean:
+    rm -rf .redis-tests/
+
+# Show Redis compatibility coverage
+redis-compat-coverage:
+    uv run compat/redis-compat/coverage.py

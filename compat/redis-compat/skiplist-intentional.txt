@@ -1,0 +1,34 @@
+# Intentional Incompatibilities with Redis
+# These tests are skipped because FrogDB intentionally differs from Redis behavior.
+# See spec/COMPATIBILITY.md for details.
+
+# =============================================================================
+# DATABASE MODEL
+# =============================================================================
+# FrogDB uses a single database per instance; SELECT is not supported
+unit/introspection
+unit/multi
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+# CONFIG REWRITE is not supported; changes via CONFIG SET are transient
+unit/introspection-2
+
+# =============================================================================
+# CROSS-SLOT OPERATIONS
+# =============================================================================
+# FrogDB rejects multi-key operations when keys hash to different slots
+# (These tests expect cross-slot operations to succeed in standalone mode)
+
+# =============================================================================
+# BITFIELD LIMITATIONS
+# =============================================================================
+# BITFIELD u64 is not supported (limited to u63)
+unit/bitfield
+
+# =============================================================================
+# SCRIPTING
+# =============================================================================
+# FrogDB enforces strict key validation (all keys must be in KEYS array)
+unit/scripting

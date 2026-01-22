@@ -9,3 +9,7 @@ brew "just"
 
 # Optional: Redis CLI for manual testing
 brew "redis"
+
+# Redis compatibility testing
+brew "tcl-tk"  # Required for running Redis test suite
+brew "uv"      # Python script runner for test harness
