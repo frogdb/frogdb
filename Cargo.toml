@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "crates/server",
     "crates/metrics",
+    "crates/testing",
     "benches",
 ]
 
@@ -63,6 +64,9 @@ bitvec = "1.0"
 # Testing - Concurrency
 shuttle = { version = "0.8" }
 
+# Testing - Network simulation
+turmoil = { version = "0.6" }
+
 # Persistence
 rocksdb = { version = "0.22", features = ["multi-threaded-cf"] }
 tempfile = "3"
@@ -79,6 +83,7 @@ jsonpath-rust = "0.7"
 frogdb-protocol = { path = "crates/protocol" }
 frogdb-core = { path = "crates/core" }
 frogdb-metrics = { path = "crates/metrics" }
+frogdb-testing = { path = "crates/testing" }
 
 # Benchmarking
 criterion = { version = "0.5", features = ["async_tokio"] }
