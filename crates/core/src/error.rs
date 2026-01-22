@@ -64,6 +64,10 @@ pub enum CommandError {
     /// Internal server error.
     #[error("ERR {message}")]
     Internal { message: String },
+
+    /// Command is recognized but not yet implemented.
+    #[error("ERR command '{command}' is not yet implemented")]
+    NotImplemented { command: &'static str },
 }
 
 impl CommandError {
@@ -102,6 +106,9 @@ impl CommandError {
                 Bytes::from_static(b"OOM command not allowed when used memory > 'maxmemory'")
             }
             Self::Internal { message } => Bytes::from(format!("ERR {}", message)),
+            Self::NotImplemented { command } => {
+                Bytes::from(format!("ERR command '{}' is not yet implemented", command))
+            }
         }
     }
 }
