@@ -6,6 +6,7 @@
 //! - Message ordering and timing
 //! - Future: Network partitions and fault injection
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -207,6 +208,49 @@ impl OperationHistory {
 
         invokes == returns
     }
+
+    /// Convert to frogdb_testing::History for linearizability checking.
+    ///
+    /// This method bridges the sim_harness history format with the testing
+    /// crate's linearizability checker.
+    pub fn to_testing_history(&self) -> frogdb_testing::History {
+        let mut history = frogdb_testing::History::new();
+
+        // Group operations by ID to pair invoke/return
+        let mut invokes: HashMap<u64, &Operation> = HashMap::new();
+
+        for op in &self.operations {
+            match op.kind {
+                OpKind::Invoke => {
+                    invokes.insert(op.op_id, op);
+                }
+                OpKind::Return => {
+                    if let Some(invoke) = invokes.remove(&op.op_id) {
+                        // Convert command name to lowercase for model matching
+                        let function = invoke.command.to_lowercase();
+                        let op_id = history.invoke(invoke.client_id, &function, invoke.args.clone());
+                        let result = self.convert_result(&op.result);
+                        history.respond(op_id, result);
+                    }
+                }
+            }
+        }
+
+        history
+    }
+
+    /// Convert OperationResult to Option<Bytes> for the testing crate.
+    fn convert_result(&self, result: &Option<OperationResult>) -> Option<Bytes> {
+        match result {
+            None => None,
+            Some(OperationResult::Ok) => Some(Bytes::from("OK")),
+            Some(OperationResult::Nil) => None,
+            Some(OperationResult::String(b)) => Some(b.clone()),
+            Some(OperationResult::Integer(n)) => Some(Bytes::from(n.to_string())),
+            Some(OperationResult::Array(_)) => None, // Skip arrays for linearizability checking
+            Some(OperationResult::Error(_)) => None, // Errors are not linearizable results
+        }
+    }
 }
 
 /// Simulated client for FrogDB operations.
@@ -222,6 +266,74 @@ impl SimClient {
     pub fn new(id: u64, server_addr: (IpAddr, u16)) -> Self {
         Self { id, server_addr }
     }
+}
+
+// =============================================================================
+// Sharding Utilities
+// =============================================================================
+
+/// Total number of hash slots (Redis-compatible).
+pub const HASH_SLOTS: usize = 16384;
+
+/// Calculate the hash slot for a key using CRC16 (XMODEM).
+///
+/// This matches Redis's hash slot calculation. If the key contains a hash tag
+/// (e.g., `{tag}key`), only the contents of the tag are hashed.
+pub fn hash_slot(key: &[u8]) -> u16 {
+    let key_to_hash = extract_hash_tag(key).unwrap_or(key);
+    crc16_xmodem(key_to_hash) % HASH_SLOTS as u16
+}
+
+/// Calculate which shard owns a key given a number of shards.
+pub fn shard_for_key(key: &[u8], num_shards: usize) -> usize {
+    let slot = hash_slot(key) as usize;
+    slot * num_shards / HASH_SLOTS
+}
+
+/// Extract the hash tag from a key, if present.
+///
+/// Hash tags are enclosed in curly braces: `{tag}key` -> `tag`
+/// Only the first occurrence of `{...}` is used.
+fn extract_hash_tag(key: &[u8]) -> Option<&[u8]> {
+    let start = key.iter().position(|&b| b == b'{')?;
+    let end = key[start + 1..].iter().position(|&b| b == b'}')?;
+    if end > 0 {
+        Some(&key[start + 1..start + 1 + end])
+    } else {
+        None
+    }
+}
+
+/// CRC16 XMODEM implementation (matches Redis).
+fn crc16_xmodem(data: &[u8]) -> u16 {
+    let mut crc: u16 = 0;
+    for &byte in data {
+        crc ^= (byte as u16) << 8;
+        for _ in 0..8 {
+            if crc & 0x8000 != 0 {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    crc
+}
+
+/// Message sent to a shard worker.
+#[derive(Debug)]
+pub enum ShardMessage {
+    /// GET operation.
+    Get {
+        key: Bytes,
+        response_tx: tokio::sync::oneshot::Sender<Option<Bytes>>,
+    },
+    /// SET operation.
+    Set {
+        key: Bytes,
+        value: Bytes,
+        response_tx: tokio::sync::oneshot::Sender<bool>,
+    },
 }
 
 #[cfg(test)]
