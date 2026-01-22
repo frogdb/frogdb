@@ -27,6 +27,7 @@ pub mod slowlog;
 pub mod sorted_set;
 pub mod stream;
 pub mod string;
+pub mod stub;
 pub mod transaction;
 
 pub use acl::*;
@@ -53,4 +54,5 @@ pub use slowlog::*;
 pub use sorted_set::*;
 pub use stream::*;
 pub use string::*;
+pub use stub::*;
 pub use transaction::*;

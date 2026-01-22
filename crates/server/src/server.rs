@@ -895,6 +895,64 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::hyperloglog::PfmergeCommand);
     registry.register(crate::commands::hyperloglog::PfdebugCommand);
     registry.register(crate::commands::hyperloglog::PfselftestCommand);
+
+    // Stub commands (not yet implemented)
+    // Pub/Sub
+    registry.register(crate::commands::stub::SubscribeCommand);
+    registry.register(crate::commands::stub::PsubscribeCommand);
+    registry.register(crate::commands::stub::SsubscribeCommand);
+    registry.register(crate::commands::stub::UnsubscribeCommand);
+    registry.register(crate::commands::stub::PunsubscribeCommand);
+    registry.register(crate::commands::stub::SunsubscribeCommand);
+    registry.register(crate::commands::stub::PublishCommand);
+    registry.register(crate::commands::stub::SpublishCommand);
+    registry.register(crate::commands::stub::PubsubCommand);
+
+    // Cluster
+    registry.register(crate::commands::stub::ClusterCommand);
+    registry.register(crate::commands::stub::AskingCommand);
+    registry.register(crate::commands::stub::ReadonlyCommand);
+    registry.register(crate::commands::stub::ReadwriteCommand);
+
+    // Replication
+    registry.register(crate::commands::stub::ReplicaofCommand);
+    registry.register(crate::commands::stub::SlaveofCommand);
+    registry.register(crate::commands::stub::WaitCommand);
+    registry.register(crate::commands::stub::WaitaofCommand);
+    registry.register(crate::commands::stub::PsyncCommand);
+    registry.register(crate::commands::stub::ReplconfCommand);
+
+    // Memory
+    registry.register(crate::commands::stub::MemoryCommand);
+
+    // Latency
+    registry.register(crate::commands::stub::LatencyCommand);
+
+    // Module
+    registry.register(crate::commands::stub::ModuleCommand);
+
+    // Function
+    registry.register(crate::commands::stub::FunctionCommand);
+    registry.register(crate::commands::stub::FcallCommand);
+    registry.register(crate::commands::stub::FcallRoCommand);
+
+    // Generic/Keys
+    registry.register(crate::commands::stub::CopyCommand);
+    registry.register(crate::commands::stub::SortCommand);
+    registry.register(crate::commands::stub::SortRoCommand);
+    registry.register(crate::commands::stub::RandomkeyCommand);
+    registry.register(crate::commands::stub::MigrateCommand);
+    registry.register(crate::commands::stub::MoveCommand);
+
+    // Connection
+    registry.register(crate::commands::stub::SelectCommand);
+    registry.register(crate::commands::stub::SwapdbCommand);
+    registry.register(crate::commands::stub::ResetCommand);
+
+    // Server
+    registry.register(crate::commands::stub::BgrewriteaofCommand);
+    registry.register(crate::commands::stub::LolwutCommand);
+    registry.register(crate::commands::stub::RoleCommand);
 }
 
 // Commands module
