@@ -86,11 +86,18 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ## Phase 7: Performance Optimizations
 
-**Goal**: Optional performance enhancements.
+**Goal**: Comprehensive performance profiling and optimization.
 
-- [ ] io_uring (optional)
-- [ ] Skip list for sorted sets (optional)
-- [ ] Connection pooling optimizations
+See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for detailed profiling infrastructure, optimization strategies, and implementation guidance.
+
+**Subsections:**
+- Profiling Infrastructure
+- Quick Wins
+- Memory Optimizations
+- I/O Optimizations
+- Data Structure Optimizations
+- Concurrency Optimizations
+- Advanced Optimizations
 
 ---
 
@@ -158,3 +165,4 @@ These must exist from the initial foundation to avoid refactoring:
 - [PERSISTENCE.md](PERSISTENCE.md) - RocksDB integration
 - [CONFIGURATION.md](CONFIGURATION.md) - Configuration system
 - [TESTING.md](TESTING.md) - Test strategy
+- [OPTIMIZATIONS.md](OPTIMIZATIONS.md) - Performance profiling and optimization

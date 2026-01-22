@@ -13,3 +13,7 @@ brew "redis"
 # Redis compatibility testing
 brew "tcl-tk"  # Required for running Redis test suite
 brew "uv"      # Python script runner for test harness
+
+# Profiling tools
+brew "cargo-flamegraph"  # CPU flamegraphs
+cask "samply"            # CPU profiler with UI
