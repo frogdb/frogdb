@@ -61,6 +61,13 @@ run *args:
 run-release *args:
     cargo run --release -p frogdb-server -- {{args}}
 
+# Show size of target directory
+target-size:
+    @echo "Target directory size:"
+    @du -sh target 2>/dev/null || echo "No target directory found"
+    @echo "\nBreakdown by subdirectory:"
+    @du -sh target/*/ 2>/dev/null || echo "No subdirectories found"
+
 # Clean build artifacts
 clean:
     cargo clean

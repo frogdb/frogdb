@@ -82,6 +82,7 @@ just check        # Run all checks (fmt-check, lint, deny, test)
 just run          # Run server (debug)
 just run-release  # Run server (release)
 just run --port 6380  # Run with arguments
+just target-size  # Show size of target directory
 just clean        # Clean build artifacts
 just watch        # Watch for changes and run tests
 just doc          # Generate and open documentation
