@@ -466,7 +466,7 @@ impl Command for TsMaddCommand {
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        if !args.len().is_multiple_of(3) {
+        if args.len() % 3 != 0 {
             return Err(CommandError::InvalidArgument {
                 message: "TSDB: wrong number of arguments".to_string(),
             });

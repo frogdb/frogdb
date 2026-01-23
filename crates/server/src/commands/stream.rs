@@ -250,7 +250,7 @@ impl Command for XaddCommand {
         i += 1;
 
         // Parse field-value pairs
-        if !(args.len() - i).is_multiple_of(2) {
+        if (args.len() - i) % 2 != 0 {
             return Err(CommandError::WrongArity { command: "XADD" });
         }
         if args.len() - i == 0 {
@@ -618,7 +618,7 @@ impl Command for XreadCommand {
 
         // Parse keys and IDs
         let remaining = args.len() - i;
-        if remaining == 0 || !remaining.is_multiple_of(2) {
+        if remaining == 0 || remaining % 2 != 0 {
             return Err(CommandError::SyntaxError);
         }
 
@@ -712,7 +712,7 @@ impl Command for XreadCommand {
         }
 
         let remaining = args.len() - i;
-        if remaining == 0 || !remaining.is_multiple_of(2) {
+        if remaining == 0 || remaining % 2 != 0 {
             return vec![];
         }
 
@@ -1043,7 +1043,7 @@ impl Command for XreadgroupCommand {
 
         // Parse keys and IDs
         let remaining = args.len() - i;
-        if remaining == 0 || !remaining.is_multiple_of(2) {
+        if remaining == 0 || remaining % 2 != 0 {
             return Err(CommandError::SyntaxError);
         }
 
@@ -1172,7 +1172,7 @@ impl Command for XreadgroupCommand {
         }
 
         let remaining = args.len() - i;
-        if remaining == 0 || !remaining.is_multiple_of(2) {
+        if remaining == 0 || remaining % 2 != 0 {
             return vec![];
         }
 

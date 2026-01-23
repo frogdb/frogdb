@@ -1,0 +1,75 @@
+# Docker Compose configuration for benchmark targets
+#
+# This file sets up FrogDB, Redis, Valkey, and Dragonfly containers for
+# performance comparison benchmarks. All servers run in containers for
+# fair comparison (same containerization overhead).
+#
+# Port mapping (using 16xxx range to avoid conflicts with local Redis/FrogDB):
+#   FrogDB:    16379 (Docker)
+#   Redis:     16380 (Docker)
+#   Valkey:    16381 (Docker)
+#   Dragonfly: 16382 (Docker)
+#
+# Usage:
+#   docker compose -f tools/loadtest/docker-compose.benchmarks.yml up -d
+#   docker compose -f tools/loadtest/docker-compose.benchmarks.yml ps
+#   docker compose -f tools/loadtest/docker-compose.benchmarks.yml down
+#
+# Build FrogDB image:
+#   docker compose -f tools/loadtest/docker-compose.benchmarks.yml build frogdb
+
+services:
+  frogdb:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: benchmark-frogdb
+    ports:
+      - "16379:6379"
+    command: frogdb-server --bind 0.0.0.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6379' 2>/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    container_name: benchmark-redis
+    ports:
+      - "16380:6379"
+    command: redis-server --save "" --appendonly no
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: benchmark-valkey
+    ports:
+      - "16381:6379"
+    command: valkey-server --save "" --appendonly no
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly
+    container_name: benchmark-dragonfly
+    ports:
+      - "16382:6379"
+    restart: unless-stopped
+    ulimits:
+      memlock: -1
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3

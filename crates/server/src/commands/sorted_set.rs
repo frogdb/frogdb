@@ -221,7 +221,7 @@ impl Command for ZaddCommand {
 
         // Parse score-member pairs
         let remaining = &args[i..];
-        if !remaining.len().is_multiple_of(2) || remaining.is_empty() {
+        if remaining.len() % 2 != 0 || remaining.is_empty() {
             return Err(CommandError::SyntaxError);
         }
 
