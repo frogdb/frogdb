@@ -951,7 +951,7 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // Server
     registry.register(crate::commands::stub::BgrewriteaofCommand);
-    registry.register(crate::commands::stub::LolwutCommand);
+    registry.register(crate::commands::server::LolwutCommand);
     registry.register(crate::commands::stub::RoleCommand);
     registry.register(crate::commands::stub::SaveCommand);
     registry.register(crate::commands::stub::MonitorCommand);

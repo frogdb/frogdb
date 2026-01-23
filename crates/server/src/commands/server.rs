@@ -223,3 +223,37 @@ impl Command for ShutdownCommand {
         vec![] // Keyless
     }
 }
+
+// ============================================================================
+// LOLWUT - Display frog art
+// ============================================================================
+
+const FROG_ART: &str = include_str!("frog-art.txt");
+
+pub struct LolwutCommand;
+
+impl Command for LolwutCommand {
+    fn name(&self) -> &'static str {
+        "LOLWUT"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(0) // LOLWUT [VERSION version]
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY | CommandFlags::FAST
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::bulk(Bytes::from(FROG_ART)))
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
