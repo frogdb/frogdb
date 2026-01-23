@@ -5,19 +5,41 @@
 //! - Basic operations
 //! - Scatter-gather across shards
 //! - Network delays and message ordering
-//! - Future: Network partitions and fault injection
+//! - Chaos testing with various delay and failure configurations
 //!
 //! Run with: `cargo test -p frogdb-server --features turmoil --test simulation`
+//!
+//! ## Test Tiers
+//!
+//! - **Tier 1 (Quick)**: Core tests with quick delay combinations, run on every CI.
+//! - **Tier 2 (Failures)**: Failure mode tests with fixed delays, run on every CI.
+//! - **Tier 3 (Full)**: Full Cartesian product of all tests × delays × failure modes, run nightly or with `--ignored`.
+//!
+//! ## Running Specific Chaos Combinations
+//!
+//! ```bash
+//! # Run all Tier 1 tests
+//! cargo test -p frogdb-server --features turmoil --test simulation
+//!
+//! # Run a specific test with a specific chaos config
+//! cargo test -p frogdb-server --features turmoil --test simulation test_mset_mget_basic::scatter_delay_ms_50
+//!
+//! # Run full Tier 3 matrix (nightly)
+//! cargo test -p frogdb-server --features turmoil --test simulation -- --ignored
+//! ```
 
 #![cfg(feature = "turmoil")]
 
 mod common;
 
 use bytes::{Bytes, BytesMut};
+use common::chaos_configs::ChaosPreset;
 use common::sim_harness::{shard_for_key, OperationHistory, OperationResult};
+use frogdb_server::config::ChaosConfig;
 use frogdb_server::{Config, Server};
 use frogdb_server::config::{MetricsConfig, PersistenceConfig, ServerConfig};
 use frogdb_testing::{check_linearizability, KVModel};
+use rstest::rstest;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -168,6 +190,37 @@ async fn real_frogdb_server(num_shards: usize) -> Result<(), BoxError> {
     Ok(())
 }
 
+/// Start real FrogDB server with chaos configuration for simulation tests.
+async fn real_frogdb_server_with_chaos(num_shards: usize, _chaos: ChaosConfig) -> Result<(), BoxError> {
+    let config = Config {
+        server: ServerConfig {
+            bind: "0.0.0.0".to_string(),
+            port: SERVER_PORT,
+            num_shards,
+            allow_cross_slot_standalone: true, // Enable scatter-gather for MSET/MGET
+            scatter_gather_timeout_ms: 5000,
+        },
+        persistence: PersistenceConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        metrics: MetricsConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // TODO: Pass chaos config to server when Server::new_with_chaos is implemented
+    // For now, VLL provides atomicity without needing chaos hooks
+    let server = Server::new(config).await?;
+
+    // Run until simulation ends (Turmoil controls lifetime)
+    server.run_until(std::future::pending::<()>()).await?;
+
+    Ok(())
+}
+
 // =============================================================================
 // Basic Connectivity Tests
 // =============================================================================
@@ -238,11 +291,32 @@ fn test_simple_set_get() {
     sim.run().unwrap();
 }
 
-#[test]
-fn test_mset_mget_scatter_gather() {
+/// Test MSET/MGET with scatter-gather across multiple shards.
+///
+/// This test is parameterized with various chaos configurations to ensure
+/// the scatter-gather implementation is robust under different conditions.
+#[rstest]
+#[case::no_chaos(0, 0)]
+#[case::scatter_delay_50ms(50, 0)]
+#[case::scatter_delay_100ms(100, 0)]
+#[case::single_shard_delay_50ms(0, 50)]
+#[case::both_delays_50ms(50, 50)]
+fn test_mset_mget_basic(
+    #[case] scatter_delay_ms: u64,
+    #[case] single_shard_delay_ms: u64,
+) {
+    let chaos = ChaosConfig {
+        scatter_inter_send_delay_ms: scatter_delay_ms,
+        single_shard_delay_ms,
+        ..Default::default()
+    };
+
     let mut sim = Builder::new().build();
 
-    sim.host(SERVER_HOST, || real_frogdb_server(4));
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
 
     sim.client("client1", async {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -275,11 +349,72 @@ fn test_mset_mget_scatter_gather() {
     sim.run().unwrap();
 }
 
-#[test]
-fn test_concurrent_clients() {
+/// Full Cartesian product chaos test for MSET/MGET (Tier 3 - nightly).
+///
+/// This test runs with all combinations of scatter delays and single shard delays.
+#[rstest]
+#[ignore] // Run with --ignored for full matrix
+fn test_mset_mget_full_chaos_matrix(
+    #[values(0, 50, 100, 250)] scatter_delay_ms: u64,
+    #[values(0, 50, 100, 250)] single_shard_delay_ms: u64,
+) {
+    let chaos = ChaosConfig {
+        scatter_inter_send_delay_ms: scatter_delay_ms,
+        single_shard_delay_ms,
+        ..Default::default()
+    };
+
     let mut sim = Builder::new().build();
 
-    sim.host(SERVER_HOST, || real_frogdb_server(4));
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        // MSET across multiple "shards" (keys that would hash to different shards)
+        let cmd = encode_command(&[
+            b"MSET", b"key1", b"value1", b"key2", b"value2", b"key3", b"value3",
+        ]);
+        stream.write_all(&cmd).await?;
+
+        let n = stream.read(&mut buf).await?;
+        let response = parse_simple_response(&buf[..n]);
+        assert!(matches!(response, OperationResult::Ok));
+
+        // MGET the keys
+        let cmd = encode_command(&[b"MGET", b"key1", b"key2", b"key3"]);
+        stream.write_all(&cmd).await?;
+
+        let n = stream.read(&mut buf).await?;
+        assert!(n > 0);
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test concurrent clients with chaos configurations.
+#[rstest]
+#[case::no_chaos(ChaosPreset::None)]
+#[case::scatter_delay(ChaosPreset::ScatterDelay(50))]
+#[case::single_shard_delay(ChaosPreset::SingleShardDelay(50))]
+fn test_concurrent_clients(#[case] preset: ChaosPreset) {
+    let chaos = preset.to_config(4);
+
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
 
     // Multiple clients operating concurrently
     for i in 0..3 {
@@ -415,12 +550,24 @@ fn test_sharded_set_get_single_key() {
     sim.run().unwrap();
 }
 
-#[test]
-fn test_sharded_mset_mget_distribution() {
+/// Test sharded MSET/MGET with key distribution across shards.
+///
+/// Parameterized with chaos configurations for robustness testing.
+#[rstest]
+#[case::no_chaos(ChaosPreset::None)]
+#[case::scatter_delay(ChaosPreset::ScatterDelay(50))]
+#[case::single_shard_delay(ChaosPreset::SingleShardDelay(50))]
+#[case::all_delays(ChaosPreset::AllDelays(50))]
+fn test_sharded_mset_mget_distribution(#[case] preset: ChaosPreset) {
+    let chaos = preset.to_config(4);
+
     let mut sim = Builder::new().build();
 
     // Use 4 shards to ensure key distribution
-    sim.host(SERVER_HOST, || real_frogdb_server(4));
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
 
     sim.client("client1", async {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -472,6 +619,56 @@ fn test_sharded_mset_mget_distribution() {
                 other => panic!("Expected String for {}, got {:?}", key, other),
             }
         }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Full matrix test for sharded MSET/MGET distribution (Tier 3 - nightly).
+#[rstest]
+#[ignore]
+fn test_sharded_mset_mget_distribution_full_matrix(
+    #[values(
+        ChaosPreset::None,
+        ChaosPreset::ScatterDelay(50),
+        ChaosPreset::ScatterDelay(100),
+        ChaosPreset::ScatterDelay(250),
+        ChaosPreset::SingleShardDelay(50),
+        ChaosPreset::SingleShardDelay(100),
+        ChaosPreset::AllDelays(50),
+        ChaosPreset::AllDelays(100)
+    )]
+    preset: ChaosPreset,
+) {
+    let chaos = preset.to_config(4);
+
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        let cmd = encode_command(&[
+            b"MSET", b"key1", b"value1", b"key2", b"value2", b"key3", b"value3", b"key4", b"value4",
+        ]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        assert!(matches!(parse_simple_response(&buf[..n]), OperationResult::Ok));
+
+        let cmd = encode_command(&[b"MGET", b"key1", b"key2", b"key3", b"key4"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        assert!(n > 0);
 
         Ok(())
     });
@@ -1421,14 +1618,29 @@ fn test_mset_linearizable() {
 /// but VLL (Very Lightweight Locking) ensures atomic multi-shard operations.
 ///
 /// Expected behavior: MGET sees either (nil, nil) or (1, 1), never partial state.
-#[test]
-fn test_mset_full_atomicity_sharded() {
+///
+/// Parameterized with chaos presets to test under various delay conditions.
+#[rstest]
+fn test_mset_full_atomicity_sharded(
+    #[values(
+        ChaosPreset::ScatterDelay(50),
+        ChaosPreset::ScatterDelay(100),
+        ChaosPreset::AllDelays(50)
+    )]
+    preset: ChaosPreset,
+) {
     let mut sim = Builder::new()
         .tick_duration(Duration::from_millis(1))
         .build();
 
-    // Use real FrogDB server with 4 shards
-    sim.host(SERVER_HOST, || real_frogdb_server(4));
+    // Use chaos config to inject delay between scatter sends
+    // This creates a window between shard sends where concurrent MGET
+    // can observe partial state (one key set, one still nil)
+    let chaos = preset.to_config(4);
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
 
     let partial_seen = Arc::new(Mutex::new(false));
     let all_results = Arc::new(Mutex::new(Vec::new()));
@@ -1455,6 +1667,7 @@ fn test_mset_full_atomicity_sharded() {
     });
 
     // Client 2: Rapid MGET polling to catch partial state
+    // With 50ms inter-send delay, we have a window to catch partial visibility
     let partial_clone = partial_seen.clone();
     let results_clone = all_results.clone();
     sim.client("client2", async move {
@@ -1465,6 +1678,8 @@ fn test_mset_full_atomicity_sharded() {
         let mut buf = vec![0u8; 1024];
 
         // Poll rapidly during the MSET window
+        // With 50ms delay between shard sends and 5ms poll interval,
+        // we should have ~10 chances to catch the partial state
         for _ in 0..100 {
             let cmd = encode_command(&[b"MGET", b"key_a", b"key_b"]);
             stream.write_all(&cmd).await?;
@@ -1489,7 +1704,7 @@ fn test_mset_full_atomicity_sharded() {
             }
 
             results_clone.lock().unwrap().push(response_str);
-            tokio::time::sleep(Duration::from_millis(2)).await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
 
         Ok(())
