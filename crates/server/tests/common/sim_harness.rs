@@ -56,7 +56,7 @@ impl Default for SimConfig {
 }
 
 /// Build a simulation with the given configuration.
-pub fn build_sim(config: &SimConfig) -> Sim<'static> {
+pub fn build_sim(_config: &SimConfig) -> Sim<'static> {
     let mut builder = Builder::new();
     builder.simulation_duration(Duration::from_secs(60));
 
@@ -247,9 +247,70 @@ impl OperationHistory {
             Some(OperationResult::Nil) => None,
             Some(OperationResult::String(b)) => Some(b.clone()),
             Some(OperationResult::Integer(n)) => Some(Bytes::from(n.to_string())),
-            Some(OperationResult::Array(_)) => None, // Skip arrays for linearizability checking
+            Some(OperationResult::Array(arr)) => Some(Self::encode_array_result(arr)),
             Some(OperationResult::Error(_)) => None, // Errors are not linearizable results
         }
+    }
+
+    /// Encode an array of results as a pipe-delimited string for linearizability checking.
+    ///
+    /// Format: "value1|nil|value2|OK|5"
+    /// - String values are encoded as-is
+    /// - Nil values are encoded as "nil"
+    /// - OK is encoded as "OK"
+    /// - Integers are encoded as their string representation
+    pub fn encode_array_result(results: &[OperationResult]) -> Bytes {
+        let parts: Vec<String> = results
+            .iter()
+            .map(|r| match r {
+                OperationResult::Ok => "OK".to_string(),
+                OperationResult::Nil => "nil".to_string(),
+                OperationResult::String(b) => String::from_utf8_lossy(b).to_string(),
+                OperationResult::Integer(n) => n.to_string(),
+                OperationResult::Array(arr) => {
+                    // Nested arrays are encoded recursively
+                    String::from_utf8_lossy(&Self::encode_array_result(arr)).to_string()
+                }
+                OperationResult::Error(e) => format!("ERR:{}", e),
+            })
+            .collect();
+        Bytes::from(parts.join("|"))
+    }
+
+    /// Record a transaction (EXEC) as a single atomic operation.
+    ///
+    /// Commands are encoded as: [num_cmds, cmd1_name, cmd1_num_args, cmd1_args..., cmd2_name, ...]
+    pub fn record_exec_invoke(
+        &mut self,
+        client_id: u64,
+        commands: &[(String, Vec<Bytes>)],
+    ) -> u64 {
+        let mut args = Vec::new();
+        args.push(Bytes::from(commands.len().to_string()));
+
+        for (cmd_name, cmd_args) in commands {
+            args.push(Bytes::from(cmd_name.clone()));
+            args.push(Bytes::from(cmd_args.len().to_string()));
+            args.extend(cmd_args.clone());
+        }
+
+        self.record_invoke(client_id, "EXEC", args)
+    }
+
+    /// Record a transaction return with array of results.
+    ///
+    /// Results are encoded as a pipe-delimited string.
+    pub fn record_exec_return(&mut self, op_id: u64, client_id: u64, results: &[OperationResult]) {
+        let encoded = Self::encode_array_result(results);
+        self.record_return(op_id, client_id, OperationResult::String(encoded));
+    }
+
+    /// Record an MGET return with array of results.
+    ///
+    /// Results are encoded as a pipe-delimited string (value or "nil").
+    pub fn record_mget_return(&mut self, op_id: u64, client_id: u64, results: &[OperationResult]) {
+        let encoded = Self::encode_array_result(results);
+        self.record_return(op_id, client_id, OperationResult::String(encoded));
     }
 }
 
@@ -364,5 +425,49 @@ mod tests {
         history.record_invoke(1, "SET", vec![Bytes::from("key"), Bytes::from("value")]);
 
         assert!(!history.is_complete());
+    }
+
+    #[test]
+    fn test_encode_array_result() {
+        let results = vec![
+            OperationResult::Ok,
+            OperationResult::String(Bytes::from("value1")),
+            OperationResult::Nil,
+            OperationResult::Integer(42),
+        ];
+        let encoded = OperationHistory::encode_array_result(&results);
+        assert_eq!(encoded.as_ref(), b"OK|value1|nil|42");
+    }
+
+    #[test]
+    fn test_record_exec_invoke() {
+        let mut history = OperationHistory::new();
+
+        let commands = vec![
+            ("SET".to_string(), vec![Bytes::from("key"), Bytes::from("value")]),
+            ("GET".to_string(), vec![Bytes::from("key")]),
+        ];
+        let _op_id = history.record_exec_invoke(1, &commands);
+
+        let ops = history.operations();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].command, "EXEC");
+        // Args: [num_cmds=2, "SET", 2, "key", "value", "GET", 1, "key"]
+        assert_eq!(ops[0].args.len(), 8);
+        assert_eq!(ops[0].args[0].as_ref(), b"2"); // num_cmds
+    }
+
+    #[test]
+    fn test_record_exec_return() {
+        let mut history = OperationHistory::new();
+
+        let op_id = history.record_invoke(1, "EXEC", vec![Bytes::from("1"), Bytes::from("SET"), Bytes::from("2"), Bytes::from("key"), Bytes::from("val")]);
+        history.record_exec_return(op_id, 1, &[OperationResult::Ok]);
+
+        assert!(history.is_complete());
+
+        let testing_history = history.to_testing_history();
+        // The result should be encoded as "OK"
+        assert_eq!(testing_history.operations().len(), 2); // 1 invoke + 1 return
     }
 }

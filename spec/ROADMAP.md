@@ -41,9 +41,11 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 **Goal**: Correctness testing for single-node operation.
 
 - [ ] Jepsen test harness integration
-- [ ] Turmoil test harness integration
-- [ ] Single-node linearizability tests
+- [x] Turmoil test harness integration
+- [x] Single-node linearizability tests
 - [ ] Single-node crash recovery tests
+- [ ] MSET/MGET full atomicity (currently per-key atomic; should be fully atomic like Redis/DragonflyDB)
+- [ ] Lua script `redis.call()` integration with command execution (enables atomic cross-key operations)
 
 ---
 
