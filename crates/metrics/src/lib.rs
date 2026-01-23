@@ -87,6 +87,30 @@ pub mod metric_names {
     pub const BLOCKED_KEYS: &str = "frogdb_blocked_keys";
     pub const BLOCKED_TIMEOUT_TOTAL: &str = "frogdb_blocked_timeout_total";
     pub const BLOCKED_SATISFIED_TOTAL: &str = "frogdb_blocked_satisfied_total";
+
+    // Lua scripting metrics
+    pub const LUA_SCRIPTS_TOTAL: &str = "frogdb_lua_scripts_total";
+    pub const LUA_SCRIPTS_DURATION: &str = "frogdb_lua_scripts_duration_seconds";
+    pub const LUA_SCRIPTS_ERRORS: &str = "frogdb_lua_scripts_errors_total";
+    pub const LUA_SCRIPTS_CACHE_HITS: &str = "frogdb_lua_scripts_cache_hits_total";
+    pub const LUA_SCRIPTS_CACHE_MISSES: &str = "frogdb_lua_scripts_cache_misses_total";
+
+    // Transaction metrics
+    pub const TRANSACTIONS_TOTAL: &str = "frogdb_transactions_total";
+    pub const TRANSACTIONS_DURATION: &str = "frogdb_transactions_duration_seconds";
+    pub const TRANSACTIONS_QUEUED_COMMANDS: &str = "frogdb_transactions_queued_commands";
+
+    // Scatter-gather metrics
+    pub const SCATTER_GATHER_TOTAL: &str = "frogdb_scatter_gather_total";
+    pub const SCATTER_GATHER_DURATION: &str = "frogdb_scatter_gather_duration_seconds";
+    pub const SCATTER_GATHER_SHARDS: &str = "frogdb_scatter_gather_shards";
+
+    // Additional metrics from OBSERVABILITY.md spec
+    pub const SHARD_QUEUE_LATENCY: &str = "frogdb_shard_queue_latency_seconds";
+    pub const CONNECTIONS_MAX: &str = "frogdb_connections_max";
+    pub const SNAPSHOT_DURATION: &str = "frogdb_snapshot_duration_seconds";
+    pub const SNAPSHOT_SIZE_BYTES: &str = "frogdb_snapshot_size_bytes";
+    pub const PERSISTENCE_ERRORS: &str = "frogdb_persistence_errors_total";
 }
 
 /// Create a metrics recorder based on configuration.
