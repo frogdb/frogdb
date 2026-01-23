@@ -3,12 +3,14 @@
 //! This module provides:
 //! - `RuntimeConfig` - mutable parameters that can be changed at runtime
 //! - `ConfigManager` - main interface for CONFIG commands
+//! - `ShardConfigNotifier` - propagates config changes to shards
 //! - Parameter registry with metadata for each configurable parameter
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
 
-use frogdb_core::glob_match;
+use frogdb_core::{glob_match, EvictionConfig, EvictionPolicy, ShardMessage};
+use tokio::sync::{mpsc, oneshot};
 use tracing_subscriber::{reload, EnvFilter};
 
 use crate::config::Config;
@@ -145,6 +147,8 @@ pub struct ConfigManager {
     log_reload_handle: Option<Arc<RwLock<Option<LogReloadHandle>>>>,
     /// Parameter metadata registry.
     params: Vec<ParamMeta>,
+    /// Optional notifier for shard config updates.
+    shard_notifier: RwLock<Option<Arc<ShardConfigNotifier>>>,
 }
 
 impl ConfigManager {
@@ -158,6 +162,7 @@ impl ConfigManager {
             static_config,
             log_reload_handle: None,
             params: Self::build_param_registry(),
+            shard_notifier: RwLock::new(None),
         }
     }
 
@@ -545,6 +550,139 @@ impl ConfigManager {
             String::new(),
             "Immutable parameters (require restart): bind, port, num-shards, dir, persistence-enabled, metrics-enabled, metrics-port".to_string(),
         ]
+    }
+
+    /// Set the shard notifier for propagating config changes to shards.
+    pub fn set_shard_notifier(&self, notifier: Arc<ShardConfigNotifier>) {
+        *self.shard_notifier.write().unwrap() = Some(notifier);
+    }
+
+    /// Get a reference to the runtime config Arc.
+    pub fn runtime_ref(&self) -> Arc<RwLock<RuntimeConfig>> {
+        self.runtime.clone()
+    }
+
+    /// Get the number of shards from static config.
+    pub fn num_shards(&self) -> usize {
+        self.static_config.num_shards
+    }
+
+    /// Set a config parameter, notifying shards if needed (async).
+    ///
+    /// This is the async version of `set` that also propagates eviction config
+    /// changes to all shards and waits for acknowledgment.
+    pub async fn set_async(&self, name: &str, value: &str) -> Result<(), ConfigError> {
+        // First, apply the change (sync)
+        self.set(name, value)?;
+
+        // Check if this is an eviction param that needs shard notification
+        let eviction_params = [
+            "maxmemory",
+            "maxmemory-policy",
+            "maxmemory-samples",
+            "lfu-log-factor",
+            "lfu-decay-time",
+        ];
+        let normalized = name.to_lowercase().replace('_', "-");
+
+        if eviction_params.contains(&normalized.as_str()) {
+            // Notify shards of eviction config change
+            let notifier = self.shard_notifier.read().unwrap().clone();
+            if let Some(ref notifier) = notifier {
+                notifier.notify_eviction_change().await?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Notifies shards of configuration changes synchronously.
+///
+/// This notifier is used to propagate runtime config changes (like maxmemory,
+/// maxmemory-policy, etc.) to all shard workers. It sends UpdateConfig messages
+/// to each shard and waits for all shards to acknowledge the update before returning.
+pub struct ShardConfigNotifier {
+    /// Senders to all shard workers.
+    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    /// Reference to the runtime config for building eviction config.
+    runtime: Arc<RwLock<RuntimeConfig>>,
+    /// Number of shards.
+    num_shards: usize,
+}
+
+impl ShardConfigNotifier {
+    /// Create a new shard config notifier.
+    pub fn new(
+        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        runtime: Arc<RwLock<RuntimeConfig>>,
+        num_shards: usize,
+    ) -> Self {
+        Self {
+            shard_senders,
+            runtime,
+            num_shards,
+        }
+    }
+
+    /// Notify all shards of an eviction config change.
+    ///
+    /// This method builds the new EvictionConfig from the current RuntimeConfig,
+    /// sends UpdateConfig messages to all shards, and waits for all shards to
+    /// acknowledge the update before returning.
+    pub async fn notify_eviction_change(&self) -> Result<(), ConfigError> {
+        // Build eviction config from current runtime config
+        let eviction_config = {
+            let config = self.runtime.read().unwrap();
+            EvictionConfig {
+                maxmemory: config.maxmemory,
+                policy: config
+                    .maxmemory_policy
+                    .parse::<EvictionPolicy>()
+                    .unwrap_or(EvictionPolicy::NoEviction),
+                maxmemory_samples: config.maxmemory_samples,
+                lfu_log_factor: config.lfu_log_factor,
+                lfu_decay_time: config.lfu_decay_time,
+            }
+        };
+
+        let mut receivers = Vec::with_capacity(self.num_shards);
+
+        // Send UpdateConfig to all shards
+        for sender in self.shard_senders.iter() {
+            let (tx, rx) = oneshot::channel();
+            if let Err(e) = sender
+                .send(ShardMessage::UpdateConfig {
+                    eviction_config: Some(eviction_config.clone()),
+                    response_tx: tx,
+                })
+                .await
+            {
+                return Err(ConfigError::InvalidValue {
+                    param: "internal".to_string(),
+                    message: format!("failed to send config update to shard: {}", e),
+                });
+            }
+            receivers.push(rx);
+        }
+
+        // Wait for all shards to acknowledge
+        for rx in receivers {
+            if let Err(e) = rx.await {
+                return Err(ConfigError::InvalidValue {
+                    param: "internal".to_string(),
+                    message: format!("shard failed to acknowledge config update: {}", e),
+                });
+            }
+        }
+
+        tracing::info!(
+            maxmemory = eviction_config.maxmemory,
+            policy = ?eviction_config.policy,
+            "Eviction config propagated to all shards"
+        );
+
+        Ok(())
     }
 }
 

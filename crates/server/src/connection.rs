@@ -843,7 +843,7 @@ impl ConnectionHandler {
 
         // Handle CONFIG commands specially (need access to config manager)
         if cmd_name_str == "CONFIG" {
-            return vec![self.handle_config_command(&cmd.args)];
+            return vec![self.handle_config_command(&cmd.args).await];
         }
 
         // Handle SLOWLOG commands specially (need scatter-gather across shards)
@@ -4007,7 +4007,7 @@ impl ConnectionHandler {
     // =========================================================================
 
     /// Handle CONFIG command and dispatch to subcommands.
-    fn handle_config_command(&self, args: &[Bytes]) -> Response {
+    async fn handle_config_command(&self, args: &[Bytes]) -> Response {
         if args.is_empty() {
             return Response::error("ERR wrong number of arguments for 'config' command");
         }
@@ -4017,7 +4017,7 @@ impl ConnectionHandler {
 
         match subcommand_str.as_ref() {
             "GET" => self.handle_config_get(&args[1..]),
-            "SET" => self.handle_config_set(&args[1..]),
+            "SET" => self.handle_config_set(&args[1..]).await,
             "HELP" => self.handle_config_help(),
             _ => Response::error(format!(
                 "ERR unknown subcommand '{}'. Try CONFIG HELP.",
@@ -4046,7 +4046,10 @@ impl ConnectionHandler {
     }
 
     /// Handle CONFIG SET <param> <value> - set a mutable configuration parameter.
-    fn handle_config_set(&self, args: &[Bytes]) -> Response {
+    ///
+    /// This is async because it may need to propagate eviction config changes
+    /// to all shard workers and wait for acknowledgment.
+    async fn handle_config_set(&self, args: &[Bytes]) -> Response {
         if args.len() < 2 {
             return Response::error("ERR wrong number of arguments for 'config|set' command");
         }
@@ -4054,7 +4057,7 @@ impl ConnectionHandler {
         let param = String::from_utf8_lossy(&args[0]);
         let value = String::from_utf8_lossy(&args[1]);
 
-        match self.config_manager.set(&param, &value) {
+        match self.config_manager.set_async(&param, &value).await {
             Ok(()) => Response::ok(),
             Err(e) => Response::error(e.to_string()),
         }
