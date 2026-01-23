@@ -23,3 +23,9 @@ pub use wal::{spawn_periodic_sync, DurabilityMode, RocksWalWriter, WalConfig};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod test_harness;
+
+#[cfg(test)]
+mod crash_recovery_tests;
