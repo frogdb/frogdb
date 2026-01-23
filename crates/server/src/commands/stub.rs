@@ -227,13 +227,6 @@ stub_command!(
 // =============================================================================
 
 stub_command!(
-    MigrateCommand,
-    "MIGRATE",
-    Arity::AtLeast(5),
-    CommandFlags::WRITE
-);
-
-stub_command!(
     MoveCommand,
     "MOVE",
     Arity::Fixed(2),

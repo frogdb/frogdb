@@ -7,6 +7,7 @@ pub mod acceptor;
 pub mod commands;
 pub mod config;
 pub mod connection;
+pub mod migrate;
 pub mod net;
 pub mod routing;
 pub mod runtime_config;

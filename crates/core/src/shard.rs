@@ -367,6 +367,9 @@ pub enum ScatterOp {
     },
     /// RANDOMKEY operation - get a random key from the shard.
     RandomKey,
+    /// DUMP operation for MIGRATE - serialize keys with full metadata.
+    /// Returns serialized data compatible with Redis RESTORE command.
+    Dump,
 }
 
 /// Result from a shard for scatter-gather operations.
@@ -2084,6 +2087,32 @@ impl ShardWorker {
                     Some(key) => vec![(Bytes::from_static(b"__randomkey__"), Response::bulk(key))],
                     None => vec![(Bytes::from_static(b"__randomkey__"), Response::null())],
                 }
+            }
+            ScatterOp::Dump => {
+                // Serialize keys with full metadata for MIGRATE.
+                // Returns serialized data in our internal format (compatible with RESTORE).
+                use crate::persistence::serialize;
+
+                keys.iter()
+                    .map(|key| {
+                        match self.store.get(key) {
+                            Some(value) => {
+                                // Get expiry if any
+                                let expires_at = self.store.get_expiry(key);
+                                let mut metadata = KeyMetadata::new(value.memory_size());
+                                metadata.expires_at = expires_at;
+
+                                // Serialize with full metadata
+                                let serialized = serialize(&value, &metadata);
+                                (key.clone(), Response::bulk(Bytes::from(serialized)))
+                            }
+                            None => {
+                                // Key doesn't exist
+                                (key.clone(), Response::null())
+                            }
+                        }
+                    })
+                    .collect()
             }
         };
 
