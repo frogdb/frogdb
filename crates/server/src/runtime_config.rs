@@ -171,6 +171,16 @@ impl ConfigManager {
         self.log_reload_handle = Some(Arc::new(RwLock::new(Some(handle))));
     }
 
+    /// Get the data directory path.
+    pub fn data_dir(&self) -> &str {
+        &self.static_config.data_dir
+    }
+
+    /// Check if persistence is enabled.
+    pub fn persistence_enabled(&self) -> bool {
+        self.static_config.persistence_enabled
+    }
+
     /// Build the parameter registry.
     fn build_param_registry() -> Vec<ParamMeta> {
         vec![

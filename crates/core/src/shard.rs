@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::command::CommandContext;
 use crate::error::CommandError;
 use crate::eviction::{EvictionCandidate, EvictionConfig, EvictionPolicy, EvictionPool};
+use crate::functions::SharedFunctionRegistry;
 use crate::persistence::{
     NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
 };
@@ -197,6 +198,28 @@ pub enum ShardMessage {
     ScriptKill {
         /// Response channel.
         response_tx: oneshot::Sender<Result<(), String>>,
+    },
+
+    // =========================================================================
+    // Function messages
+    // =========================================================================
+
+    /// Execute a function (FCALL).
+    FunctionCall {
+        /// Function name.
+        function_name: Bytes,
+        /// Keys passed to the function.
+        keys: Vec<Bytes>,
+        /// Additional arguments.
+        argv: Vec<Bytes>,
+        /// Connection ID.
+        conn_id: u64,
+        /// Protocol version for response encoding.
+        protocol_version: ProtocolVersion,
+        /// Whether this is a read-only call (FCALL_RO).
+        read_only: bool,
+        /// Response channel.
+        response_tx: oneshot::Sender<Response>,
     },
 
     // =========================================================================
@@ -813,6 +836,9 @@ pub struct ShardWorker {
     /// Script executor for this shard.
     script_executor: Option<ScriptExecutor>,
 
+    /// Function registry (shared across all shards).
+    function_registry: Option<SharedFunctionRegistry>,
+
     /// Eviction configuration.
     eviction_config: EvictionConfig,
 
@@ -903,6 +929,7 @@ impl ShardWorker {
             shard_version: 0,
             subscriptions: ShardSubscriptions::new(),
             script_executor,
+            function_registry: None,
             eviction_config,
             eviction_pool: EvictionPool::new(),
             memory_limit,
@@ -970,6 +997,7 @@ impl ShardWorker {
             shard_version: 0,
             subscriptions: ShardSubscriptions::new(),
             script_executor,
+            function_registry: None,
             eviction_config,
             eviction_pool: EvictionPool::new(),
             memory_limit,
@@ -983,6 +1011,11 @@ impl ShardWorker {
             ),
             latency_monitor: LatencyMonitor::default_monitor(),
         }
+    }
+
+    /// Set the function registry for this shard.
+    pub fn set_function_registry(&mut self, registry: SharedFunctionRegistry) {
+        self.function_registry = Some(registry);
     }
 
     /// Get the snapshot coordinator.
@@ -1114,6 +1147,12 @@ impl ShardWorker {
                         ShardMessage::ScriptKill { response_tx } => {
                             let result = self.handle_script_kill();
                             let _ = response_tx.send(result);
+                        }
+
+                        // Function message handlers
+                        ShardMessage::FunctionCall { function_name, keys, argv, conn_id, protocol_version, read_only, response_tx } => {
+                            let response = self.handle_function_call(&function_name, &keys, &argv, conn_id, protocol_version, read_only);
+                            let _ = response_tx.send(response);
                         }
 
                         // Blocking commands handlers
@@ -2368,6 +2407,97 @@ impl ShardWorker {
                 executor.kill_script().map_err(|e| e.to_string())
             }
             None => Err("ERR scripting not available".to_string()),
+        }
+    }
+
+    // =========================================================================
+    // Function execution helpers
+    // =========================================================================
+
+    /// Handle FCALL/FCALL_RO - execute a function.
+    fn handle_function_call(
+        &mut self,
+        function_name: &Bytes,
+        keys: &[Bytes],
+        argv: &[Bytes],
+        conn_id: u64,
+        protocol_version: ProtocolVersion,
+        read_only: bool,
+    ) -> Response {
+        // Get function registry
+        let registry = match &self.function_registry {
+            Some(r) => r,
+            None => {
+                return Response::error("ERR Functions not available");
+            }
+        };
+
+        // Get function from registry
+        let func_name = String::from_utf8_lossy(function_name);
+        let (function, library_name) = {
+            let registry_guard = registry.read().unwrap();
+            match registry_guard.get_function(&func_name) {
+                Some((func, lib_name)) => (func.clone(), lib_name.to_string()),
+                None => {
+                    return Response::error(format!(
+                        "ERR Function not found: {}",
+                        func_name
+                    ));
+                }
+            }
+        };
+
+        // Enforce read-only for FCALL_RO
+        if read_only && !function.is_read_only() {
+            return Response::error(format!(
+                "ERR Can't execute a function with write flag using FCALL_RO: {}",
+                func_name
+            ));
+        }
+
+        // Get the library code
+        let library_code = {
+            let registry_guard = registry.read().unwrap();
+            match registry_guard.get_library(&library_name) {
+                Some(lib) => lib.code.clone(),
+                None => {
+                    return Response::error(format!(
+                        "ERR Library not found: {}",
+                        library_name
+                    ));
+                }
+            }
+        };
+
+        // Execute the function using the script executor
+        let executor = match &mut self.script_executor {
+            Some(e) => e,
+            None => {
+                return Response::error("ERR Scripting not available");
+            }
+        };
+
+        let store = &mut self.store as &mut dyn Store;
+        let mut ctx = CommandContext::new(
+            store,
+            &self.shard_senders,
+            self.shard_id,
+            self.num_shards,
+            conn_id,
+            protocol_version,
+        );
+
+        match executor.execute_function(
+            &func_name,
+            &library_code,
+            keys,
+            argv,
+            &mut ctx,
+            &self.registry,
+            read_only,
+        ) {
+            Ok(response) => response,
+            Err(e) => Response::error(e.to_string()),
         }
     }
 

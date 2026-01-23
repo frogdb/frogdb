@@ -21,6 +21,7 @@ pub mod slowlog;
 pub mod pubsub;
 pub mod registry;
 pub mod scripting;
+pub mod functions;
 pub mod shard;
 pub mod store;
 pub mod sync;
@@ -68,6 +69,12 @@ pub use types::{
 pub use scripting::{
     CachedScript, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig, ScriptRoute,
     ScriptRouter, SingleShardRouter, LuaVm,
+};
+pub use functions::{
+    dump_libraries, load_from_file, load_library, new_shared_registry, parse_shebang,
+    restore_libraries, save_to_file, validate_library, CapturedRegistration, FunctionError,
+    FunctionFlags, FunctionLibrary, FunctionRegistry, FunctionStats, ParsedLibrary,
+    RegisteredFunction, RestorePolicy, RunningFunctionInfo, SharedFunctionRegistry, ShebangInfo,
 };
 pub use eviction::{
     EvictionConfig, EvictionPolicy, EvictionPool, EvictionCandidate,

@@ -5,7 +5,7 @@ use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use std::sync::atomic::AtomicI64;
 use frogdb_core::{
     persistence::SnapshotCoordinator, shard::NewConnection, AclManager, ClientRegistry,
-    CommandRegistry, MetricsRecorder, ShardMessage,
+    CommandRegistry, MetricsRecorder, ShardMessage, SharedFunctionRegistry,
 };
 use frogdb_metrics::metric_names;
 use tokio::sync::mpsc;
@@ -78,6 +78,9 @@ pub struct Acceptor {
 
     /// Snapshot coordinator for BGSAVE/LASTSAVE commands.
     snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+
+    /// Function registry for FUNCTION/FCALL commands.
+    function_registry: SharedFunctionRegistry,
 }
 
 impl Acceptor {
@@ -95,6 +98,7 @@ impl Acceptor {
         metrics_recorder: Arc<dyn MetricsRecorder>,
         acl_manager: Arc<AclManager>,
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+        function_registry: SharedFunctionRegistry,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -111,6 +115,7 @@ impl Acceptor {
             current_connections: Arc::new(AtomicI64::new(0)),
             acl_manager,
             snapshot_coordinator,
+            function_registry,
         }
     }
 
@@ -157,6 +162,7 @@ impl Acceptor {
                     let current_connections = self.current_connections.clone();
                     let acl_manager = self.acl_manager.clone();
                     let snapshot_coordinator = self.snapshot_coordinator.clone();
+                    let function_registry = self.function_registry.clone();
 
                     spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -175,6 +181,7 @@ impl Acceptor {
                             metrics_recorder.clone(),
                             acl_manager,
                             snapshot_coordinator,
+                            function_registry,
                         );
 
                         if let Err(e) = handler.run().await {
