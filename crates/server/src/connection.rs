@@ -24,6 +24,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Framed;
 use tracing::{debug, trace, warn};
 
+use crate::migrate::{MigrateArgs, MigrateClient, MigrateError};
 use crate::net::TcpStream;
 use crate::runtime_config::ConfigManager;
 use crate::server::next_txid;
@@ -876,6 +877,7 @@ impl ConnectionHandler {
             "RANDOMKEY" => return vec![self.handle_randomkey().await],
             "FLUSHDB" => return vec![self.handle_flushdb(&cmd.args).await],
             "FLUSHALL" => return vec![self.handle_flushall(&cmd.args).await],
+            "MIGRATE" => return vec![self.handle_migrate(&cmd.args).await],
             "DEBUG" => {
                 // Check for DEBUG SLEEP subcommand
                 if !cmd.args.is_empty() && cmd.args[0].eq_ignore_ascii_case(b"SLEEP") {
@@ -1895,6 +1897,10 @@ impl ConnectionHandler {
                 // This is handled specially in handle_randomkey
                 Response::error("ERR RANDOMKEY scatter-gather not supported through this path")
             }
+            ScatterOp::Dump => {
+                // This is handled specially in handle_migrate
+                Response::error("ERR DUMP scatter-gather not supported through this path")
+            }
         }
     }
 
@@ -2018,6 +2024,153 @@ impl ConnectionHandler {
             Some((_, response)) => response,
             None => Response::error("ERR no response from destination shard"),
         }
+    }
+
+    /// Handle MIGRATE command - migrate keys to another Redis-compatible server.
+    async fn handle_migrate(&self, args: &[Bytes]) -> Response {
+        // Parse arguments
+        let parsed = match MigrateArgs::parse(args) {
+            Ok(p) => p,
+            Err(e) => return Response::error(e),
+        };
+
+        // Check if we have any keys to migrate
+        if parsed.keys.is_empty() {
+            return Response::Simple(Bytes::from_static(b"NOKEY"));
+        }
+
+        // Group keys by shard
+        let mut shard_keys: HashMap<usize, Vec<Bytes>> = HashMap::new();
+        for key in &parsed.keys {
+            let shard_id = shard_for_key(key, self.num_shards);
+            shard_keys.entry(shard_id).or_default().push(key.clone());
+        }
+
+        let txid = next_txid();
+        let timeout_dur = Duration::from_millis(parsed.timeout_ms);
+
+        // Scatter-gather DUMP from all shards
+        let mut handles: Vec<(usize, oneshot::Receiver<PartialResult>)> = Vec::new();
+
+        for (shard_id, keys) in &shard_keys {
+            let (tx, rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: txid,
+                keys: keys.clone(),
+                operation: ScatterOp::Dump,
+                response_tx: tx,
+            };
+
+            if self.shard_senders[*shard_id].send(msg).await.is_err() {
+                return Response::error("IOERR error accessing local shard");
+            }
+            handles.push((*shard_id, rx));
+        }
+
+        // Collect serialized dumps from all shards
+        let mut dumps: Vec<(Bytes, Vec<u8>)> = Vec::new();
+
+        for (_shard_id, rx) in handles {
+            let partial = match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(p)) => p,
+                Ok(Err(_)) => return Response::error("IOERR error accessing local shard"),
+                Err(_) => return Response::error("IOERR timeout reading local keys"),
+            };
+
+            for (key, resp) in partial.results {
+                if let Response::Bulk(Some(data)) = resp {
+                    dumps.push((key, data.to_vec()));
+                }
+                // Skip keys that don't exist (Response::Null)
+            }
+        }
+
+        // If no keys actually exist, return NOKEY
+        if dumps.is_empty() {
+            return Response::Simple(Bytes::from_static(b"NOKEY"));
+        }
+
+        // Connect to target server
+        let mut client = match MigrateClient::connect(&parsed.host, parsed.port, timeout_dur).await {
+            Ok(c) => c,
+            Err(MigrateError::Timeout) => return Response::error("IOERR timeout connecting to target"),
+            Err(e) => return Response::error(format!("IOERR error connecting to target: {}", e)),
+        };
+
+        // Authenticate if needed
+        if let Some(ref auth) = parsed.auth {
+            if let Err(e) = client.auth(&auth.password, auth.username.as_deref()).await {
+                return Response::error(format!("IOERR authentication failed: {}", e));
+            }
+        }
+
+        // Select destination database
+        if parsed.dest_db != 0 {
+            if let Err(e) = client.select_db(parsed.dest_db).await {
+                return Response::error(format!("IOERR error selecting database: {}", e));
+            }
+        }
+
+        // RESTORE each key on target
+        for (key, data) in &dumps {
+            // Extract TTL from serialized data (stored in header bytes 2-10 as i64 milliseconds)
+            let ttl = if data.len() >= 10 {
+                let expires_ms = i64::from_le_bytes(data[2..10].try_into().unwrap_or([0; 8]));
+                if expires_ms > 0 {
+                    // Convert absolute timestamp to relative TTL
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    let remaining = expires_ms - now_ms;
+                    if remaining > 0 { remaining } else { 0 }
+                } else {
+                    0 // No expiry
+                }
+            } else {
+                0
+            };
+
+            if let Err(e) = client.restore(key, ttl, data, parsed.replace).await {
+                return Response::error(format!("IOERR error restoring key on target: {}", e));
+            }
+        }
+
+        // Delete source keys (unless COPY option was specified)
+        if !parsed.copy {
+            // Group keys by shard for deletion
+            let mut delete_shard_keys: HashMap<usize, Vec<Bytes>> = HashMap::new();
+            for (key, _) in &dumps {
+                let shard_id = shard_for_key(key, self.num_shards);
+                delete_shard_keys.entry(shard_id).or_default().push(key.clone());
+            }
+
+            let delete_txid = next_txid();
+            let mut delete_handles: Vec<oneshot::Receiver<PartialResult>> = Vec::new();
+
+            for (shard_id, keys) in delete_shard_keys {
+                let (tx, rx) = oneshot::channel();
+                let msg = ShardMessage::ScatterRequest {
+                    request_id: delete_txid,
+                    keys,
+                    operation: ScatterOp::Del,
+                    response_tx: tx,
+                };
+
+                if self.shard_senders[shard_id].send(msg).await.is_err() {
+                    // Log but don't fail - keys already migrated
+                    tracing::warn!("Failed to delete source key after MIGRATE");
+                }
+                delete_handles.push(rx);
+            }
+
+            // Wait for deletes to complete (but don't fail if they time out)
+            for rx in delete_handles {
+                let _ = tokio::time::timeout(self.scatter_gather_timeout, rx).await;
+            }
+        }
+
+        Response::ok()
     }
 
     /// Execute command on a specific shard.

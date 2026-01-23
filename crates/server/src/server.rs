@@ -941,7 +941,6 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::generic::RandomkeyCommand);
     registry.register(crate::commands::sort::SortCommand);
     registry.register(crate::commands::sort::SortRoCommand);
-    registry.register(crate::commands::stub::MigrateCommand);
     registry.register(crate::commands::stub::MoveCommand);
 
     // Connection
