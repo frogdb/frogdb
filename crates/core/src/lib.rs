@@ -27,6 +27,7 @@ pub mod store;
 pub mod sync;
 pub mod timeseries;
 pub mod types;
+pub mod vll;
 
 pub use command::{Arity, Command, CommandContext, CommandFlags};
 pub use error::CommandError;
@@ -67,8 +68,8 @@ pub use types::{
     ZAddResult,
 };
 pub use scripting::{
-    CachedScript, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig, ScriptRoute,
-    ScriptRouter, SingleShardRouter, LuaVm,
+    CachedScript, CrossShardRouter, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig,
+    ScriptRoute, ScriptRouter, SingleShardRouter, LuaVm,
 };
 pub use functions::{
     dump_libraries, load_from_file, load_library, new_shared_registry, parse_shebang,
@@ -108,4 +109,8 @@ pub use latency::{
 pub use timeseries::{
     Aggregation, CompressedChunk, DownsampleError, DownsampleManager, DownsampleRule,
     DuplicatePolicy, LabelFilter, LabelIndex, NoopDownsampleManager, TimeSeriesValue,
+};
+pub use vll::{
+    ExecuteSignal, IntentTable, KeyLockState, LockMode, PendingOpState, ShardReadyResult,
+    TransactionQueue, VllCommand, VllConfig, VllError, VllPendingOp, VllShardResult,
 };

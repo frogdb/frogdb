@@ -11,11 +11,11 @@ use bytes::{Bytes, BytesMut};
 use frogdb_core::{
     generate_latency_graph, persistence::SnapshotCoordinator, shard_for_key, AclManager,
     AuthenticatedUser, ClientHandle, ClientRegistry, CommandCategory, CommandFlags, CommandRegistry,
-    GlobPattern, IntrospectionRequest, IntrospectionResponse, KeyAccessType, LatencyEvent,
-    MetricsRecorder, PartialResult, PauseMode, PubSubMessage, PubSubSender, ScatterOp,
-    SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId, TransactionResult,
-    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SUBSCRIPTIONS_PER_CONNECTION,
+    ExecuteSignal, GlobPattern, IntrospectionRequest, IntrospectionResponse, KeyAccessType,
+    LatencyEvent, LockMode, MetricsRecorder, PartialResult, PauseMode, PubSubMessage, PubSubSender,
+    ScatterOp, ShardReadyResult, SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId,
+    TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use futures::{SinkExt, StreamExt};
@@ -1841,7 +1841,14 @@ impl ConnectionHandler {
         }
     }
 
-    /// Execute a scatter-gather operation across multiple shards.
+    /// Execute a scatter-gather operation across multiple shards using VLL.
+    ///
+    /// VLL (Very Lightweight Locking) provides atomic multi-shard operations:
+    /// 1. Acquire global txid
+    /// 2. Send VllLockRequest to each shard (sorted order prevents deadlocks)
+    /// 3. Wait for all shards to report ready
+    /// 4. Send execute signal to all shards
+    /// 5. Gather and merge results
     async fn execute_scatter_gather(
         &self,
         keys: &[&[u8]],
@@ -1867,8 +1874,10 @@ impl ConnectionHandler {
             ScatterOp::Dump => "DUMP",
         };
 
-        // Group keys by shard
-        let mut shard_keys: HashMap<usize, Vec<Bytes>> = HashMap::new();
+        use std::collections::BTreeMap;
+
+        // Group keys by shard using BTreeMap for deterministic ordering (prevents deadlocks)
+        let mut shard_keys: BTreeMap<usize, Vec<Bytes>> = BTreeMap::new();
         let mut key_order: Vec<(usize, Bytes)> = Vec::new(); // (shard_id, key)
 
         for key in keys {
@@ -1878,10 +1887,16 @@ impl ConnectionHandler {
             key_order.push((shard_id, key_bytes));
         }
 
+        // Determine lock mode based on operation
+        let mode = match &operation {
+            ScatterOp::MGet | ScatterOp::Exists => LockMode::Read,
+            _ => LockMode::Write,
+        };
+
         // For MSET, we need to distribute pairs to shards
-        let shard_operations: HashMap<usize, ScatterOp> = match &operation {
+        let shard_operations: BTreeMap<usize, ScatterOp> = match &operation {
             ScatterOp::MSet { pairs } => {
-                let mut shard_pairs: HashMap<usize, Vec<(Bytes, Bytes)>> = HashMap::new();
+                let mut shard_pairs: BTreeMap<usize, Vec<(Bytes, Bytes)>> = BTreeMap::new();
                 for (key, value) in pairs {
                     let shard_id = shard_for_key(key, self.num_shards);
                     shard_pairs.entry(shard_id).or_default().push((key.clone(), value.clone()));
@@ -1898,54 +1913,126 @@ impl ConnectionHandler {
 
         let txid = next_txid();
 
-        // Send ScatterRequest to each shard
-        let mut handles: Vec<(usize, oneshot::Receiver<PartialResult>)> = Vec::new();
+        // Phase 1: Send VllLockRequest to each shard (in sorted order)
+        let mut ready_receivers: Vec<(usize, oneshot::Receiver<ShardReadyResult>)> = Vec::new();
+        let mut execute_senders: Vec<(usize, oneshot::Sender<ExecuteSignal>)> = Vec::new();
 
-        for (shard_id, keys) in &shard_keys {
-            let (tx, rx) = oneshot::channel();
-            let shard_op = shard_operations.get(shard_id).cloned().unwrap_or_else(|| operation.clone());
+        for (&shard_id, shard_key_list) in &shard_keys {
+            let (ready_tx, ready_rx) = oneshot::channel();
+            let (execute_tx, execute_rx) = oneshot::channel();
+            let shard_op = shard_operations.get(&shard_id).cloned().unwrap_or_else(|| operation.clone());
 
-            let msg = ShardMessage::ScatterRequest {
-                request_id: txid,
-                keys: keys.clone(),
+            let msg = ShardMessage::VllLockRequest {
+                txid,
+                keys: shard_key_list.clone(),
+                mode,
                 operation: shard_op,
-                response_tx: tx,
+                ready_tx,
+                execute_rx,
             };
 
-            if self.shard_senders[*shard_id].send(msg).await.is_err() {
+            if self.shard_senders[shard_id].send(msg).await.is_err() {
+                // Abort any shards that already received requests
+                for &(abort_shard_id, _) in &ready_receivers {
+                    let _ = self.shard_senders[abort_shard_id]
+                        .send(ShardMessage::VllAbort { txid })
+                        .await;
+                }
                 return Response::error("ERR shard unavailable");
             }
-            handles.push((*shard_id, rx));
+            ready_receivers.push((shard_id, ready_rx));
+            execute_senders.push((shard_id, execute_tx));
         }
 
-        // Await all responses with timeout
+        // Phase 2: Wait for all shards to be ready
+        let lock_timeout = Duration::from_millis(4000); // VLL lock acquisition timeout
+        let mut all_ready = true;
+
+        for (shard_id, ready_rx) in &mut ready_receivers {
+            match tokio::time::timeout(lock_timeout, ready_rx).await {
+                Ok(Ok(ShardReadyResult::Ready)) => {
+                    trace!(shard_id, txid, "Shard ready for VLL operation");
+                }
+                Ok(Ok(ShardReadyResult::Failed(e))) => {
+                    warn!(shard_id, txid, error = %e, "VLL lock acquisition failed");
+                    all_ready = false;
+                    break;
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, txid, "VLL ready channel dropped");
+                    all_ready = false;
+                    break;
+                }
+                Err(_) => {
+                    warn!(shard_id, txid, "VLL lock acquisition timeout");
+                    all_ready = false;
+                    break;
+                }
+            }
+        }
+
+        // Phase 3: Send execute signal (proceed or abort)
+        if !all_ready {
+            // Abort all shards
+            for (shard_id, execute_tx) in execute_senders {
+                let _ = execute_tx.send(ExecuteSignal { proceed: false });
+                let _ = self.shard_senders[shard_id]
+                    .send(ShardMessage::VllAbort { txid })
+                    .await;
+            }
+            return Response::error("ERR VLL lock acquisition failed");
+        }
+
+        // All ready - send execute signal and prepare to receive results
+        let mut result_receivers: Vec<(usize, oneshot::Receiver<PartialResult>)> = Vec::new();
+
+        for (shard_id, execute_tx) in execute_senders {
+            // Send proceed signal
+            if execute_tx.send(ExecuteSignal { proceed: true }).is_err() {
+                // Abort remaining shards
+                for (&abort_shard_id, _) in shard_keys.iter().skip(result_receivers.len() + 1) {
+                    let _ = self.shard_senders[abort_shard_id]
+                        .send(ShardMessage::VllAbort { txid })
+                        .await;
+                }
+                return Response::error("ERR shard disconnected during VLL execute");
+            }
+
+            // Create result receiver
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::VllExecute { txid, response_tx };
+            if self.shard_senders[shard_id].send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable during VLL execute");
+            }
+            result_receivers.push((shard_id, response_rx));
+        }
+
+        // Phase 4: Gather results
         let mut shard_results: HashMap<usize, HashMap<Bytes, Response>> = HashMap::new();
 
-        for (shard_id, rx) in handles {
+        for (shard_id, rx) in result_receivers {
             match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
                 Ok(Ok(partial)) => {
                     let results: HashMap<Bytes, Response> = partial.results.into_iter().collect();
                     shard_results.insert(shard_id, results);
                 }
                 Ok(Err(_)) => {
-                    warn!(shard_id, "Shard dropped scatter-gather request");
-                    // Record scatter-gather error metrics
+                    warn!(shard_id, txid, "Shard dropped VLL result");
                     self.metrics_recorder.increment_counter(
                         "frogdb_scatter_gather_total",
                         1,
                         &[("command", command_name), ("status", "error")],
                     );
-                    return Response::error("ERR shard dropped request");
+                    return Response::error("ERR shard dropped VLL result");
                 }
                 Err(_) => {
-                    warn!(shard_id, "Scatter-gather timeout");
-                    // Record scatter-gather timeout metrics
+                    warn!(shard_id, txid, "VLL execution timeout");
                     self.metrics_recorder.increment_counter(
                         "frogdb_scatter_gather_total",
                         1,
                         &[("command", command_name), ("status", "timeout")],
                     );
-                    return Response::error("ERR scatter-gather timeout");
+                    return Response::error("ERR VLL execution timeout");
                 }
             }
         }
@@ -1968,8 +2055,18 @@ impl ConnectionHandler {
             &[("command", command_name)],
         );
 
-        // Merge results based on operation type
-        match &operation {
+        // Phase 5: Merge results based on operation type
+        self.merge_scatter_results(&operation, &key_order, &shard_results)
+    }
+
+    /// Merge scatter-gather results based on operation type.
+    fn merge_scatter_results(
+        &self,
+        operation: &ScatterOp,
+        key_order: &[(usize, Bytes)],
+        shard_results: &HashMap<usize, HashMap<Bytes, Response>>,
+    ) -> Response {
+        match operation {
             ScatterOp::MGet => {
                 // Return array in original key order
                 let results: Vec<Response> = key_order

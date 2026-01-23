@@ -48,6 +48,10 @@ pub struct Config {
     #[serde(default)]
     pub blocking: BlockingConfig,
 
+    /// VLL (Very Lightweight Locking) configuration.
+    #[serde(default)]
+    pub vll: VllConfig,
+
     /// Slow query log configuration.
     #[serde(default)]
     pub slowlog: SlowlogConfig,
@@ -102,6 +106,62 @@ pub struct BlockingConfig {
     /// Maximum total blocked connections (0 = unlimited).
     #[serde(default = "default_max_blocked_connections")]
     pub max_blocked_connections: usize,
+}
+
+/// VLL (Very Lightweight Locking) configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct VllConfig {
+    /// Maximum queue depth per shard before rejecting new operations.
+    #[serde(default = "default_vll_max_queue_depth")]
+    pub max_queue_depth: usize,
+
+    /// Timeout for acquiring locks on all shards (ms).
+    #[serde(default = "default_vll_lock_acquisition_timeout_ms")]
+    pub lock_acquisition_timeout_ms: u64,
+
+    /// Per-shard lock acquisition timeout (ms).
+    #[serde(default = "default_vll_per_shard_lock_timeout_ms")]
+    pub per_shard_lock_timeout_ms: u64,
+
+    /// Interval for checking/cleaning up expired operations (ms).
+    #[serde(default = "default_vll_timeout_check_interval_ms")]
+    pub timeout_check_interval_ms: u64,
+
+    /// Maximum time a continuation lock can be held (ms).
+    #[serde(default = "default_vll_max_continuation_lock_ms")]
+    pub max_continuation_lock_ms: u64,
+}
+
+fn default_vll_max_queue_depth() -> usize {
+    10000
+}
+
+fn default_vll_lock_acquisition_timeout_ms() -> u64 {
+    4000
+}
+
+fn default_vll_per_shard_lock_timeout_ms() -> u64 {
+    2000
+}
+
+fn default_vll_timeout_check_interval_ms() -> u64 {
+    100
+}
+
+fn default_vll_max_continuation_lock_ms() -> u64 {
+    65000
+}
+
+impl Default for VllConfig {
+    fn default() -> Self {
+        Self {
+            max_queue_depth: default_vll_max_queue_depth(),
+            lock_acquisition_timeout_ms: default_vll_lock_acquisition_timeout_ms(),
+            per_shard_lock_timeout_ms: default_vll_per_shard_lock_timeout_ms(),
+            timeout_check_interval_ms: default_vll_timeout_check_interval_ms(),
+            max_continuation_lock_ms: default_vll_max_continuation_lock_ms(),
+        }
+    }
 }
 
 fn default_max_waiters_per_key() -> usize {
@@ -886,6 +946,24 @@ max_depth = 128
 
 # Maximum size in bytes for JSON documents (64MB).
 max_size = 67108864
+
+[vll]
+# VLL (Very Lightweight Locking) configuration for multi-shard atomicity.
+
+# Maximum queue depth per shard before rejecting new operations.
+max_queue_depth = 10000
+
+# Timeout for acquiring locks on all shards (ms).
+lock_acquisition_timeout_ms = 4000
+
+# Per-shard lock acquisition timeout (ms).
+per_shard_lock_timeout_ms = 2000
+
+# Interval for checking/cleaning up expired operations (ms).
+timeout_check_interval_ms = 100
+
+# Maximum time a continuation lock can be held (ms).
+max_continuation_lock_ms = 65000
 "#
         .to_string()
     }
