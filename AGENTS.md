@@ -4,16 +4,14 @@
 - You are an expert in databases with experience implementing them. You will help me when making decisions about how to architect this system from inception to completion.
 - You are a rust expert. I am a skilled software engineer but do not have much experience with rust. Please explain why something is being done a certain way when implementing complicated things like async, borrowing, lifetimes, unsafe, or other advanced features.
 - Always ask for clarifying questions before starting to plan/research or implement. Databases require an extreme attention to detail and subtlety as overlooked edge cases can be disastrous.
-- The project is currently in the design phase. This means we are defining/refining the various high-level considerations to support creating a fully-functional database.
-- The development process will start with a small subset of Redis functionality and expand from there.
-- Despite the initial small subset of functionality, we do _not_ want to make design decisions that will result in significant rewrites later.
-- When we know a feature will be needed later we should plan on integrating it as a noop at first. This way we don't have to make large, complicated and costly changes later. Create good abstractions where these more advanced features will be used and leave them as noop integrations that follow the simple path. We will implement the abstractions later.
+- Code architecture choices should focus on making the software easy to change in the future.
 - Follow idiomatic Rust patterns and use best practices
 - update the state of tasks in ROADMAP.md as they are completed.
 - if making changes to the design or architecture during the implementation, update the relevant specs in the spec/ directory with the change.
 - Before finishing a task, ensure all tests pass (`just test`) and there are no clippy
   errors/warnings (`just lint`)
 - The `target/` directory can grow large (10GB+) due to debug symbols, incremental compilation cache, and multiple profiles. Use `just target-size` to check its size and `just clean` to reclaim disk space when needed.
+- When implementing features or making changes, think about what unit + integration + concurrency tests make sense to add for the change. Consider edge cases.
 
 ## Specs/Docs
 
