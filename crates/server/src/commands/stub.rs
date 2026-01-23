@@ -299,13 +299,6 @@ stub_command!(
 );
 
 stub_command!(
-    LolwutCommand,
-    "LOLWUT",
-    Arity::AtLeast(0),
-    CommandFlags::READONLY | CommandFlags::FAST
-);
-
-stub_command!(
     RoleCommand,
     "ROLE",
     Arity::Fixed(0),
