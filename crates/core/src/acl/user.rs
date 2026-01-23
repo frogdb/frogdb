@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::permissions::PermissionSet;
+use super::permissions::{PermissionSet, SubcommandRule};
 
 /// A user in the ACL system.
 #[derive(Debug, Clone)]
@@ -103,19 +103,59 @@ impl User {
         self.selectors.clear();
     }
 
-    /// Check if a command is allowed.
+    /// Check if a command is allowed (for keyless commands).
     pub fn check_command(&self, command: &str, subcommand: Option<&str>) -> bool {
-        self.root_permissions.check_command(command, subcommand)
+        // Check root permissions first
+        if self.root_permissions.check_command(command, subcommand) {
+            return true;
+        }
+        // Check selectors (OR logic - any match grants access)
+        self.selectors
+            .iter()
+            .any(|s| s.check_command(command, subcommand))
     }
 
-    /// Check if key access is allowed.
+    /// Check if key access is allowed (standalone key check).
     pub fn check_key_access(&self, key: &[u8], access: super::permissions::KeyAccessType) -> bool {
-        self.root_permissions.check_key_access(key, access)
+        // Check root permissions first
+        if self.root_permissions.check_key_access(key, access) {
+            return true;
+        }
+        // Check selectors (OR logic - any match grants access)
+        self.selectors.iter().any(|s| s.check_key_access(key, access))
+    }
+
+    /// Check if a command with keys is allowed.
+    /// For commands that access keys, BOTH the command AND the key must be
+    /// allowed within the SAME permission context (root or same selector).
+    pub fn check_command_with_key(
+        &self,
+        command: &str,
+        subcommand: Option<&str>,
+        key: &[u8],
+        access: super::permissions::KeyAccessType,
+    ) -> bool {
+        // Check if root permissions allow BOTH command AND key
+        if self.root_permissions.check_command(command, subcommand)
+            && self.root_permissions.check_key_access(key, access)
+        {
+            return true;
+        }
+
+        // Check if any selector allows BOTH command AND key
+        self.selectors.iter().any(|s| {
+            s.check_command(command, subcommand) && s.check_key_access(key, access)
+        })
     }
 
     /// Check if channel access is allowed.
     pub fn check_channel_access(&self, channel: &[u8]) -> bool {
-        self.root_permissions.check_channel_access(channel)
+        // Check root permissions first
+        if self.root_permissions.check_channel_access(channel) {
+            return true;
+        }
+        // Check selectors (OR logic - any match grants access)
+        self.selectors.iter().any(|s| s.check_channel_access(channel))
     }
 
     /// Convert to ACL LIST format string.
@@ -173,6 +213,20 @@ impl User {
         }
         for cmd in &self.root_permissions.commands.denied_commands {
             parts.push(format!("-{}", cmd));
+        }
+
+        // Subcommand rules
+        for rule in &self.root_permissions.commands.subcommand_rules {
+            if rule.allowed {
+                parts.push(format!("+{}|{}", rule.command, rule.subcommand));
+            } else {
+                parts.push(format!("-{}|{}", rule.command, rule.subcommand));
+            }
+        }
+
+        // Selectors
+        for selector in &self.selectors {
+            parts.push(selector_to_string(selector));
         }
 
         parts.join(" ")
@@ -263,11 +317,64 @@ impl User {
         }
         info.push(("channels", UserInfoValue::StringArray(channels)));
 
-        // selectors (empty for now)
-        info.push(("selectors", UserInfoValue::StringArray(vec![])));
+        // selectors
+        let selectors: Vec<String> = self.selectors.iter().map(selector_to_string).collect();
+        info.push(("selectors", UserInfoValue::StringArray(selectors)));
 
         info
     }
+}
+
+/// Convert a PermissionSet selector to its string representation.
+fn selector_to_string(selector: &PermissionSet) -> String {
+    let mut parts = Vec::new();
+
+    // Key patterns
+    if selector.all_keys {
+        parts.push("~*".to_string());
+    } else {
+        for pattern in &selector.key_patterns {
+            parts.push(pattern.to_rule_string());
+        }
+    }
+
+    // Channel patterns
+    if selector.all_channels {
+        parts.push("&*".to_string());
+    } else {
+        for pattern in &selector.channel_patterns {
+            parts.push(pattern.to_rule_string());
+        }
+    }
+
+    // Commands
+    if selector.commands.allow_all {
+        parts.push("+@all".to_string());
+    } else {
+        for category in &selector.commands.allowed_categories {
+            parts.push(format!("+@{}", category.name()));
+        }
+        for cmd in &selector.commands.allowed_commands {
+            parts.push(format!("+{}", cmd));
+        }
+    }
+    for category in &selector.commands.denied_categories {
+        parts.push(format!("-@{}", category.name()));
+    }
+    for cmd in &selector.commands.denied_commands {
+        parts.push(format!("-{}", cmd));
+    }
+
+    // Subcommand rules within selector
+    for rule in &selector.commands.subcommand_rules {
+        if rule.allowed {
+            parts.push(format!("+{}|{}", rule.command, rule.subcommand));
+        } else {
+            parts.push(format!("-{}|{}", rule.command, rule.subcommand));
+        }
+    }
+
+    format!("({})", parts.join(" "))
 }
 
 /// Value type for user info response.
@@ -299,6 +406,10 @@ pub struct UserPermissions {
     pub channel_patterns: Vec<super::permissions::ChannelPattern>,
     /// Whether all channels are allowed.
     pub all_channels: bool,
+    /// Subcommand-specific rules (Redis 7.0+).
+    pub subcommand_rules: Vec<SubcommandRule>,
+    /// Selectors for additional permissions (Redis 7.0+).
+    pub selectors: Vec<PermissionSet>,
 }
 
 impl UserPermissions {
@@ -314,6 +425,8 @@ impl UserPermissions {
             all_keys: user.root_permissions.all_keys,
             channel_patterns: user.root_permissions.channel_patterns.clone(),
             all_channels: user.root_permissions.all_channels,
+            subcommand_rules: user.root_permissions.commands.subcommand_rules.clone(),
+            selectors: user.selectors.clone(),
         }
     }
 
@@ -329,12 +442,39 @@ impl UserPermissions {
             all_keys: true,
             channel_patterns: vec![],
             all_channels: true,
+            subcommand_rules: vec![],
+            selectors: vec![],
         }
     }
 
     /// Check if a command is allowed.
     pub fn check_command(&self, command: &str, subcommand: Option<&str>) -> bool {
+        // Check root permissions
+        if self.check_command_root(command, subcommand) {
+            return true;
+        }
+
+        // Check selectors (OR logic - any match grants access)
+        self.selectors
+            .iter()
+            .any(|s| s.check_command(command, subcommand))
+    }
+
+    /// Check root permissions for a command (without selectors).
+    fn check_command_root(&self, command: &str, subcommand: Option<&str>) -> bool {
         let cmd_lower = command.to_lowercase();
+
+        // Check subcommand-specific rules FIRST (most specific wins)
+        if let Some(sub) = subcommand {
+            let sub_lower = sub.to_lowercase();
+            for rule in &self.subcommand_rules {
+                if rule.command.to_lowercase() == cmd_lower
+                    && rule.subcommand.to_lowercase() == sub_lower
+                {
+                    return rule.allowed;
+                }
+            }
+        }
 
         // Explicit deny takes precedence
         if self.denied_commands.contains(&cmd_lower) {
@@ -366,16 +506,22 @@ impl UserPermissions {
             }
         }
 
-        // Check subcommand (Redis 7.0+)
-        if let Some(_sub) = subcommand {
-            // For now, subcommand rules are not implemented
-        }
-
         false
     }
 
     /// Check if key access is allowed.
     pub fn check_key_access(&self, key: &[u8], access: super::permissions::KeyAccessType) -> bool {
+        // Check root permissions
+        if self.check_key_access_root(key, access) {
+            return true;
+        }
+
+        // Check selectors (OR logic - any match grants access)
+        self.selectors.iter().any(|s| s.check_key_access(key, access))
+    }
+
+    /// Check root permissions for key access (without selectors).
+    fn check_key_access_root(&self, key: &[u8], access: super::permissions::KeyAccessType) -> bool {
         if self.all_keys {
             return true;
         }
@@ -391,6 +537,17 @@ impl UserPermissions {
 
     /// Check if channel access is allowed.
     pub fn check_channel_access(&self, channel: &[u8]) -> bool {
+        // Check root permissions
+        if self.check_channel_access_root(channel) {
+            return true;
+        }
+
+        // Check selectors (OR logic - any match grants access)
+        self.selectors.iter().any(|s| s.check_channel_access(channel))
+    }
+
+    /// Check root permissions for channel access (without selectors).
+    fn check_channel_access_root(&self, channel: &[u8]) -> bool {
         if self.all_channels {
             return true;
         }
@@ -402,6 +559,29 @@ impl UserPermissions {
         }
 
         false
+    }
+
+    /// Check if a command with keys is allowed.
+    /// For commands that access keys, BOTH the command AND the key must be
+    /// allowed within the SAME permission context (root or same selector).
+    pub fn check_command_with_key(
+        &self,
+        command: &str,
+        subcommand: Option<&str>,
+        key: &[u8],
+        access: super::permissions::KeyAccessType,
+    ) -> bool {
+        // Check if root permissions allow BOTH command AND key
+        if self.check_command_root(command, subcommand)
+            && self.check_key_access_root(key, access)
+        {
+            return true;
+        }
+
+        // Check if any selector allows BOTH command AND key
+        self.selectors.iter().any(|s| {
+            s.check_command(command, subcommand) && s.check_key_access(key, access)
+        })
     }
 }
 
@@ -439,6 +619,19 @@ impl AuthenticatedUser {
     /// Check if key access is allowed.
     pub fn check_key_access(&self, key: &[u8], access: super::permissions::KeyAccessType) -> bool {
         self.permissions.check_key_access(key, access)
+    }
+
+    /// Check if a command with keys is allowed.
+    /// For commands that access keys, BOTH the command AND the key must be
+    /// allowed within the SAME permission context (root or same selector).
+    pub fn check_command_with_key(
+        &self,
+        command: &str,
+        subcommand: Option<&str>,
+        key: &[u8],
+        access: super::permissions::KeyAccessType,
+    ) -> bool {
+        self.permissions.check_command_with_key(command, subcommand, key, access)
     }
 
     /// Check if channel access is allowed.
@@ -557,5 +750,192 @@ mod tests {
         assert!(!perms.check_command("SET", None));
         assert!(perms.check_key_access(b"user:123", super::super::permissions::KeyAccessType::Read));
         assert!(!perms.check_key_access(b"data:123", super::super::permissions::KeyAccessType::Read));
+    }
+
+    #[test]
+    fn test_selector_grants_additional_access() {
+        use super::super::categories::CommandCategory;
+        use super::super::permissions::{KeyPattern, PermissionSet, KeyAccessType};
+
+        let mut user = User::new("test");
+        // Root permissions: can only read user:* keys
+        user.root_permissions.add_key_pattern(KeyPattern::new("user:*".to_string()));
+        user.root_permissions.commands.allow_category(CommandCategory::Read);
+
+        // Selector: can also read cache:* keys
+        let mut selector = PermissionSet::default();
+        selector.add_key_pattern(KeyPattern::new("cache:*".to_string()));
+        selector.commands.allow_category(CommandCategory::Read);
+        user.selectors.push(selector);
+
+        // Can read user:* (root)
+        assert!(user.check_key_access(b"user:123", KeyAccessType::Read));
+        // Can read cache:* (selector)
+        assert!(user.check_key_access(b"cache:123", KeyAccessType::Read));
+        // Cannot read data:* (neither root nor selector)
+        assert!(!user.check_key_access(b"data:123", KeyAccessType::Read));
+    }
+
+    #[test]
+    fn test_selector_key_pattern_only() {
+        use super::super::permissions::{KeyPattern, PermissionSet, KeyAccessType};
+
+        let mut user = User::new("test");
+        // Root: can write to app:* keys
+        user.root_permissions.add_key_pattern(KeyPattern::new("app:*".to_string()));
+        user.root_permissions.commands.allow_all = true;
+
+        // Selector: can only read cache:* keys
+        let mut selector = PermissionSet::default();
+        selector.add_key_pattern(KeyPattern::with_access("cache:*".to_string(), KeyAccessType::Read));
+        user.selectors.push(selector);
+
+        // Can write to app:*
+        assert!(user.check_key_access(b"app:123", KeyAccessType::Write));
+        // Can read cache:* (selector)
+        assert!(user.check_key_access(b"cache:123", KeyAccessType::Read));
+        // Cannot write to cache:* (selector only grants read)
+        assert!(!user.check_key_access(b"cache:123", KeyAccessType::Write));
+    }
+
+    #[test]
+    fn test_multiple_selectors() {
+        use super::super::permissions::{KeyPattern, PermissionSet, KeyAccessType};
+
+        let mut user = User::new("test");
+        // Root: no key access
+
+        // Selector 1: can read temp:*
+        let mut selector1 = PermissionSet::default();
+        selector1.add_key_pattern(KeyPattern::with_access("temp:*".to_string(), KeyAccessType::Read));
+        user.selectors.push(selector1);
+
+        // Selector 2: can read cache:*
+        let mut selector2 = PermissionSet::default();
+        selector2.add_key_pattern(KeyPattern::with_access("cache:*".to_string(), KeyAccessType::Read));
+        user.selectors.push(selector2);
+
+        // Can read temp:* (selector 1)
+        assert!(user.check_key_access(b"temp:123", KeyAccessType::Read));
+        // Can read cache:* (selector 2)
+        assert!(user.check_key_access(b"cache:456", KeyAccessType::Read));
+        // Cannot read data:* (no selector matches)
+        assert!(!user.check_key_access(b"data:789", KeyAccessType::Read));
+    }
+
+    #[test]
+    fn test_clearselectors_removes_all() {
+        use super::super::permissions::{KeyPattern, PermissionSet, KeyAccessType};
+
+        let mut user = User::new("test");
+
+        // Add selectors
+        let mut selector = PermissionSet::default();
+        selector.add_key_pattern(KeyPattern::new("temp:*".to_string()));
+        user.selectors.push(selector);
+        user.selectors.push(PermissionSet::default());
+
+        assert_eq!(user.selectors.len(), 2);
+
+        // Clear selectors
+        user.selectors.clear();
+
+        assert!(user.selectors.is_empty());
+        // Can no longer access temp:* keys via selector
+        assert!(!user.check_key_access(b"temp:123", KeyAccessType::Read));
+    }
+
+    #[test]
+    fn test_user_permissions_with_subcommand_rules() {
+        use super::super::permissions::SubcommandRule;
+
+        let mut user = User::new("test");
+        user.root_permissions.commands.allow_all = true;
+
+        // Deny CONFIG|SET specifically
+        user.root_permissions.commands.add_subcommand_rule(SubcommandRule {
+            command: "config".to_string(),
+            subcommand: "set".to_string(),
+            allowed: false,
+        });
+
+        let perms = UserPermissions::from_user(&user);
+        // CONFIG GET should be allowed
+        assert!(perms.check_command("CONFIG", Some("GET")));
+        // CONFIG SET should be denied
+        assert!(!perms.check_command("CONFIG", Some("SET")));
+    }
+
+    #[test]
+    fn test_user_permissions_with_selectors() {
+        use super::super::categories::CommandCategory;
+        use super::super::permissions::{KeyPattern, PermissionSet, KeyAccessType};
+
+        let mut user = User::new("test");
+        // Root: access to app:* keys with read commands
+        user.root_permissions.add_key_pattern(KeyPattern::new("app:*".to_string()));
+        user.root_permissions.commands.allow_category(CommandCategory::Read);
+
+        // Selector: access to cache:* keys with read commands
+        let mut selector = PermissionSet::default();
+        selector.add_key_pattern(KeyPattern::new("cache:*".to_string()));
+        selector.commands.allow_category(CommandCategory::Read);
+        user.selectors.push(selector);
+
+        let perms = UserPermissions::from_user(&user);
+
+        // Check key access
+        assert!(perms.check_key_access(b"app:123", KeyAccessType::Read));
+        assert!(perms.check_key_access(b"cache:123", KeyAccessType::Read));
+        assert!(!perms.check_key_access(b"data:123", KeyAccessType::Read));
+
+        // Check command access (both should grant READ)
+        assert!(perms.check_command("GET", None));
+    }
+
+    #[test]
+    fn test_acl_string_with_subcommand_rules() {
+        use super::super::permissions::SubcommandRule;
+
+        let mut user = User::new("test");
+        user.enabled = true;
+        user.root_permissions.commands.allow_all = true;
+        user.root_permissions.all_keys = true;
+
+        // Add subcommand rules
+        user.root_permissions.commands.add_subcommand_rule(SubcommandRule {
+            command: "config".to_string(),
+            subcommand: "get".to_string(),
+            allowed: true,
+        });
+        user.root_permissions.commands.add_subcommand_rule(SubcommandRule {
+            command: "config".to_string(),
+            subcommand: "set".to_string(),
+            allowed: false,
+        });
+
+        let acl_str = user.to_acl_string();
+        assert!(acl_str.contains("+config|get"));
+        assert!(acl_str.contains("-config|set"));
+    }
+
+    #[test]
+    fn test_acl_string_with_selectors() {
+        use super::super::categories::CommandCategory;
+        use super::super::permissions::{KeyPattern, PermissionSet};
+
+        let mut user = User::new("test");
+        user.enabled = true;
+        user.root_permissions.all_keys = true;
+        user.root_permissions.commands.allow_all = true;
+
+        // Add a selector
+        let mut selector = PermissionSet::default();
+        selector.add_key_pattern(KeyPattern::new("temp:*".to_string()));
+        selector.commands.allow_category(CommandCategory::Read);
+        user.selectors.push(selector);
+
+        let acl_str = user.to_acl_string();
+        assert!(acl_str.contains("(~temp:* +@read)"));
     }
 }

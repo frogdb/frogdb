@@ -5355,24 +5355,335 @@ async fn test_acl_concurrent_setuser() {
 }
 
 // ============================================================================
-// ACL Permission Enforcement Tests - Group 11: Redis 7.0 Prep (Ignored)
+// ACL Permission Enforcement Tests - Group 11: Redis 7.0 Features
 // ============================================================================
 
 #[tokio::test]
-#[ignore = "Redis 7.0 subcommand ACL not yet implemented"]
 async fn test_acl_subcommand_rules() {
-    // +CONFIG|GET -CONFIG|SET
-    // CONFIG GET works, CONFIG SET denied
-    let _server = TestServer::start_with_security("admin").await;
-    // TODO: Implement when subcommand ACL rules are added
+    // Create a user with +@all but deny CONFIG|SET specifically
+    let server = TestServer::start_with_security("admin").await;
+    let mut admin_client = server.connect().await;
+
+    // Authenticate as admin
+    admin_client.command(&["AUTH", "admin"]).await;
+
+    // Create user with all commands allowed but CONFIG|SET denied
+    let response = admin_client
+        .command(&[
+            "ACL", "SETUSER", "configreader", "on", ">pass",
+            "~*", "+@all", "-config|set", "-config|rewrite"
+        ])
+        .await;
+    assert_eq!(response, Response::ok());
+
+    // Connect as the new user
+    let mut user_client = server.connect().await;
+    let response = user_client.command(&["AUTH", "configreader", "pass"]).await;
+    assert_eq!(response, Response::ok());
+
+    // CONFIG GET should work (allowed by +@all, no specific deny)
+    let response = user_client.command(&["CONFIG", "GET", "maxclients"]).await;
+    assert!(
+        matches!(response, Response::Array(_)),
+        "CONFIG GET should be allowed, got {:?}",
+        response
+    );
+
+    // CONFIG SET should be denied (specific subcommand deny)
+    let response = user_client.command(&["CONFIG", "SET", "maxclients", "1000"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("NOPERM"),
+                "Expected NOPERM error, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected NOPERM error for CONFIG SET, got {:?}", response),
+    }
+
+    // CONFIG REWRITE should be denied (specific subcommand deny)
+    let response = user_client.command(&["CONFIG", "REWRITE"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("NOPERM"),
+                "Expected NOPERM error, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected NOPERM error for CONFIG REWRITE, got {:?}", response),
+    }
+
+    server.shutdown().await;
 }
 
 #[tokio::test]
-#[ignore = "Redis 7.0 selector syntax not yet implemented"]
+async fn test_acl_subcommand_allow_specific() {
+    // Create a user with -config but +config|get allowed
+    let server = TestServer::start_with_security("admin").await;
+    let mut admin_client = server.connect().await;
+
+    // Authenticate as admin
+    admin_client.command(&["AUTH", "admin"]).await;
+
+    // Create user with config denied but config|get allowed
+    let response = admin_client
+        .command(&[
+            "ACL", "SETUSER", "configget", "on", ">pass",
+            "~*", "+@all", "-config", "+config|get"
+        ])
+        .await;
+    assert_eq!(response, Response::ok());
+
+    // Connect as the new user
+    let mut user_client = server.connect().await;
+    user_client.command(&["AUTH", "configget", "pass"]).await;
+
+    // CONFIG GET should work (specific subcommand allow overrides command deny)
+    let response = user_client.command(&["CONFIG", "GET", "maxclients"]).await;
+    assert!(
+        matches!(response, Response::Array(_)),
+        "CONFIG GET should be allowed, got {:?}",
+        response
+    );
+
+    // CONFIG SET should be denied (no specific allow)
+    let response = user_client.command(&["CONFIG", "SET", "maxclients", "1000"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("NOPERM"),
+                "Expected NOPERM error, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected NOPERM error for CONFIG SET, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn test_acl_selectors() {
-    // (~temp:* +@read) selector
-    let _server = TestServer::start_with_security("admin").await;
-    // TODO: Implement when selector syntax is added
+    // Create a user with root access to app:* and selector for cache:* read-only
+    let server = TestServer::start_with_security("admin").await;
+    let mut admin_client = server.connect().await;
+
+    // Authenticate as admin
+    admin_client.command(&["AUTH", "admin"]).await;
+
+    // Create user with:
+    // - Root: app:* keys with all commands
+    // - Selector: cache:* keys with read-only access
+    let response = admin_client
+        .command(&[
+            "ACL", "SETUSER", "hybrid", "on", ">pass",
+            "~app:*", "+@all", "(~cache:* +@read)"
+        ])
+        .await;
+    assert_eq!(response, Response::ok());
+
+    // Connect as the new user
+    let mut user_client = server.connect().await;
+    user_client.command(&["AUTH", "hybrid", "pass"]).await;
+
+    // Can write to app:* (root permissions)
+    let response = user_client.command(&["SET", "app:key1", "value1"]).await;
+    assert_eq!(response, Response::ok());
+
+    // Can read from app:* (root permissions)
+    let response = user_client.command(&["GET", "app:key1"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("value1"))));
+
+    // Can read from cache:* (selector permissions)
+    // First, admin sets a cache key
+    admin_client.command(&["SET", "cache:data", "cached"]).await;
+    let response = user_client.command(&["GET", "cache:data"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("cached"))));
+
+    // Cannot write to cache:* (selector only grants read)
+    let response = user_client.command(&["SET", "cache:newkey", "value"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("NOPERM"),
+                "Expected NOPERM error for cache write, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected NOPERM error for cache write, got {:?}", response),
+    }
+
+    // Cannot access data:* (neither root nor selector)
+    let response = user_client.command(&["GET", "data:something"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("NOPERM"),
+                "Expected NOPERM error for data access, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected NOPERM error for data access, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_acl_clearselectors() {
+    let server = TestServer::start_with_security("admin").await;
+    let mut admin_client = server.connect().await;
+
+    // Authenticate as admin
+    admin_client.command(&["AUTH", "admin"]).await;
+
+    // Create user with a selector
+    admin_client
+        .command(&[
+            "ACL", "SETUSER", "withsel", "on", ">pass",
+            "~app:*", "+@all", "(~temp:* +@read)"
+        ])
+        .await;
+
+    // Verify selector exists in GETUSER response
+    let response = admin_client.command(&["ACL", "GETUSER", "withsel"]).await;
+    match response {
+        Response::Array(arr) => {
+            // Look for "selectors" field
+            let selectors_idx = arr.iter().position(|r| {
+                matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("selectors"))
+            });
+            if let Some(idx) = selectors_idx {
+                if let Some(Response::Array(selectors)) = arr.get(idx + 1) {
+                    assert!(!selectors.is_empty(), "Should have at least one selector");
+                }
+            }
+        }
+        _ => panic!("Expected array response for GETUSER"),
+    }
+
+    // Clear selectors
+    admin_client
+        .command(&["ACL", "SETUSER", "withsel", "clearselectors"])
+        .await;
+
+    // Verify selectors are cleared
+    let response = admin_client.command(&["ACL", "GETUSER", "withsel"]).await;
+    match response {
+        Response::Array(arr) => {
+            let selectors_idx = arr.iter().position(|r| {
+                matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("selectors"))
+            });
+            if let Some(idx) = selectors_idx {
+                if let Some(Response::Array(selectors)) = arr.get(idx + 1) {
+                    assert!(selectors.is_empty(), "Selectors should be cleared");
+                }
+            }
+        }
+        _ => panic!("Expected array response for GETUSER"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_acl_multiple_selectors() {
+    let server = TestServer::start_with_security("admin").await;
+    let mut admin_client = server.connect().await;
+
+    // Authenticate as admin
+    admin_client.command(&["AUTH", "admin"]).await;
+
+    // Create user with multiple selectors
+    let response = admin_client
+        .command(&[
+            "ACL", "SETUSER", "multisel", "on", ">pass",
+            "+@all", "(~temp:* +@read)", "(~cache:* +@read)"
+        ])
+        .await;
+    assert_eq!(response, Response::ok());
+
+    // Connect as the new user
+    let mut user_client = server.connect().await;
+    user_client.command(&["AUTH", "multisel", "pass"]).await;
+
+    // Admin sets some keys
+    admin_client.command(&["SET", "temp:key1", "temp_value"]).await;
+    admin_client.command(&["SET", "cache:key1", "cache_value"]).await;
+
+    // Can read temp:* (selector 1)
+    let response = user_client.command(&["GET", "temp:key1"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("temp_value"))));
+
+    // Can read cache:* (selector 2)
+    let response = user_client.command(&["GET", "cache:key1"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("cache_value"))));
+
+    // Cannot read data:* (no matching selector)
+    let response = user_client.command(&["GET", "data:key1"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("NOPERM"),
+                "Expected NOPERM error, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected NOPERM error, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_acl_acl_list_includes_subcommand_rules() {
+    let server = TestServer::start_with_security("admin").await;
+    let mut admin_client = server.connect().await;
+
+    // Authenticate as admin
+    admin_client.command(&["AUTH", "admin"]).await;
+
+    // Create user with subcommand rules
+    admin_client
+        .command(&[
+            "ACL", "SETUSER", "subcmduser", "on", ">pass",
+            "~*", "+@all", "-config|set", "+client|info"
+        ])
+        .await;
+
+    // ACL LIST should include subcommand rules in the output
+    let response = admin_client.command(&["ACL", "LIST"]).await;
+    match response {
+        Response::Array(arr) => {
+            let rules: Vec<_> = arr
+                .iter()
+                .filter_map(|r| match r {
+                    Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
+                    _ => None,
+                })
+                .collect();
+
+            let subcmduser_rule = rules.iter().find(|r| r.contains("subcmduser"));
+            assert!(subcmduser_rule.is_some(), "Should have subcmduser in ACL LIST");
+            let rule = subcmduser_rule.unwrap();
+            assert!(
+                rule.contains("-config|set") || rule.contains("+client|info"),
+                "ACL LIST should include subcommand rules: {}",
+                rule
+            );
+        }
+        _ => panic!("Expected array response for ACL LIST"),
+    }
+
+    server.shutdown().await;
 }
 
 // ============================================================================
