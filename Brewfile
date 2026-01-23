@@ -16,4 +16,4 @@ brew "uv"      # Python script runner for test harness
 
 # Profiling tools
 brew "cargo-flamegraph"  # CPU flamegraphs
-cask "samply"            # CPU profiler with UI
+brew "samply"            # CPU profiler with UI

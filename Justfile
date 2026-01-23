@@ -139,3 +139,17 @@ profile-perf *args:
 # Memory profiling with heaptrack (Linux only, requires heaptrack)
 profile-heap *args:
     heaptrack ./target/profiling/frogdb-server {{args}}
+
+# =============================================================================
+# Profiling with Load Testing
+# =============================================================================
+
+# Profile FrogDB under load (full workflow)
+# Usage: just profile-load [workload] [requests]
+# Example: just profile-load mixed 50000
+profile-load workload="mixed" requests="10000" *args:
+    uv run tools/loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} {{args}}
+
+# Profile with save-only (no auto-open)
+profile-load-save workload="mixed" requests="10000" *args:
+    uv run tools/loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} --save-only {{args}}
