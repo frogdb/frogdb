@@ -16,7 +16,7 @@ use tracing::{error, info, warn};
 use crate::acceptor::Acceptor;
 use crate::config::{Config, MemoryConfig, PersistenceConfig};
 use crate::net::{spawn, TcpListener};
-use crate::runtime_config::ConfigManager;
+use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
 
 /// Channel capacity for shard message queues.
 const SHARD_CHANNEL_CAPACITY: usize = 1024;
@@ -288,6 +288,14 @@ impl Server {
 
         // Create ACL manager
         let acl_manager = AclManager::new(config.to_acl_config());
+
+        // Create shard config notifier for propagating runtime config changes
+        let shard_notifier = Arc::new(ShardConfigNotifier::new(
+            shard_senders.clone(),
+            config_manager.runtime_ref(),
+            num_shards,
+        ));
+        config_manager.set_shard_notifier(shard_notifier);
 
         Ok(Self {
             config,

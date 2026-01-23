@@ -305,6 +305,14 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<()>,
     },
 
+    /// Update shard configuration at runtime.
+    UpdateConfig {
+        /// New eviction configuration (if changed).
+        eviction_config: Option<EvictionConfig>,
+        /// Response channel to acknowledge the update.
+        response_tx: oneshot::Sender<()>,
+    },
+
     /// Shutdown signal.
     Shutdown,
 }
@@ -1153,6 +1161,25 @@ impl ShardWorker {
                         }
                         ShardMessage::LatencyReset { events, response_tx } => {
                             self.latency_monitor.reset(&events);
+                            let _ = response_tx.send(());
+                        }
+
+                        ShardMessage::UpdateConfig { eviction_config, response_tx } => {
+                            if let Some(config) = eviction_config {
+                                self.eviction_config = config;
+                                // Recalculate per-shard memory limit
+                                self.memory_limit = if self.eviction_config.maxmemory > 0 {
+                                    self.eviction_config.maxmemory / self.num_shards as u64
+                                } else {
+                                    0
+                                };
+                                tracing::debug!(
+                                    shard_id = self.shard_id,
+                                    maxmemory = self.eviction_config.maxmemory,
+                                    policy = ?self.eviction_config.policy,
+                                    "Eviction config updated"
+                                );
+                            }
                             let _ = response_tx.send(());
                         }
 

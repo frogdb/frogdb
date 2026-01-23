@@ -7575,3 +7575,176 @@ async fn test_latency_unknown_subcommand() {
 
     server.shutdown().await;
 }
+
+// =============================================================================
+// CONFIG SET eviction parameter tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_config_set_maxmemory() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Get initial maxmemory
+    let response = client.command(&["CONFIG", "GET", "maxmemory"]).await;
+    let initial_value = match &response {
+        Response::Array(items) if items.len() >= 2 => match &items[1] {
+            Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+            _ => panic!("Expected bulk string value"),
+        },
+        _ => panic!("Expected array response"),
+    };
+
+    // Set new maxmemory value
+    let response = client
+        .command(&["CONFIG", "SET", "maxmemory", "104857600"])
+        .await;
+    assert_eq!(response, Response::ok(), "CONFIG SET should succeed");
+
+    // Verify the new value
+    let response = client.command(&["CONFIG", "GET", "maxmemory"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 2, "Should return key-value pair");
+            match &items[1] {
+                Response::Bulk(Some(b)) => {
+                    let value = String::from_utf8_lossy(b);
+                    assert_eq!(value, "104857600", "maxmemory should be updated");
+                }
+                _ => panic!("Expected bulk string value"),
+            }
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    // Restore original value
+    let _ = client
+        .command(&["CONFIG", "SET", "maxmemory", &initial_value])
+        .await;
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_config_set_maxmemory_policy() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Set maxmemory-policy to allkeys-lru
+    let response = client
+        .command(&["CONFIG", "SET", "maxmemory-policy", "allkeys-lru"])
+        .await;
+    assert_eq!(response, Response::ok(), "CONFIG SET should succeed");
+
+    // Verify the new value
+    let response = client.command(&["CONFIG", "GET", "maxmemory-policy"]).await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 2, "Should return key-value pair");
+            match &items[1] {
+                Response::Bulk(Some(b)) => {
+                    let value = String::from_utf8_lossy(b);
+                    assert_eq!(value, "allkeys-lru", "maxmemory-policy should be updated");
+                }
+                _ => panic!("Expected bulk string value"),
+            }
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    // Test invalid policy
+    let response = client
+        .command(&["CONFIG", "SET", "maxmemory-policy", "invalid-policy"])
+        .await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("Invalid value"),
+                "Should reject invalid policy"
+            );
+        }
+        _ => panic!("Expected error response for invalid policy"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_config_set_eviction_params() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Test maxmemory-samples
+    let response = client
+        .command(&["CONFIG", "SET", "maxmemory-samples", "10"])
+        .await;
+    assert_eq!(response, Response::ok(), "CONFIG SET maxmemory-samples should succeed");
+
+    // Verify the value
+    let response = client.command(&["CONFIG", "GET", "maxmemory-samples"]).await;
+    match response {
+        Response::Array(items) => {
+            match &items[1] {
+                Response::Bulk(Some(b)) => {
+                    let value = String::from_utf8_lossy(b);
+                    assert_eq!(value, "10", "maxmemory-samples should be updated");
+                }
+                _ => panic!("Expected bulk string value"),
+            }
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    // Test lfu-log-factor
+    let response = client
+        .command(&["CONFIG", "SET", "lfu-log-factor", "5"])
+        .await;
+    assert_eq!(response, Response::ok(), "CONFIG SET lfu-log-factor should succeed");
+
+    // Test lfu-decay-time
+    let response = client
+        .command(&["CONFIG", "SET", "lfu-decay-time", "2"])
+        .await;
+    assert_eq!(response, Response::ok(), "CONFIG SET lfu-decay-time should succeed");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_config_set_immutable_param() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Try to set an immutable parameter
+    let response = client
+        .command(&["CONFIG", "SET", "bind", "0.0.0.0"])
+        .await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("not mutable"),
+                "Should reject setting immutable param"
+            );
+        }
+        _ => panic!("Expected error response for immutable param"),
+    }
+
+    // Try to set num-shards (also immutable)
+    let response = client
+        .command(&["CONFIG", "SET", "num-shards", "8"])
+        .await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("not mutable"),
+                "Should reject setting num-shards"
+            );
+        }
+        _ => panic!("Expected error response for immutable param"),
+    }
+
+    server.shutdown().await;
+}
