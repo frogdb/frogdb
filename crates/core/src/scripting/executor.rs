@@ -1,19 +1,20 @@
 //! Script executor that orchestrates Lua script execution.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use mlua::{MultiValue, Value};
 
 use super::bindings::{
-    extract_keys_from_command, is_forbidden_in_script,
-    lua_args_to_command, validate_key_access,
+    extract_keys_from_command, is_forbidden_in_script, is_write_command,
+    lua_args_to_command, response_to_lua, validate_key_access,
 };
 use super::cache::{hex_to_sha, sha_to_hex, ScriptCache, ScriptSha};
 use super::config::ScriptingConfig;
 use super::error::ScriptError;
-use super::lua_vm::LuaVm;
+use super::lua_vm::{CommandExecutionContext, LuaVm};
 
 use crate::command::CommandContext;
 use crate::registry::CommandRegistry;
@@ -109,13 +110,38 @@ impl ScriptExecutor {
         // Prepare VM
         self.vm.prepare_execution(keys, argv)?;
 
+        // Set up command execution context with raw pointers
+        // SAFETY: These pointers are valid for the duration of script execution,
+        // which is synchronous and single-threaded within a shard. We use raw
+        // pointers to allow the context to be stored in RwLock and accessed
+        // from Lua closures. The pointers are cleared immediately after script
+        // execution completes, before the function returns.
+        //
+        // We use transmute to erase the lifetime from the fat pointer to dyn Store.
+        // This is safe because we ensure the pointer is only used during script
+        // execution and cleared afterwards.
+        let store_ptr: *mut dyn crate::store::Store = unsafe {
+            std::mem::transmute(ctx.store as *mut dyn crate::store::Store)
+        };
+        let cmd_exec_ctx = CommandExecutionContext {
+            store_ptr,
+            registry_ptr: registry as *const CommandRegistry,
+            shard_senders: Arc::clone(ctx.shard_senders),
+            shard_id: ctx.shard_id,
+            num_shards: ctx.num_shards,
+            conn_id: ctx.conn_id,
+            protocol_version: ctx.protocol_version,
+        };
+        self.vm.set_command_context(cmd_exec_ctx);
+
         // Set up redis.call and redis.pcall
-        self.setup_redis_bindings(ctx, registry, keys)?;
+        self.setup_redis_bindings(keys)?;
 
         // Execute the script
         let result = self.vm.execute(source);
 
-        // Cleanup
+        // Cleanup - clear context BEFORE cleanup_execution
+        self.vm.clear_command_context();
         self.vm.cleanup_execution();
         self.running.store(false, Ordering::Relaxed);
 
@@ -129,19 +155,21 @@ impl ScriptExecutor {
     /// Set up redis.call and redis.pcall bindings.
     fn setup_redis_bindings(
         &self,
-        _ctx: &mut CommandContext,
-        _registry: &CommandRegistry,
         declared_keys: &[Bytes],
     ) -> Result<(), ScriptError> {
         let lua = self.vm.lua();
 
         // Clone declared_keys so we can move it into the closures
         // Use Arc<Vec<Bytes>> so it can be shared between the two closures
-        let keys_for_call = std::sync::Arc::new(declared_keys.to_vec());
+        let keys_for_call = Arc::new(declared_keys.to_vec());
         let keys_for_pcall = keys_for_call.clone();
 
+        // Get context accessor for command execution
+        let accessor_for_call = self.vm.create_context_accessor();
+        let accessor_for_pcall = self.vm.create_context_accessor();
+
         // Create redis.call function
-        let call_fn = lua.create_function(move |_lua_ctx, args: MultiValue| -> mlua::Result<Value> {
+        let call_fn = lua.create_function(move |lua_ctx, args: MultiValue| -> mlua::Result<Value> {
             // Convert args to command parts
             let parts = match lua_args_to_command(args) {
                 Ok(p) => p,
@@ -172,11 +200,24 @@ impl ScriptExecutor {
                 }
             }
 
-            // For now, return an error indicating commands need proper integration
-            // This will be replaced with actual command execution when integrated
-            Err(mlua::Error::RuntimeError(
-                "ERR redis.call not yet integrated with command execution".to_string(),
-            ))
+            // Track writes
+            if is_write_command(&cmd_name) {
+                accessor_for_call.mark_write();
+            }
+
+            // Execute the command
+            match accessor_for_call.execute_command(&parts) {
+                Ok(response) => {
+                    // redis.call raises error on Redis errors
+                    if let Response::Error(ref e) = response {
+                        return Err(mlua::Error::RuntimeError(
+                            String::from_utf8_lossy(e).to_string()
+                        ));
+                    }
+                    response_to_lua(lua_ctx, response)
+                }
+                Err(e) => Err(mlua::Error::RuntimeError(e)),
+            }
         }).map_err(|e| ScriptError::Internal(format!("Failed to create call function: {}", e)))?;
 
         // Create redis.pcall function (same as call but catches errors)
@@ -218,10 +259,23 @@ impl ScriptExecutor {
                 }
             }
 
-            // For now, return an error table
-            let table = lua_ctx.create_table()?;
-            table.set("err", "ERR redis.pcall not yet integrated with command execution")?;
-            Ok(Value::Table(table))
+            // Track writes
+            if is_write_command(&cmd_name) {
+                accessor_for_pcall.mark_write();
+            }
+
+            // Execute the command
+            match accessor_for_pcall.execute_command(&parts) {
+                Ok(response) => {
+                    // pcall returns errors as {err='...'} table instead of raising
+                    response_to_lua(lua_ctx, response)
+                }
+                Err(e) => {
+                    let table = lua_ctx.create_table()?;
+                    table.set("err", e)?;
+                    Ok(Value::Table(table))
+                }
+            }
         }).map_err(|e| ScriptError::Internal(format!("Failed to create pcall function: {}", e)))?;
 
         self.vm.set_redis_functions(call_fn, pcall_fn)?;

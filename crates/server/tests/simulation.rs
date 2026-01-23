@@ -1990,7 +1990,7 @@ fn test_concurrent_transactions_linearizable() {
 }
 
 // =============================================================================
-// Lua Script Atomicity Tests (SKIPPED - redis.call() not implemented)
+// Lua Script Atomicity Tests (redis.call() implemented, tests need writing)
 // =============================================================================
 
 /// Test that Lua scripts execute atomically.
@@ -1999,17 +1999,18 @@ fn test_concurrent_transactions_linearizable() {
 /// Client 2: MGET a b (concurrent)
 /// Expected: Client 2 sees (nil,nil) or (1,1), never partial
 #[test]
-#[ignore] // TODO: Enable when redis.call() is implemented in Lua scripts
+#[ignore] // TODO: Implement atomicity simulation test
 fn test_lua_script_atomicity() {
-    // This test would verify that Lua script execution is atomic
-    // Currently, redis.call() is not implemented, so we skip this test
+    // This test would verify that Lua script execution is atomic.
+    // redis.call() is now implemented, but this simulation test still needs
+    // to be written to verify concurrent behavior.
     //
-    // When implemented:
+    // Test approach:
     // 1. Client 1 executes a Lua script that sets two keys
     // 2. Client 2 concurrently reads both keys
     // 3. Client 2 should never see partial state (one key set, one not)
 
-    panic!("Test not yet implemented - redis.call() support needed");
+    panic!("Test not yet implemented - simulation test body needed");
 }
 
 /// Test Lua script cross-key operations are atomic.
@@ -2017,10 +2018,12 @@ fn test_lua_script_atomicity() {
 /// Script reads key A, writes to key B based on A's value.
 /// Expected: Atomic read-modify-write semantics
 #[test]
-#[ignore] // TODO: Enable when redis.call() is implemented
+#[ignore] // TODO: Implement cross-key simulation test
 fn test_lua_script_cross_key_operations() {
     // This test would verify that Lua scripts can perform atomic
-    // read-modify-write operations across multiple keys
+    // read-modify-write operations across multiple keys.
+    // redis.call() is now implemented, but this simulation test still needs
+    // to be written.
     //
     // Example script:
     // local val = redis.call('GET', KEYS[1])
@@ -2030,15 +2033,18 @@ fn test_lua_script_cross_key_operations() {
     //
     // This should be atomic - no other client should see the intermediate state
 
-    panic!("Test not yet implemented - redis.call() support needed");
+    panic!("Test not yet implemented - simulation test body needed");
 }
 
 /// Test Lua script with INCR pattern is atomic.
 #[test]
-#[ignore] // TODO: Enable when redis.call() is implemented
+#[ignore] // TODO: Implement INCR pattern simulation test
 fn test_lua_script_incr_pattern() {
-    // This test would verify that the common INCR pattern in Lua is atomic:
+    // This test would verify that the common INCR pattern in Lua is atomic.
+    // redis.call() is now implemented, but this simulation test still needs
+    // to be written.
     //
+    // Example script:
     // local current = tonumber(redis.call('GET', KEYS[1])) or 0
     // local new = current + 1
     // redis.call('SET', KEYS[1], new)
@@ -2046,5 +2052,5 @@ fn test_lua_script_incr_pattern() {
     //
     // Multiple concurrent executions should not lose increments
 
-    panic!("Test not yet implemented - redis.call() support needed");
+    panic!("Test not yet implemented - simulation test body needed");
 }
