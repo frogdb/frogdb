@@ -4,6 +4,8 @@
 //! and health endpoints correctly.
 
 use bytes::Bytes;
+use frogdb_metrics::testing::{get_counter, get_histogram_count};
+use frogdb_metrics::assert_gauge_gte;
 use frogdb_protocol::Response;
 use frogdb_server::{Config, Server};
 use futures::{SinkExt, StreamExt};
@@ -92,6 +94,16 @@ impl TestServer {
         format!("http://{}{}", self.metrics_addr, path)
     }
 
+    /// Fetch metrics as raw Prometheus text format.
+    async fn fetch_metrics(&self) -> String {
+        reqwest::get(self.metrics_url("/metrics"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+    }
+
     /// Shutdown the test server.
     async fn shutdown(self) {
         let _ = self.shutdown_tx.send(());
@@ -174,6 +186,10 @@ async fn test_metrics_endpoint_returns_frogdb_metrics() {
 async fn test_metrics_endpoint_returns_connection_metrics() {
     let server = TestServer::start().await;
 
+    // Check connections before any client connects
+    let before = server.fetch_metrics().await;
+    let total_before = get_counter(&before, "frogdb_connections_total", &[]);
+
     // Make a connection to trigger connection metrics
     let mut client = server.connect().await;
     client.command(&["PING"]).await;
@@ -181,14 +197,17 @@ async fn test_metrics_endpoint_returns_connection_metrics() {
     // Small delay for metrics to update
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let url = server.metrics_url("/metrics");
-    let resp = reqwest::get(&url).await.unwrap();
-    let body = resp.text().await.unwrap();
+    let after = server.fetch_metrics().await;
 
+    // Verify connection total incremented
+    let total_after = get_counter(&after, "frogdb_connections_total", &[]);
     assert!(
-        body.contains("frogdb_connections_"),
-        "Should contain connection metrics"
+        total_after > total_before,
+        "Connection total should increment after connect"
     );
+
+    // Verify current connections gauge is at least 1
+    assert_gauge_gte!(&after, "frogdb_connections_current", &[], 1);
 
     server.shutdown().await;
 }
@@ -228,6 +247,11 @@ async fn test_command_metrics_recorded() {
     let server = TestServer::start().await;
     let mut client = server.connect().await;
 
+    // Get baseline metrics
+    let before = server.fetch_metrics().await;
+    let set_before = get_counter(&before, "frogdb_commands_total", &[("command", "SET")]);
+    let get_before = get_counter(&before, "frogdb_commands_total", &[("command", "GET")]);
+
     // Execute some commands
     client.command(&["SET", "testkey", "testvalue"]).await;
     client.command(&["GET", "testkey"]).await;
@@ -237,26 +261,29 @@ async fn test_command_metrics_recorded() {
     // Small delay for metrics to be recorded
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let url = server.metrics_url("/metrics");
-    let resp = reqwest::get(&url).await.unwrap();
-    let body = resp.text().await.unwrap();
+    let after = server.fetch_metrics().await;
 
-    // Verify command metrics are recorded
-    assert!(
-        body.contains("frogdb_commands_total"),
-        "Should contain commands total metric"
+    // Verify command counters incremented
+    let set_after = get_counter(&after, "frogdb_commands_total", &[("command", "SET")]);
+    let get_after = get_counter(&after, "frogdb_commands_total", &[("command", "GET")]);
+
+    assert_eq!(
+        set_after,
+        set_before + 1.0,
+        "SET command counter should increment by 1"
     );
-    assert!(
-        body.contains(r#"command="SET""#),
-        "Should record SET command metric"
+    assert_eq!(
+        get_after,
+        get_before + 1.0,
+        "GET command counter should increment by 1"
     );
+
+    // Verify histogram has recorded durations
+    let set_hist_count =
+        get_histogram_count(&after, "frogdb_commands_duration_seconds", &[("command", "SET")]);
     assert!(
-        body.contains(r#"command="GET""#),
-        "Should record GET command metric"
-    );
-    assert!(
-        body.contains("frogdb_commands_duration_seconds"),
-        "Should contain command duration histogram"
+        set_hist_count >= 1,
+        "Should have at least 1 SET command duration recorded"
     );
 
     server.shutdown().await;
@@ -271,22 +298,18 @@ async fn test_keys_total_metric() {
     let server = TestServer::start().await;
     let mut client = server.connect().await;
 
-    // Add some keys
+    // Add some keys to ensure there's data
     for i in 0..10 {
         client
             .command(&["SET", &format!("testkey:{}", i), &format!("value{}", i)])
             .await;
     }
 
-    // Small delay for metrics to update
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let url = server.metrics_url("/metrics");
-    let resp = reqwest::get(&url).await.unwrap();
-    let body = resp.text().await.unwrap();
-
+    // Note: frogdb_keys_total is collected every 10 seconds by shard metrics,
+    // so we just verify the metric name exists in the output (may still be 0)
+    let metrics = server.fetch_metrics().await;
     assert!(
-        body.contains("frogdb_keys_total"),
+        metrics.contains("frogdb_keys_total"),
         "Should contain keys total metric"
     );
 

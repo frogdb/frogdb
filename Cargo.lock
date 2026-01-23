@@ -755,6 +755,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "frogdb-core",
+ "frogdb-metrics",
  "frogdb-protocol",
  "frogdb-server",
  "futures",
