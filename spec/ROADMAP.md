@@ -19,13 +19,6 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ---
 
-## Phase 1: Remaining Commands
-
-**Goal**: Complete missing non-cluster commands.
-
-- [ ] `SORT` / `SORT_RO` - Sort lists/sets/zsets
-- [ ] `LOLWUT` - Display Redis art (low priority)
-
 ### Part 3: Key migration
 
 - [ ] `MIGRATE` - Migrate keys between instances
@@ -94,7 +87,23 @@ See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for detailed profiling infrastructure, 
 - Concurrency Optimizations
 - Advanced Optimizations
 
+## <<<<<<< HEAD
+
+## ||||||| parent of 2755a3c (update roadmap)
+
+## Phase 8: ACL Completion
+
+**Goal**: Full Redis ACL compatibility.
+
+- [ ] Subcommand-level ACL rules (e.g., allow CONFIG GET but deny CONFIG SET)
+- [ ] ACL selector syntax for granular key/channel permissions
+- [ ] Per-command ACL category enforcement
+
 ---
+
+=======
+
+> > > > > > > 2755a3c (update roadmap)
 
 ## Phase 9: Redis Functions
 
