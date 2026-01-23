@@ -119,7 +119,7 @@ pub struct SubcommandRule {
 }
 
 /// Command permissions for a user.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandPermissions {
     /// Allow all commands.
     pub allow_all: bool,
@@ -150,17 +150,32 @@ impl CommandPermissions {
     }
 
     /// Check if a command is allowed.
-    pub fn is_command_allowed(&self, command: &str, _subcommand: Option<&str>) -> bool {
+    pub fn is_command_allowed(&self, command: &str, subcommand: Option<&str>) -> bool {
         let cmd_lower = command.to_lowercase();
+
+        // Check subcommand-specific rules FIRST (most specific wins)
+        if let Some(sub) = subcommand {
+            let sub_lower = sub.to_lowercase();
+            for rule in &self.subcommand_rules {
+                if rule.command.to_lowercase() == cmd_lower
+                    && rule.subcommand.to_lowercase() == sub_lower
+                {
+                    return rule.allowed;
+                }
+            }
+        }
 
         // Explicit deny takes precedence
         if self.denied_commands.contains(&cmd_lower) {
             return false;
         }
 
+        // Get ALL categories a command belongs to
+        let categories = CommandCategory::all_for_command(&cmd_lower);
+
         // Check denied categories
-        if let Some(category) = CommandCategory::for_command(&cmd_lower) {
-            if self.denied_categories.contains(&category) {
+        for category in &categories {
+            if self.denied_categories.contains(category) {
                 // But check if explicitly allowed
                 if !self.allowed_commands.contains(&cmd_lower) {
                     return false;
@@ -178,9 +193,9 @@ impl CommandPermissions {
             return true;
         }
 
-        // Check allowed categories
-        if let Some(category) = CommandCategory::for_command(&cmd_lower) {
-            if self.allowed_categories.contains(&category) {
+        // Check allowed categories (any matching category grants access)
+        for category in &categories {
+            if self.allowed_categories.contains(category) {
                 return true;
             }
         }
@@ -221,10 +236,15 @@ impl CommandPermissions {
         self.denied_categories.insert(category);
         self.allowed_categories.remove(&category);
     }
+
+    /// Add a subcommand rule.
+    pub fn add_subcommand_rule(&mut self, rule: SubcommandRule) {
+        self.subcommand_rules.push(rule);
+    }
 }
 
 /// A complete set of permissions.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PermissionSet {
     /// Command permissions.
     pub commands: CommandPermissions,
@@ -392,5 +412,89 @@ mod tests {
         let all_perms = PermissionSet::allow_all();
         assert!(all_perms.check_key_access(b"anything", KeyAccessType::ReadWrite));
         assert!(all_perms.check_channel_access(b"any:channel"));
+    }
+
+    #[test]
+    fn test_subcommand_rule_priority() {
+        let mut perms = CommandPermissions::default();
+
+        // Allow all commands
+        perms.allow_all = true;
+
+        // But deny CONFIG|SET specifically
+        perms.add_subcommand_rule(SubcommandRule {
+            command: "config".to_string(),
+            subcommand: "set".to_string(),
+            allowed: false,
+        });
+
+        // CONFIG without subcommand should be allowed
+        assert!(perms.is_command_allowed("CONFIG", None));
+        // CONFIG GET should be allowed (no specific rule)
+        assert!(perms.is_command_allowed("CONFIG", Some("GET")));
+        // CONFIG SET should be denied (specific deny rule)
+        assert!(!perms.is_command_allowed("CONFIG", Some("SET")));
+    }
+
+    #[test]
+    fn test_subcommand_allow_specific() {
+        let mut perms = CommandPermissions::default();
+
+        // Deny config command
+        perms.deny_command("config");
+
+        // But allow CONFIG|GET specifically
+        perms.add_subcommand_rule(SubcommandRule {
+            command: "config".to_string(),
+            subcommand: "get".to_string(),
+            allowed: true,
+        });
+
+        // CONFIG without subcommand should be denied
+        assert!(!perms.is_command_allowed("CONFIG", None));
+        // CONFIG GET should be allowed (specific allow rule overrides)
+        assert!(perms.is_command_allowed("CONFIG", Some("GET")));
+        // CONFIG SET should be denied (no specific rule, falls back to command deny)
+        assert!(!perms.is_command_allowed("CONFIG", Some("SET")));
+    }
+
+    #[test]
+    fn test_subcommand_deny_specific() {
+        let mut perms = CommandPermissions::default();
+
+        // Allow config command
+        perms.allow_command("config");
+
+        // But deny CONFIG|SET specifically
+        perms.add_subcommand_rule(SubcommandRule {
+            command: "config".to_string(),
+            subcommand: "set".to_string(),
+            allowed: false,
+        });
+
+        // CONFIG without subcommand should be allowed
+        assert!(perms.is_command_allowed("CONFIG", None));
+        // CONFIG GET should be allowed (no specific rule, uses command allow)
+        assert!(perms.is_command_allowed("CONFIG", Some("GET")));
+        // CONFIG SET should be denied (specific deny rule)
+        assert!(!perms.is_command_allowed("CONFIG", Some("SET")));
+    }
+
+    #[test]
+    fn test_subcommand_case_insensitive() {
+        let mut perms = CommandPermissions::default();
+        perms.allow_all = true;
+
+        perms.add_subcommand_rule(SubcommandRule {
+            command: "config".to_string(),
+            subcommand: "set".to_string(),
+            allowed: false,
+        });
+
+        // All case variations should work
+        assert!(!perms.is_command_allowed("CONFIG", Some("SET")));
+        assert!(!perms.is_command_allowed("config", Some("set")));
+        assert!(!perms.is_command_allowed("Config", Some("Set")));
+        assert!(!perms.is_command_allowed("CONFIG", Some("set")));
     }
 }

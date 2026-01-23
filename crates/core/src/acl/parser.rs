@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use super::categories::CommandCategory;
 use super::error::AclError;
-use super::permissions::{ChannelPattern, KeyAccessType, KeyPattern};
+use super::permissions::{ChannelPattern, KeyAccessType, KeyPattern, PermissionSet, SubcommandRule};
 use super::user::User;
 
 /// Hash a password string using SHA256.
@@ -81,6 +81,14 @@ pub enum AclRule {
     AllCommands,
     /// Deny all commands (reset to no permissions).
     NoCommands,
+    /// Allow a specific subcommand (Redis 7.0+).
+    AllowSubcommand { command: String, subcommand: String },
+    /// Deny a specific subcommand (Redis 7.0+).
+    DenySubcommand { command: String, subcommand: String },
+    /// Add a selector with additional permissions (Redis 7.0+).
+    AddSelector(PermissionSet),
+    /// Clear all selectors (Redis 7.0+).
+    ClearSelectors,
 }
 
 impl AclRule {
@@ -101,6 +109,7 @@ impl AclRule {
             "resetchannels" => return Ok(AclRule::ResetChannels),
             "allcommands" | "+@all" => return Ok(AclRule::AllCommands),
             "nocommands" | "-@all" => return Ok(AclRule::NoCommands),
+            "clearselectors" => return Ok(AclRule::ClearSelectors),
             _ => {}
         }
 
@@ -166,6 +175,26 @@ impl AclRule {
             return Ok(AclRule::AddChannelPattern(ChannelPattern::new(pattern.to_string())));
         }
 
+        // Selector syntax: (rules)
+        if rule.starts_with('(') && rule.ends_with(')') {
+            let inner = &rule[1..rule.len() - 1];
+            if inner.is_empty() {
+                return Err(AclError::ParseError {
+                    modifier: rule.to_string(),
+                    reason: "Empty selector".to_string(),
+                });
+            }
+            // Check for nested parens (not allowed)
+            if inner.contains('(') || inner.contains(')') {
+                return Err(AclError::ParseError {
+                    modifier: rule.to_string(),
+                    reason: "Nested parentheses not allowed in selector".to_string(),
+                });
+            }
+            let perm_set = parse_selector_rules(inner)?;
+            return Ok(AclRule::AddSelector(perm_set));
+        }
+
         // Command rules
         if let Some(cmd) = rule.strip_prefix("+@") {
             if cmd.to_lowercase() == "all" {
@@ -196,6 +225,27 @@ impl AclRule {
                     reason: "Command name cannot be empty".to_string(),
                 });
             }
+            // Check for subcommand syntax: +command|subcommand
+            if let Some(pipe_pos) = cmd.find('|') {
+                let command = &cmd[..pipe_pos];
+                let subcommand = &cmd[pipe_pos + 1..];
+                if command.is_empty() {
+                    return Err(AclError::ParseError {
+                        modifier: rule.to_string(),
+                        reason: "Command name cannot be empty".to_string(),
+                    });
+                }
+                if subcommand.is_empty() {
+                    return Err(AclError::ParseError {
+                        modifier: rule.to_string(),
+                        reason: "Subcommand name cannot be empty".to_string(),
+                    });
+                }
+                return Ok(AclRule::AllowSubcommand {
+                    command: command.to_lowercase(),
+                    subcommand: subcommand.to_lowercase(),
+                });
+            }
             return Ok(AclRule::AllowCommand(cmd.to_lowercase()));
         }
 
@@ -204,6 +254,27 @@ impl AclRule {
                 return Err(AclError::ParseError {
                     modifier: rule.to_string(),
                     reason: "Command name cannot be empty".to_string(),
+                });
+            }
+            // Check for subcommand syntax: -command|subcommand
+            if let Some(pipe_pos) = cmd.find('|') {
+                let command = &cmd[..pipe_pos];
+                let subcommand = &cmd[pipe_pos + 1..];
+                if command.is_empty() {
+                    return Err(AclError::ParseError {
+                        modifier: rule.to_string(),
+                        reason: "Command name cannot be empty".to_string(),
+                    });
+                }
+                if subcommand.is_empty() {
+                    return Err(AclError::ParseError {
+                        modifier: rule.to_string(),
+                        reason: "Subcommand name cannot be empty".to_string(),
+                    });
+                }
+                return Ok(AclRule::DenySubcommand {
+                    command: command.to_lowercase(),
+                    subcommand: subcommand.to_lowercase(),
                 });
             }
             return Ok(AclRule::DenyCommand(cmd.to_lowercase()));
@@ -288,6 +359,26 @@ impl AclRule {
             AclRule::NoCommands => {
                 user.root_permissions.commands.reset();
             }
+            AclRule::AllowSubcommand { command, subcommand } => {
+                user.root_permissions.commands.subcommand_rules.push(SubcommandRule {
+                    command: command.clone(),
+                    subcommand: subcommand.clone(),
+                    allowed: true,
+                });
+            }
+            AclRule::DenySubcommand { command, subcommand } => {
+                user.root_permissions.commands.subcommand_rules.push(SubcommandRule {
+                    command: command.clone(),
+                    subcommand: subcommand.clone(),
+                    allowed: false,
+                });
+            }
+            AclRule::AddSelector(perm_set) => {
+                user.selectors.push(perm_set.clone());
+            }
+            AclRule::ClearSelectors => {
+                user.selectors.clear();
+            }
         }
     }
 }
@@ -299,6 +390,149 @@ pub fn parse_and_apply_rules(user: &mut User, rules: &[&str]) -> Result<(), AclE
         parsed.apply(user);
     }
     Ok(())
+}
+
+/// Parse selector rules (rules within parentheses) and return a PermissionSet.
+fn parse_selector_rules(rules_str: &str) -> Result<PermissionSet, AclError> {
+    let mut perm_set = PermissionSet::default();
+
+    for rule in rules_str.split_whitespace() {
+        // Key patterns
+        if let Some(pattern) = rule.strip_prefix("~") {
+            perm_set.add_key_pattern(KeyPattern::new(pattern.to_string()));
+            continue;
+        }
+
+        if let Some(pattern) = rule.strip_prefix("%R~") {
+            perm_set.add_key_pattern(KeyPattern::with_access(
+                pattern.to_string(),
+                KeyAccessType::Read,
+            ));
+            continue;
+        }
+
+        if let Some(pattern) = rule.strip_prefix("%W~") {
+            perm_set.add_key_pattern(KeyPattern::with_access(
+                pattern.to_string(),
+                KeyAccessType::Write,
+            ));
+            continue;
+        }
+
+        if let Some(pattern) = rule.strip_prefix("%RW~") {
+            perm_set.add_key_pattern(KeyPattern::with_access(
+                pattern.to_string(),
+                KeyAccessType::ReadWrite,
+            ));
+            continue;
+        }
+
+        // Channel patterns
+        if let Some(pattern) = rule.strip_prefix('&') {
+            perm_set.add_channel_pattern(ChannelPattern::new(pattern.to_string()));
+            continue;
+        }
+
+        // Command categories
+        if let Some(cat) = rule.strip_prefix("+@") {
+            if cat.to_lowercase() == "all" {
+                perm_set.commands.allow_all = true;
+            } else {
+                let category = CommandCategory::parse(cat).ok_or_else(|| AclError::ParseError {
+                    modifier: rule.to_string(),
+                    reason: format!("Unknown category '{}'", cat),
+                })?;
+                perm_set.commands.allow_category(category);
+            }
+            continue;
+        }
+
+        if let Some(cat) = rule.strip_prefix("-@") {
+            if cat.to_lowercase() == "all" {
+                perm_set.commands.reset();
+            } else {
+                let category = CommandCategory::parse(cat).ok_or_else(|| AclError::ParseError {
+                    modifier: rule.to_string(),
+                    reason: format!("Unknown category '{}'", cat),
+                })?;
+                perm_set.commands.deny_category(category);
+            }
+            continue;
+        }
+
+        // Commands (with potential subcommand)
+        if let Some(cmd) = rule.strip_prefix('+') {
+            if cmd.is_empty() {
+                return Err(AclError::ParseError {
+                    modifier: rule.to_string(),
+                    reason: "Command name cannot be empty".to_string(),
+                });
+            }
+            if let Some(pipe_pos) = cmd.find('|') {
+                let command = &cmd[..pipe_pos];
+                let subcommand = &cmd[pipe_pos + 1..];
+                if command.is_empty() || subcommand.is_empty() {
+                    return Err(AclError::ParseError {
+                        modifier: rule.to_string(),
+                        reason: "Command and subcommand names cannot be empty".to_string(),
+                    });
+                }
+                perm_set.commands.subcommand_rules.push(SubcommandRule {
+                    command: command.to_lowercase(),
+                    subcommand: subcommand.to_lowercase(),
+                    allowed: true,
+                });
+            } else {
+                perm_set.commands.allow_command(cmd);
+            }
+            continue;
+        }
+
+        if let Some(cmd) = rule.strip_prefix('-') {
+            if cmd.is_empty() {
+                return Err(AclError::ParseError {
+                    modifier: rule.to_string(),
+                    reason: "Command name cannot be empty".to_string(),
+                });
+            }
+            if let Some(pipe_pos) = cmd.find('|') {
+                let command = &cmd[..pipe_pos];
+                let subcommand = &cmd[pipe_pos + 1..];
+                if command.is_empty() || subcommand.is_empty() {
+                    return Err(AclError::ParseError {
+                        modifier: rule.to_string(),
+                        reason: "Command and subcommand names cannot be empty".to_string(),
+                    });
+                }
+                perm_set.commands.subcommand_rules.push(SubcommandRule {
+                    command: command.to_lowercase(),
+                    subcommand: subcommand.to_lowercase(),
+                    allowed: false,
+                });
+            } else {
+                perm_set.commands.deny_command(cmd);
+            }
+            continue;
+        }
+
+        // Allkeys/allchannels special keywords
+        if rule.eq_ignore_ascii_case("allkeys") {
+            perm_set.all_keys = true;
+            continue;
+        }
+
+        if rule.eq_ignore_ascii_case("allchannels") {
+            perm_set.all_channels = true;
+            continue;
+        }
+
+        return Err(AclError::ParseError {
+            modifier: rule.to_string(),
+            reason: "Unknown rule in selector".to_string(),
+        });
+    }
+
+    Ok(perm_set)
 }
 
 /// Parse an ACL file line (format: "user <username> <rules...>").
@@ -517,5 +751,145 @@ mod tests {
     fn test_unknown_rule() {
         let result = AclRule::parse("unknown_rule");
         assert!(matches!(result, Err(AclError::UnknownRule { .. })));
+    }
+
+    #[test]
+    fn test_parse_subcommand_allow() {
+        let result = AclRule::parse("+config|get");
+        assert!(matches!(
+            result,
+            Ok(AclRule::AllowSubcommand { command, subcommand })
+            if command == "config" && subcommand == "get"
+        ));
+
+        // Case insensitivity
+        let result = AclRule::parse("+CONFIG|GET");
+        assert!(matches!(
+            result,
+            Ok(AclRule::AllowSubcommand { command, subcommand })
+            if command == "config" && subcommand == "get"
+        ));
+    }
+
+    #[test]
+    fn test_parse_subcommand_deny() {
+        let result = AclRule::parse("-config|set");
+        assert!(matches!(
+            result,
+            Ok(AclRule::DenySubcommand { command, subcommand })
+            if command == "config" && subcommand == "set"
+        ));
+    }
+
+    #[test]
+    fn test_parse_invalid_subcommand() {
+        // Empty subcommand
+        assert!(AclRule::parse("+config|").is_err());
+        assert!(AclRule::parse("-config|").is_err());
+
+        // Empty command before pipe
+        assert!(AclRule::parse("+|get").is_err());
+        assert!(AclRule::parse("-|get").is_err());
+    }
+
+    #[test]
+    fn test_parse_selector_simple() {
+        let result = AclRule::parse("(~temp:* +@read)");
+        assert!(matches!(result, Ok(AclRule::AddSelector(perm_set)) if {
+            perm_set.key_patterns.len() == 1 &&
+            perm_set.key_patterns[0].pattern == "temp:*" &&
+            perm_set.commands.allowed_categories.contains(&CommandCategory::Read)
+        }));
+    }
+
+    #[test]
+    fn test_parse_selector_complex() {
+        let result = AclRule::parse("(~cache:* %R~data:* +@read -@write)");
+        assert!(matches!(result, Ok(AclRule::AddSelector(ref perm_set)) if {
+            perm_set.key_patterns.len() == 2 &&
+            perm_set.commands.allowed_categories.contains(&CommandCategory::Read) &&
+            perm_set.commands.denied_categories.contains(&CommandCategory::Write)
+        }));
+    }
+
+    #[test]
+    fn test_parse_selector_empty() {
+        assert!(AclRule::parse("()").is_err());
+    }
+
+    #[test]
+    fn test_parse_selector_nested_parens() {
+        assert!(AclRule::parse("((~foo:*))").is_err());
+        assert!(AclRule::parse("(~foo:* (+@read))").is_err());
+    }
+
+    #[test]
+    fn test_parse_clearselectors() {
+        assert_eq!(AclRule::parse("clearselectors"), Ok(AclRule::ClearSelectors));
+        assert_eq!(AclRule::parse("CLEARSELECTORS"), Ok(AclRule::ClearSelectors));
+    }
+
+    #[test]
+    fn test_apply_subcommand_rules() {
+        let mut user = User::new("test");
+
+        AclRule::AllowSubcommand {
+            command: "config".to_string(),
+            subcommand: "get".to_string(),
+        }.apply(&mut user);
+
+        assert_eq!(user.root_permissions.commands.subcommand_rules.len(), 1);
+        assert_eq!(user.root_permissions.commands.subcommand_rules[0].command, "config");
+        assert_eq!(user.root_permissions.commands.subcommand_rules[0].subcommand, "get");
+        assert!(user.root_permissions.commands.subcommand_rules[0].allowed);
+
+        AclRule::DenySubcommand {
+            command: "config".to_string(),
+            subcommand: "set".to_string(),
+        }.apply(&mut user);
+
+        assert_eq!(user.root_permissions.commands.subcommand_rules.len(), 2);
+        assert!(!user.root_permissions.commands.subcommand_rules[1].allowed);
+    }
+
+    #[test]
+    fn test_apply_selector() {
+        let mut user = User::new("test");
+
+        let mut perm_set = PermissionSet::default();
+        perm_set.add_key_pattern(KeyPattern::new("temp:*".to_string()));
+        perm_set.commands.allow_category(CommandCategory::Read);
+
+        AclRule::AddSelector(perm_set).apply(&mut user);
+
+        assert_eq!(user.selectors.len(), 1);
+        assert_eq!(user.selectors[0].key_patterns[0].pattern, "temp:*");
+    }
+
+    #[test]
+    fn test_apply_clear_selectors() {
+        let mut user = User::new("test");
+
+        // Add some selectors
+        let mut perm_set = PermissionSet::default();
+        perm_set.add_key_pattern(KeyPattern::new("temp:*".to_string()));
+        user.selectors.push(perm_set);
+        user.selectors.push(PermissionSet::default());
+
+        assert_eq!(user.selectors.len(), 2);
+
+        AclRule::ClearSelectors.apply(&mut user);
+
+        assert!(user.selectors.is_empty());
+    }
+
+    #[test]
+    fn test_selector_with_subcommand_rules() {
+        let result = AclRule::parse("(~temp:* +config|get -config|set)");
+        assert!(matches!(result, Ok(AclRule::AddSelector(ref perm_set)) if {
+            perm_set.commands.subcommand_rules.len() == 2 &&
+            perm_set.commands.subcommand_rules[0].allowed &&
+            !perm_set.commands.subcommand_rules[1].allowed
+        }));
     }
 }

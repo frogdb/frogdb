@@ -91,6 +91,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for detailed profiling infrastructure, optimization strategies, and implementation guidance.
 
 **Subsections:**
+
 - Profiling Infrastructure
 - Quick Wins
 - Memory Optimizations
@@ -98,16 +99,6 @@ See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for detailed profiling infrastructure, 
 - Data Structure Optimizations
 - Concurrency Optimizations
 - Advanced Optimizations
-
----
-
-## Phase 8: ACL Completion
-
-**Goal**: Full Redis ACL compatibility.
-
-- [ ] Subcommand-level ACL rules (e.g., allow CONFIG GET but deny CONFIG SET)
-- [ ] ACL selector syntax for granular key/channel permissions
-- [ ] Per-command ACL category enforcement
 
 ---
 

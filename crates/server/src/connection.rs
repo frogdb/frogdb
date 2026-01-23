@@ -323,6 +323,23 @@ fn convert_direction(dir: frogdb_protocol::Direction) -> frogdb_core::Direction 
     }
 }
 
+/// Commands that have subcommands (container commands in Redis terminology).
+const CONTAINER_COMMANDS: &[&str] = &[
+    "ACL", "CLIENT", "CONFIG", "CLUSTER", "DEBUG", "MEMORY", "MODULE",
+    "OBJECT", "SCRIPT", "SLOWLOG", "XGROUP", "XINFO", "COMMAND", "PUBSUB",
+    "FUNCTION", "LATENCY",
+];
+
+/// Extract subcommand from args for container commands.
+fn extract_subcommand(command: &str, args: &[Bytes]) -> Option<String> {
+    if CONTAINER_COMMANDS.iter().any(|c| c.eq_ignore_ascii_case(command)) {
+        args.first()
+            .map(|a| String::from_utf8_lossy(a).to_uppercase())
+    } else {
+        None
+    }
+}
+
 impl ConnectionHandler {
     /// Create a new connection handler.
     #[allow(clippy::too_many_arguments)]
@@ -656,12 +673,25 @@ impl ConnectionHandler {
         // Check command ACL permission (for commands not routed to route_and_execute)
         // Note: ACL command is exempt (users need ACL WHOAMI to check their identity)
         if let Some(user) = self.state.auth.user() {
-            if cmd_name_str != "ACL" && !user.check_command(&cmd_name_str, None) {
+            let subcommand = extract_subcommand(&cmd_name_str, &cmd.args);
+            if cmd_name_str != "ACL" && !user.check_command(&cmd_name_str, subcommand.as_deref()) {
                 let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                self.acl_manager.log().log_command_denied(&user.username, &client_info, &cmd_name_str);
+                // Log with subcommand if present
+                let log_cmd = if let Some(ref sub) = subcommand {
+                    format!("{}|{}", cmd_name_str.to_lowercase(), sub.to_lowercase())
+                } else {
+                    cmd_name_str.to_lowercase()
+                };
+                self.acl_manager.log().log_command_denied(&user.username, &client_info, &log_cmd);
+                // Return error with subcommand in message if present
+                let err_cmd = if let Some(ref sub) = subcommand {
+                    format!("{} {}", cmd_name_str.to_lowercase(), sub.to_lowercase())
+                } else {
+                    cmd_name_str.to_lowercase()
+                };
                 return vec![Response::error(format!(
                     "NOPERM this user has no permissions to run the '{}' command",
-                    cmd_name_str.to_lowercase()
+                    err_cmd
                 ))];
             }
         }
@@ -1537,12 +1567,16 @@ impl ConnectionHandler {
         // Extract keys for same-slot validation
         let keys = handler.keys(&cmd.args);
 
-        // Check key permissions
+        // Check key permissions with command context
+        // For selectors to work correctly, we must check that BOTH the command
+        // AND the key are allowed within the same permission context
         if let Some(user) = self.state.auth.user() {
             if !keys.is_empty() {
                 let access_type = key_access_type_for_flags(handler.flags());
+                let cmd_name = handler.name();
+                let subcommand = extract_subcommand(cmd_name, &cmd.args);
                 for key in &keys {
-                    if !user.check_key_access(key, access_type) {
+                    if !user.check_command_with_key(cmd_name, subcommand.as_deref(), key, access_type) {
                         return Response::error(
                             "NOPERM this user has no permissions to access one of the keys used as arguments"
                         );
@@ -1623,12 +1657,15 @@ impl ConnectionHandler {
         // Extract keys for routing
         let keys = handler.keys(&cmd.args);
 
-        // Check key permissions
+        // Check key permissions with command context
+        // For selectors to work correctly, we must check that BOTH the command
+        // AND the key are allowed within the same permission context
         if let Some(user) = self.state.auth.user() {
             if !keys.is_empty() {
                 let access_type = key_access_type_for_flags(handler.flags());
+                let subcommand = extract_subcommand(&cmd_name_str, &cmd.args);
                 for key in &keys {
-                    if !user.check_key_access(key, access_type) {
+                    if !user.check_command_with_key(&cmd_name_str, subcommand.as_deref(), key, access_type) {
                         let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
                         let key_str = String::from_utf8_lossy(key);
                         self.acl_manager.log().log_key_denied(
