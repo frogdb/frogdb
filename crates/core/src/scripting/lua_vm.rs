@@ -1,14 +1,121 @@
 //! Lua VM with sandboxing and resource limits.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use bytes::Bytes;
+use frogdb_protocol::{ProtocolVersion, Response};
 use mlua::{Function, HookTriggers, Lua, Result as LuaResult, StdLib, Value, VmState};
+use tokio::sync::mpsc;
 
 use super::config::ScriptingConfig;
 use super::error::ScriptError;
+use crate::command::CommandContext;
+use crate::registry::CommandRegistry;
+use crate::shard::ShardMessage;
+use crate::store::Store;
+
+/// Context for executing commands during script execution.
+///
+/// This struct holds raw pointers to the store and registry that are valid
+/// for the duration of a single script execution. The pointers are set before
+/// script execution begins and cleared immediately after.
+pub struct CommandExecutionContext {
+    /// Raw pointer to the store (valid for script duration).
+    pub store_ptr: *mut dyn Store,
+    /// Raw pointer to the command registry.
+    pub registry_ptr: *const CommandRegistry,
+    /// Shard message senders for cross-shard operations.
+    pub shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    /// This shard's ID.
+    pub shard_id: usize,
+    /// Total number of shards.
+    pub num_shards: usize,
+    /// Connection ID for this script execution.
+    pub conn_id: u64,
+    /// Protocol version for response encoding.
+    pub protocol_version: ProtocolVersion,
+}
+
+// SAFETY: CommandExecutionContext is only accessed from a single shard thread
+// during script execution. The raw pointers are valid for the duration of
+// script execution, which is synchronous and single-threaded within a shard.
+unsafe impl Send for CommandExecutionContext {}
+unsafe impl Sync for CommandExecutionContext {}
+
+/// Accessor handle for command execution context.
+///
+/// This is a clonable handle that can be moved into Lua closures to allow
+/// them to execute Redis commands. It provides safe access to the underlying
+/// command execution context.
+#[derive(Clone)]
+pub struct VmContextAccessor {
+    /// Command execution context (set during script execution).
+    cmd_ctx: Arc<RwLock<Option<CommandExecutionContext>>>,
+    /// Execution state for tracking writes and other state.
+    state: Arc<Mutex<ExecutionState>>,
+}
+
+impl VmContextAccessor {
+    /// Execute a Redis command and return the response.
+    ///
+    /// # Safety
+    /// This method must only be called during script execution when the
+    /// command context pointers are valid.
+    pub fn execute_command(&self, parts: &[Bytes]) -> Result<Response, String> {
+        let ctx_guard = self.cmd_ctx.read().unwrap();
+        let exec_ctx = ctx_guard
+            .as_ref()
+            .ok_or_else(|| "ERR command execution context not available".to_string())?;
+
+        // SAFETY: These pointers are valid during script execution, which is
+        // synchronous and single-threaded within a shard.
+        let store = unsafe { &mut *exec_ctx.store_ptr };
+        let registry = unsafe { &*exec_ctx.registry_ptr };
+
+        // Get the command name
+        if parts.is_empty() {
+            return Err("ERR wrong number of arguments for redis command".to_string());
+        }
+        let cmd_name = String::from_utf8_lossy(&parts[0]).to_uppercase();
+
+        // Look up the command handler
+        let handler = registry
+            .get(&cmd_name)
+            .ok_or_else(|| format!("ERR unknown command '{}'", cmd_name))?;
+
+        // Validate arity (args count excludes command name)
+        let args = &parts[1..];
+        if !handler.arity().check(args.len()) {
+            return Err(format!(
+                "ERR wrong number of arguments for '{}' command",
+                handler.name()
+            ));
+        }
+
+        // Create command context
+        let mut ctx = CommandContext::new(
+            store,
+            &exec_ctx.shard_senders,
+            exec_ctx.shard_id,
+            exec_ctx.num_shards,
+            exec_ctx.conn_id,
+            exec_ctx.protocol_version,
+        );
+
+        // Execute the command
+        match handler.execute(&mut ctx, args) {
+            Ok(response) => Ok(response),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    /// Mark the script as having performed a write operation.
+    pub fn mark_write(&self) {
+        self.state.lock().unwrap().has_writes = true;
+    }
+}
 
 /// Execution state for tracking script execution.
 #[derive(Debug, Default)]
@@ -66,9 +173,11 @@ pub struct LuaVm {
     /// Configuration.
     config: ScriptingConfig,
     /// Execution state (thread-safe).
-    state: Mutex<ExecutionState>,
+    state: Arc<Mutex<ExecutionState>>,
     /// Kill flag (thread-safe for use in hooks).
     kill_flag: Arc<AtomicBool>,
+    /// Command execution context (set during script execution).
+    cmd_ctx: Arc<RwLock<Option<CommandExecutionContext>>>,
 }
 
 impl LuaVm {
@@ -91,10 +200,11 @@ impl LuaVm {
                 .map_err(|e| ScriptError::Internal(format!("Failed to set memory limit: {}", e)))?;
         }
 
-        let state = Mutex::new(ExecutionState::default());
+        let state = Arc::new(Mutex::new(ExecutionState::default()));
         let kill_flag = Arc::new(AtomicBool::new(false));
+        let cmd_ctx = Arc::new(RwLock::new(None));
 
-        let vm = Self { lua, config, state, kill_flag };
+        let vm = Self { lua, config, state, kill_flag, cmd_ctx };
 
         // Apply sandbox restrictions
         vm.apply_sandbox()?;
@@ -221,7 +331,9 @@ impl LuaVm {
         let keys_table = self.lua.create_table()
             .map_err(|e| ScriptError::Internal(format!("Failed to create KEYS table: {}", e)))?;
         for (i, key) in keys.iter().enumerate() {
-            keys_table.set(i + 1, key.as_ref())
+            let lua_str = self.lua.create_string(key.as_ref())
+                .map_err(|e| ScriptError::Internal(format!("Failed to create KEYS[{}] string: {}", i + 1, e)))?;
+            keys_table.set(i + 1, lua_str)
                 .map_err(|e| ScriptError::Internal(format!("Failed to set KEYS[{}]: {}", i + 1, e)))?;
         }
         globals.set("KEYS", keys_table)
@@ -231,7 +343,9 @@ impl LuaVm {
         let argv_table = self.lua.create_table()
             .map_err(|e| ScriptError::Internal(format!("Failed to create ARGV table: {}", e)))?;
         for (i, arg) in argv.iter().enumerate() {
-            argv_table.set(i + 1, arg.as_ref())
+            let lua_str = self.lua.create_string(arg.as_ref())
+                .map_err(|e| ScriptError::Internal(format!("Failed to create ARGV[{}] string: {}", i + 1, e)))?;
+            argv_table.set(i + 1, lua_str)
                 .map_err(|e| ScriptError::Internal(format!("Failed to set ARGV[{}]: {}", i + 1, e)))?;
         }
         globals.set("ARGV", argv_table)
@@ -291,8 +405,26 @@ impl LuaVm {
     }
 
     /// Get the execution state.
-    pub fn state(&self) -> &Mutex<ExecutionState> {
+    pub fn state(&self) -> &Arc<Mutex<ExecutionState>> {
         &self.state
+    }
+
+    /// Set the command execution context for the duration of script execution.
+    pub fn set_command_context(&self, ctx: CommandExecutionContext) {
+        *self.cmd_ctx.write().unwrap() = Some(ctx);
+    }
+
+    /// Clear the command execution context after script execution.
+    pub fn clear_command_context(&self) {
+        *self.cmd_ctx.write().unwrap() = None;
+    }
+
+    /// Create a context accessor that can be used in Lua closures.
+    pub fn create_context_accessor(&self) -> VmContextAccessor {
+        VmContextAccessor {
+            cmd_ctx: self.cmd_ctx.clone(),
+            state: self.state.clone(),
+        }
     }
 
     /// Mark the script as having performed writes.
@@ -333,6 +465,31 @@ impl LuaVm {
 
         redis_table.set("pcall", pcall_fn)
             .map_err(|e| ScriptError::Internal(format!("Failed to set redis.pcall: {}", e)))?;
+
+        // Add redis.log function
+        let log_fn = self.lua.create_function(|_, (level, message): (i32, String)| {
+            match level {
+                0 => tracing::debug!(target: "lua_script", "{}", message),
+                1 => tracing::trace!(target: "lua_script", "{}", message),
+                2 => tracing::info!(target: "lua_script", "{}", message),
+                3 => tracing::warn!(target: "lua_script", "{}", message),
+                _ => tracing::info!(target: "lua_script", "{}", message),
+            }
+            Ok(())
+        }).map_err(|e| ScriptError::Internal(format!("Failed to create log fn: {}", e)))?;
+
+        redis_table.set("log", log_fn)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set redis.log: {}", e)))?;
+
+        // Add log level constants
+        redis_table.set("LOG_DEBUG", 0i32)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set LOG_DEBUG: {}", e)))?;
+        redis_table.set("LOG_VERBOSE", 1i32)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set LOG_VERBOSE: {}", e)))?;
+        redis_table.set("LOG_NOTICE", 2i32)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set LOG_NOTICE: {}", e)))?;
+        redis_table.set("LOG_WARNING", 3i32)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set LOG_WARNING: {}", e)))?;
 
         globals.set("redis", redis_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set redis: {}", e)))?;

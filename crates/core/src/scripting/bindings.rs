@@ -28,7 +28,6 @@ pub fn is_forbidden_in_script(cmd: &str) -> Option<&'static str> {
 }
 
 /// Check if a command is a write command.
-#[allow(dead_code)]
 pub fn is_write_command(cmd: &str) -> bool {
     match cmd.to_uppercase().as_str() {
         // String writes
@@ -64,7 +63,6 @@ pub fn validate_key_access(key: &[u8], declared_keys: &[Bytes]) -> Result<(), Sc
 }
 
 /// Convert a RESP Response to a Lua Value.
-#[allow(dead_code)]
 pub fn response_to_lua(lua: &mlua::Lua, response: Response) -> LuaResult<Value> {
     match response {
         Response::Simple(s) => {
