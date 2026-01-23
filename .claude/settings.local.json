@@ -35,7 +35,8 @@
       "Bash(cargo check:*)",
       "Bash(cargo clean:*)",
       "Bash(docker build:*)",
-      "Bash(redis-benchmark:*)"
+      "Bash(redis-benchmark:*)",
+      "WebFetch(domain:tokio.rs)"
     ]
   },
   "enableAllProjectMcpServers": true,
