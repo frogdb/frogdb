@@ -187,28 +187,6 @@ stub_command!(
 );
 
 // =============================================================================
-// Memory Commands
-// =============================================================================
-
-stub_command!(
-    MemoryCommand,
-    "MEMORY",
-    Arity::AtLeast(1),
-    CommandFlags::READONLY | CommandFlags::RANDOM
-);
-
-// =============================================================================
-// Latency Commands
-// =============================================================================
-
-stub_command!(
-    LatencyCommand,
-    "LATENCY",
-    Arity::AtLeast(1),
-    CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
-);
-
-// =============================================================================
 // Module Commands
 // =============================================================================
 

@@ -14,6 +14,7 @@ pub mod geo;
 pub mod glob;
 pub mod hyperloglog;
 pub mod json;
+pub mod latency;
 pub mod noop;
 pub mod persistence;
 pub mod slowlog;
@@ -52,8 +53,8 @@ pub use pubsub::{
     MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 pub use shard::{
-    shard_for_key, slot_for_key, PartialResult, ScatterOp, ShardMessage, ShardWorker,
-    ShardWaitQueue, TransactionResult, WaitEntry, REDIS_CLUSTER_SLOTS,
+    shard_for_key, slot_for_key, PartialResult, ScatterOp, ShardMemoryStats, ShardMessage,
+    ShardWorker, ShardWaitQueue, TransactionResult, WaitEntry, REDIS_CLUSTER_SLOTS,
 };
 pub use store::{HashMapStore, Store};
 pub use types::{
@@ -92,6 +93,10 @@ pub use json::{JsonError, JsonLimits, JsonType, JsonValue, DEFAULT_JSON_MAX_DEPT
 pub use slowlog::{
     SlowLog, SlowLogEntry, DEFAULT_SLOWLOG_LOG_SLOWER_THAN, DEFAULT_SLOWLOG_MAX_ARG_LEN,
     DEFAULT_SLOWLOG_MAX_LEN,
+};
+pub use latency::{
+    CommandHistogram, EventHistory, EventStats, LatencyEvent, LatencyMonitor, LatencySample,
+    generate_latency_graph, DEFAULT_LATENCY_HISTORY_LEN, DEFAULT_LATENCY_THRESHOLD_MS,
 };
 pub use timeseries::{
     Aggregation, CompressedChunk, DownsampleError, DownsampleManager, DownsampleRule,
