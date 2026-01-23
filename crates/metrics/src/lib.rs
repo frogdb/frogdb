@@ -13,6 +13,9 @@ pub mod prometheus_recorder;
 pub mod server;
 pub mod system;
 
+#[cfg(feature = "testing")]
+pub mod testing;
+
 use std::sync::Arc;
 use std::time::Instant;
 

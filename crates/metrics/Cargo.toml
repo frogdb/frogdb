@@ -7,6 +7,10 @@ authors.workspace = true
 repository.workspace = true
 description = "Metrics and observability for FrogDB"
 
+[features]
+default = []
+testing = []
+
 [dependencies]
 frogdb-core = { path = "../core" }
 
@@ -52,3 +56,4 @@ redis-protocol = "5"
 futures = "0.3"
 tokio-util = { version = "0.7", features = ["codec"] }
 bytes = { workspace = true }
+frogdb-metrics = { path = ".", features = ["testing"] }

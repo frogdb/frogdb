@@ -3,6 +3,7 @@
 //! These tests start a real server and connect to it using the RESP protocol.
 
 use bytes::Bytes;
+use frogdb_metrics::testing::{get_counter, get_gauge, get_histogram_count};
 use frogdb_protocol::Response;
 use frogdb_server::{Config, Server};
 use futures::{SinkExt, StreamExt};
@@ -145,6 +146,21 @@ impl TestServer {
         self.metrics_addr
     }
 
+    /// Get the metrics URL.
+    fn metrics_url(&self, path: &str) -> String {
+        format!("http://{}{}", self.metrics_addr, path)
+    }
+
+    /// Fetch metrics as raw Prometheus text format.
+    async fn fetch_metrics(&self) -> String {
+        reqwest::get(self.metrics_url("/metrics"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+    }
+
     /// Shutdown the test server.
     async fn shutdown(self) {
         let _ = self.shutdown_tx.send(());
@@ -252,6 +268,11 @@ async fn test_set_get() {
     let server = TestServer::start().await;
     let mut client = server.connect().await;
 
+    // Get baseline metrics
+    let before = server.fetch_metrics().await;
+    let set_before = get_counter(&before, "frogdb_commands_total", &[("command", "SET")]);
+    let get_before = get_counter(&before, "frogdb_commands_total", &[("command", "GET")]);
+
     // SET
     let response = client.command(&["SET", "foo", "bar"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("OK")));
@@ -259,6 +280,15 @@ async fn test_set_get() {
     // GET
     let response = client.command(&["GET", "foo"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("bar"))));
+
+    // Verify metrics recorded
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = server.fetch_metrics().await;
+    let set_after = get_counter(&after, "frogdb_commands_total", &[("command", "SET")]);
+    let get_after = get_counter(&after, "frogdb_commands_total", &[("command", "GET")]);
+
+    assert_eq!(set_after, set_before + 1.0, "SET command should be counted");
+    assert_eq!(get_after, get_before + 1.0, "GET command should be counted");
 
     server.shutdown().await;
 }
@@ -7745,6 +7775,136 @@ async fn test_config_set_immutable_param() {
         }
         _ => panic!("Expected error response for immutable param"),
     }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Metrics Assertion Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_connection_metrics_tracking() {
+    let server = TestServer::start().await;
+
+    // Check initial state - no client connections
+    let initial = server.fetch_metrics().await;
+    let initial_current = get_gauge(&initial, "frogdb_connections_current", &[]);
+
+    // Connect a client
+    let mut client1 = server.connect().await;
+    client1.command(&["PING"]).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let after_one = server.fetch_metrics().await;
+    let current_after_one = get_gauge(&after_one, "frogdb_connections_current", &[]);
+    assert!(
+        current_after_one > initial_current,
+        "Current connections should increase after client connects"
+    );
+
+    // Connect a second client
+    let mut client2 = server.connect().await;
+    client2.command(&["PING"]).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let after_two = server.fetch_metrics().await;
+    let current_after_two = get_gauge(&after_two, "frogdb_connections_current", &[]);
+    assert!(
+        current_after_two > current_after_one,
+        "Current connections should increase with second client"
+    );
+
+    // Verify total connections counter incremented
+    let total = get_counter(&after_two, "frogdb_connections_total", &[]);
+    assert!(total >= 2.0, "Total connections should be at least 2");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_dbsize_tracks_creates_and_deletes() {
+    // Note: frogdb_keys_total is collected every 10 seconds, so we use DBSIZE command
+    // to verify key count tracking, which is immediate.
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Get baseline via DBSIZE
+    let response = client.command(&["DBSIZE"]).await;
+    let baseline = match response {
+        Response::Integer(n) => n,
+        _ => panic!("Expected integer response"),
+    };
+
+    // Create keys
+    for i in 0..5 {
+        client
+            .command(&["SET", &format!("metrics_test:{}", i), "value"])
+            .await;
+    }
+
+    let response = client.command(&["DBSIZE"]).await;
+    let after_creates = match response {
+        Response::Integer(n) => n,
+        _ => panic!("Expected integer response"),
+    };
+    assert_eq!(
+        after_creates,
+        baseline + 5,
+        "DBSIZE should increase by 5"
+    );
+
+    // Delete keys
+    for i in 0..5 {
+        client.command(&["DEL", &format!("metrics_test:{}", i)]).await;
+    }
+
+    let response = client.command(&["DBSIZE"]).await;
+    let after_deletes = match response {
+        Response::Integer(n) => n,
+        _ => panic!("Expected integer response"),
+    };
+    assert_eq!(
+        after_deletes, baseline,
+        "DBSIZE should return to baseline after deletions"
+    );
+
+    // Verify the keys_total metric is present in metrics output
+    let metrics = server.fetch_metrics().await;
+    assert!(
+        metrics.contains("frogdb_keys_total"),
+        "Should have frogdb_keys_total metric"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_command_duration_histogram() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Get baseline histogram count
+    let before = server.fetch_metrics().await;
+    let ping_count_before =
+        get_histogram_count(&before, "frogdb_commands_duration_seconds", &[("command", "PING")]);
+
+    // Execute multiple PING commands
+    for _ in 0..10 {
+        client.command(&["PING"]).await;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Verify histogram recorded the commands
+    let after = server.fetch_metrics().await;
+    let ping_count_after =
+        get_histogram_count(&after, "frogdb_commands_duration_seconds", &[("command", "PING")]);
+
+    assert_eq!(
+        ping_count_after,
+        ping_count_before + 10,
+        "Histogram count should increase by 10 PING commands"
+    );
 
     server.shutdown().await;
 }
