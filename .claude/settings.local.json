@@ -34,7 +34,8 @@
       "Bash(cargo clippy:*)",
       "Bash(cargo check:*)",
       "Bash(cargo clean:*)",
-      "Bash(docker build:*)"
+      "Bash(docker build:*)",
+      "Bash(redis-benchmark:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
