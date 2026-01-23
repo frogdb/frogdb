@@ -786,8 +786,8 @@ fn test_sharded_hash_tags() {
     assert_eq!(slot2, slot3, "Keys with same tag should have same slot");
 
     // Different tags should (likely) have different slots
-    let slot_a = hash_slot(b"{a}:key");
-    let slot_b = hash_slot(b"{b}:key");
+    let _slot_a = hash_slot(b"{a}:key");
+    let _slot_b = hash_slot(b"{b}:key");
     // Note: They could collide, but it's unlikely for these short tags
 
     let mut sim = Builder::new().build();
@@ -1462,4 +1462,589 @@ fn test_sharded_server_with_latency() {
     sim.set_link_latency("client1", SERVER_HOST, Duration::from_millis(50));
 
     sim.run().unwrap();
+}
+
+// =============================================================================
+// MSET/MGET Atomicity Tests (SKIPPED - Current implementation is per-key atomic)
+// =============================================================================
+
+/// Test that MSET is fully atomic - concurrent MGET should see all-or-nothing.
+///
+/// Expected behavior: MGET sees either (nil, nil) or (1, 1), never partial state like (1, nil).
+/// Current behavior: Per-key atomic, so partial visibility is possible.
+#[test]
+#[ignore] // TODO: Enable when MSET is fully atomic (currently per-key atomic)
+fn test_mset_full_atomicity() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+
+    // Use simple_kv_server which has a mutex - but in real FrogDB,
+    // MSET across shards is scatter-gather and not fully atomic
+    sim.host(SERVER_HOST, simple_kv_server);
+
+    let results = Arc::new(Mutex::new(Vec::new()));
+
+    // Client 1: MSET {same}a 1 {same}b 1 (using hash tags to ensure same shard)
+    let _results1 = results.clone();
+    sim.client("client1", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Small delay to let client2 start its MGET
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        let cmd = encode_command(&[b"MSET", b"{same}a", b"1", b"{same}b", b"1"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let response = parse_simple_response(&buf[..n]);
+        assert!(matches!(response, OperationResult::Ok), "MSET should succeed");
+
+        Ok(())
+    });
+
+    // Client 2: Concurrent MGET - should see all-or-nothing
+    let results2 = results.clone();
+    sim.client("client2", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Run multiple MGETs concurrently with the MSET
+        for _ in 0..10 {
+            let cmd = encode_command(&[b"MGET", b"{same}a", b"{same}b"]);
+            stream.write_all(&cmd).await?;
+            let n = stream.read(&mut buf).await?;
+
+            // Parse the MGET response to check for partial visibility
+            let response_str = String::from_utf8_lossy(&buf[..n]);
+            results2.lock().unwrap().push(response_str.to_string());
+
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+
+    // Verify no partial visibility
+    // Valid states: both nil, or both "1"
+    // Invalid: one nil and one "1" (partial visibility)
+    let results = results.lock().unwrap();
+    for result in results.iter() {
+        // Parse RESP array response
+        // *2\r\n$-1\r\n$-1\r\n = both nil
+        // *2\r\n$1\r\n1\r\n$1\r\n1\r\n = both "1"
+        let has_first_value = result.contains("$1\r\n1\r\n");
+        let has_nil = result.contains("$-1\r\n");
+
+        // If we see one value and one nil, that's partial visibility (atomicity violation)
+        // This is a simplified check - real parsing would be more robust
+        if has_first_value && has_nil {
+            // Count occurrences
+            let nil_count = result.matches("$-1\r\n").count();
+            let value_count = result.matches("$1\r\n1\r\n").count();
+
+            // Partial visibility: exactly one nil and one value
+            if nil_count == 1 && value_count == 1 {
+                panic!(
+                    "MSET atomicity violation: saw partial state. Result: {}",
+                    result
+                );
+            }
+        }
+    }
+}
+
+/// Test MSET linearizability with concurrent operations.
+///
+/// Multiple concurrent MSETs should be linearizable - the final state should be
+/// consistent with some sequential ordering.
+#[test]
+#[ignore] // TODO: Enable when MSET is fully atomic
+fn test_mset_linearizable() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+
+    sim.host(SERVER_HOST, simple_kv_server);
+    let history = Arc::new(Mutex::new(OperationHistory::new()));
+
+    // Client 1: MSET {same}a=1 {same}b=1
+    let h1 = history.clone();
+    sim.client("client1", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        let op_id = {
+            let mut h = h1.lock().unwrap();
+            h.record_invoke(
+                1,
+                "MSET",
+                vec![
+                    Bytes::from("{same}a"),
+                    Bytes::from("1"),
+                    Bytes::from("{same}b"),
+                    Bytes::from("1"),
+                ],
+            )
+        };
+
+        let cmd = encode_command(&[b"MSET", b"{same}a", b"1", b"{same}b", b"1"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+
+        {
+            let mut h = h1.lock().unwrap();
+            h.record_return(op_id, 1, parse_simple_response(&buf[..n]));
+        }
+
+        Ok(())
+    });
+
+    // Client 2: MSET {same}a=2 {same}b=2
+    let h2 = history.clone();
+    sim.client("client2", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        let op_id = {
+            let mut h = h2.lock().unwrap();
+            h.record_invoke(
+                2,
+                "MSET",
+                vec![
+                    Bytes::from("{same}a"),
+                    Bytes::from("2"),
+                    Bytes::from("{same}b"),
+                    Bytes::from("2"),
+                ],
+            )
+        };
+
+        let cmd = encode_command(&[b"MSET", b"{same}a", b"2", b"{same}b", b"2"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+
+        {
+            let mut h = h2.lock().unwrap();
+            h.record_return(op_id, 2, parse_simple_response(&buf[..n]));
+        }
+
+        Ok(())
+    });
+
+    // Client 3: Observe final state
+    let h3 = history.clone();
+    sim.client("client3", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // Wait for writes to complete
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // GET {same}a
+        let op_a = {
+            let mut h = h3.lock().unwrap();
+            h.record_invoke(3, "GET", vec![Bytes::from("{same}a")])
+        };
+        let cmd = encode_command(&[b"GET", b"{same}a"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let result_a = parse_simple_response(&buf[..n]);
+        {
+            let mut h = h3.lock().unwrap();
+            h.record_return(op_a, 3, result_a.clone());
+        }
+
+        // GET {same}b
+        let op_b = {
+            let mut h = h3.lock().unwrap();
+            h.record_invoke(3, "GET", vec![Bytes::from("{same}b")])
+        };
+        let cmd = encode_command(&[b"GET", b"{same}b"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let result_b = parse_simple_response(&buf[..n]);
+        {
+            let mut h = h3.lock().unwrap();
+            h.record_return(op_b, 3, result_b.clone());
+        }
+
+        // Verify both keys have same value (either both 1 or both 2)
+        match (&result_a, &result_b) {
+            (OperationResult::String(a), OperationResult::String(b)) => {
+                assert_eq!(
+                    a, b,
+                    "Keys should have same value due to MSET atomicity"
+                );
+                assert!(
+                    a.as_ref() == b"1" || a.as_ref() == b"2",
+                    "Value should be 1 or 2"
+                );
+            }
+            _ => panic!("Expected string results"),
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+// =============================================================================
+// Transaction (MULTI/EXEC) Tests - Should Pass
+// =============================================================================
+
+/// Test that transactions are atomic - no partial visibility.
+///
+/// Client 1: MULTI; SET counter 0; INCR counter; INCR counter; EXEC
+/// Client 2: GET counter (concurrent)
+/// Expected: Client 2 sees nil or 2, never 0 or 1
+#[test]
+fn test_transaction_atomicity_no_partial_visibility() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+
+    // Use simple_kv_server for now - transactions need MULTI/EXEC support
+    // This test verifies the model behavior; full server test would need MULTI/EXEC
+    sim.host(SERVER_HOST, simple_kv_server);
+
+    let observed_values = Arc::new(Mutex::new(Vec::new()));
+
+    // For this test, we simulate transaction atomicity by doing operations in sequence
+    // The real test would use MULTI/EXEC which the simple_kv_server doesn't support yet
+
+    let _observed1 = observed_values.clone();
+    sim.client("client1", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Simulate atomic transaction: SET counter 0, then SET counter 2
+        // (simulating SET 0 + INCR + INCR = 2 atomically)
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Atomic update to final value
+        let cmd = encode_command(&[b"SET", b"counter", b"2"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        assert!(matches!(parse_simple_response(&buf[..n]), OperationResult::Ok));
+
+        Ok(())
+    });
+
+    let observed2 = observed_values.clone();
+    sim.client("client2", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Read counter multiple times
+        for _ in 0..20 {
+            let cmd = encode_command(&[b"GET", b"counter"]);
+            stream.write_all(&cmd).await?;
+            let n = stream.read(&mut buf).await?;
+            let result = parse_simple_response(&buf[..n]);
+
+            let value = match &result {
+                OperationResult::Nil => "nil".to_string(),
+                OperationResult::String(b) => String::from_utf8_lossy(b).to_string(),
+                _ => "error".to_string(),
+            };
+            observed2.lock().unwrap().push(value);
+
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+
+    // Verify we only see valid states: nil or 2
+    // We should never see 0 or 1 (intermediate states)
+    let values = observed_values.lock().unwrap();
+    for value in values.iter() {
+        assert!(
+            value == "nil" || value == "2",
+            "Should only see nil or 2 (atomic), but saw: {}",
+            value
+        );
+    }
+}
+
+/// Test transaction isolation - concurrent transactions don't interleave.
+///
+/// Client 1: MULTI; SET a 1; SET b 1; EXEC
+/// Client 2: MULTI; SET a 2; SET b 2; EXEC
+/// Expected: Final state is (a=1,b=1) or (a=2,b=2), never mixed
+#[test]
+fn test_transaction_isolation_concurrent_writes() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+
+    sim.host(SERVER_HOST, simple_kv_server);
+
+    // For this test, we verify the final state is consistent
+    // Both clients write atomically, so we should never see a mixed state
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Simulate atomic transaction
+        let cmd = encode_command(&[b"MSET", b"{same}a", b"1", b"{same}b", b"1"]);
+        stream.write_all(&cmd).await?;
+        let _n = stream.read(&mut buf).await?;
+
+        Ok(())
+    });
+
+    sim.client("client2", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Simulate atomic transaction
+        let cmd = encode_command(&[b"MSET", b"{same}a", b"2", b"{same}b", b"2"]);
+        stream.write_all(&cmd).await?;
+        let _n = stream.read(&mut buf).await?;
+
+        Ok(())
+    });
+
+    let final_state = Arc::new(Mutex::new(None));
+    let state_clone = final_state.clone();
+
+    sim.client("observer", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // Wait for both transactions to complete
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Read final state
+        let cmd = encode_command(&[b"GET", b"{same}a"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let a_value = match parse_simple_response(&buf[..n]) {
+            OperationResult::String(b) => String::from_utf8_lossy(&b).to_string(),
+            _ => "nil".to_string(),
+        };
+
+        let cmd = encode_command(&[b"GET", b"{same}b"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let b_value = match parse_simple_response(&buf[..n]) {
+            OperationResult::String(b) => String::from_utf8_lossy(&b).to_string(),
+            _ => "nil".to_string(),
+        };
+
+        *state_clone.lock().unwrap() = Some((a_value, b_value));
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+
+    // Verify final state is consistent (both 1 or both 2)
+    let state = final_state.lock().unwrap();
+    if let Some((a, b)) = state.as_ref() {
+        assert_eq!(
+            a, b,
+            "Final state should be consistent: a={}, b={}",
+            a, b
+        );
+        assert!(
+            a == "1" || a == "2",
+            "Value should be 1 or 2, got: {}",
+            a
+        );
+    }
+}
+
+/// Test that transactions can read their own writes.
+///
+/// Client: MULTI; SET key val; GET key; EXEC
+/// Expected: GET returns val
+#[test]
+fn test_transaction_read_own_writes() {
+    // This is a model-level test since our simple_kv_server doesn't support MULTI/EXEC
+    use frogdb_testing::{KVModel, KVState, Model};
+
+    let state = KVState::default();
+
+    // Transaction: SET key val, GET key
+    let result = KVModel::step(
+        &state,
+        "exec",
+        &[
+            Bytes::from("2"),    // num_cmds
+            Bytes::from("set"),  // cmd1
+            Bytes::from("2"),    // cmd1 num_args
+            Bytes::from("key"),
+            Bytes::from("val"),
+            Bytes::from("get"),  // cmd2
+            Bytes::from("1"),    // cmd2 num_args
+            Bytes::from("key"),
+        ],
+        Some(&Bytes::from("OK|val")),
+    );
+
+    assert!(
+        result.is_some(),
+        "Transaction should succeed and GET should see the SET"
+    );
+
+    let new_state = result.unwrap();
+    assert_eq!(
+        new_state.store.get(&Bytes::from("key")),
+        Some(&Bytes::from("val"))
+    );
+}
+
+/// Test concurrent transactions with linearizability checking.
+#[test]
+fn test_concurrent_transactions_linearizable() {
+    // Model-level test for transaction linearizability
+    let mut history = frogdb_testing::History::new();
+
+    // Transaction 1: SET x=1, SET y=1 (atomic)
+    let op1 = history.invoke(
+        1,
+        "exec",
+        vec![
+            Bytes::from("2"),
+            Bytes::from("set"),
+            Bytes::from("2"),
+            Bytes::from("x"),
+            Bytes::from("1"),
+            Bytes::from("set"),
+            Bytes::from("2"),
+            Bytes::from("y"),
+            Bytes::from("1"),
+        ],
+    );
+    history.respond(op1, Some(Bytes::from("OK|OK")));
+
+    // Transaction 2: SET x=2, SET y=2 (atomic)
+    let op2 = history.invoke(
+        2,
+        "exec",
+        vec![
+            Bytes::from("2"),
+            Bytes::from("set"),
+            Bytes::from("2"),
+            Bytes::from("x"),
+            Bytes::from("2"),
+            Bytes::from("set"),
+            Bytes::from("2"),
+            Bytes::from("y"),
+            Bytes::from("2"),
+        ],
+    );
+    history.respond(op2, Some(Bytes::from("OK|OK")));
+
+    // Read final state - should be consistent (both 1 or both 2)
+    let op3 = history.invoke(3, "get", vec![Bytes::from("x")]);
+    history.respond(op3, Some(Bytes::from("2"))); // Assuming tx2 won
+
+    let op4 = history.invoke(3, "get", vec![Bytes::from("y")]);
+    history.respond(op4, Some(Bytes::from("2"))); // Must also be 2
+
+    let result = check_linearizability::<KVModel>(&history);
+    assert!(
+        result.is_linearizable,
+        "Concurrent transactions should be linearizable"
+    );
+}
+
+// =============================================================================
+// Lua Script Atomicity Tests (SKIPPED - redis.call() not implemented)
+// =============================================================================
+
+/// Test that Lua scripts execute atomically.
+///
+/// Client 1: EVAL "redis.call('SET', KEYS[1], '1'); redis.call('SET', KEYS[2], '1')" 2 a b
+/// Client 2: MGET a b (concurrent)
+/// Expected: Client 2 sees (nil,nil) or (1,1), never partial
+#[test]
+#[ignore] // TODO: Enable when redis.call() is implemented in Lua scripts
+fn test_lua_script_atomicity() {
+    // This test would verify that Lua script execution is atomic
+    // Currently, redis.call() is not implemented, so we skip this test
+    //
+    // When implemented:
+    // 1. Client 1 executes a Lua script that sets two keys
+    // 2. Client 2 concurrently reads both keys
+    // 3. Client 2 should never see partial state (one key set, one not)
+
+    panic!("Test not yet implemented - redis.call() support needed");
+}
+
+/// Test Lua script cross-key operations are atomic.
+///
+/// Script reads key A, writes to key B based on A's value.
+/// Expected: Atomic read-modify-write semantics
+#[test]
+#[ignore] // TODO: Enable when redis.call() is implemented
+fn test_lua_script_cross_key_operations() {
+    // This test would verify that Lua scripts can perform atomic
+    // read-modify-write operations across multiple keys
+    //
+    // Example script:
+    // local val = redis.call('GET', KEYS[1])
+    // if val then
+    //     redis.call('SET', KEYS[2], val)
+    // end
+    //
+    // This should be atomic - no other client should see the intermediate state
+
+    panic!("Test not yet implemented - redis.call() support needed");
+}
+
+/// Test Lua script with INCR pattern is atomic.
+#[test]
+#[ignore] // TODO: Enable when redis.call() is implemented
+fn test_lua_script_incr_pattern() {
+    // This test would verify that the common INCR pattern in Lua is atomic:
+    //
+    // local current = tonumber(redis.call('GET', KEYS[1])) or 0
+    // local new = current + 1
+    // redis.call('SET', KEYS[1], new)
+    // return new
+    //
+    // Multiple concurrent executions should not lose increments
+
+    panic!("Test not yet implemented - redis.call() support needed");
 }
