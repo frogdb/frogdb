@@ -696,11 +696,11 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
                         );
                     }
                     Ok(Err(e)) => {
-                        metrics.increment_counter("frogdb_snapshot_errors_total", 1, &[]);
+                        metrics.increment_counter("frogdb_persistence_errors_total", 1, &[("type", "snapshot")]);
                         tracing::error!(epoch = current_epoch, error = %e, "Snapshot failed");
                     }
                     Err(e) => {
-                        metrics.increment_counter("frogdb_snapshot_errors_total", 1, &[]);
+                        metrics.increment_counter("frogdb_persistence_errors_total", 1, &[("type", "snapshot")]);
                         tracing::error!(epoch = current_epoch, error = %e, "Snapshot task panicked");
                     }
                 }

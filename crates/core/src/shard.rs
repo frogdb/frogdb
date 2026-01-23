@@ -2316,9 +2316,24 @@ impl ShardWorker {
         conn_id: u64,
         protocol_version: ProtocolVersion,
     ) -> Response {
+        let start = Instant::now();
+        let shard_label = self.shard_id.to_string();
+
+        // EVAL always loads the script (cache miss)
+        self.metrics_recorder.increment_counter(
+            "frogdb_lua_scripts_cache_misses_total",
+            1,
+            &[("shard", &shard_label)],
+        );
+
         let executor = match &mut self.script_executor {
             Some(e) => e,
             None => {
+                self.metrics_recorder.increment_counter(
+                    "frogdb_lua_scripts_errors_total",
+                    1,
+                    &[("shard", &shard_label), ("error", "not_available")],
+                );
                 return Response::error("ERR scripting not available");
             }
         };
@@ -2333,9 +2348,31 @@ impl ShardWorker {
             protocol_version,
         );
 
-        match executor.eval(script_source, keys, argv, &mut ctx, &self.registry) {
+        let result = executor.eval(script_source, keys, argv, &mut ctx, &self.registry);
+        let elapsed = start.elapsed().as_secs_f64();
+
+        // Record metrics
+        self.metrics_recorder.increment_counter(
+            "frogdb_lua_scripts_total",
+            1,
+            &[("shard", &shard_label), ("type", "eval")],
+        );
+        self.metrics_recorder.record_histogram(
+            "frogdb_lua_scripts_duration_seconds",
+            elapsed,
+            &[("shard", &shard_label), ("type", "eval")],
+        );
+
+        match result {
             Ok(response) => response,
-            Err(e) => Response::error(e.to_string()),
+            Err(e) => {
+                self.metrics_recorder.increment_counter(
+                    "frogdb_lua_scripts_errors_total",
+                    1,
+                    &[("shard", &shard_label), ("error", "execution")],
+                );
+                Response::error(e.to_string())
+            }
         }
     }
 
@@ -2348,9 +2385,17 @@ impl ShardWorker {
         conn_id: u64,
         protocol_version: ProtocolVersion,
     ) -> Response {
+        let start = Instant::now();
+        let shard_label = self.shard_id.to_string();
+
         let executor = match &mut self.script_executor {
             Some(e) => e,
             None => {
+                self.metrics_recorder.increment_counter(
+                    "frogdb_lua_scripts_errors_total",
+                    1,
+                    &[("shard", &shard_label), ("error", "not_available")],
+                );
                 return Response::error("ERR scripting not available");
             }
         };
@@ -2365,7 +2410,60 @@ impl ShardWorker {
             protocol_version,
         );
 
-        match executor.evalsha(script_sha, keys, argv, &mut ctx, &self.registry) {
+        let result = executor.evalsha(script_sha, keys, argv, &mut ctx, &self.registry);
+        let elapsed = start.elapsed().as_secs_f64();
+
+        // Record metrics based on result
+        match &result {
+            Ok(_) => {
+                // EVALSHA success = cache hit
+                self.metrics_recorder.increment_counter(
+                    "frogdb_lua_scripts_cache_hits_total",
+                    1,
+                    &[("shard", &shard_label)],
+                );
+                self.metrics_recorder.increment_counter(
+                    "frogdb_lua_scripts_total",
+                    1,
+                    &[("shard", &shard_label), ("type", "evalsha")],
+                );
+                self.metrics_recorder.record_histogram(
+                    "frogdb_lua_scripts_duration_seconds",
+                    elapsed,
+                    &[("shard", &shard_label), ("type", "evalsha")],
+                );
+            }
+            Err(e) => {
+                // Check if it's a NOSCRIPT error (cache miss) or execution error
+                let error_str = e.to_string();
+                if error_str.contains("NOSCRIPT") {
+                    self.metrics_recorder.increment_counter(
+                        "frogdb_lua_scripts_cache_misses_total",
+                        1,
+                        &[("shard", &shard_label)],
+                    );
+                    self.metrics_recorder.increment_counter(
+                        "frogdb_lua_scripts_errors_total",
+                        1,
+                        &[("shard", &shard_label), ("error", "noscript")],
+                    );
+                } else {
+                    // Execution error after cache hit
+                    self.metrics_recorder.increment_counter(
+                        "frogdb_lua_scripts_cache_hits_total",
+                        1,
+                        &[("shard", &shard_label)],
+                    );
+                    self.metrics_recorder.increment_counter(
+                        "frogdb_lua_scripts_errors_total",
+                        1,
+                        &[("shard", &shard_label), ("error", "execution")],
+                    );
+                }
+            }
+        }
+
+        match result {
             Ok(response) => response,
             Err(e) => Response::error(e.to_string()),
         }

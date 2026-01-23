@@ -55,6 +55,8 @@ pub struct TransactionState {
     pub exec_abort: bool,
     /// Error messages for commands that had syntax errors during queuing.
     pub queued_errors: Vec<String>,
+    /// Start time of the transaction (when MULTI was called).
+    pub start_time: Option<std::time::Instant>,
 }
 
 /// Pub/Sub state for a connection.
@@ -1388,17 +1390,47 @@ impl ConnectionHandler {
         self.state.transaction.target = TransactionTarget::None;
         self.state.transaction.exec_abort = false;
         self.state.transaction.queued_errors.clear();
+        self.state.transaction.start_time = Some(std::time::Instant::now());
 
         Response::ok()
     }
 
     /// Handle EXEC command - execute the queued transaction.
     async fn handle_exec(&mut self) -> Response {
+        // Capture start time for duration metric
+        let start_time = self.state.transaction.start_time;
+
+        // Helper to record transaction metrics
+        let record_transaction_metrics = |recorder: &Arc<dyn MetricsRecorder>,
+                                          outcome: &str,
+                                          queued_count: usize,
+                                          start_time: Option<std::time::Instant>| {
+            recorder.increment_counter(
+                "frogdb_transactions_total",
+                1,
+                &[("outcome", outcome)],
+            );
+            recorder.record_histogram(
+                "frogdb_transactions_queued_commands",
+                queued_count as f64,
+                &[("outcome", outcome)],
+            );
+            if let Some(start) = start_time {
+                recorder.record_histogram(
+                    "frogdb_transactions_duration_seconds",
+                    start.elapsed().as_secs_f64(),
+                    &[("outcome", outcome)],
+                );
+            }
+        };
+
         // Check if in transaction mode
         let queue = match self.state.transaction.queue.take() {
             Some(q) => q,
             None => return Response::error("ERR EXEC without MULTI"),
         };
+
+        let queued_count = queue.len();
 
         // Get watches and clear them
         let watches: Vec<(Bytes, u64)> = self.state.transaction.watches
@@ -1408,12 +1440,14 @@ impl ConnectionHandler {
 
         // Check if we should abort due to queuing errors
         if self.state.transaction.exec_abort {
+            record_transaction_metrics(&self.metrics_recorder, "execabort", queued_count, start_time);
             self.clear_transaction_state();
             return Response::error("EXECABORT Transaction discarded because of previous errors.");
         }
 
         // Handle empty transaction
         if queue.is_empty() {
+            record_transaction_metrics(&self.metrics_recorder, "committed", 0, start_time);
             self.clear_transaction_state();
             return Response::Array(vec![]);
         }
@@ -1426,6 +1460,7 @@ impl ConnectionHandler {
             }
             TransactionTarget::Single(shard) => *shard,
             TransactionTarget::Multi(_) => {
+                record_transaction_metrics(&self.metrics_recorder, "crossslot", queued_count, start_time);
                 self.clear_transaction_state();
                 return Response::error("CROSSSLOT Keys in request don't hash to the same slot");
             }
@@ -1446,15 +1481,28 @@ impl ConnectionHandler {
         };
 
         if self.shard_senders[target_shard].send(msg).await.is_err() {
+            record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
             return Response::error("ERR shard unavailable");
         }
 
         // Wait for result
         match response_rx.await {
-            Ok(TransactionResult::Success(results)) => Response::Array(results),
-            Ok(TransactionResult::WatchAborted) => Response::null(),
-            Ok(TransactionResult::Error(e)) => Response::error(e),
-            Err(_) => Response::error("ERR shard dropped request"),
+            Ok(TransactionResult::Success(results)) => {
+                record_transaction_metrics(&self.metrics_recorder, "committed", queued_count, start_time);
+                Response::Array(results)
+            }
+            Ok(TransactionResult::WatchAborted) => {
+                record_transaction_metrics(&self.metrics_recorder, "watch_aborted", queued_count, start_time);
+                Response::null()
+            }
+            Ok(TransactionResult::Error(e)) => {
+                record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                Response::error(e)
+            }
+            Err(_) => {
+                record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                Response::error("ERR shard dropped request")
+            }
         }
     }
 
@@ -1462,6 +1510,26 @@ impl ConnectionHandler {
     fn handle_discard(&mut self) -> Response {
         if self.state.transaction.queue.is_none() {
             return Response::error("ERR DISCARD without MULTI");
+        }
+
+        // Record transaction metrics
+        let queued_count = self.state.transaction.queue.as_ref().map_or(0, |q| q.len());
+        self.metrics_recorder.increment_counter(
+            "frogdb_transactions_total",
+            1,
+            &[("outcome", "discarded")],
+        );
+        self.metrics_recorder.record_histogram(
+            "frogdb_transactions_queued_commands",
+            queued_count as f64,
+            &[("outcome", "discarded")],
+        );
+        if let Some(start) = self.state.transaction.start_time {
+            self.metrics_recorder.record_histogram(
+                "frogdb_transactions_duration_seconds",
+                start.elapsed().as_secs_f64(),
+                &[("outcome", "discarded")],
+            );
         }
 
         // Clear all transaction state including watches (Redis behavior)
@@ -1780,6 +1848,25 @@ impl ConnectionHandler {
         _args: &[Bytes],
         operation: ScatterOp,
     ) -> Response {
+        let start = std::time::Instant::now();
+
+        // Determine command name for metrics
+        let command_name = match &operation {
+            ScatterOp::MGet => "MGET",
+            ScatterOp::MSet { .. } => "MSET",
+            ScatterOp::Del => "DEL",
+            ScatterOp::Exists => "EXISTS",
+            ScatterOp::Touch => "TOUCH",
+            ScatterOp::Unlink => "UNLINK",
+            ScatterOp::Keys { .. } => "KEYS",
+            ScatterOp::FlushDb => "FLUSHDB",
+            ScatterOp::DbSize => "DBSIZE",
+            ScatterOp::Scan { .. } => "SCAN",
+            ScatterOp::Copy { .. } | ScatterOp::CopySet { .. } => "COPY",
+            ScatterOp::RandomKey => "RANDOMKEY",
+            ScatterOp::Dump => "DUMP",
+        };
+
         // Group keys by shard
         let mut shard_keys: HashMap<usize, Vec<Bytes>> = HashMap::new();
         let mut key_order: Vec<(usize, Bytes)> = Vec::new(); // (shard_id, key)
@@ -1842,14 +1929,44 @@ impl ConnectionHandler {
                 }
                 Ok(Err(_)) => {
                     warn!(shard_id, "Shard dropped scatter-gather request");
+                    // Record scatter-gather error metrics
+                    self.metrics_recorder.increment_counter(
+                        "frogdb_scatter_gather_total",
+                        1,
+                        &[("command", command_name), ("status", "error")],
+                    );
                     return Response::error("ERR shard dropped request");
                 }
                 Err(_) => {
                     warn!(shard_id, "Scatter-gather timeout");
+                    // Record scatter-gather timeout metrics
+                    self.metrics_recorder.increment_counter(
+                        "frogdb_scatter_gather_total",
+                        1,
+                        &[("command", command_name), ("status", "timeout")],
+                    );
                     return Response::error("ERR scatter-gather timeout");
                 }
             }
         }
+
+        // Record successful scatter-gather metrics
+        let num_shards = shard_keys.len();
+        self.metrics_recorder.increment_counter(
+            "frogdb_scatter_gather_total",
+            1,
+            &[("command", command_name), ("status", "success")],
+        );
+        self.metrics_recorder.record_histogram(
+            "frogdb_scatter_gather_duration_seconds",
+            start.elapsed().as_secs_f64(),
+            &[("command", command_name)],
+        );
+        self.metrics_recorder.record_histogram(
+            "frogdb_scatter_gather_shards",
+            num_shards as f64,
+            &[("command", command_name)],
+        );
 
         // Merge results based on operation type
         match &operation {

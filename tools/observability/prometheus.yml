@@ -1,0 +1,24 @@
+# Prometheus configuration for FrogDB integration testing
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # FrogDB metrics endpoint
+  - job_name: 'frogdb'
+    static_configs:
+      - targets: ['frogdb:9090']
+    metrics_path: /metrics
+    scrape_interval: 5s
+    scrape_timeout: 3s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # OTEL Collector metrics
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8888']

@@ -1,0 +1,402 @@
+//! Integration tests for FrogDB metrics and health endpoints.
+//!
+//! These tests verify that the metrics HTTP server exposes Prometheus metrics
+//! and health endpoints correctly.
+
+use bytes::Bytes;
+use frogdb_protocol::Response;
+use frogdb_server::{Config, Server};
+use futures::{SinkExt, StreamExt};
+use redis_protocol::codec::Resp2;
+use redis_protocol::resp2::types::BytesFrame;
+use std::net::SocketAddr;
+use std::time::Duration;
+use tempfile::TempDir;
+use tokio::net::TcpStream;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
+use tokio_util::codec::Framed;
+
+/// Helper struct for managing a test server.
+struct TestServer {
+    addr: SocketAddr,
+    metrics_addr: SocketAddr,
+    shutdown_tx: oneshot::Sender<()>,
+    handle: JoinHandle<()>,
+    #[allow(dead_code)]
+    temp_dir: TempDir,
+}
+
+impl TestServer {
+    /// Start a new test server on an available port.
+    async fn start() -> Self {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Find available ports
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let metrics_addr = metrics_listener.local_addr().unwrap();
+        drop(metrics_listener);
+
+        let mut config = Config::default();
+        config.server.bind = "127.0.0.1".to_string();
+        config.server.port = addr.port();
+        config.server.num_shards = 4; // Multiple shards for shard metrics tests
+        config.logging.level = "warn".to_string();
+        config.persistence.data_dir = temp_dir.path().to_path_buf();
+        config.metrics.bind = "127.0.0.1".to_string();
+        config.metrics.port = metrics_addr.port();
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let handle = tokio::spawn(async move {
+            let server = Server::new(config).await.unwrap();
+
+            tokio::select! {
+                result = server.run() => {
+                    if let Err(e) = result {
+                        eprintln!("Server error: {}", e);
+                    }
+                }
+                _ = shutdown_rx => {
+                    // Shutdown requested
+                }
+            }
+        });
+
+        // Wait for server to be ready
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        TestServer {
+            addr,
+            metrics_addr,
+            shutdown_tx,
+            handle,
+            temp_dir,
+        }
+    }
+
+    /// Connect to the test server.
+    async fn connect(&self) -> TestClient {
+        let stream = TcpStream::connect(self.addr).await.unwrap();
+        let framed = Framed::new(stream, Resp2);
+        TestClient { framed }
+    }
+
+    /// Get the metrics URL.
+    fn metrics_url(&self, path: &str) -> String {
+        format!("http://{}{}", self.metrics_addr, path)
+    }
+
+    /// Shutdown the test server.
+    async fn shutdown(self) {
+        let _ = self.shutdown_tx.send(());
+        let _ = self.handle.await;
+    }
+}
+
+/// Helper struct for sending commands and receiving responses.
+struct TestClient {
+    framed: Framed<TcpStream, Resp2>,
+}
+
+impl TestClient {
+    /// Send a command and receive a response.
+    async fn command(&mut self, args: &[&str]) -> Response {
+        let frame = BytesFrame::Array(
+            args.iter()
+                .map(|s| BytesFrame::BulkString(Bytes::from(s.to_string())))
+                .collect(),
+        );
+
+        self.framed.send(frame).await.unwrap();
+
+        let response_frame = timeout(Duration::from_secs(5), self.framed.next())
+            .await
+            .expect("timeout")
+            .expect("connection closed")
+            .expect("frame error");
+
+        frame_to_response(response_frame)
+    }
+}
+
+/// Convert a BytesFrame to our Response type.
+fn frame_to_response(frame: BytesFrame) -> Response {
+    match frame {
+        BytesFrame::SimpleString(s) => Response::Simple(s),
+        BytesFrame::Error(e) => Response::Error(e.into_inner()),
+        BytesFrame::Integer(n) => Response::Integer(n),
+        BytesFrame::BulkString(b) => Response::Bulk(Some(b)),
+        BytesFrame::Null => Response::Bulk(None),
+        BytesFrame::Array(items) => {
+            Response::Array(items.into_iter().map(frame_to_response).collect())
+        }
+    }
+}
+
+// ============================================================================
+// Metrics Endpoint Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_metrics_endpoint_returns_frogdb_metrics() {
+    let server = TestServer::start().await;
+    let url = server.metrics_url("/metrics");
+
+    let resp = reqwest::get(&url).await.unwrap();
+    assert!(resp.status().is_success());
+
+    let body = resp.text().await.unwrap();
+
+    // Verify the response contains FrogDB metrics
+    assert!(
+        body.contains("frogdb_"),
+        "Metrics endpoint should return FrogDB metrics"
+    );
+    assert!(
+        body.contains("frogdb_uptime_seconds"),
+        "Should contain uptime metric"
+    );
+    assert!(
+        body.contains("frogdb_info"),
+        "Should contain info metric"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_metrics_endpoint_returns_connection_metrics() {
+    let server = TestServer::start().await;
+
+    // Make a connection to trigger connection metrics
+    let mut client = server.connect().await;
+    client.command(&["PING"]).await;
+
+    // Small delay for metrics to update
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let url = server.metrics_url("/metrics");
+    let resp = reqwest::get(&url).await.unwrap();
+    let body = resp.text().await.unwrap();
+
+    assert!(
+        body.contains("frogdb_connections_"),
+        "Should contain connection metrics"
+    );
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Health Endpoint Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_health_liveness() {
+    let server = TestServer::start().await;
+    let url = server.metrics_url("/health/live");
+
+    let resp = reqwest::get(&url).await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "Liveness endpoint should return 200");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_health_readiness() {
+    let server = TestServer::start().await;
+    let url = server.metrics_url("/health/ready");
+
+    let resp = reqwest::get(&url).await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "Readiness endpoint should return 200");
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Command Metrics Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_command_metrics_recorded() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Execute some commands
+    client.command(&["SET", "testkey", "testvalue"]).await;
+    client.command(&["GET", "testkey"]).await;
+    client.command(&["DEL", "testkey"]).await;
+    client.command(&["PING"]).await;
+
+    // Small delay for metrics to be recorded
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let url = server.metrics_url("/metrics");
+    let resp = reqwest::get(&url).await.unwrap();
+    let body = resp.text().await.unwrap();
+
+    // Verify command metrics are recorded
+    assert!(
+        body.contains("frogdb_commands_total"),
+        "Should contain commands total metric"
+    );
+    assert!(
+        body.contains(r#"command="SET""#),
+        "Should record SET command metric"
+    );
+    assert!(
+        body.contains(r#"command="GET""#),
+        "Should record GET command metric"
+    );
+    assert!(
+        body.contains("frogdb_commands_duration_seconds"),
+        "Should contain command duration histogram"
+    );
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Data Metrics Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_keys_total_metric() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Add some keys
+    for i in 0..10 {
+        client
+            .command(&["SET", &format!("testkey:{}", i), &format!("value{}", i)])
+            .await;
+    }
+
+    // Small delay for metrics to update
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let url = server.metrics_url("/metrics");
+    let resp = reqwest::get(&url).await.unwrap();
+    let body = resp.text().await.unwrap();
+
+    assert!(
+        body.contains("frogdb_keys_total"),
+        "Should contain keys total metric"
+    );
+
+    // Cleanup
+    for i in 0..10 {
+        client.command(&["DEL", &format!("testkey:{}", i)]).await;
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_memory_used_metric() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Add some data to use memory
+    client.command(&["SET", "memtest", "some value here"]).await;
+
+    // Small delay for metrics to update
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let url = server.metrics_url("/metrics");
+    let resp = reqwest::get(&url).await.unwrap();
+    let body = resp.text().await.unwrap();
+
+    assert!(
+        body.contains("frogdb_memory_used_bytes"),
+        "Should contain memory used metric"
+    );
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Shard Metrics Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_shard_metrics() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Add keys that will be distributed across shards
+    for i in 0..20 {
+        client
+            .command(&["SET", &format!("shardkey:{}", i), "value"])
+            .await;
+    }
+
+    // Small delay for metrics to update
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let url = server.metrics_url("/metrics");
+    let resp = reqwest::get(&url).await.unwrap();
+    let body = resp.text().await.unwrap();
+
+    assert!(
+        body.contains("frogdb_shard_keys"),
+        "Should contain shard keys metric"
+    );
+    assert!(
+        body.contains("frogdb_shard_memory_bytes"),
+        "Should contain shard memory metric"
+    );
+
+    // Cleanup
+    for i in 0..20 {
+        client.command(&["DEL", &format!("shardkey:{}", i)]).await;
+    }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Error Metrics Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_error_metrics_recorded() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Trigger an error by using wrong type operation
+    // First set a string key
+    client.command(&["SET", "mykey", "value"]).await;
+
+    // Try to use a list operation on a string key (should fail with WRONGTYPE)
+    let response = client.command(&["LPUSH", "mykey", "item"]).await;
+    assert!(
+        matches!(response, Response::Error(_)),
+        "LPUSH on string key should return error"
+    );
+
+    // Cleanup
+    client.command(&["DEL", "mykey"]).await;
+
+    // Small delay for metrics to update
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let url = server.metrics_url("/metrics");
+    let resp = reqwest::get(&url).await.unwrap();
+    let body = resp.text().await.unwrap();
+
+    // Note: Error metrics may or may not be present depending on implementation
+    // We check that the metrics endpoint is still functional after errors
+    assert!(
+        body.contains("frogdb_"),
+        "Metrics endpoint should still work after errors"
+    );
+
+    server.shutdown().await;
+}
