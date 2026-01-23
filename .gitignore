@@ -37,3 +37,11 @@ frogdb-data/
 
 # Redis compatibility test cache
 .redis-tests/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+
+# Load test reports (generated benchmark data)
+tools/loadtest/reports/

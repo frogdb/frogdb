@@ -134,7 +134,7 @@ impl Command for GeoaddCommand {
 
         // Parse coordinate-member triplets
         let remaining = &args[i..];
-        if remaining.len() < 3 || !remaining.len().is_multiple_of(3) {
+        if remaining.len() < 3 || remaining.len() % 3 != 0 {
             return Err(CommandError::WrongArity { command: "GEOADD" });
         }
 

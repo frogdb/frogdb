@@ -33,7 +33,8 @@
       "Bash(redis-cli:*)",
       "Bash(cargo clippy:*)",
       "Bash(cargo check:*)",
-      "Bash(cargo clean:*)"
+      "Bash(cargo clean:*)",
+      "Bash(docker build:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

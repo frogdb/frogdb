@@ -921,7 +921,7 @@ impl Command for MsetCommand {
         ctx: &mut CommandContext,
         args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        if !args.len().is_multiple_of(2) {
+        if args.len() % 2 != 0 {
             return Err(CommandError::WrongArity { command: "MSET" });
         }
 
@@ -961,7 +961,7 @@ impl Command for MsetnxCommand {
         ctx: &mut CommandContext,
         args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        if !args.len().is_multiple_of(2) {
+        if args.len() % 2 != 0 {
             return Err(CommandError::WrongArity { command: "MSETNX" });
         }
 
