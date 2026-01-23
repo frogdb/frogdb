@@ -21,7 +21,25 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ### Part 3: Key migration
 
-- [ ] `MIGRATE` - Migrate keys between instances
+- [ ] Config prescedence: file, ENV variables, CLI flags, runtime changes with CONFIG SET
+- [ ] Ability to "watch" or "listen" for config value changes for values adjustable at runtime
+- [ ] Wire dynamic config values into code where they're used
+- [ ] Validation + errors for invalid config
+- [ ] Log the full configuration state on startup
+
+### Observability audit
+
+- [ ] What metrics + logs + traces are missing?
+- [ ] Do we have per-command count metrics?
+- [ ] Do we have per-command latency metrics?
+- [ ] Any other metrics we're missing?
+- [ ] Have we validated that open telemtry and prometheus can interact with frogdb?
+- [ ] Could a skilled software reliability engineer be able to easily diagnose issues with frogdb?
+
+### Operational Readiness
+
+- [ ] Look up other modern databases like CockroachDB, DragonflyDB, FoundationDB, and identify features or tooling they provide for operating the database (migrations, disaster recovery, observability, debugging, etc)
+- [ ] Determine if any of these apply to frogdb
 
 ---
 
@@ -41,15 +59,17 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 **Goal**: Correctness testing for single-node operation.
 
 - [ ] Jepsen test harness integration
-- [x] Turmoil test harness integration
-- [x] Single-node linearizability tests
-- [ ] Single-node crash recovery tests
+
+### Very Light Locking (VLL) Implementation
+
+**Goal**: Provide same guarantees as Dragonflydb for multi-key operations
+
 - [ ] MSET/MGET full atomicity (currently per-key atomic; should be fully atomic like Redis/DragonflyDB)
-- [ ] Lua script `redis.call()` integration with command execution (enables atomic cross-key operations)
+- [ ] transaction consistency behavior like dragonflydb
+- [ ] Lua script consistency behavior like dragonflydb
+- [ ] Check for potential performance bottlenecks.
 
----
-
-## Phase 5: Clustering
+### Clustering / Replication
 
 **Goal**: Distributed operation support.
 
@@ -60,14 +80,12 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 - [ ] `ROLE` - Report replication role (primary/replica)
 - [ ] `BGREWRITEAOF` - Stub returning appropriate message (N/A for RocksDB)
 
----
-
-## Phase 6: Distributed Cluster Testing
+### Distributed Cluster Testing
 
 **Goal**: Correctness testing for clustered operation.
 
-- [ ] Cluster partition tests (Jepsen)
-- [ ] Cluster partition tests (Turmoil)
+- [ ] Cluster partition/chaos tests (Jepsen)
+- [ ] Cluster partition/chaos tests (Turmoil)
 - [ ] Cluster failover tests
 - [ ] Cluster linearizability tests
 
@@ -89,23 +107,7 @@ See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for detailed profiling infrastructure, 
 - Concurrency Optimizations
 - Advanced Optimizations
 
-## <<<<<<< HEAD
-
-## ||||||| parent of 2755a3c (update roadmap)
-
-## Phase 8: ACL Completion
-
-**Goal**: Full Redis ACL compatibility.
-
-- [ ] Subcommand-level ACL rules (e.g., allow CONFIG GET but deny CONFIG SET)
-- [ ] ACL selector syntax for granular key/channel permissions
-- [ ] Per-command ACL category enforcement
-
 ---
-
-=======
-
-> > > > > > > 2755a3c (update roadmap)
 
 ## Phase 9: Redis Functions
 
