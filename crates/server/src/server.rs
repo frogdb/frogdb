@@ -415,8 +415,13 @@ impl Server {
         Ok((rocks, recovered, sync_handle))
     }
 
-    /// Run the server.
-    pub async fn run(self) -> Result<()> {
+    /// Run the server until the provided future completes.
+    ///
+    /// Use this for testing where OS signals aren't available (e.g., Turmoil simulation).
+    pub async fn run_until<F>(self, shutdown: F) -> Result<()>
+    where
+        F: std::future::Future<Output = ()>,
+    {
         // Start metrics server if enabled
         let metrics_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
             let metrics_config = frogdb_metrics::MetricsConfig {
@@ -484,7 +489,7 @@ impl Server {
         );
 
         // Wait for shutdown signal
-        shutdown_signal().await;
+        shutdown.await;
 
         info!("Shutdown signal received, stopping server...");
 
@@ -543,6 +548,11 @@ impl Server {
         info!("Server shutdown complete");
 
         Ok(())
+    }
+
+    /// Run the server (production - waits for OS signals).
+    pub async fn run(self) -> Result<()> {
+        self.run_until(shutdown_signal()).await
     }
 
     /// Get the snapshot coordinator.

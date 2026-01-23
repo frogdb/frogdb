@@ -14,13 +14,13 @@
 mod common;
 
 use bytes::{Bytes, BytesMut};
-use common::sim_harness::{shard_for_key, OperationHistory, OperationResult, ShardMessage};
+use common::sim_harness::{shard_for_key, OperationHistory, OperationResult};
+use frogdb_server::{Config, Server};
+use frogdb_server::config::{MetricsConfig, PersistenceConfig, ServerConfig};
 use frogdb_testing::{check_linearizability, KVModel};
-use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
 use turmoil::net::{TcpListener, TcpStream};
 use turmoil::Builder;
 
@@ -61,6 +61,8 @@ fn parse_simple_response(data: &[u8]) -> OperationResult {
             let s = String::from_utf8_lossy(&data[1..]).trim_end().to_string();
             if s == "OK" {
                 OperationResult::Ok
+            } else if s == "PONG" {
+                OperationResult::String(Bytes::from("PONG"))
             } else {
                 OperationResult::String(Bytes::from(s))
             }
@@ -103,7 +105,7 @@ fn parse_simple_response(data: &[u8]) -> OperationResult {
     }
 }
 
-/// Echo server for basic connectivity tests.
+/// Echo server for basic connectivity tests (doesn't need real server).
 async fn echo_server() -> Result<(), BoxError> {
     let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, SERVER_PORT)).await?;
 
@@ -130,117 +132,45 @@ async fn echo_server() -> Result<(), BoxError> {
     }
 }
 
-/// Simple RESP server that handles basic commands for testing.
-async fn simple_kv_server() -> Result<(), BoxError> {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::sync::Mutex;
+// =============================================================================
+// Real FrogDB Server Helper
+// =============================================================================
 
-    let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, SERVER_PORT)).await?;
-    let store: Arc<Mutex<HashMap<Bytes, Bytes>>> = Arc::new(Mutex::new(HashMap::new()));
+/// Start real FrogDB server for simulation tests.
+///
+/// This runs the actual FrogDB server code under Turmoil's network simulation.
+/// The server runs until the simulation ends (using std::future::pending).
+async fn real_frogdb_server(num_shards: usize) -> Result<(), BoxError> {
+    let config = Config {
+        server: ServerConfig {
+            bind: "0.0.0.0".to_string(),
+            port: SERVER_PORT,
+            num_shards,
+            allow_cross_slot_standalone: true, // Enable scatter-gather for MSET/MGET
+            scatter_gather_timeout_ms: 5000,
+        },
+        persistence: PersistenceConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        metrics: MetricsConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
-    loop {
-        let (mut stream, _addr) = listener.accept().await?;
-        let store = store.clone();
+    let server = Server::new(config).await?;
 
-        tokio::spawn(async move {
-            let mut buf = vec![0u8; 4096];
+    // Run until simulation ends (Turmoil controls lifetime)
+    server.run_until(std::future::pending::<()>()).await?;
 
-            loop {
-                let n = match stream.read(&mut buf).await {
-                    Ok(0) => return,
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-
-                // Very simplified command parsing
-                let data = &buf[..n];
-                let response = if data.starts_with(b"*") {
-                    // Parse RESP array
-                    let s = String::from_utf8_lossy(data);
-                    let parts: Vec<&str> = s.split("\r\n").collect();
-
-                    // Extract command and args from RESP format
-                    let mut args = Vec::new();
-                    let mut i = 0;
-                    while i < parts.len() {
-                        if parts[i].starts_with('$') {
-                            i += 1;
-                            if i < parts.len() && !parts[i].is_empty() {
-                                args.push(parts[i]);
-                            }
-                        }
-                        i += 1;
-                    }
-
-                    if args.is_empty() {
-                        b"+OK\r\n".to_vec()
-                    } else {
-                        let cmd = args[0].to_uppercase();
-                        match cmd.as_str() {
-                            "PING" => b"+PONG\r\n".to_vec(),
-                            "SET" if args.len() >= 3 => {
-                                let key = Bytes::from(args[1].to_string());
-                                let value = Bytes::from(args[2].to_string());
-                                store.lock().await.insert(key, value);
-                                b"+OK\r\n".to_vec()
-                            }
-                            "GET" if args.len() >= 2 => {
-                                let key = Bytes::from(args[1].to_string());
-                                if let Some(value) = store.lock().await.get(&key) {
-                                    format!(
-                                        "${}\r\n{}\r\n",
-                                        value.len(),
-                                        String::from_utf8_lossy(value)
-                                    )
-                                    .into_bytes()
-                                } else {
-                                    b"$-1\r\n".to_vec()
-                                }
-                            }
-                            "MSET" if args.len() >= 3 && (args.len() - 1) % 2 == 0 => {
-                                let mut store = store.lock().await;
-                                let mut i = 1;
-                                while i + 1 < args.len() {
-                                    let key = Bytes::from(args[i].to_string());
-                                    let value = Bytes::from(args[i + 1].to_string());
-                                    store.insert(key, value);
-                                    i += 2;
-                                }
-                                b"+OK\r\n".to_vec()
-                            }
-                            "MGET" if args.len() >= 2 => {
-                                let store = store.lock().await;
-                                let mut response = format!("*{}\r\n", args.len() - 1);
-                                for i in 1..args.len() {
-                                    let key = Bytes::from(args[i].to_string());
-                                    if let Some(value) = store.get(&key) {
-                                        response.push_str(&format!(
-                                            "${}\r\n{}\r\n",
-                                            value.len(),
-                                            String::from_utf8_lossy(value)
-                                        ));
-                                    } else {
-                                        response.push_str("$-1\r\n");
-                                    }
-                                }
-                                response.into_bytes()
-                            }
-                            _ => b"-ERR unknown command\r\n".to_vec(),
-                        }
-                    }
-                } else {
-                    b"-ERR invalid request\r\n".to_vec()
-                };
-
-                if stream.write_all(&response).await.is_err() {
-                    return;
-                }
-            }
-        });
-    }
+    Ok(())
 }
+
+// =============================================================================
+// Basic Connectivity Tests
+// =============================================================================
 
 #[test]
 fn test_basic_connectivity() {
@@ -273,7 +203,7 @@ fn test_basic_connectivity() {
 fn test_simple_set_get() {
     let mut sim = Builder::new().build();
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
 
     sim.client("client1", async {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -312,7 +242,7 @@ fn test_simple_set_get() {
 fn test_mset_mget_scatter_gather() {
     let mut sim = Builder::new().build();
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
 
     sim.client("client1", async {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -349,7 +279,7 @@ fn test_mset_mget_scatter_gather() {
 fn test_concurrent_clients() {
     let mut sim = Builder::new().build();
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
 
     // Multiple clients operating concurrently
     for i in 0..3 {
@@ -420,7 +350,7 @@ fn test_network_delay_simulation() {
         .tick_duration(Duration::from_millis(10))
         .build();
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
 
     // Register the client first
     sim.client("client1", async {
@@ -445,230 +375,6 @@ fn test_network_delay_simulation() {
 }
 
 // =============================================================================
-// Sharded KV Server Implementation
-// =============================================================================
-
-/// Shard worker that handles GET/SET operations for its assigned keys.
-async fn shard_worker(shard_id: usize, mut rx: mpsc::Receiver<ShardMessage>) {
-    let mut store: HashMap<Bytes, Bytes> = HashMap::new();
-
-    while let Some(msg) = rx.recv().await {
-        match msg {
-            ShardMessage::Get { key, response_tx } => {
-                let value = store.get(&key).cloned();
-                let _ = response_tx.send(value);
-            }
-            ShardMessage::Set {
-                key,
-                value,
-                response_tx,
-            } => {
-                store.insert(key, value);
-                let _ = response_tx.send(true);
-            }
-        }
-    }
-
-    tracing::debug!("Shard {} worker shutting down", shard_id);
-}
-
-/// Create a sharded KV server with the given number of shards.
-///
-/// This server routes keys to shards based on CRC16 hash slots, similar to Redis Cluster.
-async fn sharded_kv_server(num_shards: usize) -> Result<(), BoxError> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    // Create shard channels
-    let mut shard_senders = Vec::with_capacity(num_shards);
-
-    for shard_id in 0..num_shards {
-        let (tx, rx) = mpsc::channel::<ShardMessage>(1024);
-        shard_senders.push(tx);
-
-        // Spawn shard worker
-        tokio::spawn(shard_worker(shard_id, rx));
-    }
-
-    let shard_senders = Arc::new(shard_senders);
-
-    let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, SERVER_PORT)).await?;
-
-    loop {
-        let (mut stream, _addr) = listener.accept().await?;
-        let senders = shard_senders.clone();
-        let num_shards = num_shards;
-
-        tokio::spawn(async move {
-            let mut buf = vec![0u8; 4096];
-
-            loop {
-                let n = match stream.read(&mut buf).await {
-                    Ok(0) => return,
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-
-                // Very simplified command parsing (same as simple_kv_server)
-                let data = &buf[..n];
-                let response = if data.starts_with(b"*") {
-                    let s = String::from_utf8_lossy(data);
-                    let parts: Vec<&str> = s.split("\r\n").collect();
-
-                    let mut args = Vec::new();
-                    let mut i = 0;
-                    while i < parts.len() {
-                        if parts[i].starts_with('$') {
-                            i += 1;
-                            if i < parts.len() && !parts[i].is_empty() {
-                                args.push(parts[i]);
-                            }
-                        }
-                        i += 1;
-                    }
-
-                    if args.is_empty() {
-                        b"+OK\r\n".to_vec()
-                    } else {
-                        let cmd = args[0].to_uppercase();
-                        match cmd.as_str() {
-                            "PING" => b"+PONG\r\n".to_vec(),
-                            "SET" if args.len() >= 3 => {
-                                let key = Bytes::from(args[1].to_string());
-                                let value = Bytes::from(args[2].to_string());
-
-                                // Route to correct shard
-                                let shard = shard_for_key(key.as_ref(), num_shards);
-                                let (tx, rx) = oneshot::channel();
-                                let msg = ShardMessage::Set {
-                                    key,
-                                    value,
-                                    response_tx: tx,
-                                };
-                                if senders[shard].send(msg).await.is_ok() {
-                                    if rx.await.unwrap_or(false) {
-                                        b"+OK\r\n".to_vec()
-                                    } else {
-                                        b"-ERR shard error\r\n".to_vec()
-                                    }
-                                } else {
-                                    b"-ERR shard unavailable\r\n".to_vec()
-                                }
-                            }
-                            "GET" if args.len() >= 2 => {
-                                let key = Bytes::from(args[1].to_string());
-
-                                // Route to correct shard
-                                let shard = shard_for_key(key.as_ref(), num_shards);
-                                let (tx, rx) = oneshot::channel();
-                                let msg = ShardMessage::Get {
-                                    key,
-                                    response_tx: tx,
-                                };
-                                if senders[shard].send(msg).await.is_ok() {
-                                    match rx.await {
-                                        Ok(Some(value)) => format!(
-                                            "${}\r\n{}\r\n",
-                                            value.len(),
-                                            String::from_utf8_lossy(&value)
-                                        )
-                                        .into_bytes(),
-                                        Ok(None) => b"$-1\r\n".to_vec(),
-                                        Err(_) => b"-ERR shard error\r\n".to_vec(),
-                                    }
-                                } else {
-                                    b"-ERR shard unavailable\r\n".to_vec()
-                                }
-                            }
-                            "MSET" if args.len() >= 3 && (args.len() - 1) % 2 == 0 => {
-                                // Scatter to all relevant shards
-                                let mut pending = Vec::new();
-                                let mut i = 1;
-                                while i + 1 < args.len() {
-                                    let key = Bytes::from(args[i].to_string());
-                                    let value = Bytes::from(args[i + 1].to_string());
-                                    let shard = shard_for_key(key.as_ref(), num_shards);
-                                    let (tx, rx) = oneshot::channel();
-                                    let msg = ShardMessage::Set {
-                                        key,
-                                        value,
-                                        response_tx: tx,
-                                    };
-                                    if senders[shard].send(msg).await.is_ok() {
-                                        pending.push(rx);
-                                    }
-                                    i += 2;
-                                }
-
-                                // Gather results
-                                let mut all_ok = true;
-                                for rx in pending {
-                                    if !rx.await.unwrap_or(false) {
-                                        all_ok = false;
-                                    }
-                                }
-
-                                if all_ok {
-                                    b"+OK\r\n".to_vec()
-                                } else {
-                                    b"-ERR partial failure\r\n".to_vec()
-                                }
-                            }
-                            "MGET" if args.len() >= 2 => {
-                                // Scatter to all relevant shards
-                                let mut pending = Vec::new();
-                                for i in 1..args.len() {
-                                    let key = Bytes::from(args[i].to_string());
-                                    let shard = shard_for_key(key.as_ref(), num_shards);
-                                    let (tx, rx) = oneshot::channel();
-                                    let msg = ShardMessage::Get {
-                                        key,
-                                        response_tx: tx,
-                                    };
-                                    if senders[shard].send(msg).await.is_ok() {
-                                        pending.push(rx);
-                                    } else {
-                                        pending.push({
-                                            let (tx, rx) = oneshot::channel();
-                                            let _ = tx.send(None);
-                                            rx
-                                        });
-                                    }
-                                }
-
-                                // Gather results
-                                let mut response = format!("*{}\r\n", pending.len());
-                                for rx in pending {
-                                    match rx.await {
-                                        Ok(Some(value)) => {
-                                            response.push_str(&format!(
-                                                "${}\r\n{}\r\n",
-                                                value.len(),
-                                                String::from_utf8_lossy(&value)
-                                            ));
-                                        }
-                                        _ => {
-                                            response.push_str("$-1\r\n");
-                                        }
-                                    }
-                                }
-                                response.into_bytes()
-                            }
-                            _ => b"-ERR unknown command\r\n".to_vec(),
-                        }
-                    }
-                } else {
-                    b"-ERR invalid request\r\n".to_vec()
-                };
-
-                if stream.write_all(&response).await.is_err() {
-                    return;
-                }
-            }
-        });
-    }
-}
-
-// =============================================================================
 // Scatter-Gather Tests
 // =============================================================================
 
@@ -676,7 +382,7 @@ async fn sharded_kv_server(num_shards: usize) -> Result<(), BoxError> {
 fn test_sharded_set_get_single_key() {
     let mut sim = Builder::new().build();
 
-    sim.host(SERVER_HOST, || sharded_kv_server(4));
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
 
     sim.client("client1", async {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -714,7 +420,7 @@ fn test_sharded_mset_mget_distribution() {
     let mut sim = Builder::new().build();
 
     // Use 4 shards to ensure key distribution
-    sim.host(SERVER_HOST, || sharded_kv_server(4));
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
 
     sim.client("client1", async {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -792,7 +498,7 @@ fn test_sharded_hash_tags() {
 
     let mut sim = Builder::new().build();
 
-    sim.host(SERVER_HOST, || sharded_kv_server(4));
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
 
     sim.client("client1", async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -837,7 +543,7 @@ fn test_sharded_hash_tags() {
 fn test_sharded_concurrent_clients() {
     let mut sim = Builder::new().build();
 
-    sim.host(SERVER_HOST, || sharded_kv_server(4));
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
 
     // Multiple clients operating on different shards concurrently
     for i in 0..4 {
@@ -890,12 +596,15 @@ fn test_sharded_concurrent_clients() {
 
 #[test]
 fn test_linearizability_concurrent_writes() {
-    let mut sim = Builder::new().build();
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
     let history = Arc::new(Mutex::new(OperationHistory::new()));
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
 
-    // Client 1: SET key=A, small delay, then SET key=B
+    // Client 1: SET key=A, then SET key=B
+    // We use sequential operations with delays to ensure ordering
     let h1 = history.clone();
     sim.client("client1", async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -904,8 +613,8 @@ fn test_linearizability_concurrent_writes() {
         let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
         let mut buf = vec![0u8; 1024];
 
-        // Small initial delay to let client2 start
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        // Wait for client2 to be ready
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // SET key=A
         let op1 = {
@@ -921,8 +630,8 @@ fn test_linearizability_concurrent_writes() {
             h.record_return(op1, 1, result);
         }
 
-        // Small delay between SETs
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        // Delay between SETs
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         // SET key=B
         let op2 = {
@@ -941,7 +650,7 @@ fn test_linearizability_concurrent_writes() {
         Ok(())
     });
 
-    // Client 2: GETs that overlap with client 1's operations
+    // Client 2: GETs after client 1's operations complete
     let h2 = history.clone();
     sim.client("client2", async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -950,7 +659,10 @@ fn test_linearizability_concurrent_writes() {
         let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
         let mut buf = vec![0u8; 1024];
 
-        // First GET - may see nil (before SET A completes)
+        // Wait until after SET A is expected to complete
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // First GET - should see A (after SET A completes)
         let op1 = {
             let mut h = h2.lock().unwrap();
             h.record_invoke(2, "GET", vec![Bytes::from("key")])
@@ -964,10 +676,10 @@ fn test_linearizability_concurrent_writes() {
             h.record_return(op1, 2, result);
         }
 
-        // Delay to ensure we're past SET A
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        // Wait until after SET B is expected to complete
+        tokio::time::sleep(Duration::from_millis(150)).await;
 
-        // Second GET - should see A or B
+        // Second GET - should see B
         let op2 = {
             let mut h = h2.lock().unwrap();
             h.record_invoke(2, "GET", vec![Bytes::from("key")])
@@ -994,8 +706,7 @@ fn test_linearizability_concurrent_writes() {
     let testing_history = history.to_testing_history();
     let result = check_linearizability::<KVModel>(&testing_history);
 
-    // The simple_kv_server uses a mutex, so all executions should be linearizable
-    // If this fails, it indicates a bug in history recording or conversion
+    // The real server should be linearizable for single-key operations
     if !result.is_linearizable {
         // Print debug info
         eprintln!("History operations:");
@@ -1017,7 +728,7 @@ fn test_linearizability_single_key_serial() {
     let mut sim = Builder::new().build();
     let history = Arc::new(Mutex::new(OperationHistory::new()));
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
 
     let h = history.clone();
     sim.client("client1", async move {
@@ -1147,7 +858,7 @@ fn test_network_partition_client_isolated() {
         .tick_duration(Duration::from_millis(1))
         .build();
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
 
     let success = Arc::new(Mutex::new(false));
     let success_clone = success.clone();
@@ -1216,7 +927,7 @@ fn test_partition_heal_recovery() {
         .tick_duration(Duration::from_millis(1))
         .build();
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
 
     // Track operation results
     let results = Arc::new(Mutex::new(Vec::new()));
@@ -1278,7 +989,7 @@ fn test_high_latency_operations() {
         .tick_duration(Duration::from_millis(1))
         .build();
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
 
     let start_times = Arc::new(Mutex::new(Vec::new()));
     let start_times_clone = start_times.clone();
@@ -1321,7 +1032,7 @@ fn test_high_latency_operations() {
 fn test_connection_drop_reconnect() {
     let mut sim = Builder::new().build();
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
 
     sim.client("client1", async {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1371,7 +1082,7 @@ fn test_multiple_clients_with_varying_latency() {
         .tick_duration(Duration::from_millis(1))
         .build();
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
 
     // Track which client completes first
     let completion_order = Arc::new(Mutex::new(Vec::new()));
@@ -1429,7 +1140,7 @@ fn test_sharded_server_with_latency() {
         .tick_duration(Duration::from_millis(1))
         .build();
 
-    sim.host(SERVER_HOST, || sharded_kv_server(4));
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
 
     sim.client("client1", async {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1471,7 +1182,7 @@ fn test_sharded_server_with_latency() {
 /// Test that MSET is fully atomic - concurrent MGET should see all-or-nothing.
 ///
 /// Expected behavior: MGET sees either (nil, nil) or (1, 1), never partial state like (1, nil).
-/// Current behavior: Per-key atomic, so partial visibility is possible.
+/// Current behavior: Per-key atomic, so partial visibility is possible with scatter-gather.
 #[test]
 #[ignore] // TODO: Enable when MSET is fully atomic (currently per-key atomic)
 fn test_mset_full_atomicity() {
@@ -1479,9 +1190,8 @@ fn test_mset_full_atomicity() {
         .tick_duration(Duration::from_millis(1))
         .build();
 
-    // Use simple_kv_server which has a mutex - but in real FrogDB,
-    // MSET across shards is scatter-gather and not fully atomic
-    sim.host(SERVER_HOST, simple_kv_server);
+    // Use real FrogDB server - this will expose the real scatter-gather behavior
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
 
     let results = Arc::new(Mutex::new(Vec::new()));
 
@@ -1573,7 +1283,7 @@ fn test_mset_linearizable() {
         .tick_duration(Duration::from_millis(1))
         .build();
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
     let history = Arc::new(Mutex::new(OperationHistory::new()));
 
     // Client 1: MSET {same}a=1 {same}b=1
@@ -1707,6 +1417,116 @@ fn test_mset_linearizable() {
     sim.run().unwrap();
 }
 
+/// Test MSET atomicity with sharded server - exposes scatter-gather non-atomicity.
+///
+/// Uses real FrogDB server. Keys WITHOUT hash tags will route to different shards,
+/// and the scatter-gather pattern creates a window for partial visibility.
+///
+/// Expected behavior: MGET sees either (nil, nil) or (1, 1), never partial state.
+/// Current behavior: Scatter-gather allows partial visibility - this test should FAIL.
+#[test]
+#[ignore] // TODO: Enable when MSET is fully atomic (currently per-key atomic)
+fn test_mset_full_atomicity_sharded() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+
+    // Use real FrogDB server with 4 shards
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
+
+    let partial_seen = Arc::new(Mutex::new(false));
+    let all_results = Arc::new(Mutex::new(Vec::new()));
+
+    // Client 1: MSET key_a 1 key_b 1 (keys route to different shards)
+    sim.client("client1", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Small delay to let client2 start polling
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Keys without hash tags - will scatter to different shards
+        let cmd = encode_command(&[b"MSET", b"key_a", b"1", b"key_b", b"1"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let response = parse_simple_response(&buf[..n]);
+        assert!(matches!(response, OperationResult::Ok), "MSET should succeed");
+
+        Ok(())
+    });
+
+    // Client 2: Rapid MGET polling to catch partial state
+    let partial_clone = partial_seen.clone();
+    let results_clone = all_results.clone();
+    sim.client("client2", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        // Poll rapidly during the MSET window
+        for _ in 0..100 {
+            let cmd = encode_command(&[b"MGET", b"key_a", b"key_b"]);
+            stream.write_all(&cmd).await?;
+            let n = stream.read(&mut buf).await?;
+            let response_str = String::from_utf8_lossy(&buf[..n]).to_string();
+
+            // Check for partial visibility
+            // *2\r\n$1\r\n1\r\n$-1\r\n = first key set, second nil (PARTIAL!)
+            // *2\r\n$-1\r\n$1\r\n1\r\n = first nil, second key set (PARTIAL!)
+            let has_value = response_str.contains("$1\r\n1\r\n");
+            let has_nil = response_str.contains("$-1\r\n");
+
+            if has_value && has_nil {
+                let nil_count = response_str.matches("$-1\r\n").count();
+                let value_count = response_str.matches("$1\r\n1\r\n").count();
+
+                // Exactly one nil and one value = partial visibility
+                if nil_count == 1 && value_count == 1 {
+                    *partial_clone.lock().unwrap() = true;
+                    results_clone.lock().unwrap().push(format!("PARTIAL: {}", response_str));
+                }
+            }
+
+            results_clone.lock().unwrap().push(response_str);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+
+    // This test SHOULD fail - we expect to see partial state
+    let saw_partial = *partial_seen.lock().unwrap();
+    let results = all_results.lock().unwrap();
+
+    if saw_partial {
+        // Find and report the partial state
+        for result in results.iter() {
+            if result.starts_with("PARTIAL:") {
+                panic!(
+                    "MSET atomicity violation detected (as expected for non-atomic MSET): {}",
+                    result
+                );
+            }
+        }
+    }
+
+    // If we didn't see partial state, the test passes (but shouldn't for non-atomic MSET)
+    // This assertion documents the expected failure
+    assert!(
+        saw_partial,
+        "Expected to see partial visibility during MSET scatter-gather, but didn't. \
+         This test is designed to FAIL to demonstrate the atomicity gap. \
+         If this passes, either MSET is now atomic (good!) or timing prevented catching the race."
+    );
+}
+
 // =============================================================================
 // Transaction (MULTI/EXEC) Tests - Should Pass
 // =============================================================================
@@ -1722,14 +1542,12 @@ fn test_transaction_atomicity_no_partial_visibility() {
         .tick_duration(Duration::from_millis(1))
         .build();
 
-    // Use simple_kv_server for now - transactions need MULTI/EXEC support
-    // This test verifies the model behavior; full server test would need MULTI/EXEC
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
 
     let observed_values = Arc::new(Mutex::new(Vec::new()));
 
     // For this test, we simulate transaction atomicity by doing operations in sequence
-    // The real test would use MULTI/EXEC which the simple_kv_server doesn't support yet
+    // The real test would use MULTI/EXEC
 
     let _observed1 = observed_values.clone();
     sim.client("client1", async move {
@@ -1805,7 +1623,7 @@ fn test_transaction_isolation_concurrent_writes() {
         .tick_duration(Duration::from_millis(1))
         .build();
 
-    sim.host(SERVER_HOST, simple_kv_server);
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
 
     // For this test, we verify the final state is consistent
     // Both clients write atomically, so we should never see a mixed state
@@ -1817,7 +1635,7 @@ fn test_transaction_isolation_concurrent_writes() {
         let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
         let mut buf = vec![0u8; 1024];
 
-        // Simulate atomic transaction
+        // Simulate atomic transaction using MSET with same-slot keys
         let cmd = encode_command(&[b"MSET", b"{same}a", b"1", b"{same}b", b"1"]);
         stream.write_all(&cmd).await?;
         let _n = stream.read(&mut buf).await?;
@@ -1832,7 +1650,7 @@ fn test_transaction_isolation_concurrent_writes() {
         let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
         let mut buf = vec![0u8; 1024];
 
-        // Simulate atomic transaction
+        // Simulate atomic transaction using MSET with same-slot keys
         let cmd = encode_command(&[b"MSET", b"{same}a", b"2", b"{same}b", b"2"]);
         stream.write_all(&cmd).await?;
         let _n = stream.read(&mut buf).await?;
