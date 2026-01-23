@@ -17,6 +17,7 @@ use crate::persistence::{
 use crate::pubsub::{
     ConnId, IntrospectionRequest, IntrospectionResponse, PubSubSender, ShardSubscriptions,
 };
+use crate::latency::{LatencyEvent, LatencyMonitor, LatencySample};
 use crate::registry::CommandRegistry;
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
 use crate::slowlog::{SlowLog, SlowLogEntry};
@@ -258,6 +259,52 @@ pub enum ShardMessage {
         client_name: String,
     },
 
+    // =========================================================================
+    // Memory messages
+    // =========================================================================
+
+    /// Get memory usage for a specific key.
+    MemoryUsage {
+        /// Key to check.
+        key: Bytes,
+        /// Number of nested samples for complex structures (optional).
+        samples: Option<usize>,
+        /// Response channel.
+        response_tx: oneshot::Sender<Option<usize>>,
+    },
+
+    /// Get memory statistics from this shard.
+    MemoryStats {
+        /// Response channel.
+        response_tx: oneshot::Sender<ShardMemoryStats>,
+    },
+
+    // =========================================================================
+    // Latency messages
+    // =========================================================================
+
+    /// Get the latest latency sample for each event type.
+    LatencyLatest {
+        /// Response channel.
+        response_tx: oneshot::Sender<Vec<(LatencyEvent, LatencySample)>>,
+    },
+
+    /// Get latency history for a specific event type.
+    LatencyHistory {
+        /// Event type to query.
+        event: LatencyEvent,
+        /// Response channel.
+        response_tx: oneshot::Sender<Vec<LatencySample>>,
+    },
+
+    /// Reset latency data for specific events (or all if empty).
+    LatencyReset {
+        /// Events to reset (empty = all).
+        events: Vec<LatencyEvent>,
+        /// Response channel.
+        response_tx: oneshot::Sender<()>,
+    },
+
     /// Shutdown signal.
     Shutdown,
 }
@@ -327,6 +374,21 @@ pub enum ScatterOp {
 pub struct PartialResult {
     /// Results keyed by original key position.
     pub results: Vec<(Bytes, Response)>,
+}
+
+/// Memory statistics for a single shard.
+#[derive(Debug, Clone, Default)]
+pub struct ShardMemoryStats {
+    /// Total memory used by data (bytes).
+    pub data_memory: usize,
+    /// Number of keys in the shard.
+    pub keys: usize,
+    /// Peak memory usage (high-water mark).
+    pub peak_memory: u64,
+    /// Memory limit for this shard (0 = unlimited).
+    pub memory_limit: u64,
+    /// Overhead estimate (allocator, metadata, etc).
+    pub overhead_estimate: usize,
 }
 
 /// Result from executing a transaction.
@@ -761,6 +823,9 @@ pub struct ShardWorker {
 
     /// Slow query log for this shard.
     slowlog: SlowLog,
+
+    /// Latency monitor for this shard.
+    latency_monitor: LatencyMonitor,
 }
 
 impl ShardWorker {
@@ -838,6 +903,7 @@ impl ShardWorker {
                 crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
                 slowlog_next_id,
             ),
+            latency_monitor: LatencyMonitor::default_monitor(),
         }
     }
 
@@ -904,6 +970,7 @@ impl ShardWorker {
                 crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
                 slowlog_next_id,
             ),
+            latency_monitor: LatencyMonitor::default_monitor(),
         }
     }
 
@@ -1060,6 +1127,30 @@ impl ShardWorker {
                         }
                         ShardMessage::SlowlogAdd { duration_us, command, client_addr, client_name } => {
                             self.slowlog.add(duration_us, &command, client_addr, client_name);
+                        }
+
+                        // Memory handlers
+                        ShardMessage::MemoryUsage { key, samples: _, response_tx } => {
+                            let usage = self.calculate_key_memory_usage(&key);
+                            let _ = response_tx.send(usage);
+                        }
+                        ShardMessage::MemoryStats { response_tx } => {
+                            let stats = self.collect_memory_stats();
+                            let _ = response_tx.send(stats);
+                        }
+
+                        // Latency handlers
+                        ShardMessage::LatencyLatest { response_tx } => {
+                            let latest = self.latency_monitor.latest();
+                            let _ = response_tx.send(latest);
+                        }
+                        ShardMessage::LatencyHistory { event, response_tx } => {
+                            let history = self.latency_monitor.history(event);
+                            let _ = response_tx.send(history);
+                        }
+                        ShardMessage::LatencyReset { events, response_tx } => {
+                            self.latency_monitor.reset(&events);
+                            let _ = response_tx.send(());
                         }
 
                         ShardMessage::Shutdown => {
@@ -2748,6 +2839,41 @@ impl ShardWorker {
         }
 
         Some(new_entries)
+    }
+
+    /// Calculate memory usage for a specific key.
+    ///
+    /// Returns None if the key doesn't exist.
+    fn calculate_key_memory_usage(&self, key: &[u8]) -> Option<usize> {
+        let value = self.store.get(key)?;
+
+        // Calculate approximate memory usage:
+        // - Key size
+        // - Value size (using memory_size method on Value)
+        // - Overhead for metadata, expiry tracking, etc.
+        let key_size = key.len();
+        let value_size = value.memory_size();
+        let overhead = std::mem::size_of::<crate::types::KeyMetadata>() + 64; // Rough estimate for hashmap entry overhead
+
+        Some(key_size + value_size + overhead)
+    }
+
+    /// Collect memory statistics for this shard.
+    fn collect_memory_stats(&self) -> ShardMemoryStats {
+        let data_memory = self.store.memory_used();
+        let keys = self.store.len();
+
+        // Estimate overhead: hashmap overhead per key + shard-level structures
+        let per_key_overhead = 64; // Rough estimate for HashMap entry overhead
+        let overhead_estimate = keys * per_key_overhead + 1024; // Plus shard structures
+
+        ShardMemoryStats {
+            data_memory,
+            keys,
+            peak_memory: self.peak_memory,
+            memory_limit: self.memory_limit,
+            overhead_estimate,
+        }
     }
 }
 

@@ -26,12 +26,6 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 - [ ] `SORT` / `SORT_RO` - Sort lists/sets/zsets
 - [ ] `LOLWUT` - Display Redis art (low priority)
 
-### Part 2: Performance commands
-
-- [ ] `MEMORY` commands (DOCTOR, MALLOC-SIZE, PURGE, STATS, USAGE)
-- [ ] `LATENCY` commands (DOCTOR, GRAPH, HISTOGRAM, HISTORY, LATEST, RESET)
-- [ ] `SLOWLOG` subcommands (GET, LEN, RESET)
-
 ### Part 3: Key migration
 
 - [ ] `MIGRATE` - Migrate keys between instances

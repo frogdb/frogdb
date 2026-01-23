@@ -7187,3 +7187,391 @@ async fn test_randomkey_multiple_keys() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// MEMORY tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_memory_help() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["MEMORY", "HELP"]).await;
+    match response {
+        Response::Array(items) => {
+            assert!(!items.is_empty(), "Help should not be empty");
+            // First item should mention MEMORY
+            if let Some(Response::Bulk(Some(first))) = items.first() {
+                let text = String::from_utf8_lossy(first);
+                assert!(
+                    text.to_uppercase().contains("MEMORY"),
+                    "Help should mention MEMORY"
+                );
+            }
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_memory_usage_missing_key() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // MEMORY USAGE for non-existent key should return null
+    let response = client.command(&["MEMORY", "USAGE", "nonexistent"]).await;
+    match response {
+        Response::Null => {}
+        Response::Bulk(None) => {}
+        _ => panic!("Expected null response for missing key, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_memory_usage_existing_key() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Set a key
+    let _ = client.command(&["SET", "testkey", "testvalue"]).await;
+
+    // MEMORY USAGE should return a positive integer
+    let response = client.command(&["MEMORY", "USAGE", "testkey"]).await;
+    match response {
+        Response::Integer(size) => {
+            assert!(size > 0, "Memory usage should be positive, got {}", size);
+        }
+        _ => panic!("Expected integer response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_memory_usage_with_samples() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Set a key
+    let _ = client.command(&["SET", "testkey", "testvalue"]).await;
+
+    // MEMORY USAGE with SAMPLES option
+    let response = client
+        .command(&["MEMORY", "USAGE", "testkey", "SAMPLES", "5"])
+        .await;
+    match response {
+        Response::Integer(size) => {
+            assert!(size > 0, "Memory usage should be positive, got {}", size);
+        }
+        _ => panic!("Expected integer response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_memory_stats() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // MEMORY STATS should return an array of key-value pairs
+    let response = client.command(&["MEMORY", "STATS"]).await;
+    match response {
+        Response::Array(items) => {
+            assert!(!items.is_empty(), "MEMORY STATS should not be empty");
+            // Should have pairs (key, value)
+            assert!(items.len() % 2 == 0, "Should have even number of items");
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_memory_doctor() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // MEMORY DOCTOR should return a bulk string report
+    let response = client.command(&["MEMORY", "DOCTOR"]).await;
+    match response {
+        Response::Bulk(Some(report)) => {
+            let text = String::from_utf8_lossy(&report);
+            assert!(!text.is_empty(), "Doctor report should not be empty");
+        }
+        _ => panic!("Expected bulk response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_memory_malloc_size() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // MEMORY MALLOC-SIZE should return the input (stub behavior)
+    let response = client.command(&["MEMORY", "MALLOC-SIZE", "1024"]).await;
+    match response {
+        Response::Integer(size) => {
+            assert_eq!(size, 1024, "Should return the input size");
+        }
+        _ => panic!("Expected integer response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_memory_purge() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // MEMORY PURGE should return OK (stub behavior)
+    let response = client.command(&["MEMORY", "PURGE"]).await;
+    match response {
+        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
+        _ => panic!("Expected OK response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_memory_unknown_subcommand() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["MEMORY", "INVALID"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("unknown subcommand"),
+                "Error should mention unknown subcommand"
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// LATENCY tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_latency_help() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["LATENCY", "HELP"]).await;
+    match response {
+        Response::Array(items) => {
+            assert!(!items.is_empty(), "Help should not be empty");
+            // First item should mention LATENCY
+            if let Some(Response::Bulk(Some(first))) = items.first() {
+                let text = String::from_utf8_lossy(first);
+                assert!(
+                    text.to_uppercase().contains("LATENCY"),
+                    "Help should mention LATENCY"
+                );
+            }
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_latency_latest_empty() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // Initially LATENCY LATEST should return empty or minimal data
+    let response = client.command(&["LATENCY", "LATEST"]).await;
+    match response {
+        Response::Array(_) => {
+            // Either empty or with entries - both are valid
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_latency_reset() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // LATENCY RESET should return OK
+    let response = client.command(&["LATENCY", "RESET"]).await;
+    match response {
+        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
+        _ => panic!("Expected OK response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_latency_reset_specific_event() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // LATENCY RESET with specific event
+    let response = client.command(&["LATENCY", "RESET", "command"]).await;
+    match response {
+        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
+        _ => panic!("Expected OK response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_latency_history_unknown_event() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // LATENCY HISTORY with invalid event should return error
+    let response = client.command(&["LATENCY", "HISTORY", "invalid"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("Unknown event type"),
+                "Error should mention unknown event type, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_latency_history_valid_event() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // LATENCY HISTORY with valid event should return array
+    let response = client.command(&["LATENCY", "HISTORY", "command"]).await;
+    match response {
+        Response::Array(_) => {
+            // Empty or with entries - both are valid
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_latency_graph_unknown_event() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // LATENCY GRAPH with invalid event should return error
+    let response = client.command(&["LATENCY", "GRAPH", "invalid"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("Unknown event type"),
+                "Error should mention unknown event type, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_latency_graph_valid_event() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // LATENCY GRAPH with valid event should return bulk string
+    let response = client.command(&["LATENCY", "GRAPH", "command"]).await;
+    match response {
+        Response::Bulk(Some(graph)) => {
+            let text = String::from_utf8_lossy(&graph);
+            // Should contain the event name
+            assert!(
+                text.contains("command"),
+                "Graph should mention the event name"
+            );
+        }
+        _ => panic!("Expected bulk response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_latency_doctor() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // LATENCY DOCTOR should return a bulk string report
+    let response = client.command(&["LATENCY", "DOCTOR"]).await;
+    match response {
+        Response::Bulk(Some(report)) => {
+            let text = String::from_utf8_lossy(&report);
+            assert!(!text.is_empty(), "Doctor report should not be empty");
+        }
+        _ => panic!("Expected bulk response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_latency_histogram() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    // LATENCY HISTOGRAM should return an array (may be empty)
+    let response = client.command(&["LATENCY", "HISTOGRAM"]).await;
+    match response {
+        Response::Array(_) => {
+            // Empty or with data - both are valid
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_latency_unknown_subcommand() {
+    let server = TestServer::start().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["LATENCY", "INVALID"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("unknown subcommand"),
+                "Error should mention unknown subcommand"
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}

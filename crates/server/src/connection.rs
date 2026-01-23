@@ -8,10 +8,11 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::{Bytes, BytesMut};
 use frogdb_core::{
-    persistence::SnapshotCoordinator, shard_for_key, AclManager, AuthenticatedUser, ClientHandle,
-    ClientRegistry, CommandCategory, CommandFlags, CommandRegistry, GlobPattern,
-    IntrospectionRequest, IntrospectionResponse, KeyAccessType, MetricsRecorder, PartialResult,
-    PauseMode, PubSubMessage, PubSubSender, ScatterOp, ShardMessage, StreamId, TransactionResult,
+    generate_latency_graph, persistence::SnapshotCoordinator, shard_for_key, AclManager,
+    AuthenticatedUser, ClientHandle, ClientRegistry, CommandCategory, CommandFlags, CommandRegistry,
+    GlobPattern, IntrospectionRequest, IntrospectionResponse, KeyAccessType, LatencyEvent,
+    MetricsRecorder, PartialResult, PauseMode, PubSubMessage, PubSubSender, ScatterOp,
+    ShardMemoryStats, ShardMessage, StreamId, TransactionResult,
     MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
@@ -847,6 +848,16 @@ impl ConnectionHandler {
         // Handle SLOWLOG commands specially (need scatter-gather across shards)
         if cmd_name_str == "SLOWLOG" {
             return vec![self.handle_slowlog_command(&cmd.args).await];
+        }
+
+        // Handle MEMORY commands specially (need scatter-gather or key-based routing)
+        if cmd_name_str == "MEMORY" {
+            return vec![self.handle_memory_command(&cmd.args).await];
+        }
+
+        // Handle LATENCY commands specially (need scatter-gather across shards)
+        if cmd_name_str == "LATENCY" {
+            return vec![self.handle_latency_command(&cmd.args).await];
         }
 
         // Handle BGSAVE/LASTSAVE commands specially (need snapshot coordinator)
@@ -4104,6 +4115,553 @@ impl ConnectionHandler {
             Response::bulk(Bytes::from_static(b"    Print this help.")),
         ];
         Response::Array(help)
+    }
+
+    // =========================================================================
+    // MEMORY command handlers
+    // =========================================================================
+
+    /// Handle MEMORY command and dispatch to subcommands.
+    async fn handle_memory_command(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'memory' command");
+        }
+
+        let subcommand = args[0].to_ascii_uppercase();
+        let subcommand_str = String::from_utf8_lossy(&subcommand);
+
+        match subcommand_str.as_ref() {
+            "DOCTOR" => self.handle_memory_doctor().await,
+            "HELP" => self.handle_memory_help(),
+            "MALLOC-SIZE" => self.handle_memory_malloc_size(&args[1..]),
+            "PURGE" => self.handle_memory_purge(),
+            "STATS" => self.handle_memory_stats().await,
+            "USAGE" => self.handle_memory_usage(&args[1..]).await,
+            _ => Response::error(format!(
+                "ERR unknown subcommand '{}'. Try MEMORY HELP.",
+                subcommand_str
+            )),
+        }
+    }
+
+    /// Handle MEMORY DOCTOR - diagnose memory issues.
+    async fn handle_memory_doctor(&self) -> Response {
+        let stats = self.gather_memory_stats().await;
+
+        let mut report = Vec::new();
+
+        // Analyze memory usage
+        let total_data_memory: usize = stats.iter().map(|s| s.data_memory).sum();
+        let total_keys: usize = stats.iter().map(|s| s.keys).sum();
+        let total_peak: u64 = stats.iter().map(|s| s.peak_memory).max().unwrap_or(0);
+        let total_limit: u64 = stats.iter().map(|s| s.memory_limit).sum();
+
+        report.push(format!("Sam, I have a few things to report:"));
+
+        // Check memory usage ratio
+        if total_limit > 0 {
+            let usage_ratio = total_data_memory as f64 / total_limit as f64;
+            if usage_ratio > 0.9 {
+                report.push(format!(
+                    "* High memory usage: {:.1}% of {} bytes limit",
+                    usage_ratio * 100.0,
+                    total_limit
+                ));
+            } else if usage_ratio > 0.75 {
+                report.push(format!(
+                    "* Moderate memory usage: {:.1}% of {} bytes limit",
+                    usage_ratio * 100.0,
+                    total_limit
+                ));
+            }
+        }
+
+        // Check for memory fragmentation
+        let total_overhead: usize = stats.iter().map(|s| s.overhead_estimate).sum();
+        let overhead_ratio = if total_data_memory > 0 {
+            total_overhead as f64 / total_data_memory as f64
+        } else {
+            0.0
+        };
+
+        if overhead_ratio > 0.5 {
+            report.push(format!(
+                "* High overhead ratio: {:.1}% overhead detected",
+                overhead_ratio * 100.0
+            ));
+        }
+
+        // Report peak memory if significantly higher than current
+        if total_peak > 0 && total_data_memory > 0 {
+            let peak_ratio = total_peak as f64 / total_data_memory as f64;
+            if peak_ratio > 1.5 {
+                report.push(format!(
+                    "* Peak memory was {:.1}x higher than current usage",
+                    peak_ratio
+                ));
+            }
+        }
+
+        if report.len() == 1 {
+            report.push("* No memory issues detected.".to_string());
+        }
+
+        report.push(format!(
+            "\nSummary: {} keys, {} bytes data, {} shards",
+            total_keys,
+            total_data_memory,
+            stats.len()
+        ));
+
+        Response::bulk(Bytes::from(report.join("\n")))
+    }
+
+    /// Handle MEMORY HELP - show help text.
+    fn handle_memory_help(&self) -> Response {
+        let help = vec![
+            Response::bulk(Bytes::from_static(
+                b"MEMORY <subcommand> [<arg> ...]. Subcommands are:",
+            )),
+            Response::bulk(Bytes::from_static(b"DOCTOR")),
+            Response::bulk(Bytes::from_static(
+                b"    Return memory problems reports.",
+            )),
+            Response::bulk(Bytes::from_static(b"HELP")),
+            Response::bulk(Bytes::from_static(b"    Print this help.")),
+            Response::bulk(Bytes::from_static(b"MALLOC-SIZE <size>")),
+            Response::bulk(Bytes::from_static(
+                b"    Return the allocator usable size for the given input size.",
+            )),
+            Response::bulk(Bytes::from_static(b"PURGE")),
+            Response::bulk(Bytes::from_static(
+                b"    Attempt to release memory back to the OS.",
+            )),
+            Response::bulk(Bytes::from_static(b"STATS")),
+            Response::bulk(Bytes::from_static(
+                b"    Return information about memory usage.",
+            )),
+            Response::bulk(Bytes::from_static(b"USAGE <key> [SAMPLES <count>]")),
+            Response::bulk(Bytes::from_static(
+                b"    Return memory used by a key and its value.",
+            )),
+        ];
+        Response::Array(help)
+    }
+
+    /// Handle MEMORY MALLOC-SIZE <size> - get allocator usable size (stub).
+    fn handle_memory_malloc_size(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'memory|malloc-size' command");
+        }
+
+        // Parse the size argument
+        match String::from_utf8_lossy(&args[0]).parse::<i64>() {
+            Ok(size) => {
+                // Without jemalloc, just return the input size
+                // In a real implementation this would query the allocator
+                Response::Integer(size)
+            }
+            Err(_) => Response::error("ERR value is not an integer or out of range"),
+        }
+    }
+
+    /// Handle MEMORY PURGE - force memory release (stub).
+    fn handle_memory_purge(&self) -> Response {
+        // Without jemalloc, this is a no-op
+        // In a real implementation this would call jemalloc_purge_arena or similar
+        Response::ok()
+    }
+
+    /// Handle MEMORY STATS - get detailed memory statistics.
+    async fn handle_memory_stats(&self) -> Response {
+        let stats = self.gather_memory_stats().await;
+
+        let total_data_memory: usize = stats.iter().map(|s| s.data_memory).sum();
+        let total_keys: usize = stats.iter().map(|s| s.keys).sum();
+        let total_overhead: usize = stats.iter().map(|s| s.overhead_estimate).sum();
+        let peak_memory: u64 = stats.iter().map(|s| s.peak_memory).max().unwrap_or(0);
+        let total_limit: u64 = stats.iter().map(|s| s.memory_limit).sum();
+
+        // Build a flat array of key-value pairs (Redis MEMORY STATS format)
+        let mut result = vec![
+            Response::bulk(Bytes::from_static(b"peak.allocated")),
+            Response::Integer(peak_memory as i64),
+            Response::bulk(Bytes::from_static(b"total.allocated")),
+            Response::Integer(total_data_memory as i64),
+            Response::bulk(Bytes::from_static(b"startup.allocated")),
+            Response::Integer(0), // We don't track startup memory separately
+            Response::bulk(Bytes::from_static(b"replication.backlog")),
+            Response::Integer(0), // No replication backlog yet
+            Response::bulk(Bytes::from_static(b"clients.slaves")),
+            Response::Integer(0), // No replica clients yet
+            Response::bulk(Bytes::from_static(b"clients.normal")),
+            Response::Integer(0), // Would need client tracking
+            Response::bulk(Bytes::from_static(b"aof.buffer")),
+            Response::Integer(0), // No AOF buffer
+            Response::bulk(Bytes::from_static(b"overhead.total")),
+            Response::Integer(total_overhead as i64),
+            Response::bulk(Bytes::from_static(b"keys.count")),
+            Response::Integer(total_keys as i64),
+            Response::bulk(Bytes::from_static(b"keys.bytes-per-key")),
+            Response::Integer(if total_keys > 0 {
+                (total_data_memory / total_keys) as i64
+            } else {
+                0
+            }),
+            Response::bulk(Bytes::from_static(b"dataset.bytes")),
+            Response::Integer(total_data_memory as i64),
+            Response::bulk(Bytes::from_static(b"dataset.percentage")),
+            Response::bulk(Bytes::from(if total_data_memory > 0 && total_limit > 0 {
+                format!("{:.2}", (total_data_memory as f64 / total_limit as f64) * 100.0)
+            } else {
+                "0.00".to_string()
+            })),
+            Response::bulk(Bytes::from_static(b"peak.percentage")),
+            Response::bulk(Bytes::from(if peak_memory > 0 && total_limit > 0 {
+                format!("{:.2}", (peak_memory as f64 / total_limit as f64) * 100.0)
+            } else {
+                "0.00".to_string()
+            })),
+        ];
+
+        // Add per-shard breakdown
+        result.push(Response::bulk(Bytes::from_static(b"db.0")));
+        let db_stats = vec![
+            Response::bulk(Bytes::from_static(b"overhead.hashtable.main")),
+            Response::Integer(total_overhead as i64),
+            Response::bulk(Bytes::from_static(b"overhead.hashtable.expires")),
+            Response::Integer(0),
+        ];
+        result.push(Response::Array(db_stats));
+
+        Response::Array(result)
+    }
+
+    /// Handle MEMORY USAGE <key> [SAMPLES count] - get memory for a specific key.
+    async fn handle_memory_usage(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'memory|usage' command");
+        }
+
+        let key = &args[0];
+        let _samples = if args.len() >= 3
+            && args[1].eq_ignore_ascii_case(b"SAMPLES")
+        {
+            match String::from_utf8_lossy(&args[2]).parse::<usize>() {
+                Ok(n) => Some(n),
+                Err(_) => return Response::error("ERR value is not an integer or out of range"),
+            }
+        } else {
+            None
+        };
+
+        // Route to the shard that owns this key
+        let shard_id = shard_for_key(key, self.shard_senders.len());
+        let sender = &self.shard_senders[shard_id];
+
+        let (response_tx, response_rx) = oneshot::channel();
+        if sender
+            .send(ShardMessage::MemoryUsage {
+                key: key.clone(),
+                samples: _samples,
+                response_tx,
+            })
+            .await
+            .is_err()
+        {
+            return Response::error("ERR shard communication error");
+        }
+
+        match response_rx.await {
+            Ok(Some(usage)) => Response::Integer(usage as i64),
+            Ok(None) => Response::Null,
+            Err(_) => Response::error("ERR shard response error"),
+        }
+    }
+
+    /// Gather memory stats from all shards.
+    async fn gather_memory_stats(&self) -> Vec<ShardMemoryStats> {
+        let mut stats = Vec::new();
+
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::MemoryStats { response_tx })
+                .await
+                .is_ok()
+            {
+                if let Ok(shard_stats) = response_rx.await {
+                    stats.push(shard_stats);
+                }
+            }
+        }
+
+        stats
+    }
+
+    // =========================================================================
+    // LATENCY command handlers
+    // =========================================================================
+
+    /// Handle LATENCY command and dispatch to subcommands.
+    async fn handle_latency_command(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'latency' command");
+        }
+
+        let subcommand = args[0].to_ascii_uppercase();
+        let subcommand_str = String::from_utf8_lossy(&subcommand);
+
+        match subcommand_str.as_ref() {
+            "DOCTOR" => self.handle_latency_doctor().await,
+            "GRAPH" => self.handle_latency_graph(&args[1..]).await,
+            "HELP" => self.handle_latency_help(),
+            "HISTOGRAM" => self.handle_latency_histogram(&args[1..]).await,
+            "HISTORY" => self.handle_latency_history(&args[1..]).await,
+            "LATEST" => self.handle_latency_latest().await,
+            "RESET" => self.handle_latency_reset(&args[1..]).await,
+            _ => Response::error(format!(
+                "ERR unknown subcommand '{}'. Try LATENCY HELP.",
+                subcommand_str
+            )),
+        }
+    }
+
+    /// Handle LATENCY DOCTOR - diagnose latency issues.
+    async fn handle_latency_doctor(&self) -> Response {
+        let latest = self.gather_latency_latest().await;
+
+        let mut report = Vec::new();
+        report.push("I have a few latency reports to share:".to_string());
+
+        if latest.is_empty() {
+            report.push("* No latency events recorded yet.".to_string());
+        } else {
+            for (event, sample) in &latest {
+                if sample.latency_ms > 100 {
+                    report.push(format!(
+                        "* {} event at {} had HIGH latency of {}ms",
+                        event.as_str(),
+                        sample.timestamp,
+                        sample.latency_ms
+                    ));
+                } else if sample.latency_ms > 10 {
+                    report.push(format!(
+                        "* {} event at {} had moderate latency of {}ms",
+                        event.as_str(),
+                        sample.timestamp,
+                        sample.latency_ms
+                    ));
+                }
+            }
+
+            if report.len() == 1 {
+                report.push("* All recorded events have acceptable latency.".to_string());
+            }
+        }
+
+        Response::bulk(Bytes::from(report.join("\n")))
+    }
+
+    /// Handle LATENCY GRAPH <event> - show ASCII latency graph.
+    async fn handle_latency_graph(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'latency|graph' command");
+        }
+
+        let event_str = String::from_utf8_lossy(&args[0]);
+        let event = match LatencyEvent::from_str(&event_str) {
+            Some(e) => e,
+            None => {
+                return Response::error(format!(
+                    "ERR Unknown event type: {}. Valid events: command, fork, aof-fsync, expire-cycle, eviction-cycle, snapshot-io",
+                    event_str
+                ));
+            }
+        };
+
+        let history = self.gather_latency_history(event).await;
+        let graph = generate_latency_graph(event, &history);
+
+        Response::bulk(Bytes::from(graph))
+    }
+
+    /// Handle LATENCY HELP - show help text.
+    fn handle_latency_help(&self) -> Response {
+        let help = vec![
+            Response::bulk(Bytes::from_static(
+                b"LATENCY <subcommand> [<arg> ...]. Subcommands are:",
+            )),
+            Response::bulk(Bytes::from_static(b"DOCTOR")),
+            Response::bulk(Bytes::from_static(
+                b"    Return latency diagnostic report.",
+            )),
+            Response::bulk(Bytes::from_static(b"GRAPH <event>")),
+            Response::bulk(Bytes::from_static(
+                b"    Return an ASCII art graph of latency for the event.",
+            )),
+            Response::bulk(Bytes::from_static(b"HELP")),
+            Response::bulk(Bytes::from_static(b"    Print this help.")),
+            Response::bulk(Bytes::from_static(b"HISTOGRAM [<command> ...]")),
+            Response::bulk(Bytes::from_static(
+                b"    Return a cumulative distribution of command latencies.",
+            )),
+            Response::bulk(Bytes::from_static(b"HISTORY <event>")),
+            Response::bulk(Bytes::from_static(
+                b"    Return timestamp-latency pairs for the event.",
+            )),
+            Response::bulk(Bytes::from_static(b"LATEST")),
+            Response::bulk(Bytes::from_static(
+                b"    Return the latest latency samples for all events.",
+            )),
+            Response::bulk(Bytes::from_static(b"RESET [<event> ...]")),
+            Response::bulk(Bytes::from_static(
+                b"    Reset latency data for specified events, or all if none given.",
+            )),
+        ];
+        Response::Array(help)
+    }
+
+    /// Handle LATENCY HISTOGRAM [command...] - show command latency histogram.
+    async fn handle_latency_histogram(&self, _args: &[Bytes]) -> Response {
+        // This would require command-level latency tracking which is not yet implemented
+        // Return an empty response for now
+        Response::Array(vec![])
+    }
+
+    /// Handle LATENCY HISTORY <event> - get historical latency data.
+    async fn handle_latency_history(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'latency|history' command");
+        }
+
+        let event_str = String::from_utf8_lossy(&args[0]);
+        let event = match LatencyEvent::from_str(&event_str) {
+            Some(e) => e,
+            None => {
+                return Response::error(format!(
+                    "ERR Unknown event type: {}. Valid events: command, fork, aof-fsync, expire-cycle, eviction-cycle, snapshot-io",
+                    event_str
+                ));
+            }
+        };
+
+        let history = self.gather_latency_history(event).await;
+
+        // Return as array of [timestamp, latency] pairs
+        let entries: Vec<Response> = history
+            .into_iter()
+            .map(|sample| {
+                Response::Array(vec![
+                    Response::Integer(sample.timestamp),
+                    Response::Integer(sample.latency_ms as i64),
+                ])
+            })
+            .collect();
+
+        Response::Array(entries)
+    }
+
+    /// Handle LATENCY LATEST - get latest latency samples.
+    async fn handle_latency_latest(&self) -> Response {
+        let latest = self.gather_latency_latest().await;
+
+        let entries: Vec<Response> = latest
+            .into_iter()
+            .map(|(event, sample)| {
+                Response::Array(vec![
+                    Response::bulk(Bytes::from(event.as_str())),
+                    Response::Integer(sample.timestamp),
+                    Response::Integer(sample.latency_ms as i64),
+                    Response::Integer(sample.latency_ms as i64), // max_latency (same as latest in our impl)
+                ])
+            })
+            .collect();
+
+        Response::Array(entries)
+    }
+
+    /// Handle LATENCY RESET [event...] - clear latency data.
+    async fn handle_latency_reset(&self, args: &[Bytes]) -> Response {
+        // Parse event names
+        let events: Vec<LatencyEvent> = args
+            .iter()
+            .filter_map(|arg| {
+                let s = String::from_utf8_lossy(arg);
+                LatencyEvent::from_str(&s)
+            })
+            .collect();
+
+        // Broadcast reset to all shards
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::LatencyReset {
+                    events: events.clone(),
+                    response_tx,
+                })
+                .await
+                .is_ok()
+            {
+                let _ = response_rx.await;
+            }
+        }
+
+        Response::ok()
+    }
+
+    /// Gather latest latency samples from all shards.
+    async fn gather_latency_latest(&self) -> Vec<(LatencyEvent, frogdb_core::LatencySample)> {
+        use std::collections::HashMap;
+
+        let mut latest_by_event: HashMap<LatencyEvent, frogdb_core::LatencySample> = HashMap::new();
+
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::LatencyLatest { response_tx })
+                .await
+                .is_ok()
+            {
+                if let Ok(samples) = response_rx.await {
+                    for (event, sample) in samples {
+                        // Keep the most recent sample for each event
+                        latest_by_event
+                            .entry(event)
+                            .and_modify(|existing| {
+                                if sample.timestamp > existing.timestamp {
+                                    *existing = sample;
+                                }
+                            })
+                            .or_insert(sample);
+                    }
+                }
+            }
+        }
+
+        latest_by_event.into_iter().collect()
+    }
+
+    /// Gather latency history for a specific event from all shards.
+    async fn gather_latency_history(&self, event: LatencyEvent) -> Vec<frogdb_core::LatencySample> {
+        let mut all_samples = Vec::new();
+
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::LatencyHistory { event, response_tx })
+                .await
+                .is_ok()
+            {
+                if let Ok(samples) = response_rx.await {
+                    all_samples.extend(samples);
+                }
+            }
+        }
+
+        // Sort by timestamp (newest first)
+        all_samples.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        all_samples
     }
 
     // =========================================================================

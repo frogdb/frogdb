@@ -922,11 +922,11 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::stub::PsyncCommand);
     registry.register(crate::commands::stub::ReplconfCommand);
 
-    // Memory
-    registry.register(crate::commands::stub::MemoryCommand);
+    // Memory (handled specially in connection.rs for scatter-gather)
+    registry.register(crate::commands::memory::MemoryCommand);
 
-    // Latency
-    registry.register(crate::commands::stub::LatencyCommand);
+    // Latency (handled specially in connection.rs for scatter-gather)
+    registry.register(crate::commands::latency::LatencyCommand);
 
     // Module
     registry.register(crate::commands::stub::ModuleCommand);
