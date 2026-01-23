@@ -198,31 +198,6 @@ stub_command!(
 );
 
 // =============================================================================
-// Function Commands
-// =============================================================================
-
-stub_command!(
-    FunctionCommand,
-    "FUNCTION",
-    Arity::AtLeast(1),
-    CommandFlags::NOSCRIPT
-);
-
-stub_command!(
-    FcallCommand,
-    "FCALL",
-    Arity::AtLeast(2),
-    CommandFlags::SCRIPT | CommandFlags::NOSCRIPT | CommandFlags::STALE
-);
-
-stub_command!(
-    FcallRoCommand,
-    "FCALL_RO",
-    Arity::AtLeast(2),
-    CommandFlags::SCRIPT | CommandFlags::NOSCRIPT | CommandFlags::READONLY | CommandFlags::STALE
-);
-
-// =============================================================================
 // Generic/Keys Commands
 // =============================================================================
 

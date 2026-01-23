@@ -366,6 +366,182 @@ impl ScriptExecutor {
     pub fn cache_stats(&self) -> (usize, usize) {
         (self.cache.len(), self.cache.current_bytes())
     }
+
+    /// Execute a function from a library.
+    ///
+    /// This loads the library code, then calls the named function with the given keys and args.
+    pub fn execute_function(
+        &mut self,
+        function_name: &str,
+        library_code: &str,
+        keys: &[Bytes],
+        argv: &[Bytes],
+        ctx: &mut CommandContext,
+        registry: &CommandRegistry,
+        read_only: bool,
+    ) -> Result<Response, ScriptError> {
+        // Check if already running
+        if self.running.load(Ordering::Relaxed) {
+            return Err(ScriptError::NestedScript);
+        }
+
+        self.running.store(true, Ordering::Relaxed);
+
+        // Prepare VM
+        self.vm.prepare_execution(keys, argv)?;
+
+        // Set up command execution context
+        let store_ptr: *mut dyn crate::store::Store = unsafe {
+            std::mem::transmute(ctx.store as *mut dyn crate::store::Store)
+        };
+        let cmd_exec_ctx = CommandExecutionContext {
+            store_ptr,
+            registry_ptr: registry as *const CommandRegistry,
+            shard_senders: Arc::clone(ctx.shard_senders),
+            shard_id: ctx.shard_id,
+            num_shards: ctx.num_shards,
+            conn_id: ctx.conn_id,
+            protocol_version: ctx.protocol_version,
+        };
+        self.vm.set_command_context(cmd_exec_ctx);
+
+        // Set up redis.call and redis.pcall
+        self.setup_redis_bindings(keys)?;
+
+        // Strip shebang from library code (Lua doesn't understand #!)
+        let library_code_clean = if library_code.starts_with("#!") {
+            library_code.find('\n').map(|pos| &library_code[pos + 1..]).unwrap_or("")
+        } else {
+            library_code
+        };
+
+        // Build function execution code
+        // This loads the library first, then calls the function
+        let execution_code = format!(
+            r#"
+-- Load the library (this registers functions in redis.functions)
+{}
+
+-- Get the registered function
+local fn = __frogdb_functions and __frogdb_functions["{}"]
+if not fn then
+    error("Function not found after loading library: {}")
+end
+
+-- Call the function with KEYS and ARGV
+return fn(KEYS, ARGV)
+"#,
+            library_code_clean, function_name, function_name
+        );
+
+        // Set up function registration before loading
+        self.setup_function_registration()?;
+
+        // Execute
+        let result = self.vm.execute(execution_code.as_bytes());
+
+        // Check for read-only violations
+        if read_only && self.vm.has_writes() {
+            self.vm.clear_command_context();
+            self.vm.cleanup_execution();
+            self.running.store(false, Ordering::Relaxed);
+            return Err(ScriptError::Runtime(format!(
+                "FCALL_RO called but function '{}' performed a write",
+                function_name
+            )));
+        }
+
+        // Cleanup
+        self.vm.clear_command_context();
+        self.vm.cleanup_execution();
+        self.running.store(false, Ordering::Relaxed);
+
+        // Convert result
+        match result {
+            Ok(value) => Ok(self.lua_to_response(value)),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Set up the function registration mechanism for library loading.
+    fn setup_function_registration(&self) -> Result<(), ScriptError> {
+        let lua = self.vm.lua();
+        let globals = lua.globals();
+
+        // Create a storage table for registered functions
+        let functions_table = lua.create_table()
+            .map_err(|e| ScriptError::Internal(format!("Failed to create functions table: {}", e)))?;
+
+        globals.set("__frogdb_functions", functions_table)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set functions table: {}", e)))?;
+
+        // Get the redis table and add register_function
+        let redis_table: mlua::Table = globals.get("redis")
+            .map_err(|e| ScriptError::Internal(format!("Failed to get redis table: {}", e)))?;
+
+        // Create register_function
+        let register_fn = lua.create_function(|lua_ctx, args: MultiValue| -> mlua::Result<()> {
+            let args_vec: Vec<Value> = args.into_iter().collect();
+
+            if args_vec.is_empty() {
+                return Err(mlua::Error::RuntimeError(
+                    "redis.register_function requires at least one argument".to_string(),
+                ));
+            }
+
+            let globals = lua_ctx.globals();
+            let functions_table: mlua::Table = globals.get("__frogdb_functions")
+                .map_err(|_| mlua::Error::RuntimeError("Functions table not found".to_string()))?;
+
+            match &args_vec[0] {
+                // Table form: redis.register_function{function_name='name', callback=fn, ...}
+                Value::Table(t) => {
+                    let name: String = t.get("function_name")
+                        .map_err(|_| mlua::Error::RuntimeError(
+                            "Missing required field 'function_name'".to_string()
+                        ))?;
+
+                    let callback: mlua::Function = t.get("callback")
+                        .map_err(|_| mlua::Error::RuntimeError(
+                            "Missing required field 'callback'".to_string()
+                        ))?;
+
+                    functions_table.set(name, callback)?;
+                }
+
+                // Simple form: redis.register_function('name', callback)
+                Value::String(name) => {
+                    if args_vec.len() < 2 {
+                        return Err(mlua::Error::RuntimeError(
+                            "redis.register_function requires a callback function".to_string(),
+                        ));
+                    }
+
+                    let callback = match &args_vec[1] {
+                        Value::Function(f) => f.clone(),
+                        _ => return Err(mlua::Error::RuntimeError(
+                            "Second argument must be a function".to_string(),
+                        )),
+                    };
+
+                    functions_table.set(name.to_str()?, callback)?;
+                }
+
+                _ => {
+                    return Err(mlua::Error::RuntimeError(
+                        "First argument must be a string or table".to_string(),
+                    ));
+                }
+            }
+
+            Ok(())
+        }).map_err(|e| ScriptError::Internal(format!("Failed to create register_function: {}", e)))?;
+
+        redis_table.set("register_function", register_fn)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set register_function: {}", e)))?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ use frogdb_core::{
     AuthenticatedUser, ClientHandle, ClientRegistry, CommandCategory, CommandFlags, CommandRegistry,
     GlobPattern, IntrospectionRequest, IntrospectionResponse, KeyAccessType, LatencyEvent,
     MetricsRecorder, PartialResult, PauseMode, PubSubMessage, PubSubSender, ScatterOp,
-    ShardMemoryStats, ShardMessage, StreamId, TransactionResult,
+    SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId, TransactionResult,
     MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
@@ -260,6 +261,9 @@ pub struct ConnectionHandler {
 
     /// Snapshot coordinator for BGSAVE/LASTSAVE commands.
     snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+
+    /// Function registry for FUNCTION/FCALL commands.
+    function_registry: SharedFunctionRegistry,
 }
 
 /// Determine key access type from command flags.
@@ -361,6 +365,7 @@ impl ConnectionHandler {
         metrics_recorder: Arc<dyn MetricsRecorder>,
         acl_manager: Arc<AclManager>,
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+        function_registry: SharedFunctionRegistry,
     ) -> Self {
         let framed = Framed::new(socket, Resp2);
         let requires_auth = acl_manager.requires_auth();
@@ -386,6 +391,7 @@ impl ConnectionHandler {
             metrics_recorder,
             acl_manager,
             snapshot_coordinator,
+            function_registry,
         }
     }
 
@@ -833,6 +839,14 @@ impl ConnectionHandler {
             "EVAL" => return vec![self.handle_eval(&cmd.args).await],
             "EVALSHA" => return vec![self.handle_evalsha(&cmd.args).await],
             "SCRIPT" => return vec![self.handle_script(&cmd.args).await],
+            _ => {}
+        }
+
+        // Handle function commands specially
+        match cmd_name_str.as_ref() {
+            "FCALL" => return vec![self.handle_fcall(&cmd.args, false).await],
+            "FCALL_RO" => return vec![self.handle_fcall(&cmd.args, true).await],
+            "FUNCTION" => return vec![self.handle_function(&cmd.args).await],
             _ => {}
         }
 
@@ -2984,6 +2998,454 @@ impl ConnectionHandler {
             Response::bulk(Bytes::from_static(b"    Print this help.")),
         ];
         Response::Array(help)
+    }
+
+    // =========================================================================
+    // Function command handlers
+    // =========================================================================
+
+    /// Handle FCALL and FCALL_RO commands.
+    async fn handle_fcall(&self, args: &[Bytes], read_only: bool) -> Response {
+        let cmd_name = if read_only { "fcall_ro" } else { "fcall" };
+
+        if args.len() < 2 {
+            return Response::error(format!(
+                "ERR wrong number of arguments for '{}' command",
+                cmd_name
+            ));
+        }
+
+        // Parse arguments: function numkeys [key ...] [arg ...]
+        let function_name = args[0].clone();
+        let numkeys = match std::str::from_utf8(&args[1])
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            Some(n) => n,
+            None => return Response::error("ERR value is not an integer or out of range"),
+        };
+
+        // Validate we have enough args
+        if args.len() < 2 + numkeys {
+            return Response::error("ERR Number of keys can't be greater than number of args");
+        }
+
+        // Extract keys and argv
+        let keys: Vec<Bytes> = args[2..2 + numkeys].to_vec();
+        let argv: Vec<Bytes> = args[2 + numkeys..].to_vec();
+
+        // Determine target shard
+        let target_shard = if keys.is_empty() {
+            0 // No keys -> shard 0
+        } else {
+            let first_shard = shard_for_key(&keys[0], self.num_shards);
+            // Check all keys hash to same shard
+            for key in &keys[1..] {
+                if shard_for_key(key, self.num_shards) != first_shard {
+                    return Response::error("CROSSSLOT Keys in request don't hash to the same slot");
+                }
+            }
+            first_shard
+        };
+
+        // Send to shard
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::FunctionCall {
+            function_name,
+            keys,
+            argv,
+            conn_id: self.state.id,
+            protocol_version: self.state.protocol_version,
+            read_only,
+            response_tx,
+        };
+
+        if self.shard_senders[target_shard].send(msg).await.is_err() {
+            return Response::error("ERR shard unavailable");
+        }
+
+        match response_rx.await {
+            Ok(response) => response,
+            Err(_) => Response::error("ERR shard dropped request"),
+        }
+    }
+
+    /// Handle FUNCTION command with subcommands.
+    async fn handle_function(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'function' command");
+        }
+
+        let subcommand = args[0].to_ascii_uppercase();
+        let subcommand_str = String::from_utf8_lossy(&subcommand);
+
+        match subcommand_str.as_ref() {
+            "LOAD" => self.handle_function_load(&args[1..]).await,
+            "LIST" => self.handle_function_list(&args[1..]),
+            "DELETE" => self.handle_function_delete(&args[1..]),
+            "FLUSH" => self.handle_function_flush(&args[1..]),
+            "STATS" => self.handle_function_stats(),
+            "DUMP" => self.handle_function_dump(),
+            "RESTORE" => self.handle_function_restore(&args[1..]).await,
+            "KILL" => self.handle_function_kill().await,
+            "HELP" => self.handle_function_help(),
+            _ => Response::error(format!(
+                "ERR unknown subcommand '{}'. Try FUNCTION HELP.",
+                subcommand_str
+            )),
+        }
+    }
+
+    /// Handle FUNCTION LOAD [REPLACE] code.
+    async fn handle_function_load(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'function|load' command");
+        }
+
+        // Check for REPLACE option
+        let (replace, code) = if args.len() >= 2 && args[0].to_ascii_uppercase() == b"REPLACE".as_slice() {
+            (true, &args[1])
+        } else {
+            (false, &args[0])
+        };
+
+        let code_str = match std::str::from_utf8(code) {
+            Ok(s) => s,
+            Err(_) => return Response::error("ERR library code must be valid UTF-8"),
+        };
+
+        // Load the library
+        let library = match frogdb_core::load_library(code_str) {
+            Ok(lib) => lib,
+            Err(e) => return Response::error(e.to_string()),
+        };
+
+        let library_name = library.name.clone();
+
+        // Register in the global registry
+        {
+            let mut registry = self.function_registry.write().unwrap();
+            match registry.load_library(library, replace) {
+                Ok(_) => {}
+                Err(e) => return Response::error(e.to_string()),
+            }
+        }
+
+        // Persist to disk
+        self.persist_functions();
+
+        Response::bulk(Bytes::from(library_name))
+    }
+
+    /// Handle FUNCTION LIST [LIBRARYNAME pattern] [WITHCODE].
+    fn handle_function_list(&self, args: &[Bytes]) -> Response {
+        let mut pattern: Option<&str> = None;
+        let mut with_code = false;
+
+        let mut i = 0;
+        while i < args.len() {
+            let opt = args[i].to_ascii_uppercase();
+            match opt.as_slice() {
+                b"LIBRARYNAME" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Response::error("ERR syntax error");
+                    }
+                    pattern = std::str::from_utf8(&args[i]).ok();
+                }
+                b"WITHCODE" => {
+                    with_code = true;
+                }
+                _ => {
+                    return Response::error(format!(
+                        "ERR unknown option '{}'",
+                        String::from_utf8_lossy(&args[i])
+                    ));
+                }
+            }
+            i += 1;
+        }
+
+        let registry = self.function_registry.read().unwrap();
+        let libraries = registry.list_libraries(pattern);
+
+        let mut result = Vec::new();
+        for lib in libraries {
+            let mut lib_info = Vec::new();
+
+            // library_name
+            lib_info.push(Response::bulk(Bytes::from_static(b"library_name")));
+            lib_info.push(Response::bulk(Bytes::from(lib.name.clone())));
+
+            // engine
+            lib_info.push(Response::bulk(Bytes::from_static(b"engine")));
+            lib_info.push(Response::bulk(Bytes::from(lib.engine.clone())));
+
+            // functions
+            lib_info.push(Response::bulk(Bytes::from_static(b"functions")));
+            let mut funcs = Vec::new();
+            for func in lib.functions.values() {
+                let mut func_info = Vec::new();
+
+                func_info.push(Response::bulk(Bytes::from_static(b"name")));
+                func_info.push(Response::bulk(Bytes::from(func.name.clone())));
+
+                func_info.push(Response::bulk(Bytes::from_static(b"flags")));
+                let flags: Vec<Response> = func
+                    .flags
+                    .to_strings()
+                    .into_iter()
+                    .map(|f| Response::bulk(Bytes::from(f)))
+                    .collect();
+                func_info.push(Response::Array(flags));
+
+                if let Some(ref desc) = func.description {
+                    func_info.push(Response::bulk(Bytes::from_static(b"description")));
+                    func_info.push(Response::bulk(Bytes::from(desc.clone())));
+                }
+
+                funcs.push(Response::Array(func_info));
+            }
+            lib_info.push(Response::Array(funcs));
+
+            // code (if requested)
+            if with_code {
+                lib_info.push(Response::bulk(Bytes::from_static(b"library_code")));
+                lib_info.push(Response::bulk(Bytes::from(lib.code.clone())));
+            }
+
+            result.push(Response::Array(lib_info));
+        }
+
+        Response::Array(result)
+    }
+
+    /// Handle FUNCTION DELETE library-name.
+    fn handle_function_delete(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'function|delete' command");
+        }
+
+        let library_name = match std::str::from_utf8(&args[0]) {
+            Ok(s) => s,
+            Err(_) => return Response::error("ERR library name must be valid UTF-8"),
+        };
+
+        {
+            let mut registry = self.function_registry.write().unwrap();
+            match registry.delete_library(library_name) {
+                Ok(()) => {}
+                Err(e) => return Response::error(e.to_string()),
+            }
+        }
+
+        // Persist to disk
+        self.persist_functions();
+
+        Response::ok()
+    }
+
+    /// Handle FUNCTION FLUSH [ASYNC|SYNC].
+    fn handle_function_flush(&self, args: &[Bytes]) -> Response {
+        // Parse optional ASYNC|SYNC argument (we ignore it for now)
+        if !args.is_empty() {
+            let mode = args[0].to_ascii_uppercase();
+            if mode.as_slice() != b"ASYNC" && mode.as_slice() != b"SYNC" {
+                return Response::error(
+                    "ERR FUNCTION FLUSH only supports ASYNC and SYNC options",
+                );
+            }
+        }
+
+        {
+            let mut registry = self.function_registry.write().unwrap();
+            registry.flush();
+        }
+
+        // Persist to disk (empty state)
+        self.persist_functions();
+
+        Response::ok()
+    }
+
+    /// Handle FUNCTION STATS.
+    fn handle_function_stats(&self) -> Response {
+        let registry = self.function_registry.read().unwrap();
+        let stats = registry.stats();
+
+        let mut result = Vec::new();
+
+        // running_script
+        result.push(Response::bulk(Bytes::from_static(b"running_script")));
+        if let Some(ref running) = stats.running_function {
+            let mut script_info = Vec::new();
+            script_info.push(Response::bulk(Bytes::from_static(b"name")));
+            script_info.push(Response::bulk(Bytes::from(running.name.clone())));
+            script_info.push(Response::bulk(Bytes::from_static(b"command")));
+            script_info.push(Response::bulk(Bytes::from_static(b"fcall")));
+            script_info.push(Response::bulk(Bytes::from_static(b"duration_ms")));
+            script_info.push(Response::Integer(running.duration_ms as i64));
+            result.push(Response::Array(script_info));
+        } else {
+            result.push(Response::Null);
+        }
+
+        // engines
+        result.push(Response::bulk(Bytes::from_static(b"engines")));
+        let mut engines = Vec::new();
+        let mut lua_info = Vec::new();
+        lua_info.push(Response::bulk(Bytes::from_static(b"libraries_count")));
+        lua_info.push(Response::Integer(stats.library_count as i64));
+        lua_info.push(Response::bulk(Bytes::from_static(b"functions_count")));
+        lua_info.push(Response::Integer(stats.function_count as i64));
+        engines.push(Response::bulk(Bytes::from_static(b"LUA")));
+        engines.push(Response::Array(lua_info));
+        result.push(Response::Array(engines));
+
+        Response::Array(result)
+    }
+
+    /// Handle FUNCTION DUMP.
+    fn handle_function_dump(&self) -> Response {
+        let registry = self.function_registry.read().unwrap();
+        let dump = frogdb_core::dump_libraries(&registry);
+        Response::bulk(Bytes::from(dump))
+    }
+
+    /// Handle FUNCTION RESTORE payload [APPEND|REPLACE|FLUSH].
+    async fn handle_function_restore(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'function|restore' command");
+        }
+
+        let payload = &args[0];
+        let policy = if args.len() > 1 {
+            match frogdb_core::RestorePolicy::from_str(&String::from_utf8_lossy(&args[1])) {
+                Ok(p) => p,
+                Err(e) => return Response::error(e.to_string()),
+            }
+        } else {
+            frogdb_core::RestorePolicy::Append
+        };
+
+        // Parse the dump
+        let libraries = match frogdb_core::restore_libraries(payload) {
+            Ok(libs) => libs,
+            Err(e) => return Response::error(e.to_string()),
+        };
+
+        // Apply based on policy
+        {
+            let mut registry = self.function_registry.write().unwrap();
+
+            if policy == frogdb_core::RestorePolicy::Flush {
+                registry.flush();
+            }
+
+            let replace = policy == frogdb_core::RestorePolicy::Replace;
+
+            for (name, code) in libraries {
+                let library = match frogdb_core::load_library(&code) {
+                    Ok(lib) => lib,
+                    Err(e) => {
+                        return Response::error(format!(
+                            "ERR Failed to load library '{}': {}",
+                            name, e
+                        ))
+                    }
+                };
+
+                if let Err(e) = registry.load_library(library, replace) {
+                    return Response::error(format!(
+                        "ERR Failed to restore library '{}': {}",
+                        name, e
+                    ));
+                }
+            }
+        }
+
+        // Persist to disk
+        self.persist_functions();
+
+        Response::ok()
+    }
+
+    /// Handle FUNCTION HELP.
+    fn handle_function_help(&self) -> Response {
+        let help = vec![
+            Response::bulk(Bytes::from_static(b"FUNCTION <subcommand> [<arg> [value] ...]. Subcommands are:")),
+            Response::bulk(Bytes::from_static(b"DELETE <library-name>")),
+            Response::bulk(Bytes::from_static(b"    Delete a library and all its functions.")),
+            Response::bulk(Bytes::from_static(b"DUMP")),
+            Response::bulk(Bytes::from_static(b"    Return a serialized payload of loaded libraries.")),
+            Response::bulk(Bytes::from_static(b"FLUSH [ASYNC|SYNC]")),
+            Response::bulk(Bytes::from_static(b"    Delete all libraries.")),
+            Response::bulk(Bytes::from_static(b"KILL")),
+            Response::bulk(Bytes::from_static(b"    Kill a currently running read-only function.")),
+            Response::bulk(Bytes::from_static(b"LIST [LIBRARYNAME pattern] [WITHCODE]")),
+            Response::bulk(Bytes::from_static(b"    List all libraries, optionally filtered by name pattern.")),
+            Response::bulk(Bytes::from_static(b"LOAD [REPLACE] <library-code>")),
+            Response::bulk(Bytes::from_static(b"    Create a new library with the given code.")),
+            Response::bulk(Bytes::from_static(b"RESTORE <serialized-payload> [APPEND|REPLACE|FLUSH]")),
+            Response::bulk(Bytes::from_static(b"    Restore libraries from the serialized payload.")),
+            Response::bulk(Bytes::from_static(b"STATS")),
+            Response::bulk(Bytes::from_static(b"    Return information about running scripts and engines.")),
+            Response::bulk(Bytes::from_static(b"HELP")),
+            Response::bulk(Bytes::from_static(b"    Print this help.")),
+        ];
+        Response::Array(help)
+    }
+
+    /// Persist functions to disk if persistence is enabled.
+    fn persist_functions(&self) {
+        if !self.config_manager.persistence_enabled() {
+            return;
+        }
+
+        let path = PathBuf::from(self.config_manager.data_dir()).join("functions.fdb");
+        let registry = self.function_registry.read().unwrap();
+
+        if let Err(e) = frogdb_core::save_to_file(&registry, &path) {
+            warn!(error = %e, "Failed to persist functions to disk");
+        }
+    }
+
+    /// Handle FUNCTION KILL - terminate a running read-only function.
+    ///
+    /// FUNCTION KILL uses the same mechanism as SCRIPT KILL since functions
+    /// execute using the same Lua script executor. It will only kill functions
+    /// that were called via FCALL_RO (read-only execution).
+    async fn handle_function_kill(&self) -> Response {
+        // Send ScriptKill to all shards (only one can be running a script at a time per shard)
+        // We check all shards since we don't track which shard is running the function
+        let mut responses = Vec::with_capacity(self.num_shards);
+
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScriptKill { response_tx };
+
+            if sender.send(msg).await.is_err() {
+                continue;
+            }
+
+            if let Ok(result) = response_rx.await {
+                responses.push(result);
+            }
+        }
+
+        // Check if any shard was running a script
+        for response in responses {
+            match response {
+                Ok(()) => return Response::ok(),
+                Err(e) if e.contains("UNKILLABLE") => {
+                    return Response::error("UNKILLABLE The busy script was not running in read-only mode.")
+                }
+                Err(_) => {} // NOTBUSY - continue checking other shards
+            }
+        }
+
+        // No shard had a running script
+        Response::error("NOTBUSY No scripts in execution right now.")
     }
 
     // =========================================================================

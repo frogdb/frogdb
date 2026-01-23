@@ -96,6 +96,9 @@ pub struct Server {
 
     /// ACL manager for authentication and authorization.
     acl_manager: Arc<AclManager>,
+
+    /// Function registry (shared across all shards).
+    function_registry: frogdb_core::SharedFunctionRegistry,
 }
 
 impl Server {
@@ -235,6 +238,39 @@ impl Server {
         // Create shared slowlog ID counter for global ordering across shards
         let slowlog_next_id = Arc::new(AtomicU64::new(0));
 
+        // Create shared function registry
+        let function_registry = frogdb_core::new_shared_registry();
+
+        // Load persisted functions from disk (if persistence is enabled)
+        if config.persistence.enabled {
+            let functions_path = config.persistence.data_dir.join("functions.fdb");
+            match frogdb_core::load_from_file(&functions_path) {
+                Ok(libraries) if !libraries.is_empty() => {
+                    info!(count = libraries.len(), "Loading persisted functions");
+                    let mut registry = function_registry.write().unwrap();
+                    for (name, code) in libraries {
+                        match frogdb_core::load_library(&code) {
+                            Ok(library) => {
+                                if let Err(e) = registry.load_library(library, false) {
+                                    warn!(library = %name, error = %e, "Failed to load persisted function library");
+                                }
+                            }
+                            Err(e) => {
+                                warn!(library = %name, error = %e, "Failed to parse persisted function library");
+                            }
+                        }
+                    }
+                    info!("Persisted functions loaded");
+                }
+                Ok(_) => {
+                    // No functions to load, that's fine
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to load persisted functions");
+                }
+            }
+        }
+
         // Convert recovered stores to an iterator if available
         let mut recovered_iter = recovered_stores.map(|v| v.into_iter());
 
@@ -243,7 +279,7 @@ impl Server {
             .zip(new_conn_receivers.into_iter())
             .enumerate()
         {
-            let worker = if let Some(ref rocks) = rocks_store {
+            let mut worker = if let Some(ref rocks) = rocks_store {
                 // Get recovered store for this shard
                 let (store, _expiry_index) = recovered_iter
                     .as_mut()
@@ -278,6 +314,9 @@ impl Server {
                     slowlog_next_id.clone(),
                 )
             };
+
+            // Set function registry on each shard
+            worker.set_function_registry(function_registry.clone());
 
             let handle = spawn(async move {
                 worker.run().await;
@@ -314,6 +353,7 @@ impl Server {
             prometheus_recorder,
             health_checker,
             acl_manager,
+            function_registry,
         })
     }
 
@@ -471,6 +511,7 @@ impl Server {
             self.metrics_recorder.clone(),
             self.acl_manager.clone(),
             self.snapshot_coordinator.clone(),
+            self.function_registry.clone(),
         );
 
         // Spawn acceptor task
@@ -950,9 +991,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::stub::ModuleCommand);
 
     // Function
-    registry.register(crate::commands::stub::FunctionCommand);
-    registry.register(crate::commands::stub::FcallCommand);
-    registry.register(crate::commands::stub::FcallRoCommand);
+    registry.register(crate::commands::function::FunctionCommand);
+    registry.register(crate::commands::function::FcallCommand);
+    registry.register(crate::commands::function::FcallRoCommand);
 
     // Generic/Keys
     registry.register(crate::commands::generic::CopyCommand);
