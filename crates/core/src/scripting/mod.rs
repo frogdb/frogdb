@@ -20,4 +20,4 @@ pub use config::ScriptingConfig;
 pub use error::ScriptError;
 pub use executor::ScriptExecutor;
 pub use lua_vm::LuaVm;
-pub use router::{ScriptRoute, ScriptRouter, SingleShardRouter};
+pub use router::{CrossShardRouter, ScriptRoute, ScriptRouter, SingleShardRouter};

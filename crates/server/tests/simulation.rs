@@ -1181,10 +1181,9 @@ fn test_sharded_server_with_latency() {
 
 /// Test that MSET is fully atomic - concurrent MGET should see all-or-nothing.
 ///
+/// With VLL (Very Lightweight Locking), MSET is now fully atomic across shards.
 /// Expected behavior: MGET sees either (nil, nil) or (1, 1), never partial state like (1, nil).
-/// Current behavior: Per-key atomic, so partial visibility is possible with scatter-gather.
 #[test]
-#[ignore] // TODO: Enable when MSET is fully atomic (currently per-key atomic)
 fn test_mset_full_atomicity() {
     let mut sim = Builder::new()
         .tick_duration(Duration::from_millis(1))
@@ -1274,10 +1273,9 @@ fn test_mset_full_atomicity() {
 
 /// Test MSET linearizability with concurrent operations.
 ///
-/// Multiple concurrent MSETs should be linearizable - the final state should be
+/// With VLL, multiple concurrent MSETs are linearizable - the final state should be
 /// consistent with some sequential ordering.
 #[test]
-#[ignore] // TODO: Enable when MSET is fully atomic
 fn test_mset_linearizable() {
     let mut sim = Builder::new()
         .tick_duration(Duration::from_millis(1))
@@ -1417,15 +1415,13 @@ fn test_mset_linearizable() {
     sim.run().unwrap();
 }
 
-/// Test MSET atomicity with sharded server - exposes scatter-gather non-atomicity.
+/// Test MSET atomicity with sharded server - VLL ensures atomicity.
 ///
 /// Uses real FrogDB server. Keys WITHOUT hash tags will route to different shards,
-/// and the scatter-gather pattern creates a window for partial visibility.
+/// but VLL (Very Lightweight Locking) ensures atomic multi-shard operations.
 ///
 /// Expected behavior: MGET sees either (nil, nil) or (1, 1), never partial state.
-/// Current behavior: Scatter-gather allows partial visibility - this test should FAIL.
 #[test]
-#[ignore] // TODO: Enable when MSET is fully atomic (currently per-key atomic)
 fn test_mset_full_atomicity_sharded() {
     let mut sim = Builder::new()
         .tick_duration(Duration::from_millis(1))
@@ -1501,29 +1497,13 @@ fn test_mset_full_atomicity_sharded() {
 
     sim.run().unwrap();
 
-    // This test SHOULD fail - we expect to see partial state
+    // With VLL, we should NOT see partial state
     let saw_partial = *partial_seen.lock().unwrap();
-    let results = all_results.lock().unwrap();
 
-    if saw_partial {
-        // Find and report the partial state
-        for result in results.iter() {
-            if result.starts_with("PARTIAL:") {
-                panic!(
-                    "MSET atomicity violation detected (as expected for non-atomic MSET): {}",
-                    result
-                );
-            }
-        }
-    }
-
-    // If we didn't see partial state, the test passes (but shouldn't for non-atomic MSET)
-    // This assertion documents the expected failure
+    // VLL ensures atomic multi-shard operations - no partial visibility
     assert!(
-        saw_partial,
-        "Expected to see partial visibility during MSET scatter-gather, but didn't. \
-         This test is designed to FAIL to demonstrate the atomicity gap. \
-         If this passes, either MSET is now atomic (good!) or timing prevented catching the race."
+        !saw_partial,
+        "MSET atomicity violation: saw partial state. VLL should prevent this."
     );
 }
 
