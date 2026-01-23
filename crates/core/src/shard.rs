@@ -44,6 +44,8 @@ pub enum ShardMessage {
         request_id: u64,
         keys: Vec<Bytes>,
         operation: ScatterOp,
+        /// Connection ID for access control during continuation locks.
+        conn_id: u64,
         response_tx: oneshot::Sender<PartialResult>,
     },
 
@@ -919,6 +921,10 @@ pub struct ShardWorker {
 
     /// VLL continuation lock (for MULTI/EXEC and Lua scripts).
     continuation_lock: Option<crate::vll::ContinuationLock>,
+
+    /// Pending release receiver for continuation lock.
+    /// When Some, we poll this to detect when the lock should be released.
+    pending_continuation_release: Option<oneshot::Receiver<()>>,
 }
 
 impl ShardWorker {
@@ -1001,6 +1007,7 @@ impl ShardWorker {
             intent_table: None,
             tx_queue: None,
             continuation_lock: None,
+            pending_continuation_release: None,
         }
     }
 
@@ -1072,6 +1079,7 @@ impl ShardWorker {
             intent_table: None,
             tx_queue: None,
             continuation_lock: None,
+            pending_continuation_release: None,
         }
     }
 
@@ -1105,6 +1113,19 @@ impl ShardWorker {
         })
     }
 
+    /// Check if this connection can execute during a continuation lock.
+    ///
+    /// When a continuation lock is held, only the lock owner can execute commands.
+    /// Returns Ok(()) if execution is allowed, Err(Response) otherwise.
+    fn can_execute_during_lock(&self, conn_id: u64) -> Result<(), Response> {
+        if let Some(ref lock) = self.continuation_lock {
+            if lock.conn_id != conn_id {
+                return Err(Response::error("ERR shard busy with continuation lock"));
+            }
+        }
+        Ok(())
+    }
+
     /// Run the shard worker event loop.
     pub async fn run(mut self) {
         tracing::info!(shard_id = self.shard_id, "Shard worker started");
@@ -1129,10 +1150,24 @@ impl ShardWorker {
                 Some(msg) = self.message_rx.recv() => {
                     match msg {
                         ShardMessage::Execute { command, conn_id, txid: _, protocol_version, response_tx } => {
+                            // Check if this connection can execute during continuation lock
+                            if let Err(err) = self.can_execute_during_lock(conn_id) {
+                                let _ = response_tx.send(err);
+                                continue;
+                            }
                             let response = self.execute_command(&command, conn_id, protocol_version).await;
                             let _ = response_tx.send(response);
                         }
-                        ShardMessage::ScatterRequest { request_id: _, keys, operation, response_tx } => {
+                        ShardMessage::ScatterRequest { request_id: _, keys, operation, conn_id, response_tx } => {
+                            // Check if this connection can execute during continuation lock
+                            if let Err(err) = self.can_execute_during_lock(conn_id) {
+                                // Return a PartialResult with the error for each key
+                                let error_results: Vec<(Bytes, Response)> = keys.iter()
+                                    .map(|k| (k.clone(), err.clone()))
+                                    .collect();
+                                let _ = response_tx.send(PartialResult { results: error_results });
+                                continue;
+                            }
                             let result = self.execute_scatter_part(&keys, &operation).await;
                             let _ = response_tx.send(result);
                         }
@@ -1187,10 +1222,20 @@ impl ShardWorker {
 
                         // Scripting message handlers
                         ShardMessage::EvalScript { script_source, keys, argv, conn_id, protocol_version, response_tx } => {
+                            // Check if this connection can execute during continuation lock
+                            if let Err(err) = self.can_execute_during_lock(conn_id) {
+                                let _ = response_tx.send(err);
+                                continue;
+                            }
                             let response = self.handle_eval_script(&script_source, &keys, &argv, conn_id, protocol_version);
                             let _ = response_tx.send(response);
                         }
                         ShardMessage::EvalScriptSha { script_sha, keys, argv, conn_id, protocol_version, response_tx } => {
+                            // Check if this connection can execute during continuation lock
+                            if let Err(err) = self.can_execute_during_lock(conn_id) {
+                                let _ = response_tx.send(err);
+                                continue;
+                            }
                             let response = self.handle_evalsha(&script_sha, &keys, &argv, conn_id, protocol_version);
                             let _ = response_tx.send(response);
                         }
@@ -1324,6 +1369,19 @@ impl ShardWorker {
                 // Blocking waiter timeout check
                 _ = waiter_timeout_interval.tick() => {
                     self.check_waiter_timeouts();
+                }
+
+                // Check for continuation lock release signal
+                _ = async {
+                    match &mut self.pending_continuation_release {
+                        Some(rx) => rx.await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    // Release signal received - clear the continuation lock
+                    self.continuation_lock = None;
+                    self.pending_continuation_release = None;
+                    tracing::debug!(shard_id = self.shard_id, "Continuation lock released");
                 }
 
                 else => break,
@@ -2513,6 +2571,9 @@ impl ShardWorker {
     }
 
     /// Handle VLL continuation lock - acquire full shard lock for MULTI/Lua.
+    ///
+    /// This is non-blocking: we store the release receiver and poll it in the main loop,
+    /// allowing the shard to continue processing messages from the lock owner while locked.
     async fn handle_vll_continuation_lock(
         &mut self,
         txid: u64,
@@ -2547,14 +2608,11 @@ impl ShardWorker {
         // Acquire continuation lock
         self.continuation_lock = Some(crate::vll::ContinuationLock::new(txid, conn_id));
 
-        // Notify ready
+        // Store release receiver for polling in main loop (non-blocking!)
+        self.pending_continuation_release = Some(release_rx);
+
+        // Notify ready - shard continues processing messages from lock owner
         let _ = ready_tx.send(ShardReadyResult::Ready);
-
-        // Wait for release signal
-        let _ = release_rx.await;
-
-        // Release continuation lock
-        self.continuation_lock = None;
     }
 
     /// Process waiting VLL operations after one completes.

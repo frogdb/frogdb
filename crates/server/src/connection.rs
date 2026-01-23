@@ -2180,6 +2180,7 @@ impl ConnectionHandler {
             operation: ScatterOp::Copy {
                 source_key: source.clone(),
             },
+            conn_id: self.state.id,
             response_tx: tx1,
         };
 
@@ -2233,6 +2234,7 @@ impl ConnectionHandler {
                 expiry_ms,
                 replace,
             },
+            conn_id: self.state.id,
             response_tx: tx2,
         };
 
@@ -2286,6 +2288,7 @@ impl ConnectionHandler {
                 request_id: txid,
                 keys: keys.clone(),
                 operation: ScatterOp::Dump,
+                conn_id: self.state.id,
                 response_tx: tx,
             };
 
@@ -2382,6 +2385,7 @@ impl ConnectionHandler {
                     request_id: delete_txid,
                     keys,
                     operation: ScatterOp::Del,
+                    conn_id: self.state.id,
                     response_tx: tx,
                 };
 
@@ -2965,21 +2969,39 @@ impl ConnectionHandler {
         let keys: Vec<Bytes> = args[2..2 + numkeys].to_vec();
         let argv: Vec<Bytes> = args[2 + numkeys..].to_vec();
 
-        // Determine target shard
-        let target_shard = if keys.is_empty() {
-            0 // No keys -> shard 0
-        } else {
-            let first_shard = shard_for_key(&keys[0], self.num_shards);
-            // Check all keys hash to same shard
-            for key in &keys[1..] {
-                if shard_for_key(key, self.num_shards) != first_shard {
-                    return Response::error("CROSSSLOT Keys in request don't hash to the same slot");
-                }
-            }
-            first_shard
-        };
+        // Determine which shards are involved
+        if keys.is_empty() {
+            // No keys -> single shard (shard 0)
+            return self.execute_single_shard_script(script_source, keys, argv, 0).await;
+        }
 
-        // Send to shard
+        // Collect unique shards in sorted order
+        let mut shards: Vec<usize> = keys.iter()
+            .map(|k| shard_for_key(k, self.num_shards))
+            .collect();
+        shards.sort();
+        shards.dedup();
+
+        if shards.len() == 1 {
+            // Single shard - use simple path
+            self.execute_single_shard_script(script_source, keys, argv, shards[0]).await
+        } else if self.allow_cross_slot {
+            // Cross-shard script - use VLL continuation locks
+            self.execute_cross_shard_script(script_source, keys, argv, shards).await
+        } else {
+            // Cross-slot not allowed
+            Response::error("CROSSSLOT Keys in request don't hash to the same slot")
+        }
+    }
+
+    /// Execute a Lua script on a single shard.
+    async fn execute_single_shard_script(
+        &self,
+        script_source: Bytes,
+        keys: Vec<Bytes>,
+        argv: Vec<Bytes>,
+        shard_id: usize,
+    ) -> Response {
         let (response_tx, response_rx) = oneshot::channel();
         let msg = ShardMessage::EvalScript {
             script_source,
@@ -2990,7 +3012,7 @@ impl ConnectionHandler {
             response_tx,
         };
 
-        if self.shard_senders[target_shard].send(msg).await.is_err() {
+        if self.shard_senders[shard_id].send(msg).await.is_err() {
             return Response::error("ERR shard unavailable");
         }
 
@@ -2998,6 +3020,112 @@ impl ConnectionHandler {
             Ok(response) => response,
             Err(_) => Response::error("ERR shard dropped request"),
         }
+    }
+
+    /// Execute a Lua script across multiple shards using VLL continuation locks.
+    ///
+    /// This acquires continuation locks on all involved shards (in sorted order to
+    /// prevent deadlocks), executes the script on the primary shard, then releases
+    /// all locks.
+    async fn execute_cross_shard_script(
+        &self,
+        script_source: Bytes,
+        keys: Vec<Bytes>,
+        argv: Vec<Bytes>,
+        shards: Vec<usize>, // Already sorted and deduplicated
+    ) -> Response {
+        use std::time::Duration;
+
+        let txid = next_txid();
+        let primary_shard = shards[0]; // Execute on first shard
+
+        // Phase 1: Acquire continuation locks on all shards (in sorted order)
+        let mut release_txs: Vec<oneshot::Sender<()>> = Vec::with_capacity(shards.len());
+        let mut ready_rxs: Vec<oneshot::Receiver<ShardReadyResult>> = Vec::with_capacity(shards.len());
+
+        for &shard_id in &shards {
+            let (ready_tx, ready_rx) = oneshot::channel();
+            let (release_tx, release_rx) = oneshot::channel();
+
+            let msg = ShardMessage::VllContinuationLock {
+                txid,
+                conn_id: self.state.id,
+                ready_tx,
+                release_rx,
+            };
+
+            if self.shard_senders[shard_id].send(msg).await.is_err() {
+                // Abort: release already-locked shards
+                for tx in release_txs {
+                    let _ = tx.send(());
+                }
+                return Response::error("ERR shard unavailable");
+            }
+
+            release_txs.push(release_tx);
+            ready_rxs.push(ready_rx);
+        }
+
+        // Phase 2: Wait for all shards to be ready
+        let lock_timeout = Duration::from_millis(4000);
+        for (i, ready_rx) in ready_rxs.into_iter().enumerate() {
+            match tokio::time::timeout(lock_timeout, ready_rx).await {
+                Ok(Ok(ShardReadyResult::Ready)) => {
+                    // Shard is ready
+                }
+                Ok(Ok(ShardReadyResult::Failed(e))) => {
+                    // Lock acquisition failed - release all locks
+                    for tx in release_txs {
+                        let _ = tx.send(());
+                    }
+                    return Response::error(format!("ERR lock acquisition failed: {}", e));
+                }
+                Ok(Err(_)) => {
+                    // Channel closed - release all locks
+                    for tx in release_txs {
+                        let _ = tx.send(());
+                    }
+                    return Response::error("ERR shard dropped lock request");
+                }
+                Err(_) => {
+                    // Timeout - release all locks
+                    for tx in release_txs {
+                        let _ = tx.send(());
+                    }
+                    return Response::error(format!(
+                        "ERR lock acquisition timeout on shard {}",
+                        shards[i]
+                    ));
+                }
+            }
+        }
+
+        // Phase 3: Execute script on primary shard
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::EvalScript {
+            script_source,
+            keys,
+            argv,
+            conn_id: self.state.id,
+            protocol_version: self.state.protocol_version,
+            response_tx,
+        };
+
+        let response = if self.shard_senders[primary_shard].send(msg).await.is_ok() {
+            match response_rx.await {
+                Ok(resp) => resp,
+                Err(_) => Response::error("ERR script execution failed"),
+            }
+        } else {
+            Response::error("ERR shard unavailable")
+        };
+
+        // Phase 4: Release all locks
+        for tx in release_txs {
+            let _ = tx.send(());
+        }
+
+        response
     }
 
     /// Handle EVALSHA command.
@@ -3025,21 +3153,39 @@ impl ConnectionHandler {
         let keys: Vec<Bytes> = args[2..2 + numkeys].to_vec();
         let argv: Vec<Bytes> = args[2 + numkeys..].to_vec();
 
-        // Determine target shard
-        let target_shard = if keys.is_empty() {
-            0 // No keys -> shard 0
-        } else {
-            let first_shard = shard_for_key(&keys[0], self.num_shards);
-            // Check all keys hash to same shard
-            for key in &keys[1..] {
-                if shard_for_key(key, self.num_shards) != first_shard {
-                    return Response::error("CROSSSLOT Keys in request don't hash to the same slot");
-                }
-            }
-            first_shard
-        };
+        // Determine which shards are involved
+        if keys.is_empty() {
+            // No keys -> single shard (shard 0)
+            return self.execute_single_shard_script_sha(script_sha, keys, argv, 0).await;
+        }
 
-        // Send to shard
+        // Collect unique shards in sorted order
+        let mut shards: Vec<usize> = keys.iter()
+            .map(|k| shard_for_key(k, self.num_shards))
+            .collect();
+        shards.sort();
+        shards.dedup();
+
+        if shards.len() == 1 {
+            // Single shard - use simple path
+            self.execute_single_shard_script_sha(script_sha, keys, argv, shards[0]).await
+        } else if self.allow_cross_slot {
+            // Cross-shard script - use VLL continuation locks
+            self.execute_cross_shard_script_sha(script_sha, keys, argv, shards).await
+        } else {
+            // Cross-slot not allowed
+            Response::error("CROSSSLOT Keys in request don't hash to the same slot")
+        }
+    }
+
+    /// Execute a cached Lua script (by SHA) on a single shard.
+    async fn execute_single_shard_script_sha(
+        &self,
+        script_sha: Bytes,
+        keys: Vec<Bytes>,
+        argv: Vec<Bytes>,
+        shard_id: usize,
+    ) -> Response {
         let (response_tx, response_rx) = oneshot::channel();
         let msg = ShardMessage::EvalScriptSha {
             script_sha,
@@ -3050,7 +3196,7 @@ impl ConnectionHandler {
             response_tx,
         };
 
-        if self.shard_senders[target_shard].send(msg).await.is_err() {
+        if self.shard_senders[shard_id].send(msg).await.is_err() {
             return Response::error("ERR shard unavailable");
         }
 
@@ -3058,6 +3204,102 @@ impl ConnectionHandler {
             Ok(response) => response,
             Err(_) => Response::error("ERR shard dropped request"),
         }
+    }
+
+    /// Execute a cached Lua script (by SHA) across multiple shards using VLL continuation locks.
+    async fn execute_cross_shard_script_sha(
+        &self,
+        script_sha: Bytes,
+        keys: Vec<Bytes>,
+        argv: Vec<Bytes>,
+        shards: Vec<usize>, // Already sorted and deduplicated
+    ) -> Response {
+        use std::time::Duration;
+
+        let txid = next_txid();
+        let primary_shard = shards[0];
+
+        // Phase 1: Acquire continuation locks on all shards
+        let mut release_txs: Vec<oneshot::Sender<()>> = Vec::with_capacity(shards.len());
+        let mut ready_rxs: Vec<oneshot::Receiver<ShardReadyResult>> = Vec::with_capacity(shards.len());
+
+        for &shard_id in &shards {
+            let (ready_tx, ready_rx) = oneshot::channel();
+            let (release_tx, release_rx) = oneshot::channel();
+
+            let msg = ShardMessage::VllContinuationLock {
+                txid,
+                conn_id: self.state.id,
+                ready_tx,
+                release_rx,
+            };
+
+            if self.shard_senders[shard_id].send(msg).await.is_err() {
+                for tx in release_txs {
+                    let _ = tx.send(());
+                }
+                return Response::error("ERR shard unavailable");
+            }
+
+            release_txs.push(release_tx);
+            ready_rxs.push(ready_rx);
+        }
+
+        // Phase 2: Wait for all shards to be ready
+        let lock_timeout = Duration::from_millis(4000);
+        for (i, ready_rx) in ready_rxs.into_iter().enumerate() {
+            match tokio::time::timeout(lock_timeout, ready_rx).await {
+                Ok(Ok(ShardReadyResult::Ready)) => {}
+                Ok(Ok(ShardReadyResult::Failed(e))) => {
+                    for tx in release_txs {
+                        let _ = tx.send(());
+                    }
+                    return Response::error(format!("ERR lock acquisition failed: {}", e));
+                }
+                Ok(Err(_)) => {
+                    for tx in release_txs {
+                        let _ = tx.send(());
+                    }
+                    return Response::error("ERR shard dropped lock request");
+                }
+                Err(_) => {
+                    for tx in release_txs {
+                        let _ = tx.send(());
+                    }
+                    return Response::error(format!(
+                        "ERR lock acquisition timeout on shard {}",
+                        shards[i]
+                    ));
+                }
+            }
+        }
+
+        // Phase 3: Execute script on primary shard
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::EvalScriptSha {
+            script_sha,
+            keys,
+            argv,
+            conn_id: self.state.id,
+            protocol_version: self.state.protocol_version,
+            response_tx,
+        };
+
+        let response = if self.shard_senders[primary_shard].send(msg).await.is_ok() {
+            match response_rx.await {
+                Ok(resp) => resp,
+                Err(_) => Response::error("ERR script execution failed"),
+            }
+        } else {
+            Response::error("ERR shard unavailable")
+        };
+
+        // Phase 4: Release all locks
+        for tx in release_txs {
+            let _ = tx.send(());
+        }
+
+        response
     }
 
     /// Handle SCRIPT command.
@@ -3770,6 +4012,7 @@ impl ConnectionHandler {
                     pattern: pattern.clone(),
                     key_type,
                 },
+                conn_id: self.state.id,
                 response_tx,
             };
 
@@ -3838,6 +4081,7 @@ impl ConnectionHandler {
                 request_id: next_txid(),
                 keys: vec![],
                 operation: ScatterOp::Keys { pattern: pattern.clone() },
+                conn_id: self.state.id,
                 response_tx,
             };
             if sender.send(msg).await.is_err() {
@@ -3882,6 +4126,7 @@ impl ConnectionHandler {
                 request_id: next_txid(),
                 keys: vec![],
                 operation: ScatterOp::DbSize,
+                conn_id: self.state.id,
                 response_tx,
             };
             if sender.send(msg).await.is_err() {
@@ -3927,6 +4172,7 @@ impl ConnectionHandler {
                 request_id: next_txid(),
                 keys: vec![],
                 operation: ScatterOp::DbSize,
+                conn_id: self.state.id,
                 response_tx,
             };
             if sender.send(msg).await.is_err() {
@@ -3988,6 +4234,7 @@ impl ConnectionHandler {
             request_id: next_txid(),
             keys: vec![],
             operation: ScatterOp::RandomKey,
+            conn_id: self.state.id,
             response_tx,
         };
 
@@ -4032,6 +4279,7 @@ impl ConnectionHandler {
                 request_id: next_txid(),
                 keys: vec![],
                 operation: ScatterOp::FlushDb,
+                conn_id: self.state.id,
                 response_tx,
             };
             if sender.send(msg).await.is_err() {
