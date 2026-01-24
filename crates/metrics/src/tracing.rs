@@ -422,6 +422,92 @@ impl ScatterGatherSpan {
 /// A thread-safe wrapper for OtelTracer.
 pub type SharedTracer = Arc<OtelTracer>;
 
+// =============================================================================
+// Test Tracer with InMemorySpanExporter
+// =============================================================================
+
+#[cfg(any(test, feature = "testing"))]
+mod test_tracer {
+    use super::*;
+    use opentelemetry_sdk::export::trace::SpanData;
+    use opentelemetry_sdk::testing::trace::InMemorySpanExporter;
+    use opentelemetry_sdk::trace::SimpleSpanProcessor;
+
+    /// Test tracer with captured spans for verification.
+    ///
+    /// This tracer uses an `InMemorySpanExporter` to capture spans for inspection
+    /// in tests. Spans are exported immediately when `end()` is called (not batched).
+    pub struct TestTracer {
+        /// The inner OtelTracer (use tracer.start_request_span(), etc.)
+        pub tracer: OtelTracer,
+        /// The exporter that collects spans
+        exporter: InMemorySpanExporter,
+    }
+
+    impl TestTracer {
+        /// Create a test tracer with all spans enabled by default.
+        /// Use this for behavior testing where you want to verify spans are created.
+        pub fn new_all_enabled() -> Self {
+            Self::new(&TracingConfig {
+                enabled: true,
+                sampling_rate: 1.0, // Sample all
+                service_name: "frogdb-test".to_string(),
+                scatter_gather_spans: true,
+                shard_spans: true,
+                persistence_spans: true,
+                ..Default::default()
+            })
+        }
+
+        /// Create a test tracer with custom config for testing config-controlled behavior.
+        pub fn new(config: &TracingConfig) -> Self {
+            let exporter = InMemorySpanExporter::default();
+
+            let sampler = if config.sampling_rate >= 1.0 {
+                Sampler::AlwaysOn
+            } else if config.sampling_rate <= 0.0 {
+                Sampler::AlwaysOff
+            } else {
+                Sampler::TraceIdRatioBased(config.sampling_rate)
+            };
+
+            // Use SimpleSpanProcessor for immediate export (not batched)
+            let provider = TracerProvider::builder()
+                .with_span_processor(SimpleSpanProcessor::new(Box::new(exporter.clone())))
+                .with_sampler(sampler)
+                .with_id_generator(RandomIdGenerator::default())
+                .with_resource(Resource::new(vec![KeyValue::new(
+                    "service.name",
+                    config.service_name.clone(),
+                )]))
+                .build();
+
+            let tracer = provider.tracer("frogdb-test");
+
+            Self {
+                tracer: OtelTracer {
+                    tracer,
+                    enabled: config.enabled,
+                },
+                exporter,
+            }
+        }
+
+        /// Get all finished spans that have been exported.
+        pub fn get_finished_spans(&self) -> Vec<SpanData> {
+            self.exporter.get_finished_spans().unwrap_or_default()
+        }
+
+        /// Clear all captured spans.
+        pub fn reset(&self) {
+            self.exporter.reset();
+        }
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+pub use test_tracer::TestTracer;
+
 /// Create a shared tracer from configuration.
 pub fn create_tracer(config: &TracingConfig) -> Result<SharedTracer, Box<dyn std::error::Error + Send + Sync>> {
     let tracer = OtelTracer::new(config)?;

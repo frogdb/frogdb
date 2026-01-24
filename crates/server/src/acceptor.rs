@@ -7,7 +7,9 @@ use frogdb_core::{
     persistence::SnapshotCoordinator, shard::NewConnection, AclManager, ClientRegistry,
     CommandRegistry, MetricsRecorder, ShardMessage, SharedFunctionRegistry,
 };
-use frogdb_metrics::metric_names;
+use frogdb_metrics::{metric_names, SharedTracer};
+
+use crate::config::TracingConfig;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
@@ -81,6 +83,12 @@ pub struct Acceptor {
 
     /// Function registry for FUNCTION/FCALL commands.
     function_registry: SharedFunctionRegistry,
+
+    /// Optional shared tracer for distributed tracing.
+    shared_tracer: Option<SharedTracer>,
+
+    /// Tracing configuration.
+    tracing_config: TracingConfig,
 }
 
 impl Acceptor {
@@ -99,6 +107,8 @@ impl Acceptor {
         acl_manager: Arc<AclManager>,
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
         function_registry: SharedFunctionRegistry,
+        shared_tracer: Option<SharedTracer>,
+        tracing_config: TracingConfig,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -116,6 +126,8 @@ impl Acceptor {
             acl_manager,
             snapshot_coordinator,
             function_registry,
+            shared_tracer,
+            tracing_config,
         }
     }
 
@@ -163,6 +175,8 @@ impl Acceptor {
                     let acl_manager = self.acl_manager.clone();
                     let snapshot_coordinator = self.snapshot_coordinator.clone();
                     let function_registry = self.function_registry.clone();
+                    let shared_tracer = self.shared_tracer.clone();
+                    let tracing_config = self.tracing_config.clone();
 
                     spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -182,6 +196,8 @@ impl Acceptor {
                             acl_manager,
                             snapshot_coordinator,
                             function_registry,
+                            shared_tracer,
+                            tracing_config,
                         );
 
                         if let Err(e) = handler.run().await {

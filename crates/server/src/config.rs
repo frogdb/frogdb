@@ -32,6 +32,10 @@ pub struct Config {
     #[serde(default)]
     pub metrics: MetricsConfig,
 
+    /// Distributed tracing configuration.
+    #[serde(default)]
+    pub tracing: TracingConfig,
+
     /// Memory configuration.
     #[serde(default)]
     pub memory: MemoryConfig,
@@ -586,6 +590,38 @@ pub struct MetricsConfig {
     pub otlp_interval_secs: u64,
 }
 
+/// Distributed tracing configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TracingConfig {
+    /// Whether distributed tracing is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// OTLP endpoint for trace export.
+    #[serde(default = "default_tracing_endpoint")]
+    pub otlp_endpoint: String,
+
+    /// Sampling rate (0.0 to 1.0). 1.0 = sample all, 0.1 = sample 10%.
+    #[serde(default = "default_sampling_rate")]
+    pub sampling_rate: f64,
+
+    /// Service name in traces.
+    #[serde(default = "default_service_name")]
+    pub service_name: String,
+
+    /// Enable scatter-gather operation spans (child spans per shard for MGET/MSET).
+    #[serde(default)]
+    pub scatter_gather_spans: bool,
+
+    /// Enable shard execution spans (spans inside shard workers).
+    #[serde(default)]
+    pub shard_spans: bool,
+
+    /// Enable persistence spans (WAL writes, snapshots).
+    #[serde(default)]
+    pub persistence_spans: bool,
+}
+
 /// Server-specific configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServerConfig {
@@ -836,6 +872,18 @@ fn default_lfu_decay_time() -> u64 {
     1
 }
 
+fn default_tracing_endpoint() -> String {
+    "http://localhost:4317".to_string()
+}
+
+fn default_sampling_rate() -> f64 {
+    1.0
+}
+
+fn default_service_name() -> String {
+    "frogdb".to_string()
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -881,6 +929,48 @@ impl Default for MetricsConfig {
             otlp_enabled: false,
             otlp_endpoint: default_otlp_endpoint(),
             otlp_interval_secs: default_otlp_interval_secs(),
+        }
+    }
+}
+
+impl Default for TracingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            otlp_endpoint: default_tracing_endpoint(),
+            sampling_rate: default_sampling_rate(),
+            service_name: default_service_name(),
+            scatter_gather_spans: false,
+            shard_spans: false,
+            persistence_spans: false,
+        }
+    }
+}
+
+impl TracingConfig {
+    /// Validate the tracing configuration.
+    pub fn validate(&self) -> Result<()> {
+        if self.enabled && self.otlp_endpoint.is_empty() {
+            anyhow::bail!("OTLP endpoint must be specified when tracing is enabled");
+        }
+
+        if self.sampling_rate < 0.0 || self.sampling_rate > 1.0 {
+            anyhow::bail!("sampling_rate must be between 0.0 and 1.0");
+        }
+
+        Ok(())
+    }
+
+    /// Convert to frogdb_metrics::TracingConfig.
+    pub fn to_metrics_config(&self) -> frogdb_metrics::TracingConfig {
+        frogdb_metrics::TracingConfig {
+            enabled: self.enabled,
+            otlp_endpoint: self.otlp_endpoint.clone(),
+            sampling_rate: self.sampling_rate,
+            service_name: self.service_name.clone(),
+            scatter_gather_spans: self.scatter_gather_spans,
+            shard_spans: self.shard_spans,
+            persistence_spans: self.persistence_spans,
         }
     }
 }
@@ -1080,6 +1170,9 @@ impl Config {
         // Validate replication config
         self.replication.validate()?;
 
+        // Validate tracing config
+        self.tracing.validate()?;
+
         Ok(())
     }
 
@@ -1188,6 +1281,28 @@ otlp_endpoint = "http://localhost:4317"
 
 # OTLP push interval in seconds
 otlp_interval_secs = 15
+
+[tracing]
+# Whether distributed tracing is enabled
+enabled = false
+
+# OTLP endpoint for trace export
+otlp_endpoint = "http://localhost:4317"
+
+# Sampling rate (0.0 to 1.0). 1.0 = sample all, 0.1 = sample 10%
+sampling_rate = 1.0
+
+# Service name in traces
+service_name = "frogdb"
+
+# Enable scatter-gather operation spans (child spans per shard for MGET/MSET)
+scatter_gather_spans = false
+
+# Enable shard execution spans (spans inside shard workers)
+shard_spans = false
+
+# Enable persistence spans (WAL writes, snapshots)
+persistence_spans = false
 
 [memory]
 # Maximum memory limit in bytes. 0 means unlimited.
@@ -1597,5 +1712,69 @@ mod tests {
         } else {
             panic!("Expected Replica config");
         }
+    }
+
+    // ===== TracingConfig Tests =====
+
+    #[test]
+    fn test_tracing_config_defaults() {
+        let config = TracingConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.otlp_endpoint, "http://localhost:4317");
+        assert_eq!(config.sampling_rate, 1.0);
+        assert_eq!(config.service_name, "frogdb");
+        assert!(!config.scatter_gather_spans);
+        assert!(!config.shard_spans);
+        assert!(!config.persistence_spans);
+    }
+
+    #[test]
+    fn test_validate_tracing_enabled_without_endpoint() {
+        let mut config = Config::default();
+        config.tracing.enabled = true;
+        config.tracing.otlp_endpoint = String::new();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_tracing_invalid_sampling_rate() {
+        let mut config = Config::default();
+        config.tracing.enabled = true;
+        config.tracing.sampling_rate = 1.5;
+        assert!(config.validate().is_err());
+
+        config.tracing.sampling_rate = -0.1;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_tracing_valid_config() {
+        let mut config = Config::default();
+        config.tracing.enabled = true;
+        config.tracing.otlp_endpoint = "http://localhost:4317".to_string();
+        config.tracing.sampling_rate = 0.5;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_tracing_config_to_metrics_config() {
+        let config = TracingConfig {
+            enabled: true,
+            otlp_endpoint: "http://example.com:4317".to_string(),
+            sampling_rate: 0.1,
+            service_name: "test-service".to_string(),
+            scatter_gather_spans: true,
+            shard_spans: false,
+            persistence_spans: true,
+        };
+
+        let metrics_config = config.to_metrics_config();
+        assert!(metrics_config.enabled);
+        assert_eq!(metrics_config.otlp_endpoint, "http://example.com:4317");
+        assert_eq!(metrics_config.sampling_rate, 0.1);
+        assert_eq!(metrics_config.service_name, "test-service");
+        assert!(metrics_config.scatter_gather_spans);
+        assert!(!metrics_config.shard_spans);
+        assert!(metrics_config.persistence_spans);
     }
 }
