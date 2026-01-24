@@ -581,6 +581,8 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
             &[],
         );
 
+        tracing::info!(epoch = initial_epoch, "Snapshot started");
+
         // Clone Arc handles for the spawned task
         let rocks_store = self.rocks_store.clone();
         let snapshot_dir = self.snapshot_dir.clone();

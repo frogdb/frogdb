@@ -1336,11 +1336,9 @@ impl ShardWorker {
                                 } else {
                                     0
                                 };
-                                tracing::debug!(
+                                tracing::info!(
                                     shard_id = self.shard_id,
-                                    maxmemory = self.eviction_config.maxmemory,
-                                    policy = ?self.eviction_config.policy,
-                                    "Eviction config updated"
+                                    "Shard config updated"
                                 );
                             }
                             let _ = response_tx.send(());
@@ -1545,11 +1543,11 @@ impl ShardWorker {
 
         // Try to evict if policy allows
         if self.eviction_config.policy == EvictionPolicy::NoEviction {
-            tracing::debug!(
+            tracing::warn!(
                 shard_id = self.shard_id,
                 memory_used = self.store.memory_used(),
                 memory_limit = self.memory_limit,
-                "OOM: no eviction policy configured"
+                "OOM rejected write"
             );
             let shard_label = self.shard_id.to_string();
             self.metrics_recorder.increment_counter(
@@ -1560,6 +1558,13 @@ impl ShardWorker {
             return Err(CommandError::OutOfMemory);
         }
 
+        tracing::debug!(
+            shard_id = self.shard_id,
+            memory_used = self.store.memory_used(),
+            memory_limit = self.memory_limit,
+            "Eviction triggered"
+        );
+
         // Attempt eviction
         let max_attempts = 10; // Limit attempts to avoid infinite loop
         for _ in 0..max_attempts {
@@ -1569,11 +1574,16 @@ impl ShardWorker {
 
             if !self.evict_one() {
                 // No more keys to evict
-                tracing::debug!(
+                tracing::warn!(
+                    shard_id = self.shard_id,
+                    policy = %self.eviction_config.policy,
+                    "No volatile keys for eviction"
+                );
+                tracing::warn!(
                     shard_id = self.shard_id,
                     memory_used = self.store.memory_used(),
                     memory_limit = self.memory_limit,
-                    "OOM: no keys available for eviction"
+                    "OOM rejected write"
                 );
                 let shard_label = self.shard_id.to_string();
                 self.metrics_recorder.increment_counter(
@@ -1587,11 +1597,11 @@ impl ShardWorker {
 
         // Still over limit after max attempts
         if self.is_over_memory_limit() {
-            tracing::debug!(
+            tracing::warn!(
                 shard_id = self.shard_id,
                 memory_used = self.store.memory_used(),
                 memory_limit = self.memory_limit,
-                "OOM: still over limit after eviction attempts"
+                "OOM rejected write"
             );
             let shard_label = self.shard_id.to_string();
             self.metrics_recorder.increment_counter(
@@ -2486,7 +2496,17 @@ impl ShardWorker {
         let intent_table = self.intent_table.as_mut().unwrap();
         let tx_queue = self.tx_queue.as_mut().unwrap();
 
-        // Check queue capacity
+        // Check queue capacity - warn when queue depth is high
+        let queue_depth = tx_queue.len();
+        // Warn when queue has 8000+ transactions (80% of default 10000)
+        if queue_depth >= 8000 {
+            tracing::warn!(
+                shard_id = self.shard_id,
+                queue_depth,
+                "Shard message queue depth high"
+            );
+        }
+
         if !tx_queue.has_capacity() {
             let _ = ready_tx.send(ShardReadyResult::Failed(VllError::QueueFull));
             return;
@@ -2966,6 +2986,7 @@ impl ShardWorker {
         response_tx: oneshot::Sender<Response>,
         deadline: Option<Instant>,
     ) {
+        let keys_count = keys.len();
         let entry = WaitEntry {
             conn_id,
             keys,
@@ -2984,10 +3005,11 @@ impl ShardWorker {
             // The response_tx was moved into entry, so we can't send an error back here.
             // The client will timeout.
         } else {
-            tracing::trace!(
+            tracing::debug!(
                 shard_id = self.shard_id,
-                conn_id = conn_id,
-                "Registered blocking wait"
+                conn_id,
+                keys_count,
+                "Client blocked on keys"
             );
 
             // Update blocked clients metric
@@ -3214,6 +3236,13 @@ impl ShardWorker {
                 _ => continue, // Not a list operation
             };
 
+            // Calculate wait duration (approximate since we don't track start time)
+            tracing::debug!(
+                shard_id = self.shard_id,
+                conn_id = entry.conn_id,
+                "Blocked client unblocked"
+            );
+
             // Send response
             let _ = entry.response_tx.send(response);
 
@@ -3335,6 +3364,12 @@ impl ShardWorker {
                 _ => continue, // Not a zset operation
             };
 
+            tracing::debug!(
+                shard_id = self.shard_id,
+                conn_id = entry.conn_id,
+                "Blocked client unblocked"
+            );
+
             // Send response
             let _ = entry.response_tx.send(response);
 
@@ -3423,6 +3458,12 @@ impl ShardWorker {
 
                 _ => continue, // Not a stream operation
             };
+
+            tracing::debug!(
+                shard_id = self.shard_id,
+                conn_id = entry.conn_id,
+                "Blocked client unblocked"
+            );
 
             // Send response
             let _ = entry.response_tx.send(response);

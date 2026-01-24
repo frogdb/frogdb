@@ -8,6 +8,7 @@ use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 use mlua::{Function, HookTriggers, Lua, Result as LuaResult, StdLib, Value, VmState};
 use tokio::sync::mpsc;
+use tracing::{debug, error};
 
 use super::config::ScriptingConfig;
 use super::error::ScriptError;
@@ -204,10 +205,19 @@ impl LuaVm {
         let kill_flag = Arc::new(AtomicBool::new(false));
         let cmd_ctx = Arc::new(RwLock::new(None));
 
+        debug!(
+            heap_limit_mb = config.lua_heap_limit_mb,
+            time_limit_ms = config.lua_time_limit_ms,
+            "Lua VM initialized"
+        );
+
         let vm = Self { lua, config, state, kill_flag, cmd_ctx };
 
         // Apply sandbox restrictions
-        vm.apply_sandbox()?;
+        vm.apply_sandbox().map_err(|e| {
+            error!(error = %e, "Failed to initialize Lua VM");
+            e
+        })?;
 
         Ok(vm)
     }

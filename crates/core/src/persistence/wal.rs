@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use tracing::{debug, error, info, trace};
 
 use super::rocks::RocksStore;
 use super::serialization::serialize;
@@ -84,6 +85,13 @@ impl RocksWalWriter {
         config: WalConfig,
         metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
     ) -> Self {
+        let durability_mode = match &config.mode {
+            DurabilityMode::Async => "async".to_string(),
+            DurabilityMode::Periodic { interval_ms } => format!("periodic_{}ms", interval_ms),
+            DurabilityMode::Sync => "sync".to_string(),
+        };
+        debug!(shard_id, durability_mode = %durability_mode, "WAL writer created");
+
         Self {
             rocks,
             shard_id,
@@ -106,7 +114,10 @@ impl RocksWalWriter {
         metadata: &KeyMetadata,
     ) -> std::io::Result<u64> {
         let serialized = serialize(value, metadata);
-        self.write_raw(key, &serialized).await
+        self.write_raw(key, &serialized).await.map_err(|e| {
+            error!(shard_id = self.shard_id, key_len = key.len(), error = %e, "WAL write_set failed");
+            e
+        })
     }
 
     /// Write a DELETE operation.
@@ -116,7 +127,10 @@ impl RocksWalWriter {
         let mut state = self.pending_batch.lock().await;
         self.rocks
             .batch_delete(&mut state.batch, self.shard_id, key)
-            .map_err(std::io::Error::other)?;
+            .map_err(|e| {
+                error!(shard_id = self.shard_id, key_len = key.len(), error = %e, "WAL write_delete failed");
+                std::io::Error::other(e)
+            })?;
 
         // Estimate delete size (key + overhead)
         state.size += key.len() + 32;
@@ -177,6 +191,8 @@ impl RocksWalWriter {
         let start = Instant::now();
 
         let batch = std::mem::take(&mut state.batch);
+        let batch_len = batch.len();
+        let bytes = state.size;
         state.size = 0;
         state.last_flush = Instant::now();
 
@@ -194,15 +210,27 @@ impl RocksWalWriter {
 
         self.rocks
             .write_batch_opt(batch, &write_opts)
-            .map_err(std::io::Error::other)?;
+            .map_err(|e| {
+                error!(shard_id = self.shard_id, error = %e, "WAL flush failed");
+                std::io::Error::other(e)
+            })?;
 
         // Record flush duration
-        let duration = start.elapsed().as_secs_f64();
+        let duration = start.elapsed();
+        let duration_secs = duration.as_secs_f64();
         let shard_label = self.shard_id.to_string();
         self.metrics_recorder.record_histogram(
             "frogdb_wal_flush_duration_seconds",
-            duration,
+            duration_secs,
             &[("shard", &shard_label)],
+        );
+
+        trace!(
+            shard_id = self.shard_id,
+            entries = batch_len,
+            bytes,
+            duration_ms = duration.as_millis() as u64,
+            "WAL batch flushed"
         );
 
         Ok(())
@@ -317,6 +345,7 @@ pub fn spawn_periodic_sync(
     rocks: Arc<RocksStore>,
     interval_ms: u64,
 ) -> tokio::task::JoinHandle<()> {
+    info!(interval_ms, "Periodic WAL sync started");
     let interval = Duration::from_millis(interval_ms);
 
     tokio::spawn(async move {

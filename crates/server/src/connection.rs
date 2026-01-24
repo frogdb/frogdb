@@ -23,7 +23,7 @@ use redis_protocol::codec::Resp2;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Framed;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::migrate::{MigrateArgs, MigrateClient, MigrateError};
 use crate::net::TcpStream;
@@ -376,6 +376,8 @@ impl ConnectionHandler {
         // Create pub/sub channel
         let (pubsub_tx, pubsub_rx) = mpsc::unbounded_channel();
 
+        debug!(conn_id = conn_id, addr = %addr, "Connection established");
+
         Self {
             framed,
             state,
@@ -431,7 +433,7 @@ impl ConnectionHandler {
             tokio::select! {
                 // Check for CLIENT KILL
                 _ = self.client_handle.killed() => {
-                    debug!(conn_id = self.state.id, "Killed by CLIENT KILL");
+                    info!(conn_id = self.state.id, addr = %self.state.addr, "Connection killed");
                     break;
                 }
 
@@ -454,7 +456,12 @@ impl ConnectionHandler {
                             continue;
                         }
                         None => {
-                            debug!(conn_id = self.state.id, "Client disconnected");
+                            debug!(
+                                conn_id = self.state.id,
+                                addr = %self.state.addr,
+                                session_duration_ms = self.state.created_at.elapsed().as_millis() as u64,
+                                "Client disconnected"
+                            );
                             break;
                         }
                     };
@@ -693,6 +700,12 @@ impl ConnectionHandler {
                     cmd_name_str.to_lowercase()
                 };
                 self.acl_manager.log().log_command_denied(&user.username, &client_info, &log_cmd);
+                warn!(
+                    conn_id = self.state.id,
+                    username = %user.username,
+                    command = %log_cmd,
+                    "ACL denied command"
+                );
                 // Return error with subcommand in message if present
                 let err_cmd = if let Some(ref sub) = subcommand {
                     format!("{} {}", cmd_name_str.to_lowercase(), sub.to_lowercase())
@@ -981,10 +994,25 @@ impl ConnectionHandler {
 
         match result {
             Ok(user) => {
+                info!(conn_id = self.state.id, username = %user.username, "Client authenticated");
                 self.state.auth = AuthState::Authenticated(user);
                 Response::ok()
             }
-            Err(e) => Response::error(e.to_string()),
+            Err(e) => {
+                let username = if args.len() > 1 {
+                    String::from_utf8_lossy(&args[0]).to_string()
+                } else {
+                    "default".to_string()
+                };
+                warn!(
+                    conn_id = self.state.id,
+                    addr = %self.state.addr,
+                    username = %username,
+                    reason = %e,
+                    "Authentication failed"
+                );
+                Response::error(e.to_string())
+            }
         }
     }
 
@@ -1060,9 +1088,17 @@ impl ConnectionHandler {
 
             match self.acl_manager.authenticate(&username_str, &password_str, &client_info) {
                 Ok(user) => {
+                    info!(conn_id = self.state.id, username = %user.username, "Client authenticated");
                     self.state.auth = AuthState::Authenticated(user);
                 }
                 Err(_) => {
+                    warn!(
+                        conn_id = self.state.id,
+                        addr = %self.state.addr,
+                        username = %username_str,
+                        reason = "invalid username-password pair or user is disabled",
+                        "Authentication failed"
+                    );
                     return Response::error("WRONGPASS invalid username-password pair or user is disabled");
                 }
             }
@@ -1386,6 +1422,7 @@ impl ConnectionHandler {
             return Response::error("ERR MULTI calls can not be nested");
         }
 
+        debug!(conn_id = self.state.id, "Transaction started");
         self.state.transaction.queue = Some(Vec::new());
         self.state.transaction.target = TransactionTarget::None;
         self.state.transaction.exec_abort = false;
@@ -1488,10 +1525,18 @@ impl ConnectionHandler {
         // Wait for result
         match response_rx.await {
             Ok(TransactionResult::Success(results)) => {
+                let duration_ms = start_time.map(|s| s.elapsed().as_millis() as u64).unwrap_or(0);
+                debug!(
+                    conn_id = self.state.id,
+                    commands_count = queued_count,
+                    duration_ms,
+                    "Transaction executed"
+                );
                 record_transaction_metrics(&self.metrics_recorder, "committed", queued_count, start_time);
                 Response::Array(results)
             }
             Ok(TransactionResult::WatchAborted) => {
+                debug!(conn_id = self.state.id, "Transaction aborted due to WATCH conflict");
                 record_transaction_metrics(&self.metrics_recorder, "watch_aborted", queued_count, start_time);
                 Response::null()
             }
@@ -2026,7 +2071,13 @@ impl ConnectionHandler {
                     return Response::error("ERR shard dropped VLL result");
                 }
                 Err(_) => {
-                    warn!(shard_id, txid, "VLL execution timeout");
+                    warn!(
+                        conn_id = self.state.id,
+                        timeout_ms = self.scatter_gather_timeout.as_millis() as u64,
+                        shard_id,
+                        txid,
+                        "Scatter-gather operation timed out"
+                    );
                     self.metrics_recorder.increment_counter(
                         "frogdb_scatter_gather_total",
                         1,
@@ -2451,6 +2502,12 @@ impl ConnectionHandler {
         for channel in args {
             // Add to local tracking
             self.state.pubsub.subscriptions.insert(channel.clone());
+
+            debug!(
+                conn_id = self.state.id,
+                channel = %String::from_utf8_lossy(channel),
+                "Subscribed to channel"
+            );
 
             // Send to all shards
             for sender in self.shard_senders.iter() {

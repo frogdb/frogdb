@@ -2,10 +2,12 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use mlua::{MultiValue, Value};
+use tracing::{debug, info, warn};
 
 use super::bindings::{
     extract_keys_from_command, is_forbidden_in_script, is_write_command,
@@ -99,12 +101,21 @@ impl ScriptExecutor {
     fn execute_script(
         &self,
         source: &[u8],
-        _sha: &ScriptSha,
+        sha: &ScriptSha,
         keys: &[Bytes],
         argv: &[Bytes],
         ctx: &mut CommandContext,
         registry: &CommandRegistry,
     ) -> Result<Response, ScriptError> {
+        let script_sha = sha_to_hex(sha);
+        let start_time = Instant::now();
+
+        debug!(
+            script_sha = %script_sha,
+            keys_count = keys.len(),
+            "Script execution started"
+        );
+
         self.running.store(true, Ordering::Relaxed);
 
         // Prepare VM
@@ -146,9 +157,41 @@ impl ScriptExecutor {
         self.running.store(false, Ordering::Relaxed);
 
         // Convert result
+        let duration_ms = start_time.elapsed().as_millis() as u64;
         match result {
-            Ok(value) => Ok(self.lua_to_response(value)),
-            Err(e) => Err(e),
+            Ok(value) => {
+                debug!(
+                    script_sha = %script_sha,
+                    duration_ms,
+                    "Script executed"
+                );
+                Ok(self.lua_to_response(value))
+            }
+            Err(ref e) => {
+                match e {
+                    ScriptError::Timeout { timeout_ms } => {
+                        warn!(
+                            script_sha = %script_sha,
+                            timeout_ms = *timeout_ms,
+                            "Script timed out"
+                        );
+                    }
+                    ScriptError::Killed => {
+                        info!(script_sha = %script_sha, "Script killed");
+                    }
+                    ScriptError::MemoryLimitExceeded => {
+                        warn!(script_sha = %script_sha, "Script exceeded memory limit");
+                    }
+                    _ => {
+                        warn!(
+                            script_sha = %script_sha,
+                            error = %e,
+                            "Script execution failed"
+                        );
+                    }
+                }
+                Err(result.unwrap_err())
+            }
         }
     }
 
@@ -330,7 +373,9 @@ impl ScriptExecutor {
     /// Load a script into the cache and return its SHA.
     pub fn load_script(&mut self, source: Bytes) -> String {
         let sha = self.cache.load(source);
-        sha_to_hex(&sha)
+        let script_sha = sha_to_hex(&sha);
+        debug!(script_sha = %script_sha, "Script cached");
+        script_sha
     }
 
     /// Check if scripts exist in the cache.
@@ -346,7 +391,9 @@ impl ScriptExecutor {
 
     /// Flush all scripts from the cache.
     pub fn flush_scripts(&mut self) {
+        let scripts_removed = self.cache.len();
         self.cache.flush();
+        info!(scripts_removed, "Script cache flushed");
     }
 
     /// Request to kill the currently running script.

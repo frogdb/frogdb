@@ -4,6 +4,7 @@ use bytes::Bytes;
 use griddle::HashMap;
 use rand::seq::IteratorRandom;
 use std::time::{Duration, Instant};
+use tracing::{debug, warn};
 
 use crate::glob::glob_match;
 use crate::noop::ExpiryIndex;
@@ -262,6 +263,7 @@ impl HashMapStore {
     fn check_and_delete_expired(&mut self, key: &[u8]) -> bool {
         if let Some(entry) = self.data.get(key) {
             if entry.metadata.is_expired() {
+                debug!(key_len = key.len(), "Key expired via lazy deletion");
                 // Remove from both data and expiry index
                 if let Some(entry) = self.data.remove(key) {
                     let size = Self::entry_memory_size(key, &entry.value);
@@ -311,6 +313,13 @@ impl Store for HashMapStore {
     fn delete(&mut self, key: &[u8]) -> bool {
         if let Some(entry) = self.data.remove(key) {
             let size = Self::entry_memory_size(key, &entry.value);
+            if size > self.memory_used {
+                warn!(
+                    key_len = key.len(),
+                    reported_size = size,
+                    "Memory accounting underflow during delete"
+                );
+            }
             self.memory_used = self.memory_used.saturating_sub(size);
             self.expiry_index.remove(key);
             true
