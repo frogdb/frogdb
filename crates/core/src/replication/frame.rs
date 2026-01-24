@@ -23,6 +23,49 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::io;
 use tokio_util::codec::{Decoder, Encoder};
 
+/// Serialize a command to RESP format for replication.
+///
+/// This converts a command name and arguments into the RESP wire protocol format
+/// that replicas can parse and execute.
+///
+/// # Arguments
+/// * `cmd_name` - The command name (e.g., "SET")
+/// * `args` - The command arguments
+///
+/// # Returns
+/// The serialized RESP bytes
+///
+/// # Example
+/// ```ignore
+/// let resp = serialize_command_to_resp("SET", &[Bytes::from("key"), Bytes::from("value")]);
+/// // Returns: "*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n"
+/// ```
+pub fn serialize_command_to_resp(cmd_name: &str, args: &[Bytes]) -> Bytes {
+    let total_elements = 1 + args.len();
+
+    // Estimate capacity: array header + command + args
+    // Each element has: $<len>\r\n<data>\r\n
+    let estimated_size = 16 + cmd_name.len() + args.iter().map(|a| 16 + a.len()).sum::<usize>();
+    let mut buf = BytesMut::with_capacity(estimated_size);
+
+    // RESP array header
+    buf.extend_from_slice(format!("*{}\r\n", total_elements).as_bytes());
+
+    // Command name as bulk string
+    buf.extend_from_slice(format!("${}\r\n", cmd_name.len()).as_bytes());
+    buf.extend_from_slice(cmd_name.as_bytes());
+    buf.extend_from_slice(b"\r\n");
+
+    // Arguments as bulk strings
+    for arg in args {
+        buf.extend_from_slice(format!("${}\r\n", arg.len()).as_bytes());
+        buf.extend_from_slice(arg);
+        buf.extend_from_slice(b"\r\n");
+    }
+
+    buf.freeze()
+}
+
 /// Frame magic bytes: "FRPL"
 pub const FRAME_MAGIC: [u8; 4] = [0x46, 0x52, 0x50, 0x4C]; // "FRPL"
 
@@ -415,5 +458,42 @@ mod tests {
         flags.set(FrameFlags::END_OF_BATCH);
         assert!(flags.contains(FrameFlags::COMPRESSED));
         assert!(flags.contains(FrameFlags::END_OF_BATCH));
+    }
+
+    #[test]
+    fn test_serialize_command_to_resp() {
+        // Test simple SET command
+        let args = vec![Bytes::from("key"), Bytes::from("value")];
+        let resp = super::serialize_command_to_resp("SET", &args);
+
+        // Expected: *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
+        assert_eq!(
+            resp.as_ref(),
+            b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n"
+        );
+    }
+
+    #[test]
+    fn test_serialize_command_to_resp_no_args() {
+        // Test PING command with no arguments
+        let args: Vec<Bytes> = vec![];
+        let resp = super::serialize_command_to_resp("PING", &args);
+
+        // Expected: *1\r\n$4\r\nPING\r\n
+        assert_eq!(resp.as_ref(), b"*1\r\n$4\r\nPING\r\n");
+    }
+
+    #[test]
+    fn test_serialize_command_to_resp_binary_data() {
+        // Test with binary data containing special characters
+        let args = vec![
+            Bytes::from("key"),
+            Bytes::from_static(b"value\r\nwith\x00newlines"),
+        ];
+        let resp = super::serialize_command_to_resp("SET", &args);
+
+        // Binary data should be preserved correctly (20 bytes: value\r\nwith\x00newlines)
+        assert!(resp.starts_with(b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$20\r\n"));
+        assert!(resp.ends_with(b"\r\n"));
     }
 }

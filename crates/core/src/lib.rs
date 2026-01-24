@@ -116,6 +116,7 @@ pub use vll::{
     TransactionQueue, VllCommand, VllConfig, VllError, VllPendingOp, VllShardResult,
 };
 pub use replication::{
-    ReplicaInfo, ReplicationFrame, ReplicationFrameCodec, ReplicationState,
-    ReplicationTrackerImpl, FRAME_MAGIC, FRAME_VERSION,
+    NoopBroadcaster, ReplicaInfo, ReplicationBroadcaster, ReplicationFrame,
+    ReplicationFrameCodec, ReplicationState, ReplicationTrackerImpl, SharedBroadcaster,
+    FRAME_MAGIC, FRAME_VERSION, serialize_command_to_resp,
 };

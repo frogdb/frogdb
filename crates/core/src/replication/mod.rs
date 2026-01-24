@@ -35,6 +35,52 @@ pub mod frame;
 pub mod state;
 pub mod tracker;
 
-pub use frame::{ReplicationFrame, ReplicationFrameCodec, FRAME_MAGIC, FRAME_VERSION};
+pub use frame::{ReplicationFrame, ReplicationFrameCodec, FRAME_MAGIC, FRAME_VERSION, serialize_command_to_resp};
 pub use state::ReplicationState;
 pub use tracker::{ReplicaInfo, ReplicationTrackerImpl};
+
+use bytes::Bytes;
+use std::sync::Arc;
+
+/// Trait for broadcasting replication frames to replicas.
+///
+/// This trait decouples the shard workers from the full replication handler,
+/// allowing shards to broadcast write commands without knowing about the
+/// underlying replication implementation.
+pub trait ReplicationBroadcaster: Send + Sync {
+    /// Broadcast a command to all replicas.
+    ///
+    /// # Arguments
+    /// * `cmd_name` - The command name (e.g., "SET")
+    /// * `args` - The command arguments
+    ///
+    /// # Returns
+    /// The new replication offset after this command.
+    fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64;
+
+    /// Check if replication is active (has connected replicas).
+    fn is_active(&self) -> bool;
+
+    /// Get the current replication offset.
+    fn current_offset(&self) -> u64;
+}
+
+/// No-op broadcaster for when not running as primary or no replicas connected.
+pub struct NoopBroadcaster;
+
+impl ReplicationBroadcaster for NoopBroadcaster {
+    fn broadcast_command(&self, _cmd_name: &str, _args: &[Bytes]) -> u64 {
+        0
+    }
+
+    fn is_active(&self) -> bool {
+        false
+    }
+
+    fn current_offset(&self) -> u64 {
+        0
+    }
+}
+
+/// A type alias for the broadcaster wrapped in an Arc.
+pub type SharedBroadcaster = Arc<dyn ReplicationBroadcaster>;
