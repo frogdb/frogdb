@@ -11,6 +11,7 @@ use std::sync::Arc as StdArc;
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
+use tracing::{debug, error, info};
 
 /// Errors that can occur with RocksDB operations.
 #[derive(Debug, Error)]
@@ -88,6 +89,14 @@ impl RocksStore {
     ///
     /// Creates one column family per shard named "shard_0", "shard_1", etc.
     pub fn open(path: &Path, num_shards: usize, config: &RocksConfig) -> Result<Self, RocksError> {
+        let path_str = path.display().to_string();
+        info!(
+            path = %path_str,
+            num_shards,
+            write_buffer_size = config.write_buffer_size,
+            "Opening RocksDB"
+        );
+
         let mut db_opts = Options::default();
         db_opts.create_if_missing(config.create_if_missing);
         db_opts.create_missing_column_families(true);
@@ -128,14 +137,21 @@ impl RocksStore {
                 &db_opts,
                 path,
                 cf_descriptors,
-            )?;
+            ).map_err(|e| {
+                error!(path = %path_str, error = %e, "Failed to open RocksDB");
+                RocksError::from(e)
+            })?;
 
             // Create any missing shard CFs
             // Note: We need to iterate and create each missing CF
             // This is a workaround since open_cf_descriptors doesn't create missing CFs
             for cf_name in &cf_names {
                 if !existing_cfs.contains(cf_name) {
-                    db.create_cf(cf_name, &cf_opts)?;
+                    debug!(cf_name = %cf_name, "Creating column family");
+                    db.create_cf(cf_name, &cf_opts).map_err(|e| {
+                        error!(path = %path_str, error = %e, "Failed to open RocksDB");
+                        RocksError::from(e)
+                    })?;
                 }
             }
 
@@ -147,9 +163,14 @@ impl RocksStore {
                 .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()))
                 .collect();
 
-            DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(&db_opts, path, cf_descriptors)?
+            DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(&db_opts, path, cf_descriptors)
+                .map_err(|e| {
+                    error!(path = %path_str, error = %e, "Failed to open RocksDB");
+                    RocksError::from(e)
+                })?
         };
 
+        info!(path = %path_str, num_shards, "RocksDB opened");
         Ok(Self { db, num_shards })
     }
 
@@ -168,7 +189,10 @@ impl RocksStore {
     /// Put a key-value pair into a shard.
     pub fn put(&self, shard_id: usize, key: &[u8], value: &[u8]) -> Result<(), RocksError> {
         let cf = self.cf_handle(shard_id)?;
-        self.db.put_cf(&cf, key, value)?;
+        self.db.put_cf(&cf, key, value).map_err(|e| {
+            error!(shard_id, key_len = key.len(), error = %e, "RocksDB put failed");
+            RocksError::from(e)
+        })?;
         Ok(())
     }
 
@@ -181,7 +205,10 @@ impl RocksStore {
         write_opts: &WriteOptions,
     ) -> Result<(), RocksError> {
         let cf = self.cf_handle(shard_id)?;
-        self.db.put_cf_opt(&cf, key, value, write_opts)?;
+        self.db.put_cf_opt(&cf, key, value, write_opts).map_err(|e| {
+            error!(shard_id, key_len = key.len(), error = %e, "RocksDB put failed");
+            RocksError::from(e)
+        })?;
         Ok(())
     }
 
@@ -194,7 +221,10 @@ impl RocksStore {
     /// Delete a key from a shard.
     pub fn delete(&self, shard_id: usize, key: &[u8]) -> Result<(), RocksError> {
         let cf = self.cf_handle(shard_id)?;
-        self.db.delete_cf(&cf, key)?;
+        self.db.delete_cf(&cf, key).map_err(|e| {
+            error!(shard_id, key_len = key.len(), error = %e, "RocksDB delete failed");
+            RocksError::from(e)
+        })?;
         Ok(())
     }
 
@@ -206,13 +236,19 @@ impl RocksStore {
         write_opts: &WriteOptions,
     ) -> Result<(), RocksError> {
         let cf = self.cf_handle(shard_id)?;
-        self.db.delete_cf_opt(&cf, key, write_opts)?;
+        self.db.delete_cf_opt(&cf, key, write_opts).map_err(|e| {
+            error!(shard_id, key_len = key.len(), error = %e, "RocksDB delete failed");
+            RocksError::from(e)
+        })?;
         Ok(())
     }
 
     /// Write a batch of operations to a shard.
     pub fn write_batch(&self, batch: WriteBatch) -> Result<(), RocksError> {
-        self.db.write(batch)?;
+        self.db.write(batch).map_err(|e| {
+            error!(error = %e, "RocksDB batch write failed");
+            RocksError::from(e)
+        })?;
         Ok(())
     }
 
@@ -222,7 +258,10 @@ impl RocksStore {
         batch: WriteBatch,
         write_opts: &WriteOptions,
     ) -> Result<(), RocksError> {
-        self.db.write_opt(batch, write_opts)?;
+        self.db.write_opt(batch, write_opts).map_err(|e| {
+            error!(error = %e, "RocksDB batch write failed");
+            RocksError::from(e)
+        })?;
         Ok(())
     }
 
@@ -270,9 +309,13 @@ impl RocksStore {
 
     /// Flush all pending writes to disk.
     pub fn flush(&self) -> Result<(), RocksError> {
+        debug!(num_shards = self.num_shards, "RocksDB flush initiated");
         for shard_id in 0..self.num_shards {
             let cf = self.cf_handle(shard_id)?;
-            self.db.flush_cf(&cf)?;
+            self.db.flush_cf(&cf).map_err(|e| {
+                error!(shard_id, error = %e, "RocksDB flush failed");
+                RocksError::from(e)
+            })?;
         }
         Ok(())
     }
@@ -305,7 +348,10 @@ impl RocksStore {
 
         for shard_id in 0..self.num_shards {
             let cf = self.cf_handle(shard_id)?;
-            self.db.flush_cf_opt(&cf, &flush_opts)?;
+            self.db.flush_cf_opt(&cf, &flush_opts).map_err(|e| {
+                error!(shard_id, error = %e, "RocksDB flush failed");
+                RocksError::from(e)
+            })?;
         }
         Ok(())
     }
@@ -316,8 +362,16 @@ impl RocksStore {
     /// immutable SST files, making it very fast and space-efficient.
     /// Must be called from a spawn_blocking context as Checkpoint is !Send.
     pub fn create_checkpoint(&self, path: &Path) -> Result<(), RocksError> {
-        let checkpoint = rocksdb::checkpoint::Checkpoint::new(&self.db)?;
-        checkpoint.create_checkpoint(path)?;
+        let path_str = path.display().to_string();
+        info!(path = %path_str, "Creating RocksDB checkpoint");
+        let checkpoint = rocksdb::checkpoint::Checkpoint::new(&self.db).map_err(|e| {
+            error!(path = %path_str, error = %e, "Checkpoint creation failed");
+            RocksError::from(e)
+        })?;
+        checkpoint.create_checkpoint(path).map_err(|e| {
+            error!(path = %path_str, error = %e, "Checkpoint creation failed");
+            RocksError::from(e)
+        })?;
         Ok(())
     }
 

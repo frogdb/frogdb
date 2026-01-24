@@ -3,6 +3,7 @@
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use thiserror::Error;
+use tracing::error;
 
 /// Core error variants for command execution.
 #[derive(Debug, Clone, Error)]
@@ -71,6 +72,16 @@ pub enum CommandError {
 }
 
 impl CommandError {
+    /// Create an internal error with logging.
+    ///
+    /// This should be used for unexpected internal errors that indicate a bug
+    /// or system issue, not for user-facing errors.
+    pub fn internal(command: &str, message: impl Into<String>) -> Self {
+        let message = message.into();
+        error!(command, error = %message, "Command internal error");
+        Self::Internal { message }
+    }
+
     /// Convert to RESP error response.
     pub fn to_response(&self) -> Response {
         Response::Error(self.to_bytes())

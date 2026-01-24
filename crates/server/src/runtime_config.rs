@@ -11,6 +11,7 @@ use std::sync::{Arc, RwLock};
 
 use frogdb_core::{glob_match, EvictionConfig, EvictionPolicy, ShardMessage};
 use tokio::sync::{mpsc, oneshot};
+use tracing::{info, warn};
 use tracing_subscriber::{reload, EnvFilter};
 
 use crate::config::Config;
@@ -478,9 +479,13 @@ impl ConfigManager {
             .params
             .iter()
             .find(|p| p.name == normalized)
-            .ok_or_else(|| ConfigError::UnknownParameter(name.to_string()))?;
+            .ok_or_else(|| {
+                warn!(param = %name, "Unknown config parameter");
+                ConfigError::UnknownParameter(name.to_string())
+            })?;
 
         if !param.mutable {
+            warn!(param = %name, "Attempted to change immutable config");
             return Err(ConfigError::ImmutableParameter(name.to_string()));
         }
 
@@ -488,7 +493,21 @@ impl ConfigManager {
             .setter
             .ok_or_else(|| ConfigError::ImmutableParameter(name.to_string()))?;
 
-        setter(self, value)
+        // Get old value before change
+        let old_value = (param.getter)(self);
+
+        // Apply the change
+        setter(self, value).map_err(|e| {
+            warn!(param = %name, value = %value, error = %e, "Invalid config value rejected");
+            e
+        })?;
+
+        // Get new value after change
+        let new_value = (param.getter)(self);
+
+        info!(param = %name, old_value = %old_value, new_value = %new_value, "Config parameter changed");
+
+        Ok(())
     }
 
     /// Get all parameter names.
