@@ -17,6 +17,7 @@ pub mod json;
 pub mod latency;
 pub mod noop;
 pub mod persistence;
+pub mod replication;
 pub mod slowlog;
 pub mod pubsub;
 pub mod registry;
@@ -113,4 +114,8 @@ pub use timeseries::{
 pub use vll::{
     ExecuteSignal, IntentTable, KeyLockState, LockMode, PendingOpState, ShardReadyResult,
     TransactionQueue, VllCommand, VllConfig, VllError, VllPendingOp, VllShardResult,
+};
+pub use replication::{
+    ReplicaInfo, ReplicationFrame, ReplicationFrameCodec, ReplicationState,
+    ReplicationTrackerImpl, FRAME_MAGIC, FRAME_VERSION,
 };

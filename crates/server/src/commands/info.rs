@@ -290,6 +290,16 @@ fn build_stats_info(ctx: &mut CommandContext) -> String {
 }
 
 fn build_replication_info() -> String {
+    // TODO: Wire ReplicationTrackerImpl into CommandContext to provide real values.
+    // This requires adding the tracker to the server's shard execution path.
+    // For now, return static values indicating standalone mode.
+    //
+    // Full implementation should report:
+    // - role: master or slave
+    // - connected_slaves: N
+    // - slaveN: ip=...,port=...,state=...,offset=...,lag=...
+    // - master_replid: actual 40-char replication ID
+    // - master_repl_offset: current WAL position
     "# Replication\r\n\
      role:master\r\n\
      connected_slaves:0\r\n\
