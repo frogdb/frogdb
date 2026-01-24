@@ -11,15 +11,21 @@ use frogdb_core::{
     ReplicationBroadcaster, ReplicationFrame, ReplicationState, ReplicationTracker,
     ReplicationTrackerImpl, RocksStore, replication::tracker::ReplicaState, serialize_command_to_resp,
 };
-use std::path::PathBuf;
+use sha2::Digest;
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, RwLock};
+
+use crate::replication::fullsync::{
+    calculate_file_checksum, stream_file_to_writer, FullSyncMetadata, FullSyncState,
+};
 
 /// Primary replication handler.
 ///
@@ -165,6 +171,7 @@ impl PrimaryReplicationHandler {
         stream.write_all(response.as_bytes()).await?;
 
         let current_offset = state.replication_offset;
+        let replication_id = state.replication_id.clone();
         drop(state);
 
         // Register replica in syncing state
@@ -188,43 +195,35 @@ impl PrimaryReplicationHandler {
             if let Err(e) = checkpoint_result {
                 tracing::error!(error = %e, "Failed to create checkpoint for FULLRESYNC");
                 // Fall back to minimal RDB
-                let empty_rdb = create_minimal_rdb();
-                let rdb_header = format!("${}\r\n", empty_rdb.len());
-                stream.write_all(rdb_header.as_bytes()).await?;
-                stream.write_all(&empty_rdb).await?;
+                self.send_minimal_rdb(&mut stream).await?;
             } else {
-                // TODO: Stream checkpoint files to replica
-                // For now, send minimal RDB as placeholder
-                // Future implementation will:
-                // 1. Calculate total size of checkpoint files
-                // 2. Send metadata (size, checksum)
-                // 3. Stream each file using stream_file_to_writer
-                // 4. Clean up checkpoint directory
-                tracing::info!(
-                    checkpoint_path = %checkpoint_path.display(),
-                    "Checkpoint created for FULLRESYNC (streaming not yet implemented)"
-                );
+                // Stream checkpoint files to replica
+                let stream_result = self.stream_checkpoint(
+                    &mut stream,
+                    &checkpoint_path,
+                    replica_id,
+                    &replication_id,
+                    current_offset,
+                ).await;
 
-                let empty_rdb = create_minimal_rdb();
-                let rdb_header = format!("${}\r\n", empty_rdb.len());
-                stream.write_all(rdb_header.as_bytes()).await?;
-                stream.write_all(&empty_rdb).await?;
-
-                // Clean up checkpoint
-                if let Err(e) = tokio::fs::remove_dir_all(&checkpoint_path).await {
+                // Clean up checkpoint directory regardless of success/failure
+                if let Err(e) = fs::remove_dir_all(&checkpoint_path).await {
                     tracing::warn!(
                         checkpoint_path = %checkpoint_path.display(),
                         error = %e,
                         "Failed to clean up checkpoint directory"
                     );
                 }
+
+                // Propagate streaming errors
+                if let Err(e) = stream_result {
+                    tracing::error!(error = %e, "Failed to stream checkpoint for FULLRESYNC");
+                    return Err(e);
+                }
             }
         } else {
             // No persistence - send minimal RDB
-            let empty_rdb = create_minimal_rdb();
-            let rdb_header = format!("${}\r\n", empty_rdb.len());
-            stream.write_all(rdb_header.as_bytes()).await?;
-            stream.write_all(&empty_rdb).await?;
+            self.send_minimal_rdb(&mut stream).await?;
         }
 
         tracing::info!(
@@ -239,6 +238,125 @@ impl PrimaryReplicationHandler {
 
         // Start streaming WAL updates
         self.start_streaming(stream, addr, replica_id).await
+    }
+
+    /// Stream checkpoint files to replica.
+    ///
+    /// Protocol:
+    /// 1. Send file count as $<count>\r\n
+    /// 2. For each file:
+    ///    a. Send filename as bulk string
+    ///    b. Send file size as bulk string
+    ///    c. Stream file contents
+    /// 3. Send metadata (replication_id:offset:checksum)
+    async fn stream_checkpoint(
+        &self,
+        stream: &mut TcpStream,
+        checkpoint_path: &Path,
+        replica_id: u64,
+        replication_id: &str,
+        replication_offset: u64,
+    ) -> io::Result<()> {
+        // Collect all files in checkpoint directory
+        let mut files: Vec<(String, u64, PathBuf)> = Vec::new();
+        let mut total_size = 0u64;
+
+        let mut dir = fs::read_dir(checkpoint_path).await?;
+        while let Some(entry) = dir.next_entry().await? {
+            let path = entry.path();
+            if path.is_file() {
+                let metadata = fs::metadata(&path).await?;
+                let file_name = path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let file_size = metadata.len();
+                total_size += file_size;
+                files.push((file_name, file_size, path));
+            }
+        }
+
+        // Sort files for deterministic ordering
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+
+        tracing::info!(
+            replica_id = replica_id,
+            file_count = files.len(),
+            total_size = total_size,
+            "Streaming checkpoint to replica"
+        );
+
+        // Create sync state for progress tracking
+        let sync_state = FullSyncState::new(replica_id, replica_id, total_size);
+
+        // Send FrogDB checkpoint header (distinguishes from minimal RDB)
+        // Format: $FROGDB_CHECKPOINT\r\n<file_count>\r\n
+        stream.write_all(b"$FROGDB_CHECKPOINT\r\n").await?;
+        stream.write_all(format!("{}\r\n", files.len()).as_bytes()).await?;
+
+        // Stream each file
+        for (file_name, file_size, file_path) in &files {
+            // Send filename
+            stream.write_all(format!("${}\r\n{}\r\n", file_name.len(), file_name).as_bytes()).await?;
+
+            // Send file size
+            stream.write_all(format!("${}\r\n", file_size).as_bytes()).await?;
+
+            // Stream file contents
+            let bytes_written = stream_file_to_writer(file_path, stream, Some(&sync_state)).await?;
+
+            tracing::debug!(
+                file = %file_name,
+                size = bytes_written,
+                progress = format!("{:.1}%", sync_state.progress_percent()),
+                "Streamed checkpoint file"
+            );
+        }
+
+        // Calculate overall checksum from checkpoint files
+        // We use a simple approach: hash the concatenation of all file hashes
+        let mut combined_hash = sha2::Sha256::new();
+        for (file_name, _, file_path) in &files {
+            let file_hash = calculate_file_checksum(file_path).await?;
+            Digest::update(&mut combined_hash, file_name.as_bytes());
+            Digest::update(&mut combined_hash, &file_hash);
+        }
+        let final_hash = Digest::finalize(combined_hash);
+        let mut checksum = [0u8; 32];
+        checksum.copy_from_slice(&final_hash);
+
+        // Send metadata
+        let metadata = FullSyncMetadata {
+            rdb_size: total_size,
+            checksum,
+            replication_id: replication_id.to_string(),
+            replication_offset,
+        };
+        let metadata_bytes = metadata.to_bytes();
+        stream.write_all(format!("${}\r\n", metadata_bytes.len()).as_bytes()).await?;
+        stream.write_all(&metadata_bytes).await?;
+        stream.write_all(b"\r\n").await?;
+
+        let elapsed = sync_state.elapsed();
+        let rate_mbps = (total_size as f64 / 1024.0 / 1024.0) / elapsed.as_secs_f64();
+        tracing::info!(
+            replica_id = replica_id,
+            files = files.len(),
+            total_bytes = total_size,
+            elapsed_ms = elapsed.as_millis() as u64,
+            rate_mbps = format!("{:.2}", rate_mbps),
+            "Checkpoint streaming complete"
+        );
+
+        Ok(())
+    }
+
+    /// Send a minimal RDB for empty database or fallback.
+    async fn send_minimal_rdb(&self, stream: &mut TcpStream) -> io::Result<()> {
+        let empty_rdb = create_minimal_rdb();
+        let rdb_header = format!("${}\r\n", empty_rdb.len());
+        stream.write_all(rdb_header.as_bytes()).await?;
+        stream.write_all(&empty_rdb).await?;
+        Ok(())
     }
 
     /// Start streaming WAL updates to a replica.
