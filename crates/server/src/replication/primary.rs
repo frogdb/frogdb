@@ -8,9 +8,10 @@
 
 use bytes::{Bytes, BytesMut};
 use frogdb_core::{
-    ReplicationFrame, ReplicationState, ReplicationTracker, ReplicationTrackerImpl,
-    replication::tracker::ReplicaState,
+    ReplicationBroadcaster, ReplicationFrame, ReplicationState, ReplicationTracker,
+    ReplicationTrackerImpl, RocksStore, replication::tracker::ReplicaState, serialize_command_to_resp,
 };
+use std::path::PathBuf;
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
@@ -35,6 +36,13 @@ pub struct PrimaryReplicationHandler {
 
     /// Active replica connections
     connections: Arc<RwLock<HashMap<u64, ReplicaConnectionHandle>>>,
+
+    /// Optional RocksDB store for FULLRESYNC checkpoint streaming.
+    /// If None, only minimal RDB is sent (for in-memory mode).
+    rocks_store: Option<Arc<RocksStore>>,
+
+    /// Directory for storing temporary checkpoint data.
+    data_dir: PathBuf,
 }
 
 /// Handle to a replica connection.
@@ -57,7 +65,18 @@ struct ReplicaConnectionHandle {
 
 impl PrimaryReplicationHandler {
     /// Create a new primary replication handler.
-    pub fn new(state: ReplicationState, tracker: Arc<ReplicationTrackerImpl>) -> Self {
+    ///
+    /// # Arguments
+    /// * `state` - Initial replication state
+    /// * `tracker` - Replication tracker for ACK handling
+    /// * `rocks_store` - Optional RocksDB store for checkpoint streaming
+    /// * `data_dir` - Directory for storing temporary checkpoint data
+    pub fn new(
+        state: ReplicationState,
+        tracker: Arc<ReplicationTrackerImpl>,
+        rocks_store: Option<Arc<RocksStore>>,
+        data_dir: PathBuf,
+    ) -> Self {
         let (wal_broadcast, _) = broadcast::channel(10000);
 
         Self {
@@ -65,6 +84,8 @@ impl PrimaryReplicationHandler {
             tracker,
             wal_broadcast,
             connections: Arc::new(RwLock::new(HashMap::new())),
+            rocks_store,
+            data_dir,
         }
     }
 
@@ -150,16 +171,61 @@ impl PrimaryReplicationHandler {
         let replica_id = self.tracker.register_replica(addr);
         self.tracker.set_state(replica_id, ReplicaState::Syncing);
 
-        // TODO: Send RDB snapshot
-        // For now, send an empty RDB (just the EOF marker)
-        // The real implementation will create a RocksDB checkpoint and stream it
+        // Stream database snapshot to replica
+        if let Some(ref rocks) = self.rocks_store {
+            // Create checkpoint for FULLRESYNC
+            let checkpoint_path = self.data_dir.join(format!("fullsync_{}", replica_id));
 
-        // Empty RDB: $<length>\r\n<rdb_data>
-        // For an empty database, we send a minimal valid RDB
-        let empty_rdb = create_minimal_rdb();
-        let rdb_header = format!("${}\r\n", empty_rdb.len());
-        stream.write_all(rdb_header.as_bytes()).await?;
-        stream.write_all(&empty_rdb).await?;
+            // Create checkpoint in blocking task (Checkpoint is !Send)
+            let rocks_clone = rocks.clone();
+            let path_clone = checkpoint_path.clone();
+            let checkpoint_result = tokio::task::spawn_blocking(move || {
+                rocks_clone.create_checkpoint(&path_clone)
+            })
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+            if let Err(e) = checkpoint_result {
+                tracing::error!(error = %e, "Failed to create checkpoint for FULLRESYNC");
+                // Fall back to minimal RDB
+                let empty_rdb = create_minimal_rdb();
+                let rdb_header = format!("${}\r\n", empty_rdb.len());
+                stream.write_all(rdb_header.as_bytes()).await?;
+                stream.write_all(&empty_rdb).await?;
+            } else {
+                // TODO: Stream checkpoint files to replica
+                // For now, send minimal RDB as placeholder
+                // Future implementation will:
+                // 1. Calculate total size of checkpoint files
+                // 2. Send metadata (size, checksum)
+                // 3. Stream each file using stream_file_to_writer
+                // 4. Clean up checkpoint directory
+                tracing::info!(
+                    checkpoint_path = %checkpoint_path.display(),
+                    "Checkpoint created for FULLRESYNC (streaming not yet implemented)"
+                );
+
+                let empty_rdb = create_minimal_rdb();
+                let rdb_header = format!("${}\r\n", empty_rdb.len());
+                stream.write_all(rdb_header.as_bytes()).await?;
+                stream.write_all(&empty_rdb).await?;
+
+                // Clean up checkpoint
+                if let Err(e) = tokio::fs::remove_dir_all(&checkpoint_path).await {
+                    tracing::warn!(
+                        checkpoint_path = %checkpoint_path.display(),
+                        error = %e,
+                        "Failed to clean up checkpoint directory"
+                    );
+                }
+            }
+        } else {
+            // No persistence - send minimal RDB
+            let empty_rdb = create_minimal_rdb();
+            let rdb_header = format!("${}\r\n", empty_rdb.len());
+            stream.write_all(rdb_header.as_bytes()).await?;
+            stream.write_all(&empty_rdb).await?;
+        }
 
         tracing::info!(
             replica_id = replica_id,
@@ -335,6 +401,46 @@ impl PrimaryReplicationHandler {
     /// Get replication ID.
     pub async fn replication_id(&self) -> String {
         self.state.read().await.replication_id.clone()
+    }
+
+    /// Get the current replication offset synchronously (non-async).
+    ///
+    /// This reads from the tracker which stores the offset atomically,
+    /// allowing it to be called from synchronous contexts.
+    pub fn current_offset_sync(&self) -> u64 {
+        self.tracker.current_offset()
+    }
+}
+
+impl ReplicationBroadcaster for PrimaryReplicationHandler {
+    fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64 {
+        // Serialize the command to RESP format
+        let resp_bytes = serialize_command_to_resp(cmd_name, args);
+        let bytes_len = resp_bytes.len() as u64;
+
+        // Increment offset atomically via the tracker
+        let new_offset = self.tracker.increment_offset(bytes_len);
+
+        // Create and broadcast the frame
+        let frame = ReplicationFrame::new(new_offset, resp_bytes);
+        self.broadcast_frame(frame);
+
+        tracing::trace!(
+            cmd = cmd_name,
+            bytes = bytes_len,
+            offset = new_offset,
+            "Broadcast command to replicas"
+        );
+
+        new_offset
+    }
+
+    fn is_active(&self) -> bool {
+        self.tracker.replica_count() > 0
+    }
+
+    fn current_offset(&self) -> u64 {
+        self.tracker.current_offset()
     }
 }
 

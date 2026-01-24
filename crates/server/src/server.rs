@@ -6,7 +6,7 @@ use frogdb_core::persistence::{
     RocksConfig, RocksSnapshotCoordinator, RocksStore, SnapshotCoordinator, WalConfig,
 };
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
-use frogdb_core::{AclManager, ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, ShardMessage, ShardWorker};
+use frogdb_core::{AclManager, ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, NoopBroadcaster, SharedBroadcaster, ShardMessage, ShardWorker};
 use frogdb_metrics::{HealthChecker, MetricsServer, PrometheusRecorder, SystemMetricsCollector};
 use std::time::Duration;
 use tokio::signal;
@@ -274,6 +274,10 @@ impl Server {
         // Convert recovered stores to an iterator if available
         let mut recovered_iter = recovered_stores.map(|v| v.into_iter());
 
+        // Create replication broadcaster
+        // TODO: Initialize PrimaryReplicationHandler when replication is enabled
+        let replication_broadcaster: SharedBroadcaster = Arc::new(NoopBroadcaster);
+
         for (shard_id, (msg_rx, conn_rx)) in shard_receivers
             .into_iter()
             .zip(new_conn_receivers.into_iter())
@@ -300,6 +304,7 @@ impl Server {
                     eviction_config.clone(),
                     metrics_recorder.clone(),
                     slowlog_next_id.clone(),
+                    replication_broadcaster.clone(),
                 )
             } else {
                 ShardWorker::with_eviction(
@@ -312,6 +317,7 @@ impl Server {
                     eviction_config.clone(),
                     metrics_recorder.clone(),
                     slowlog_next_id.clone(),
+                    replication_broadcaster.clone(),
                 )
             };
 

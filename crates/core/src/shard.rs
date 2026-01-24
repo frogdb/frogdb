@@ -20,6 +20,7 @@ use crate::pubsub::{
 };
 use crate::latency::{LatencyEvent, LatencyMonitor, LatencySample};
 use crate::registry::CommandRegistry;
+use crate::replication::{NoopBroadcaster, SharedBroadcaster};
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
 use crate::slowlog::{SlowLog, SlowLogEntry};
 use crate::store::{HashMapStore, Store};
@@ -925,6 +926,9 @@ pub struct ShardWorker {
     /// Pending release receiver for continuation lock.
     /// When Some, we poll this to detect when the lock should be released.
     pending_continuation_release: Option<oneshot::Receiver<()>>,
+
+    /// Replication broadcaster for streaming writes to replicas.
+    replication_broadcaster: SharedBroadcaster,
 }
 
 impl ShardWorker {
@@ -947,6 +951,7 @@ impl ShardWorker {
             EvictionConfig::default(),
             Arc::new(crate::noop::NoopMetricsRecorder::new()),
             Arc::new(AtomicU64::new(0)),
+            Arc::new(NoopBroadcaster),
         )
     }
 
@@ -962,6 +967,7 @@ impl ShardWorker {
         eviction_config: EvictionConfig,
         metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
         slowlog_next_id: Arc<AtomicU64>,
+        replication_broadcaster: SharedBroadcaster,
     ) -> Self {
         // Try to create script executor
         let script_executor = ScriptExecutor::new(ScriptingConfig::default())
@@ -1008,6 +1014,7 @@ impl ShardWorker {
             tx_queue: None,
             continuation_lock: None,
             pending_continuation_release: None,
+            replication_broadcaster,
         }
     }
 
@@ -1027,6 +1034,7 @@ impl ShardWorker {
         eviction_config: EvictionConfig,
         metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
         slowlog_next_id: Arc<AtomicU64>,
+        replication_broadcaster: SharedBroadcaster,
     ) -> Self {
         let wal_writer = RocksWalWriter::new(
             rocks_store.clone(),
@@ -1080,12 +1088,21 @@ impl ShardWorker {
             tx_queue: None,
             continuation_lock: None,
             pending_continuation_release: None,
+            replication_broadcaster,
         }
     }
 
     /// Set the function registry for this shard.
     pub fn set_function_registry(&mut self, registry: SharedFunctionRegistry) {
         self.function_registry = Some(registry);
+    }
+
+    /// Set the replication broadcaster for this shard.
+    ///
+    /// This allows setting the broadcaster after construction, which is useful
+    /// when the primary replication handler is initialized separately from the shards.
+    pub fn set_replication_broadcaster(&mut self, broadcaster: SharedBroadcaster) {
+        self.replication_broadcaster = broadcaster;
     }
 
     /// Get the snapshot coordinator.
@@ -2034,6 +2051,11 @@ impl ShardWorker {
 
             // Persist to WAL for write operations
             self.persist_command_to_wal(&cmd_name_str, &command.args).await;
+
+            // Broadcast to replicas (if running as primary with connected replicas)
+            if self.replication_broadcaster.is_active() {
+                self.replication_broadcaster.broadcast_command(&cmd_name_str, &command.args);
+            }
         }
 
         response
