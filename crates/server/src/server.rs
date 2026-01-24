@@ -16,6 +16,7 @@ use tracing::{error, info, warn};
 use crate::acceptor::Acceptor;
 use crate::config::{Config, MemoryConfig, PersistenceConfig};
 use crate::net::{spawn, TcpListener};
+use crate::replication::PrimaryReplicationHandler;
 use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
 
 /// Channel capacity for shard message queues.
@@ -275,8 +276,32 @@ impl Server {
         let mut recovered_iter = recovered_stores.map(|v| v.into_iter());
 
         // Create replication broadcaster
-        // TODO: Initialize PrimaryReplicationHandler when replication is enabled
-        let replication_broadcaster: SharedBroadcaster = Arc::new(NoopBroadcaster);
+        let replication_broadcaster: SharedBroadcaster = if config.replication.is_primary() {
+            // Initialize PrimaryReplicationHandler for primary role
+            let state_path = config.persistence.data_dir.join(&config.replication.state_file);
+            let repl_state = frogdb_core::ReplicationState::load_or_create(&state_path)
+                .map_err(|e| anyhow::anyhow!("Failed to load replication state: {}", e))?;
+
+            info!(
+                replication_id = %repl_state.replication_id,
+                offset = repl_state.replication_offset,
+                "Initialized primary replication state"
+            );
+
+            let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
+            tracker.set_offset(repl_state.replication_offset);
+
+            let handler = Arc::new(PrimaryReplicationHandler::new(
+                repl_state,
+                tracker,
+                rocks_store.clone(),
+                config.persistence.data_dir.clone(),
+            ));
+
+            handler as SharedBroadcaster
+        } else {
+            Arc::new(NoopBroadcaster)
+        };
 
         for (shard_id, (msg_rx, conn_rx)) in shard_receivers
             .into_iter()

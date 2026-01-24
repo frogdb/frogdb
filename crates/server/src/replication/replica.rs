@@ -10,13 +10,17 @@ use bytes::BytesMut;
 use frogdb_core::{ReplicationFrame, ReplicationFrameCodec, ReplicationState};
 use std::io;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::timeout;
 use tokio_util::codec::Decoder;
+
+use crate::replication::fullsync::{receive_to_file, FullSyncMetadata};
 
 /// Connection timeout for initial connection
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -45,6 +49,9 @@ pub struct ReplicaReplicationHandler {
 
     /// Shutdown signal
     shutdown: tokio::sync::watch::Sender<bool>,
+
+    /// Directory for storing checkpoint data
+    data_dir: PathBuf,
 }
 
 /// Connection to the primary for replication.
@@ -60,6 +67,9 @@ pub struct ReplicaConnection {
 
     /// Current connection state
     connection_state: ConnectionState,
+
+    /// Directory for storing checkpoint data
+    data_dir: PathBuf,
 }
 
 /// State of the replica connection.
@@ -98,6 +108,7 @@ impl ReplicaReplicationHandler {
         primary_addr: SocketAddr,
         listening_port: u16,
         state: ReplicationState,
+        data_dir: PathBuf,
     ) -> (Self, mpsc::Receiver<ReplicationFrame>) {
         let (frame_tx, frame_rx) = mpsc::channel(10000);
         let (shutdown, _) = tokio::sync::watch::channel(false);
@@ -108,6 +119,7 @@ impl ReplicaReplicationHandler {
             state: Arc::new(RwLock::new(state)),
             frame_tx,
             shutdown,
+            data_dir,
         };
 
         (handler, frame_rx)
@@ -160,6 +172,7 @@ impl ReplicaReplicationHandler {
             primary_addr: self.primary_addr,
             state: self.state.clone(),
             connection_state: ConnectionState::Connected,
+            data_dir: self.data_dir.clone(),
         };
 
         // Perform handshake
@@ -169,9 +182,13 @@ impl ReplicaReplicationHandler {
         let sync_type = conn.psync().await?;
 
         match sync_type {
-            SyncType::FullSync { rdb_size } => {
-                // Receive RDB
+            SyncType::FullSyncRdb { rdb_size } => {
+                // Receive minimal RDB
                 conn.receive_rdb(rdb_size).await?;
+            }
+            SyncType::FullSyncCheckpoint { file_count } => {
+                // Receive FrogDB checkpoint
+                conn.receive_checkpoint(file_count).await?;
             }
             SyncType::PartialSync => {
                 // No RDB needed, continue to streaming
@@ -195,7 +212,11 @@ impl ReplicaReplicationHandler {
 
 /// Type of sync initiated by PSYNC.
 enum SyncType {
-    FullSync { rdb_size: usize },
+    /// Full sync with minimal RDB (size known upfront)
+    FullSyncRdb { rdb_size: usize },
+    /// Full sync with FrogDB checkpoint streaming
+    FullSyncCheckpoint { file_count: usize },
+    /// Partial sync - continue from current offset
     PartialSync,
 }
 
@@ -281,7 +302,7 @@ impl ReplicaConnection {
 
                 self.connection_state = ConnectionState::Syncing;
 
-                // Read RDB size: $<length>\r\n
+                // Read next line to determine sync type: $<length>\r\n or $FROGDB_CHECKPOINT\r\n
                 line_buf.clear();
                 reader.read_line(&mut line_buf).await?;
                 let line = line_buf.trim();
@@ -289,15 +310,34 @@ impl ReplicaConnection {
                 if !line.starts_with('$') {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "expected RDB size prefix",
+                        "expected RDB size prefix or checkpoint marker",
                     ));
                 }
 
-                let rdb_size: usize = line[1..].parse().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "invalid RDB size")
-                })?;
+                let marker = &line[1..];
+                if marker == "FROGDB_CHECKPOINT" {
+                    // FrogDB checkpoint protocol
+                    // Next line is file count
+                    line_buf.clear();
+                    reader.read_line(&mut line_buf).await?;
+                    let file_count: usize = line_buf.trim().parse().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, "invalid file count in checkpoint")
+                    })?;
 
-                Ok(SyncType::FullSync { rdb_size })
+                    tracing::info!(
+                        file_count = file_count,
+                        "FrogDB checkpoint FULLRESYNC"
+                    );
+
+                    Ok(SyncType::FullSyncCheckpoint { file_count })
+                } else {
+                    // Traditional minimal RDB protocol
+                    let rdb_size: usize = marker.parse().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, "invalid RDB size")
+                    })?;
+
+                    Ok(SyncType::FullSyncRdb { rdb_size })
+                }
             } else {
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -357,6 +397,103 @@ impl ReplicaConnection {
                 io::ErrorKind::InvalidData,
                 "invalid RDB header",
             ));
+        }
+
+        self.connection_state = ConnectionState::Streaming;
+        Ok(())
+    }
+
+    /// Receive FrogDB checkpoint during FULLRESYNC.
+    ///
+    /// Protocol:
+    /// 1. Already received $FROGDB_CHECKPOINT and file count
+    /// 2. For each file:
+    ///    a. Receive filename as bulk string
+    ///    b. Receive file size as bulk string
+    ///    c. Receive file contents
+    /// 3. Receive metadata (replication_id:offset:checksum)
+    async fn receive_checkpoint(&mut self, file_count: usize) -> io::Result<()> {
+        tracing::info!(file_count = file_count, "Receiving FrogDB checkpoint");
+
+        // Create checkpoint directory
+        let checkpoint_dir = self.data_dir.join("checkpoint_incoming");
+        fs::create_dir_all(&checkpoint_dir).await?;
+
+        let mut total_bytes = 0u64;
+        let mut reader = BufReader::new(&mut self.stream);
+
+        // Receive each file
+        for i in 0..file_count {
+            // Read filename length: $<len>\r\n
+            let mut line = String::new();
+            reader.read_line(&mut line).await?;
+            let filename_len: usize = line.trim().trim_start_matches('$').parse().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid filename length")
+            })?;
+
+            // Read filename
+            let mut filename_buf = vec![0u8; filename_len + 2]; // +2 for \r\n
+            reader.read_exact(&mut filename_buf).await?;
+            let filename = String::from_utf8_lossy(&filename_buf[..filename_len]).to_string();
+
+            // Read file size: $<size>\r\n
+            line.clear();
+            reader.read_line(&mut line).await?;
+            let file_size: u64 = line.trim().trim_start_matches('$').parse().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid file size")
+            })?;
+
+            // Receive file contents
+            let file_path = checkpoint_dir.join(&filename);
+            let checksum = receive_to_file(
+                reader.get_mut(),
+                &file_path,
+                file_size,
+                None, // No progress tracking for now
+            ).await?;
+
+            total_bytes += file_size;
+
+            tracing::debug!(
+                file = i + 1,
+                filename = %filename,
+                size = file_size,
+                checksum = %hex::encode(&checksum[..8]),
+                "Received checkpoint file"
+            );
+        }
+
+        // Read metadata: $<len>\r\n<metadata>\r\n
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        let metadata_len: usize = line.trim().trim_start_matches('$').parse().map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "invalid metadata length")
+        })?;
+
+        let mut metadata_buf = vec![0u8; metadata_len + 2]; // +2 for \r\n
+        reader.read_exact(&mut metadata_buf).await?;
+        let metadata = FullSyncMetadata::from_bytes(&metadata_buf[..metadata_len])?;
+
+        tracing::info!(
+            total_bytes = total_bytes,
+            files = file_count,
+            replication_id = %metadata.replication_id,
+            offset = metadata.replication_offset,
+            "Checkpoint received successfully"
+        );
+
+        // Verify checksum
+        // TODO: For now we trust the checksum, but we should verify against received files
+
+        // TODO: Load checkpoint into RocksDB
+        // This requires:
+        // 1. Stop current database
+        // 2. Move/backup current data
+        // 3. Restore checkpoint
+        // 4. Resume operations
+        // For now, we just clean up and proceed to streaming
+        if let Err(e) = fs::remove_dir_all(&checkpoint_dir).await {
+            tracing::warn!(error = %e, "Failed to clean up checkpoint directory");
         }
 
         self.connection_state = ConnectionState::Streaming;
@@ -481,8 +618,9 @@ mod tests {
     async fn test_replica_handler_creation() {
         let addr: SocketAddr = "127.0.0.1:6379".parse().unwrap();
         let state = ReplicationState::new();
+        let data_dir = PathBuf::from("/tmp/frogdb-test");
 
-        let (handler, _rx) = ReplicaReplicationHandler::new(addr, 6380, state);
+        let (handler, _rx) = ReplicaReplicationHandler::new(addr, 6380, state, data_dir);
 
         let current_state = handler.state().await;
         assert!(!current_state.replication_id.is_empty());
