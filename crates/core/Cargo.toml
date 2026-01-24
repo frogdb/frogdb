@@ -20,7 +20,9 @@ crc16.workspace = true
 murmur3.workspace = true
 bitvec.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 ordered-float.workspace = true
+parking_lot.workspace = true
 rand.workspace = true
 shuttle = { workspace = true, optional = true }
 rocksdb.workspace = true
