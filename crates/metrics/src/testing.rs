@@ -11,6 +11,22 @@
 //! let count = get_counter(&metrics, "frogdb_commands_total", &[("command", "SET")]);
 //! assert_eq!(count, 1.0);
 //! ```
+//!
+//! # Snapshot-based Testing
+//!
+//! For before/after comparisons, use `MetricsSnapshot` and `MetricsDelta`:
+//!
+//! ```rust,ignore
+//! use frogdb_metrics::testing::{MetricsSnapshot, MetricsDelta};
+//!
+//! let before = MetricsSnapshot::new(server.fetch_metrics().await);
+//! // ... perform operations ...
+//! let after = MetricsSnapshot::new(server.fetch_metrics().await);
+//!
+//! MetricsDelta::new(before, after)
+//!     .assert_counter_increased("frogdb_commands_total", &[("command", "SET")], 1.0)
+//!     .assert_histogram_recorded("frogdb_commands_duration_seconds", &[("command", "SET")], 1);
+//! ```
 
 use std::collections::HashMap;
 
@@ -426,6 +442,331 @@ macro_rules! assert_histogram_count_gte {
     }};
 }
 
+// =============================================================================
+// Snapshot-based Testing Helpers
+// =============================================================================
+
+/// A snapshot of metrics for comparison.
+///
+/// Wraps raw Prometheus text format metrics with helper methods for
+/// extracting specific metric values.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let snapshot = MetricsSnapshot::new(server.fetch_metrics().await);
+/// let count = snapshot.counter("frogdb_commands_total", &[("command", "SET")]);
+/// ```
+#[derive(Debug, Clone)]
+pub struct MetricsSnapshot {
+    raw: String,
+}
+
+/// Fetch metrics from an HTTP endpoint.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use frogdb_metrics::testing::fetch_metrics;
+///
+/// let metrics = fetch_metrics(server.metrics_addr).await;
+/// ```
+#[cfg(feature = "testing")]
+pub async fn fetch_metrics(addr: std::net::SocketAddr) -> String {
+    reqwest::get(format!("http://{}/metrics", addr))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap()
+}
+
+impl MetricsSnapshot {
+    /// Create a new metrics snapshot from raw Prometheus text format.
+    pub fn new(raw: String) -> Self {
+        Self { raw }
+    }
+
+    /// Fetch metrics from an HTTP endpoint and create a snapshot.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use frogdb_metrics::testing::MetricsSnapshot;
+    ///
+    /// let snapshot = MetricsSnapshot::fetch(server.metrics_addr).await;
+    /// ```
+    #[cfg(feature = "testing")]
+    pub async fn fetch(addr: std::net::SocketAddr) -> Self {
+        Self::new(fetch_metrics(addr).await)
+    }
+
+    /// Get the raw metrics text.
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    /// Get a counter value by name and labels.
+    ///
+    /// Returns 0.0 if the metric is not found.
+    pub fn counter(&self, name: &str, labels: &[(&str, &str)]) -> f64 {
+        get_counter(&self.raw, name, labels)
+    }
+
+    /// Get a gauge value by name and labels.
+    ///
+    /// Returns 0.0 if the metric is not found.
+    pub fn gauge(&self, name: &str, labels: &[(&str, &str)]) -> f64 {
+        get_gauge(&self.raw, name, labels)
+    }
+
+    /// Get a histogram count (_count suffix) by name and labels.
+    pub fn histogram_count(&self, name: &str, labels: &[(&str, &str)]) -> u64 {
+        get_histogram_count(&self.raw, name, labels)
+    }
+
+    /// Get a histogram sum (_sum suffix) by name and labels.
+    pub fn histogram_sum(&self, name: &str, labels: &[(&str, &str)]) -> f64 {
+        get_histogram_sum(&self.raw, name, labels)
+    }
+}
+
+/// Helper for asserting metric changes between snapshots.
+///
+/// Provides fluent API for asserting that metrics changed as expected
+/// between a "before" and "after" snapshot.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let before = MetricsSnapshot::new(server.fetch_metrics().await);
+/// // ... perform operations ...
+/// let after = MetricsSnapshot::new(server.fetch_metrics().await);
+///
+/// MetricsDelta::new(before, after)
+///     .assert_counter_increased("frogdb_commands_total", &[("command", "SET")], 1.0)
+///     .assert_counter_increased_gte("frogdb_keyspace_hits_total", &[], 1.0)
+///     .assert_histogram_recorded("frogdb_commands_duration_seconds", &[("command", "SET")], 1);
+/// ```
+#[derive(Debug)]
+pub struct MetricsDelta {
+    before: MetricsSnapshot,
+    after: MetricsSnapshot,
+}
+
+impl MetricsDelta {
+    /// Create a new delta from before and after snapshots.
+    pub fn new(before: MetricsSnapshot, after: MetricsSnapshot) -> Self {
+        Self { before, after }
+    }
+
+    /// Assert that a counter increased by exactly the expected amount.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the counter didn't increase by the expected amount.
+    pub fn assert_counter_increased(
+        &self,
+        name: &str,
+        labels: &[(&str, &str)],
+        expected_increase: f64,
+    ) -> &Self {
+        let before = self.before.counter(name, labels);
+        let after = self.after.counter(name, labels);
+        let actual_increase = after - before;
+
+        assert!(
+            (actual_increase - expected_increase).abs() < 0.001,
+            "Counter {} with labels {:?} expected increase of {}, got {} (before={}, after={})",
+            name,
+            labels,
+            expected_increase,
+            actual_increase,
+            before,
+            after
+        );
+        self
+    }
+
+    /// Assert that a counter increased by at least the minimum amount.
+    ///
+    /// Useful for metrics that may be incremented by background processes
+    /// or when the exact count varies.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the counter didn't increase by at least the minimum.
+    pub fn assert_counter_increased_gte(
+        &self,
+        name: &str,
+        labels: &[(&str, &str)],
+        min_increase: f64,
+    ) -> &Self {
+        let before = self.before.counter(name, labels);
+        let after = self.after.counter(name, labels);
+        let actual_increase = after - before;
+
+        assert!(
+            actual_increase >= min_increase - 0.001,
+            "Counter {} with labels {:?} expected increase >= {}, got {} (before={}, after={})",
+            name,
+            labels,
+            min_increase,
+            actual_increase,
+            before,
+            after
+        );
+        self
+    }
+
+    /// Assert that a histogram recorded exactly the expected number of observations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the histogram count didn't increase by the expected amount.
+    pub fn assert_histogram_recorded(
+        &self,
+        name: &str,
+        labels: &[(&str, &str)],
+        expected_count: u64,
+    ) -> &Self {
+        let before = self.before.histogram_count(name, labels);
+        let after = self.after.histogram_count(name, labels);
+        let actual_increase = after - before;
+
+        assert_eq!(
+            actual_increase, expected_count,
+            "Histogram {} with labels {:?} expected {} new observations, got {} (before={}, after={})",
+            name, labels, expected_count, actual_increase, before, after
+        );
+        self
+    }
+
+    /// Assert that a histogram recorded at least the minimum number of observations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the histogram count didn't increase by at least the minimum.
+    pub fn assert_histogram_recorded_gte(
+        &self,
+        name: &str,
+        labels: &[(&str, &str)],
+        min_count: u64,
+    ) -> &Self {
+        let before = self.before.histogram_count(name, labels);
+        let after = self.after.histogram_count(name, labels);
+        let actual_increase = after - before;
+
+        assert!(
+            actual_increase >= min_count,
+            "Histogram {} with labels {:?} expected >= {} new observations, got {} (before={}, after={})",
+            name, labels, min_count, actual_increase, before, after
+        );
+        self
+    }
+
+    /// Assert that a gauge has the expected value after operations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the gauge doesn't have the expected value.
+    pub fn assert_gauge_eq(&self, name: &str, labels: &[(&str, &str)], expected: f64) -> &Self {
+        let actual = self.after.gauge(name, labels);
+        assert!(
+            (actual - expected).abs() < 0.001,
+            "Gauge {} with labels {:?} expected {}, got {}",
+            name,
+            labels,
+            expected,
+            actual
+        );
+        self
+    }
+
+    /// Assert that a gauge is at least the minimum value after operations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the gauge is less than the minimum.
+    pub fn assert_gauge_gte(&self, name: &str, labels: &[(&str, &str)], min: f64) -> &Self {
+        let actual = self.after.gauge(name, labels);
+        assert!(
+            actual >= min - 0.001,
+            "Gauge {} with labels {:?} expected >= {}, got {}",
+            name,
+            labels,
+            min,
+            actual
+        );
+        self
+    }
+
+    /// Get the counter delta (after - before).
+    pub fn counter_delta(&self, name: &str, labels: &[(&str, &str)]) -> f64 {
+        self.after.counter(name, labels) - self.before.counter(name, labels)
+    }
+
+    /// Get the histogram count delta (after - before).
+    pub fn histogram_count_delta(&self, name: &str, labels: &[(&str, &str)]) -> u64 {
+        self.after.histogram_count(name, labels) - self.before.histogram_count(name, labels)
+    }
+}
+
+/// Assert a counter delta between before and after metrics.
+///
+/// This macro is useful for inline delta assertions without creating
+/// a full `MetricsDelta` struct.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let before = server.fetch_metrics().await;
+/// client.command(&["SET", "key", "value"]).await;
+/// let after = server.fetch_metrics().await;
+///
+/// assert_counter_delta!(&before, &after, "frogdb_commands_total", &[("command", "SET")], 1.0);
+/// ```
+#[macro_export]
+macro_rules! assert_counter_delta {
+    ($before:expr, $after:expr, $name:expr, $labels:expr, $expected:expr) => {{
+        let labels: &[(&str, &str)] = $labels;
+        let before_val = $crate::testing::get_counter($before, $name, labels);
+        let after_val = $crate::testing::get_counter($after, $name, labels);
+        let actual_delta = after_val - before_val;
+        assert!(
+            (actual_delta - $expected as f64).abs() < 0.001,
+            "Counter {} with labels {:?} expected delta of {}, got {} (before={}, after={})",
+            $name,
+            labels,
+            $expected,
+            actual_delta,
+            before_val,
+            after_val
+        );
+    }};
+}
+
+/// Assert a counter delta is at least the minimum between before and after metrics.
+#[macro_export]
+macro_rules! assert_counter_delta_gte {
+    ($before:expr, $after:expr, $name:expr, $labels:expr, $min:expr) => {{
+        let labels: &[(&str, &str)] = $labels;
+        let before_val = $crate::testing::get_counter($before, $name, labels);
+        let after_val = $crate::testing::get_counter($after, $name, labels);
+        let actual_delta = after_val - before_val;
+        assert!(
+            actual_delta >= $min as f64 - 0.001,
+            "Counter {} with labels {:?} expected delta >= {}, got {} (before={}, after={})",
+            $name,
+            labels,
+            $min,
+            actual_delta,
+            before_val,
+            after_val
+        );
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,5 +993,143 @@ my_metric_neg -Inf
         assert_eq!(samples.len(), 2);
         assert!(samples[0].value.is_infinite() && samples[0].value > 0.0);
         assert!(samples[1].value.is_infinite() && samples[1].value < 0.0);
+    }
+
+    // =========================================================================
+    // MetricsSnapshot Tests
+    // =========================================================================
+
+    #[test]
+    fn test_metrics_snapshot_counter() {
+        let text = r#"my_counter{cmd="SET"} 42"#.to_string();
+        let snapshot = MetricsSnapshot::new(text);
+
+        assert_eq!(snapshot.counter("my_counter", &[("cmd", "SET")]), 42.0);
+        assert_eq!(snapshot.counter("my_counter", &[("cmd", "GET")]), 0.0);
+        assert_eq!(snapshot.counter("nonexistent", &[]), 0.0);
+    }
+
+    #[test]
+    fn test_metrics_snapshot_gauge() {
+        let text = r#"my_gauge 3.14"#.to_string();
+        let snapshot = MetricsSnapshot::new(text);
+
+        assert!((snapshot.gauge("my_gauge", &[]) - 3.14).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_metrics_snapshot_histogram() {
+        let text = r#"
+my_histogram_count{cmd="GET"} 100
+my_histogram_sum{cmd="GET"} 25.5
+        "#
+        .to_string();
+        let snapshot = MetricsSnapshot::new(text);
+
+        assert_eq!(snapshot.histogram_count("my_histogram", &[("cmd", "GET")]), 100);
+        assert!((snapshot.histogram_sum("my_histogram", &[("cmd", "GET")]) - 25.5).abs() < 0.001);
+    }
+
+    // =========================================================================
+    // MetricsDelta Tests
+    // =========================================================================
+
+    #[test]
+    fn test_metrics_delta_counter_increased() {
+        let before = MetricsSnapshot::new(r#"my_counter{cmd="SET"} 10"#.to_string());
+        let after = MetricsSnapshot::new(r#"my_counter{cmd="SET"} 15"#.to_string());
+
+        let delta = MetricsDelta::new(before, after);
+        delta.assert_counter_increased("my_counter", &[("cmd", "SET")], 5.0);
+    }
+
+    #[test]
+    fn test_metrics_delta_counter_increased_gte() {
+        let before = MetricsSnapshot::new(r#"my_counter{cmd="SET"} 10"#.to_string());
+        let after = MetricsSnapshot::new(r#"my_counter{cmd="SET"} 20"#.to_string());
+
+        let delta = MetricsDelta::new(before, after);
+        delta.assert_counter_increased_gte("my_counter", &[("cmd", "SET")], 5.0);
+        delta.assert_counter_increased_gte("my_counter", &[("cmd", "SET")], 10.0);
+    }
+
+    #[test]
+    fn test_metrics_delta_histogram_recorded() {
+        let before = MetricsSnapshot::new(r#"my_histogram_count{cmd="GET"} 50"#.to_string());
+        let after = MetricsSnapshot::new(r#"my_histogram_count{cmd="GET"} 55"#.to_string());
+
+        let delta = MetricsDelta::new(before, after);
+        delta.assert_histogram_recorded("my_histogram", &[("cmd", "GET")], 5);
+    }
+
+    #[test]
+    fn test_metrics_delta_histogram_recorded_gte() {
+        let before = MetricsSnapshot::new(r#"my_histogram_count{cmd="GET"} 50"#.to_string());
+        let after = MetricsSnapshot::new(r#"my_histogram_count{cmd="GET"} 60"#.to_string());
+
+        let delta = MetricsDelta::new(before, after);
+        delta.assert_histogram_recorded_gte("my_histogram", &[("cmd", "GET")], 5);
+        delta.assert_histogram_recorded_gte("my_histogram", &[("cmd", "GET")], 10);
+    }
+
+    #[test]
+    fn test_metrics_delta_gauge_eq() {
+        let before = MetricsSnapshot::new(r#"my_gauge 5"#.to_string());
+        let after = MetricsSnapshot::new(r#"my_gauge 10"#.to_string());
+
+        let delta = MetricsDelta::new(before, after);
+        delta.assert_gauge_eq("my_gauge", &[], 10.0);
+    }
+
+    #[test]
+    fn test_metrics_delta_chaining() {
+        let before = MetricsSnapshot::new(
+            r#"
+counter_a 10
+counter_b 20
+histogram_count 5
+        "#
+            .to_string(),
+        );
+        let after = MetricsSnapshot::new(
+            r#"
+counter_a 15
+counter_b 25
+histogram_count 10
+        "#
+            .to_string(),
+        );
+
+        // Test fluent chaining
+        MetricsDelta::new(before, after)
+            .assert_counter_increased("counter_a", &[], 5.0)
+            .assert_counter_increased("counter_b", &[], 5.0)
+            .assert_histogram_recorded("histogram", &[], 5);
+    }
+
+    #[test]
+    fn test_metrics_delta_getters() {
+        let before = MetricsSnapshot::new(r#"my_counter 10"#.to_string());
+        let after = MetricsSnapshot::new(r#"my_counter 25"#.to_string());
+
+        let delta = MetricsDelta::new(before, after);
+        assert_eq!(delta.counter_delta("my_counter", &[]), 15.0);
+    }
+
+    #[test]
+    fn test_assert_counter_delta_macro() {
+        let before = r#"my_counter{cmd="SET"} 10"#;
+        let after = r#"my_counter{cmd="SET"} 15"#;
+
+        assert_counter_delta!(&before, &after, "my_counter", &[("cmd", "SET")], 5.0);
+    }
+
+    #[test]
+    fn test_assert_counter_delta_gte_macro() {
+        let before = r#"my_counter 10"#;
+        let after = r#"my_counter 20"#;
+
+        assert_counter_delta_gte!(&before, &after, "my_counter", &[], 5.0);
+        assert_counter_delta_gte!(&before, &after, "my_counter", &[], 10.0);
     }
 }

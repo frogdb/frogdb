@@ -4,6 +4,7 @@
 //! RESP3-specific response types (Map, Set, Double, Push).
 
 use bytes::Bytes;
+use frogdb_metrics::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
 use frogdb_server::{Config, Server};
 use futures::{SinkExt, StreamExt};
 use redis_protocol::codec::{Resp2, Resp3};
@@ -21,6 +22,7 @@ use tokio_util::codec::Framed;
 /// Helper struct for managing a test server.
 struct TestServer {
     addr: SocketAddr,
+    metrics_addr: SocketAddr,
     shutdown_tx: oneshot::Sender<()>,
     handle: JoinHandle<()>,
     #[allow(dead_code)]
@@ -35,12 +37,18 @@ impl TestServer {
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
+        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let metrics_addr = metrics_listener.local_addr().unwrap();
+        drop(metrics_listener);
+
         let mut config = Config::default();
         config.server.bind = "127.0.0.1".to_string();
         config.server.port = addr.port();
         config.server.num_shards = 1;
         config.logging.level = "warn".to_string();
         config.persistence.data_dir = temp_dir.path().to_path_buf();
+        config.metrics.bind = "127.0.0.1".to_string();
+        config.metrics.port = metrics_addr.port();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -60,6 +68,7 @@ impl TestServer {
 
         TestServer {
             addr,
+            metrics_addr,
             shutdown_tx,
             handle,
             temp_dir,
@@ -73,6 +82,10 @@ impl TestServer {
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
+        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let metrics_addr = metrics_listener.local_addr().unwrap();
+        drop(metrics_listener);
+
         let mut config = Config::default();
         config.server.bind = "127.0.0.1".to_string();
         config.server.port = addr.port();
@@ -80,6 +93,8 @@ impl TestServer {
         config.logging.level = "warn".to_string();
         config.persistence.data_dir = temp_dir.path().to_path_buf();
         config.security.requirepass = requirepass.to_string();
+        config.metrics.bind = "127.0.0.1".to_string();
+        config.metrics.port = metrics_addr.port();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -99,6 +114,7 @@ impl TestServer {
 
         TestServer {
             addr,
+            metrics_addr,
             shutdown_tx,
             handle,
             temp_dir,
@@ -217,6 +233,9 @@ async fn test_hello_upgrade_to_resp3() {
     let server = TestServer::start().await;
     let mut client = server.connect_resp3().await;
 
+    // Get baseline metrics
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // Send HELLO 3 to upgrade to RESP3
     let response = client.command(&["HELLO", "3"]).await;
     match response {
@@ -239,6 +258,12 @@ async fn test_hello_upgrade_to_resp3() {
         }
         _ => panic!("Expected Map response for HELLO 3, got {:?}", response),
     }
+
+    // Verify metrics - HELLO command was tracked
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "HELLO")], 1.0);
 
     server.shutdown().await;
 }
@@ -388,6 +413,9 @@ async fn test_hgetall_resp3_returns_map() {
     // Set up some hash data
     client.command(&["HSET", "myhash", "field1", "value1", "field2", "value2"]).await;
 
+    // Get baseline metrics (after setup)
+    let before = MetricsSnapshot::fetch(server.metrics_addr).await;
+
     // HGETALL should return a Map in RESP3
     let response = client.command(&["HGETALL", "myhash"]).await;
     match response {
@@ -396,6 +424,12 @@ async fn test_hgetall_resp3_returns_map() {
         }
         _ => panic!("Expected Map response for HGETALL in RESP3, got {:?}", response),
     }
+
+    // Verify metrics - HGETALL was tracked
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::fetch(server.metrics_addr).await;
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "HGETALL")], 1.0);
 
     server.shutdown().await;
 }
@@ -408,6 +442,9 @@ async fn test_hgetall_resp2_returns_array() {
     // Set up some hash data
     client.command(&["HSET", "myhash", "field1", "value1", "field2", "value2"]).await;
 
+    // Get baseline metrics (after setup)
+    let before = MetricsSnapshot::fetch(server.metrics_addr).await;
+
     // HGETALL should return a flattened Array in RESP2
     let response = client.command(&["HGETALL", "myhash"]).await;
     match response {
@@ -417,6 +454,12 @@ async fn test_hgetall_resp2_returns_array() {
         }
         _ => panic!("Expected Array response for HGETALL in RESP2, got {:?}", response),
     }
+
+    // Verify metrics - HGETALL was tracked
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::fetch(server.metrics_addr).await;
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "HGETALL")], 1.0);
 
     server.shutdown().await;
 }
@@ -432,6 +475,9 @@ async fn test_smembers_resp3_returns_set() {
     // Set up some set data
     client.command(&["SADD", "myset", "a", "b", "c"]).await;
 
+    // Get baseline metrics (after setup)
+    let before = MetricsSnapshot::fetch(server.metrics_addr).await;
+
     // SMEMBERS should return a Set in RESP3
     let response = client.command(&["SMEMBERS", "myset"]).await;
     match response {
@@ -440,6 +486,12 @@ async fn test_smembers_resp3_returns_set() {
         }
         _ => panic!("Expected Set response for SMEMBERS in RESP3, got {:?}", response),
     }
+
+    // Verify metrics - SMEMBERS was tracked
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::fetch(server.metrics_addr).await;
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "SMEMBERS")], 1.0);
 
     server.shutdown().await;
 }

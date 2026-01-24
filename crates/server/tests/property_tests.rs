@@ -4,6 +4,7 @@
 //! operations through the RESP protocol.
 
 use bytes::Bytes;
+use frogdb_metrics::testing::{MetricsDelta, MetricsSnapshot};
 use frogdb_protocol::Response;
 use frogdb_server::{Config, Server};
 use futures::{SinkExt, StreamExt};
@@ -23,6 +24,7 @@ use tokio_util::codec::Framed;
 /// Helper struct for managing a test server.
 struct TestServer {
     addr: SocketAddr,
+    metrics_addr: SocketAddr,
     shutdown_tx: Option<oneshot::Sender<()>>,
     handle: JoinHandle<()>,
     #[allow(dead_code)]
@@ -72,6 +74,7 @@ impl TestServer {
 
         TestServer {
             addr,
+            metrics_addr,
             shutdown_tx: Some(shutdown_tx),
             handle,
             temp_dir,
@@ -267,6 +270,9 @@ proptest! {
             // Ensure key doesn't exist
             client.command(&["DEL", &key]).await;
 
+            // Get baseline metrics
+            let before = MetricsSnapshot::fetch(server.metrics_addr).await;
+
             // INCR on nonexistent key
             let result = client.command(&["INCR", &key]).await;
             prop_assert_eq!(extract_integer(&result), Some(1));
@@ -279,6 +285,12 @@ proptest! {
             } else {
                 prop_assert!(false, "Expected bulk string response");
             }
+
+            // Verify metrics - INCR and GET were tracked
+            let after = MetricsSnapshot::fetch(server.metrics_addr).await;
+            MetricsDelta::new(before, after)
+                .assert_counter_increased_gte("frogdb_commands_total", &[("command", "INCR")], 1.0)
+                .assert_counter_increased_gte("frogdb_commands_total", &[("command", "GET")], 1.0);
 
             server.shutdown().await;
             Ok(())

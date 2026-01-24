@@ -9,7 +9,7 @@ description = "Metrics and observability for FrogDB"
 
 [features]
 default = []
-testing = []
+testing = ["dep:reqwest"]
 
 [dependencies]
 frogdb-core = { path = "../core" }
@@ -45,6 +45,9 @@ serde_json = { workspace = true }
 
 # Bytes
 bytes = { workspace = true }
+
+# HTTP client for testing (optional)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

@@ -1,6 +1,7 @@
 //! Integration tests for TimeSeries commands.
 
 use bytes::Bytes;
+use frogdb_metrics::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
 use frogdb_protocol::Response;
 use frogdb_server::{Config, Server};
 use futures::{SinkExt, StreamExt};
@@ -18,6 +19,7 @@ use tokio_util::codec::Framed;
 /// Helper struct for managing a test server.
 struct TestServer {
     addr: SocketAddr,
+    metrics_addr: SocketAddr,
     shutdown_tx: oneshot::Sender<()>,
     handle: JoinHandle<()>,
     #[allow(dead_code)]
@@ -63,6 +65,7 @@ impl TestServer {
 
         TestServer {
             addr,
+            metrics_addr,
             shutdown_tx,
             handle,
             temp_dir,
@@ -123,6 +126,9 @@ async fn test_ts_create() {
     let server = TestServer::start().await;
     let mut client = server.connect().await;
 
+    // Get baseline metrics
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // Basic create
     let response = client.command(&["TS.CREATE", "temp"]).await;
     assert_eq!(response, Response::ok());
@@ -151,6 +157,12 @@ async fn test_ts_create() {
     let response = client.command(&["TS.CREATE", "temp"]).await;
     assert!(matches!(response, Response::Error(_)));
 
+    // Verify metrics - 3 TS.CREATE commands total
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "TS.CREATE")], 3.0);
+
     server.shutdown().await;
 }
 
@@ -161,6 +173,9 @@ async fn test_ts_add_and_get() {
 
     // Create time series
     client.command(&["TS.CREATE", "temp"]).await;
+
+    // Get baseline metrics (after CREATE)
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
 
     // Add with explicit timestamp
     let response = client.command(&["TS.ADD", "temp", "1000", "23.5"]).await;
@@ -185,6 +200,13 @@ async fn test_ts_add_and_get() {
         }
         _ => panic!("Expected array response"),
     }
+
+    // Verify metrics - 2 TS.ADD and 1 TS.GET
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "TS.ADD")], 2.0)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "TS.GET")], 1.0);
 
     server.shutdown().await;
 }
@@ -251,6 +273,9 @@ async fn test_ts_range() {
             .await;
     }
 
+    // Get baseline metrics (after CREATE and ADDs)
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // Query range
     let response = client
         .command(&["TS.RANGE", "temp", "1000", "1500"])
@@ -281,6 +306,12 @@ async fn test_ts_range() {
         }
         _ => panic!("Expected array response"),
     }
+
+    // Verify metrics - 3 TS.RANGE commands
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "TS.RANGE")], 3.0);
 
     server.shutdown().await;
 }
@@ -386,6 +417,9 @@ async fn test_ts_madd() {
     client.command(&["TS.CREATE", "temp1"]).await;
     client.command(&["TS.CREATE", "temp2"]).await;
 
+    // Get baseline metrics (after CREATEs)
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // Add to multiple series
     let response = client
         .command(&[
@@ -401,6 +435,12 @@ async fn test_ts_madd() {
         }
         _ => panic!("Expected array response"),
     }
+
+    // Verify metrics - 1 TS.MADD command
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "TS.MADD")], 1.0);
 
     server.shutdown().await;
 }

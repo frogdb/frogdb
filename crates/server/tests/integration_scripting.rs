@@ -3,6 +3,7 @@
 //! These tests verify redis.call(), redis.pcall(), and redis.log() functionality.
 
 use bytes::Bytes;
+use frogdb_metrics::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
 use frogdb_protocol::Response;
 use frogdb_server::{Config, Server};
 use futures::{SinkExt, StreamExt};
@@ -20,6 +21,7 @@ use tokio_util::codec::Framed;
 /// Helper struct for managing a test server.
 struct TestServer {
     addr: SocketAddr,
+    metrics_addr: SocketAddr,
     shutdown_tx: oneshot::Sender<()>,
     handle: JoinHandle<()>,
     #[allow(dead_code)]
@@ -67,6 +69,7 @@ impl TestServer {
 
         TestServer {
             addr,
+            metrics_addr,
             shutdown_tx,
             handle,
             temp_dir,
@@ -131,6 +134,9 @@ async fn test_eval_redis_call_set_get() {
     let server = TestServer::start().await;
     let mut client = server.connect().await;
 
+    // Get baseline metrics
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // Use redis.call to SET a value
     let response = client
         .command(&[
@@ -153,6 +159,12 @@ async fn test_eval_redis_call_set_get() {
         ])
         .await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("myvalue"))));
+
+    // Verify metrics
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "EVAL")], 2.0);
 
     server.shutdown().await;
 }
@@ -222,6 +234,9 @@ async fn test_eval_redis_call_raises_on_error() {
     // First set a string value
     client.command(&["SET", "stringkey", "value"]).await;
 
+    // Get baseline metrics
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // Try to use INCR on a string (should cause error in redis.call)
     // Note: INCR on non-numeric string should fail
     let response = client
@@ -241,6 +256,12 @@ async fn test_eval_redis_call_raises_on_error() {
         }
         _ => panic!("Expected error response, got: {:?}", response),
     }
+
+    // Verify metrics - EVAL command was executed (even though script errored)
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "EVAL")], 1.0);
 
     server.shutdown().await;
 }
@@ -500,6 +521,9 @@ async fn test_evalsha_after_script_load() {
         _ => panic!("Expected bulk string with SHA, got: {:?}", response),
     };
 
+    // Get baseline metrics (after LOAD)
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // Execute using EVALSHA
     let response = client
         .command(&["EVALSHA", &sha, "1", "shakey", "shavalue"])
@@ -509,6 +533,12 @@ async fn test_evalsha_after_script_load() {
     // Verify the value was set
     let response = client.command(&["GET", "shakey"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("shavalue"))));
+
+    // Verify metrics - EVALSHA was executed
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "EVALSHA")], 1.0);
 
     server.shutdown().await;
 }
