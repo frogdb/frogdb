@@ -1,6 +1,7 @@
 //! Integration tests for Redis Functions (FUNCTION, FCALL, FCALL_RO).
 
 use bytes::Bytes;
+use frogdb_metrics::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
 use frogdb_protocol::Response;
 use frogdb_server::{Config, Server};
 use futures::{SinkExt, StreamExt};
@@ -18,6 +19,7 @@ use tokio_util::codec::Framed;
 /// Helper struct for managing a test server.
 struct TestServer {
     addr: SocketAddr,
+    metrics_addr: SocketAddr,
     shutdown_tx: oneshot::Sender<()>,
     handle: JoinHandle<()>,
     #[allow(dead_code)]
@@ -65,6 +67,7 @@ impl TestServer {
 
         TestServer {
             addr,
+            metrics_addr,
             shutdown_tx,
             handle,
             temp_dir,
@@ -149,6 +152,9 @@ async fn test_function_load_and_list() {
     let server = TestServer::start().await;
     let mut client = server.connect().await;
 
+    // Get baseline metrics
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // Load a function library
     let code = r#"#!lua name=mylib
 redis.register_function('hello', function(keys, args)
@@ -167,6 +173,12 @@ end)
         }
         _ => panic!("Expected array response from FUNCTION LIST"),
     }
+
+    // Verify metrics
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased_gte("frogdb_commands_total", &[("command", "FUNCTION")], 2.0);
 
     server.shutdown().await;
 }
@@ -190,9 +202,18 @@ end)
 
     client.command(&["FUNCTION", "LOAD", code]).await;
 
+    // Get baseline metrics (after LOAD)
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // Call the function
     let response = client.command(&["FCALL", "add", "0", "5", "3"]).await;
     assert_eq!(response, Response::Integer(8));
+
+    // Verify metrics
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "FCALL")], 1.0);
 
     server.shutdown().await;
 }
@@ -215,9 +236,18 @@ end)
 
     client.command(&["FUNCTION", "LOAD", code]).await;
 
+    // Get baseline metrics (after LOAD)
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // Call the function with a key
     let response = client.command(&["FCALL", "getkey", "1", "mykey"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("hello"))));
+
+    // Verify metrics
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "FCALL")], 1.0);
 
     server.shutdown().await;
 }
@@ -248,11 +278,20 @@ redis.register_function{
 
     client.command(&["FUNCTION", "LOAD", code]).await;
 
+    // Get baseline metrics (after LOAD)
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // FCALL_RO should work with read-only function
     let response = client
         .command(&["FCALL_RO", "readonly_get", "1", "rokey"])
         .await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("value"))));
+
+    // Verify metrics
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "FCALL_RO")], 1.0);
 
     server.shutdown().await;
 }
@@ -272,6 +311,9 @@ end)
 
     client.command(&["FUNCTION", "LOAD", code]).await;
 
+    // Get baseline metrics (after LOAD)
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+
     // FCALL_RO should fail for functions without no-writes flag
     let response = client.command(&["FCALL_RO", "write_func", "0"]).await;
     match response {
@@ -285,6 +327,13 @@ end)
         }
         _ => panic!("Expected error response for FCALL_RO with write function"),
     }
+
+    // Verify metrics - command error should still be tracked
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    // FCALL_RO was called but failed
+    MetricsDelta::new(before, after)
+        .assert_counter_increased("frogdb_commands_total", &[("command", "FCALL_RO")], 1.0);
 
     server.shutdown().await;
 }

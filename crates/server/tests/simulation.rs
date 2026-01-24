@@ -162,6 +162,9 @@ async fn echo_server() -> Result<(), BoxError> {
 ///
 /// This runs the actual FrogDB server code under Turmoil's network simulation.
 /// The server runs until the simulation ends (using std::future::pending).
+///
+/// Note: Metrics are disabled in simulation tests because the metrics HTTP server
+/// uses real TCP bindings which are incompatible with Turmoil's simulated network.
 async fn real_frogdb_server(num_shards: usize) -> Result<(), BoxError> {
     let config = Config {
         server: ServerConfig {
@@ -191,6 +194,9 @@ async fn real_frogdb_server(num_shards: usize) -> Result<(), BoxError> {
 }
 
 /// Start real FrogDB server with chaos configuration for simulation tests.
+///
+/// Note: Metrics are disabled in simulation tests because the metrics HTTP server
+/// uses real TCP bindings which are incompatible with Turmoil's simulated network.
 async fn real_frogdb_server_with_chaos(num_shards: usize, _chaos: ChaosConfig) -> Result<(), BoxError> {
     let config = Config {
         server: ServerConfig {
