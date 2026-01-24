@@ -7,7 +7,7 @@ use frogdb_core::persistence::{
 };
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
 use frogdb_core::{AclManager, ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, NoopBroadcaster, SharedBroadcaster, ShardMessage, ShardWorker};
-use frogdb_metrics::{HealthChecker, MetricsServer, PrometheusRecorder, SystemMetricsCollector};
+use frogdb_metrics::{HealthChecker, MetricsServer, PrometheusRecorder, SharedTracer, SystemMetricsCollector};
 use std::time::Duration;
 use tokio::signal;
 use tokio::sync::mpsc;
@@ -100,6 +100,9 @@ pub struct Server {
 
     /// Function registry (shared across all shards).
     function_registry: frogdb_core::SharedFunctionRegistry,
+
+    /// Optional shared tracer for distributed tracing.
+    shared_tracer: Option<SharedTracer>,
 }
 
 impl Server {
@@ -359,6 +362,27 @@ impl Server {
         // Create ACL manager
         let acl_manager = AclManager::new(config.to_acl_config());
 
+        // Initialize distributed tracer if enabled
+        let shared_tracer = if config.tracing.enabled {
+            let tracing_config = config.tracing.to_metrics_config();
+            match frogdb_metrics::create_tracer(&tracing_config) {
+                Ok(tracer) => {
+                    info!(
+                        endpoint = %config.tracing.otlp_endpoint,
+                        sampling_rate = %config.tracing.sampling_rate,
+                        "Distributed tracing enabled"
+                    );
+                    Some(tracer)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to initialize tracer, continuing without tracing");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Create shard config notifier for propagating runtime config changes
         let shard_notifier = Arc::new(ShardConfigNotifier::new(
             shard_senders.clone(),
@@ -385,6 +409,7 @@ impl Server {
             health_checker,
             acl_manager,
             function_registry,
+            shared_tracer,
         })
     }
 
@@ -543,6 +568,8 @@ impl Server {
             self.acl_manager.clone(),
             self.snapshot_coordinator.clone(),
             self.function_registry.clone(),
+            self.shared_tracer.clone(),
+            self.config.tracing.clone(),
         );
 
         // Spawn acceptor task
@@ -603,6 +630,12 @@ impl Server {
         }
         if let Some(handle) = system_collector_handle {
             handle.abort();
+        }
+
+        // Shutdown tracer and flush pending spans
+        if let Some(ref tracer) = self.shared_tracer {
+            info!("Shutting down distributed tracer...");
+            tracer.shutdown();
         }
 
         // Final flush of RocksDB

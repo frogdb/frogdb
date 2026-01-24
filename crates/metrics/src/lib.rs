@@ -12,6 +12,7 @@ pub mod otlp;
 pub mod prometheus_recorder;
 pub mod server;
 pub mod system;
+pub mod tracing;
 
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -20,10 +21,15 @@ use std::sync::Arc;
 use std::time::Instant;
 
 pub use config::MetricsConfig;
+pub use config::TracingConfig;
 pub use health::HealthChecker;
 pub use prometheus_recorder::PrometheusRecorder;
 pub use server::MetricsServer;
 pub use system::SystemMetricsCollector;
+pub use tracing::{create_tracer, OtelTracer, RequestSpan, ScatterGatherSpan, SharedTracer};
+
+#[cfg(feature = "testing")]
+pub use tracing::TestTracer;
 
 use frogdb_core::MetricsRecorder;
 

@@ -17,6 +17,7 @@ use frogdb_core::{
     TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
+use frogdb_metrics::SharedTracer;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use futures::{SinkExt, StreamExt};
 use redis_protocol::codec::Resp2;
@@ -25,6 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Framed;
 use tracing::{debug, info, trace, warn};
 
+use crate::config::TracingConfig;
 use crate::migrate::{MigrateArgs, MigrateClient, MigrateError};
 use crate::net::TcpStream;
 use crate::runtime_config::ConfigManager;
@@ -266,6 +268,12 @@ pub struct ConnectionHandler {
 
     /// Function registry for FUNCTION/FCALL commands.
     function_registry: SharedFunctionRegistry,
+
+    /// Optional shared tracer for distributed tracing.
+    shared_tracer: Option<SharedTracer>,
+
+    /// Tracing configuration.
+    tracing_config: TracingConfig,
 }
 
 /// Determine key access type from command flags.
@@ -368,6 +376,8 @@ impl ConnectionHandler {
         acl_manager: Arc<AclManager>,
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
         function_registry: SharedFunctionRegistry,
+        shared_tracer: Option<SharedTracer>,
+        tracing_config: TracingConfig,
     ) -> Self {
         let framed = Framed::new(socket, Resp2);
         let requires_auth = acl_manager.requires_auth();
@@ -396,6 +406,8 @@ impl ConnectionHandler {
             acl_manager,
             snapshot_coordinator,
             function_registry,
+            shared_tracer,
+            tracing_config,
         }
     }
 
@@ -504,6 +516,10 @@ impl ConnectionHandler {
                         self.metrics_recorder.clone(),
                     );
 
+                    // Start request span for distributed tracing (if enabled)
+                    let request_span = self.shared_tracer.as_ref()
+                        .map(|t| t.start_request_span(&cmd_name_for_metrics, self.state.id));
+
                     // Route and execute (with transaction and pub/sub handling)
                     let responses = self.route_and_execute_with_transaction(&cmd).await;
 
@@ -514,8 +530,21 @@ impl ConnectionHandler {
                     let has_error = responses.iter().any(|r| matches!(r, Response::Error(_)));
                     if has_error {
                         timer.finish_with_error("command_error");
+                        // Mark span as error
+                        if let Some(ref span) = request_span {
+                            span.set_error("command_error");
+                        }
                     } else {
                         timer.finish();
+                        // Mark span as success
+                        if let Some(ref span) = request_span {
+                            span.set_ok();
+                        }
+                    }
+
+                    // End the request span
+                    if let Some(span) = request_span {
+                        span.end();
                     }
 
                     // Log to slowlog if threshold exceeded and command not exempt

@@ -9,7 +9,7 @@ description = "Metrics and observability for FrogDB"
 
 [features]
 default = []
-testing = ["dep:reqwest"]
+testing = ["dep:reqwest", "opentelemetry_sdk/testing"]
 
 [dependencies]
 frogdb-core = { path = "../core" }

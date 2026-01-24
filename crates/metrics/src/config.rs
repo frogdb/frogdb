@@ -87,6 +87,79 @@ impl MetricsConfig {
     }
 }
 
+/// Distributed tracing configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TracingConfig {
+    /// Whether distributed tracing is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// OTLP endpoint for trace export.
+    #[serde(default = "default_tracing_endpoint")]
+    pub otlp_endpoint: String,
+
+    /// Sampling rate (0.0 to 1.0). 1.0 = sample all, 0.1 = sample 10%.
+    #[serde(default = "default_sampling_rate")]
+    pub sampling_rate: f64,
+
+    /// Service name in traces.
+    #[serde(default = "default_service_name")]
+    pub service_name: String,
+
+    /// Enable scatter-gather operation spans (child spans per shard for MGET/MSET).
+    #[serde(default)]
+    pub scatter_gather_spans: bool,
+
+    /// Enable shard execution spans (spans inside shard workers).
+    #[serde(default)]
+    pub shard_spans: bool,
+
+    /// Enable persistence spans (WAL writes, snapshots).
+    #[serde(default)]
+    pub persistence_spans: bool,
+}
+
+fn default_tracing_endpoint() -> String {
+    "http://localhost:4317".to_string()
+}
+
+fn default_sampling_rate() -> f64 {
+    1.0
+}
+
+fn default_service_name() -> String {
+    "frogdb".to_string()
+}
+
+impl Default for TracingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            otlp_endpoint: default_tracing_endpoint(),
+            sampling_rate: default_sampling_rate(),
+            service_name: default_service_name(),
+            scatter_gather_spans: false,
+            shard_spans: false,
+            persistence_spans: false,
+        }
+    }
+}
+
+impl TracingConfig {
+    /// Validate the configuration.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.enabled && self.otlp_endpoint.is_empty() {
+            return Err("OTLP endpoint must be specified when tracing is enabled".to_string());
+        }
+
+        if self.sampling_rate < 0.0 || self.sampling_rate > 1.0 {
+            return Err("sampling_rate must be between 0.0 and 1.0".to_string());
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +204,70 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    // ===== TracingConfig Tests =====
+
+    #[test]
+    fn test_tracing_default_config() {
+        let config = TracingConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.otlp_endpoint, "http://localhost:4317");
+        assert_eq!(config.sampling_rate, 1.0);
+        assert_eq!(config.service_name, "frogdb");
+        assert!(!config.scatter_gather_spans);
+        assert!(!config.shard_spans);
+        assert!(!config.persistence_spans);
+    }
+
+    #[test]
+    fn test_tracing_validate_valid() {
+        let config = TracingConfig {
+            enabled: true,
+            otlp_endpoint: "http://localhost:4317".to_string(),
+            sampling_rate: 0.5,
+            service_name: "test".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_tracing_validate_enabled_no_endpoint() {
+        let config = TracingConfig {
+            enabled: true,
+            otlp_endpoint: String::new(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_tracing_validate_invalid_sampling_rate_high() {
+        let config = TracingConfig {
+            sampling_rate: 1.5,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_tracing_validate_invalid_sampling_rate_low() {
+        let config = TracingConfig {
+            sampling_rate: -0.1,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_tracing_validate_disabled_no_endpoint_ok() {
+        // When disabled, empty endpoint is OK
+        let config = TracingConfig {
+            enabled: false,
+            otlp_endpoint: String::new(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
     }
 }
