@@ -12,6 +12,9 @@
   errors/warnings (`just lint`)
 - The `target/` directory can grow large (10GB+) due to debug symbols, incremental compilation cache, and multiple profiles. Use `just target-size` to check its size and `just clean` to reclaim disk space when needed.
 - When implementing features or making changes, think about what unit + integration + concurrency tests make sense to add for the change. Consider edge cases.
+- We use git worktrees when working with claude code. Be sure to check which
+  working directory we are in. Only suggest reading/modifying files from the
+  current worktree (if relevant), *NOT* the main repe.
 
 ## Specs/Docs
 
