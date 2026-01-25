@@ -41,7 +41,12 @@
       "WebFetch(domain:apple.github.io)",
       "WebFetch(domain:unpkg.com)",
       "WebFetch(domain:jenil.github.io)",
-      "WebFetch(domain:picocss.com)"
+      "WebFetch(domain:picocss.com)",
+      "Bash(docker run:*)",
+      "Bash(docker start:*)",
+      "Bash(docker stop:*)",
+      "Bash(docker rm:*)",
+      "Bash(redis-server:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

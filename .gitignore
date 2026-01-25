@@ -45,3 +45,6 @@ __pycache__/
 
 # Load test reports (generated benchmark data)
 tools/loadtest/reports/
+
+# redis dump files
+*.rdb
