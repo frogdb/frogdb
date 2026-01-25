@@ -1,0 +1,33 @@
+# YCSB Workload A - Update Heavy
+#
+# Industry-standard benchmark from Yahoo! Cloud Serving Benchmark.
+# 50% reads, 50% updates - simulates session store where records are
+# read and updated frequently.
+#
+# Use case: Session stores, user preferences, shopping carts
+
+name: ycsb-a
+description: "YCSB Workload A - Update Heavy (50% read, 50% write)"
+scenario: session-store
+
+commands:
+  - GET: 50%
+  - SET: 50%
+
+keys:
+  pattern: zipfian
+  space_size: 1000000
+  prefix: "ycsb:"
+
+data:
+  size_bytes: 1000
+  size_distribution: fixed
+
+concurrency:
+  clients: 100
+  threads: 4
+  pipeline: 1
+
+targets:
+  ops_per_sec: 50000
+  p99_latency_ms: 5.0

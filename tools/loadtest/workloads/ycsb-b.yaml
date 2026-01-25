@@ -1,0 +1,33 @@
+# YCSB Workload B - Read Mostly
+#
+# Industry-standard benchmark from Yahoo! Cloud Serving Benchmark.
+# 95% reads, 5% updates - simulates photo tagging where most
+# operations are reads.
+#
+# Use case: Photo metadata, user profiles, configuration storage
+
+name: ycsb-b
+description: "YCSB Workload B - Read Mostly (95% read, 5% write)"
+scenario: cache
+
+commands:
+  - GET: 95%
+  - SET: 5%
+
+keys:
+  pattern: zipfian
+  space_size: 1000000
+  prefix: "ycsb:"
+
+data:
+  size_bytes: 1000
+  size_distribution: fixed
+
+concurrency:
+  clients: 100
+  threads: 4
+  pipeline: 1
+
+targets:
+  ops_per_sec: 80000
+  p99_latency_ms: 3.0

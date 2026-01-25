@@ -1,0 +1,42 @@
+# User Profile Workload
+#
+# User profile storage using hashes. Each user profile is stored
+# as a hash with multiple fields (name, email, preferences, etc.).
+#
+# Characteristics:
+# - HGET (50%): Read single field (e.g., email for auth)
+# - HSET (20%): Update single field (e.g., last_login)
+# - HGETALL (20%): Read full profile (e.g., profile page)
+# - HMGET (10%): Read multiple fields (e.g., name + avatar)
+# - Gaussian distribution (active users are hot)
+# - 10 fields per hash
+
+name: user-profile
+description: "User profile storage using hashes"
+scenario: user-profile
+
+commands:
+  - HGET: 50%
+  - HSET: 20%
+  - HGETALL: 20%
+  - HMGET: 10%
+
+keys:
+  pattern: gaussian
+  space_size: 100000
+  prefix: "user:"
+
+data:
+  size_bytes: 500
+
+concurrency:
+  clients: 100
+  threads: 4
+  pipeline: 1
+
+hash:
+  fields_per_hash: 10
+
+targets:
+  ops_per_sec: 40000
+  p99_latency_ms: 5.0

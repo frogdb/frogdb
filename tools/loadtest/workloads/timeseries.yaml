@@ -1,0 +1,43 @@
+# Time Series Workload
+#
+# Metrics ingestion using Redis streams. Ideal for:
+# - Application metrics and monitoring
+# - IoT sensor data
+# - Event logging and audit trails
+#
+# Characteristics:
+# - XADD (80%): Write new metric entries
+# - XRANGE (15%): Query recent metrics
+# - XLEN (5%): Check stream size
+# - 1000 metric streams (e.g., per-service metrics)
+# - 5 fields per entry (timestamp, value, tags, etc.)
+
+name: timeseries
+description: "Metrics ingestion using streams"
+scenario: timeseries
+
+commands:
+  - XADD: 80%
+  - XRANGE: 15%
+  - XLEN: 5%
+
+keys:
+  pattern: uniform
+  space_size: 1000
+  prefix: "metrics:"
+
+data:
+  size_bytes: 200
+
+concurrency:
+  clients: 50
+  threads: 4
+  pipeline: 1
+
+stream:
+  fields_per_entry: 5
+  max_len: 100000
+
+targets:
+  ops_per_sec: 50000
+  p99_latency_ms: 5.0

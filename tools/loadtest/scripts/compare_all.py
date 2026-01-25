@@ -22,6 +22,7 @@ Options:
     --all                 Run against all backends
     --start-docker        Auto-start Docker containers before benchmarks (includes FrogDB)
     --workload NAME       Workload preset: read-heavy, write-heavy, mixed (default: mixed)
+    --yaml-workload NAME  Run a YAML workload from workloads/ (e.g., ycsb-a, leaderboard)
     --extended            Include extended command workloads (hash, list, zset)
     -n, --requests N      Requests per client (default: 10000)
     -o, --output DIR      Output directory for results
@@ -41,6 +42,12 @@ Examples:
 
     # Extended workloads with all backends (Docker)
     uv run compare_all.py --all --extended --start-docker
+
+    # Run YCSB-A workload comparison
+    uv run compare_all.py --all --start-docker --yaml-workload ycsb-a
+
+    # Run leaderboard workload (sorted sets)
+    uv run compare_all.py --all --start-docker --yaml-workload leaderboard
 
     # Compare against native FrogDB (not in Docker)
     uv run compare_all.py --backends redis --start-docker --frogdb-native
@@ -536,31 +543,127 @@ def run_extended_benchmark(
     output_file: Path,
     name: str,
 ) -> dict:
-    """Run extended benchmarks using redis-benchmark for non-GET/SET commands."""
+    """Run extended benchmarks for non-GET/SET commands using unified runners.
+
+    Uses the new benchmark system with redis-py based runners for:
+    - Hash operations (HSET, HGET, HGETALL)
+    - List operations (LPUSH, RPOP, LRANGE)
+    - Sorted Set operations (ZADD, ZRANGE, ZINCRBY)
+    """
     script_dir = Path(__file__).parent
-    extended_script = script_dir / "extended_benchmark.py"
 
-    if not extended_script.exists():
-        print(f"  Warning: extended_benchmark.py not found, skipping extended workloads")
-        return {}
-
-    result = subprocess.run(
-        [sys.executable, str(extended_script), "--host", host, "--port", str(port), "--json"],
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode != 0:
-        print(f"  Warning: Extended benchmark failed for {name}: {result.stderr}")
-        return {}
-
+    # Try to use the new unified benchmark system
     try:
-        data = json.loads(result.stdout)
+        sys.path.insert(0, str(script_dir))
+        from workload_loader import WorkloadConfig, KeysConfig, ConcurrencyConfig, DataConfig
+        from workload_loader import HashConfig, ListConfig, ZSetConfig
+        from runners.hash_runner import HashRunner
+        from runners.list_runner import ListRunner
+        from runners.zset import ZSetRunner
+
+        results = {}
+
+        # Hash workload
+        print(f"    Running hash operations...")
+        hash_workload = WorkloadConfig(
+            name="extended-hash",
+            commands={"HSET": 30, "HGET": 50, "HGETALL": 20},
+            keys=KeysConfig(space_size=10000),
+            data=DataConfig(size_bytes=128),
+            hash=HashConfig(fields_per_hash=10),
+            concurrency=ConcurrencyConfig(clients=50, threads=4, pipeline=1),
+        )
+        hash_runner = HashRunner(host, port)
+        if hash_runner.is_available():
+            hash_output = output_file.parent / f"{output_file.stem}_hash"
+            hash_output.mkdir(parents=True, exist_ok=True)
+            hash_result = hash_runner.run(hash_workload, hash_output, requests=10000, warmup=True)
+            results["hash"] = {
+                "ops_per_sec": hash_result.total_ops_per_sec,
+                "p99_ms": hash_result.p99_latency_ms,
+                "commands": {cmd: {"ops_per_sec": r.ops_per_sec, "p99_ms": r.p99_latency_ms}
+                            for cmd, r in hash_result.commands.items()},
+            }
+
+        # List workload
+        print(f"    Running list operations...")
+        list_workload = WorkloadConfig(
+            name="extended-list",
+            commands={"LPUSH": 50, "RPOP": 30, "LRANGE": 20},
+            keys=KeysConfig(space_size=1000),
+            data=DataConfig(size_bytes=128),
+            list=ListConfig(max_length=1000),
+            concurrency=ConcurrencyConfig(clients=50, threads=4, pipeline=1),
+        )
+        list_runner = ListRunner(host, port)
+        if list_runner.is_available():
+            list_output = output_file.parent / f"{output_file.stem}_list"
+            list_output.mkdir(parents=True, exist_ok=True)
+            list_result = list_runner.run(list_workload, list_output, requests=10000, warmup=True)
+            results["list"] = {
+                "ops_per_sec": list_result.total_ops_per_sec,
+                "p99_ms": list_result.p99_latency_ms,
+                "commands": {cmd: {"ops_per_sec": r.ops_per_sec, "p99_ms": r.p99_latency_ms}
+                            for cmd, r in list_result.commands.items()},
+            }
+
+        # ZSet workload
+        print(f"    Running sorted set operations...")
+        zset_workload = WorkloadConfig(
+            name="extended-zset",
+            commands={"ZADD": 30, "ZINCRBY": 30, "ZRANGE": 25, "ZRANK": 15},
+            keys=KeysConfig(space_size=100),
+            data=DataConfig(size_bytes=128),
+            zset=ZSetConfig(members_per_set=1000),
+            concurrency=ConcurrencyConfig(clients=50, threads=4, pipeline=1),
+        )
+        zset_runner = ZSetRunner(host, port)
+        if zset_runner.is_available():
+            zset_output = output_file.parent / f"{output_file.stem}_zset"
+            zset_output.mkdir(parents=True, exist_ok=True)
+            zset_result = zset_runner.run(zset_workload, zset_output, requests=10000, warmup=True)
+            results["zset"] = {
+                "ops_per_sec": zset_result.total_ops_per_sec,
+                "p99_ms": zset_result.p99_latency_ms,
+                "commands": {cmd: {"ops_per_sec": r.ops_per_sec, "p99_ms": r.p99_latency_ms}
+                            for cmd, r in zset_result.commands.items()},
+            }
+
+        # Save results
         with open(output_file, "w") as f:
-            json.dump(data, f, indent=2)
-        return data
-    except json.JSONDecodeError:
-        print(f"  Warning: Failed to parse extended benchmark output for {name}")
+            json.dump(results, f, indent=2)
+
+        return results
+
+    except ImportError as e:
+        # Fall back to legacy extended_benchmark.py if new system not available
+        print(f"  Warning: New benchmark system not available ({e}), trying legacy...")
+        extended_script = script_dir / "extended_benchmark.py"
+
+        if not extended_script.exists():
+            print(f"  Warning: extended_benchmark.py not found, skipping extended workloads")
+            return {}
+
+        result = subprocess.run(
+            [sys.executable, str(extended_script), "--host", host, "--port", str(port), "--json"],
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode != 0:
+            print(f"  Warning: Extended benchmark failed for {name}: {result.stderr}")
+            return {}
+
+        try:
+            data = json.loads(result.stdout)
+            with open(output_file, "w") as f:
+                json.dump(data, f, indent=2)
+            return data
+        except json.JSONDecodeError:
+            print(f"  Warning: Failed to parse extended benchmark output for {name}")
+            return {}
+    except Exception as e:
+        print(f"  Warning: Extended benchmark failed: {e}")
         return {}
 
 
@@ -635,6 +738,8 @@ def main() -> None:
     parser.add_argument("-w", "--workload", default="mixed",
                         choices=["read-heavy", "write-heavy", "mixed"],
                         help="Workload preset (default: mixed)")
+    parser.add_argument("--yaml-workload", type=str,
+                        help="Run a YAML workload from workloads/ (e.g., ycsb-a, leaderboard)")
     parser.add_argument("--extended", action="store_true",
                         help="Include extended command workloads (hash, list, zset)")
     parser.add_argument("-n", "--requests", type=int, default=10000,
@@ -671,6 +776,32 @@ def main() -> None:
     else:
         print("Error: Specify --backends or --all", file=sys.stderr)
         sys.exit(1)
+
+    # Handle YAML workload mode - delegate to benchmark.py
+    if args.yaml_workload:
+        benchmark_script = script_dir / "benchmark.py"
+        if not benchmark_script.exists():
+            print(f"Error: benchmark.py not found at {benchmark_script}", file=sys.stderr)
+            sys.exit(1)
+
+        # Build command for benchmark.py
+        cmd = [
+            sys.executable, str(benchmark_script),
+            "--workload", args.yaml_workload,
+            "--backends", ",".join(backends_to_run),
+            "-n", str(args.requests * 100 * 4),  # Convert per-client to total
+            "-o", str(args.output),
+        ]
+
+        if args.start_docker:
+            cmd.append("--start-docker")
+
+        print(f"Delegating to benchmark.py for YAML workload: {args.yaml_workload}")
+        print(f"Command: {' '.join(cmd)}")
+        print()
+
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
 
     # Check if memtier_benchmark is available
     if not shutil.which("memtier_benchmark"):

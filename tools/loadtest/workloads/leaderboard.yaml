@@ -1,0 +1,43 @@
+# Leaderboard Workload
+#
+# Gaming leaderboard using sorted sets. This workload exercises
+# complex data structure operations with mixed read/write patterns.
+#
+# Characteristics:
+# - ZADD/ZINCRBY (30% + 30%): Score updates from gameplay
+# - ZRANGE (20%): Display top players
+# - ZRANK (15%): Show player's position
+# - ZSCORE (5%): Show player's score
+# - Uniform distribution across leaderboards
+# - 100 leaderboards with 10,000 members each
+
+name: leaderboard
+description: "Gaming leaderboard with sorted sets"
+scenario: leaderboard
+
+commands:
+  - ZADD: 30%
+  - ZINCRBY: 30%
+  - ZRANGE: 20%
+  - ZRANK: 15%
+  - ZSCORE: 5%
+
+keys:
+  pattern: uniform
+  space_size: 100
+  prefix: "lb:"
+
+data:
+  size_bytes: 128
+
+concurrency:
+  clients: 50
+  threads: 4
+  pipeline: 1
+
+zset:
+  members_per_set: 10000
+
+targets:
+  ops_per_sec: 30000
+  p99_latency_ms: 10.0

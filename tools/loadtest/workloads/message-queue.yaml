@@ -1,0 +1,39 @@
+# Message Queue Workload
+#
+# FIFO queue using Redis lists. This is a common pattern for
+# task queues, job processing, and async communication.
+#
+# Characteristics:
+# - LPUSH (50%): Producer adds tasks to queue
+# - RPOP (50%): Consumer takes tasks from queue
+# - Small number of queues (10 channels)
+# - Pipeline for throughput (batch operations)
+# - Uniform distribution across queues
+
+name: message-queue
+description: "FIFO queue using lists"
+scenario: queue
+
+commands:
+  - LPUSH: 50%
+  - RPOP: 50%
+
+keys:
+  pattern: uniform
+  space_size: 10
+  prefix: "queue:"
+
+data:
+  size_bytes: 256
+
+concurrency:
+  clients: 50
+  threads: 4
+  pipeline: 10
+
+list:
+  max_length: 100000
+
+targets:
+  ops_per_sec: 80000
+  p99_latency_ms: 5.0

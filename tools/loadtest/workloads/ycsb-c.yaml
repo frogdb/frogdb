@@ -1,0 +1,32 @@
+# YCSB Workload C - Read Only
+#
+# Industry-standard benchmark from Yahoo! Cloud Serving Benchmark.
+# 100% reads - simulates user profile cache where updates happen
+# elsewhere (e.g., through a separate admin system).
+#
+# Use case: Read-only caches, CDN origin, static content serving
+
+name: ycsb-c
+description: "YCSB Workload C - Read Only (100% read)"
+scenario: cache-readonly
+
+commands:
+  - GET: 100%
+
+keys:
+  pattern: zipfian
+  space_size: 1000000
+  prefix: "ycsb:"
+
+data:
+  size_bytes: 1000
+  size_distribution: fixed
+
+concurrency:
+  clients: 100
+  threads: 4
+  pipeline: 1
+
+targets:
+  ops_per_sec: 100000
+  p99_latency_ms: 2.0
