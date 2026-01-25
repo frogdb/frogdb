@@ -19,21 +19,47 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ---
 
-### Part 3: Key migration
+## Benchmark Comparisons
 
-- [ ] Config prescedence: file, ENV variables, CLI flags, runtime changes with CONFIG SET
-- [ ] Ability to "watch" or "listen" for config value changes for values adjustable at runtime
-- [ ] Wire dynamic config values into code where they're used
+**Goal**: Performance comparison with Redis/Valkey/Dragonfly.
+
+- [x] Benchmark harness setup (Redis)
+- [ ] Valkey comparison benchmarks
+- [ ] Dragonfly comparison benchmarks
+- [ ] Performance report generation
+
+### Clustering / Replication
+
+**Goal**: Distributed operation support.
+
+- [ ] Replication via WAL streaming
+- [ ] CLUSTER commands
+- [ ] Hash slot migration
+- [ ] Failover
+- [ ] `ROLE` - Report replication role (primary/replica)
+- [ ] `BGREWRITEAOF` - Stub returning appropriate message (N/A for RocksDB)
+
+### Distributed Cluster Testing
+
+**Goal**: Correctness testing for clustered operation.
+
+- [ ] Cluster partition/chaos tests (Jepsen)
+- [ ] Cluster partition/chaos tests (Turmoil)
+- [ ] Cluster failover tests
+- [ ] Cluster linearizability tests
+
+## Distributed Single-Node Testing
+
+**Goal**: Correctness testing for single-node operation.
+
+- [ ] Jepsen test harness integration
+
+### Config validation audit
+
 - [ ] Validation + errors for invalid config
-- [ ] Log the full configuration state on startup
 
 ### Observability audit
 
-- [ ] What metrics + logs + traces are missing?
-- [ ] Do we have per-command count metrics?
-- [ ] Do we have per-command latency metrics?
-- [ ] Any other metrics we're missing?
-- [ ] Have we validated that open telemtry and prometheus can interact with frogdb?
 - [ ] Could a skilled software reliability engineer be able to easily diagnose issues with frogdb?
 
 ### Operational Readiness
@@ -43,9 +69,11 @@ Inspired by: **CockroachDB**, **DragonflyDB**, **FoundationDB**, **Redis**, **Va
 #### HIGH PRIORITY - Essential for Production Readiness
 
 ##### 1. Machine-Readable Status JSON Endpoint
+
 **Inspired by:** FoundationDB `status json`
 
 Comprehensive JSON snapshot of server health accessible via HTTP or command:
+
 ```
 GET /status/json
 STATUS JSON  # Redis command
@@ -61,9 +89,11 @@ Returns: server info, memory stats, per-shard health, client counts, persistence
 - [ ] Include all health indicators in response
 
 ##### 2. Hot Shard Detection
+
 **Inspired by:** CockroachDB Hot Ranges, Redis hot key detection
 
 Identifies shards receiving disproportionate traffic:
+
 ```
 DEBUG HOTSHARDS [PERIOD <seconds>]
 INFO hotshards
@@ -80,13 +110,16 @@ Reports: ops/sec per shard, percentage distribution, queue depths, recommendatio
 - [ ] Generate recommendations when imbalance detected
 
 ##### 3. Latency Band Tracking (SLO Monitoring)
+
 **Inspired by:** FoundationDB latency band tracking
 
 Server-side latency measurement against configurable thresholds:
+
 ```toml
 [latency_bands]
 bands = [1, 5, 10, 50, 100, 500]  # ms
 ```
+
 ```
 LATENCY BANDS [command]
 ```
@@ -102,9 +135,11 @@ Reports: percentage of requests in each latency bucket.
 - [ ] Export latency band metrics to Prometheus
 
 ##### 4. Admin Port Separation
+
 **Inspired by:** DragonflyDB `--admin_bind`, `--admin_port`
 
 Separate port for administrative commands:
+
 ```toml
 [admin]
 bind = "127.0.0.1"
@@ -120,9 +155,11 @@ port = 6380
 - [ ] Document recommended firewall rules
 
 ##### 5. Grafana Dashboard Templates
+
 **Inspired by:** DragonflyDB Kubernetes dashboards
 
 Ready-to-import JSON dashboards:
+
 1. **Overview**: uptime, connections, ops/sec, memory
 2. **Performance**: latency histograms, slow queries, command breakdown
 3. **Shards**: per-shard memory/keys/queue depth
@@ -140,9 +177,11 @@ Ready-to-import JSON dashboards:
 #### MEDIUM PRIORITY - Improves Debuggability
 
 ##### 6. Enhanced MEMORY DOCTOR
+
 **Inspired by:** Redis MEMORY DOCTOR
 
 Extend with actionable recommendations:
+
 - Identify specific big keys (>1MB)
 - Detect shard memory imbalance
 - Provide specific remediation steps
@@ -155,9 +194,11 @@ Extend with actionable recommendations:
 - [ ] Add estimated memory savings per recommendation
 
 ##### 7. DEBUG HASHING Command
+
 **Inspired by:** FrogDB-specific need
 
 Show key-to-shard mapping:
+
 ```
 DEBUG HASHING user:123
 key:user:123 hash:0x7f1234... shard:3 num_shards:8
@@ -171,9 +212,11 @@ key:user:123 hash:0x7f1234... shard:3 num_shards:8
 - [ ] Support multiple keys in single command
 
 ##### 8. Enhanced LATENCY DOCTOR
+
 **Inspired by:** Redis LATENCY DOCTOR, CockroachDB diagnostics
 
 Deeper analysis with:
+
 - Correlation detection (latency spikes during expire-cycle, snapshots)
 - Cross-reference with SLOWLOG
 - FrogDB-specific scatter-gather analysis
@@ -187,9 +230,11 @@ Deeper analysis with:
 - [ ] Generate actionable recommendations
 
 ##### 9. Client Connection Statistics
+
 **Inspired by:** CockroachDB connection diagnostics
 
 Per-client command statistics:
+
 ```
 CLIENT STATS [ID <client-id>]
 ```
@@ -205,9 +250,11 @@ Reports: commands processed, bytes sent/received, avg/p99 latency, command break
 - [ ] Include command type breakdown per client
 
 ##### 10. Persistence Lag Monitoring
+
 **Inspired by:** FoundationDB durability lag
 
 Track how far behind persistence is:
+
 ```
 INFO persistence
 ```
@@ -225,9 +272,11 @@ Reports: WAL lag (operations, bytes), last sync time/latency, durability lag in 
 #### NICE TO HAVE - Advanced Differentiation
 
 ##### 11. Debug Diagnostic Bundles
+
 **Inspired by:** CockroachDB statement diagnostics
 
 Generate downloadable ZIP with traces, slowlog, config, stats:
+
 ```
 DEBUG BUNDLE GENERATE [DURATION <seconds>]
 GET /debug/bundle
@@ -242,9 +291,11 @@ GET /debug/bundle
 - [ ] Include: config, INFO, SLOWLOG, recent traces, memory stats
 
 ##### 12. Automated Alert Rule Generation
+
 **Inspired by:** CockroachDB alert generation
 
 Generate Prometheus alerting rules from config:
+
 ```
 GET /alerts/prometheus
 ```
@@ -258,9 +309,11 @@ GET /alerts/prometheus
 - [ ] Include severity levels and recommended thresholds
 
 ##### 13. DEBUG DUMP-VLL-QUEUE
+
 **Inspired by:** FrogDB VLL architecture
 
 Inspect VLL transaction queues:
+
 ```
 DEBUG DUMP-VLL-QUEUE [shard_id]
 ```
@@ -274,9 +327,11 @@ DEBUG DUMP-VLL-QUEUE [shard_id]
 - [ ] Add queue depth history
 
 ##### 14. Intrinsic Latency Testing CLI
+
 **Inspired by:** Redis `redis-cli --intrinsic-latency`
 
 Measure baseline system latency:
+
 ```bash
 frogdb-cli --intrinsic-latency 100
 ```
@@ -290,9 +345,11 @@ frogdb-cli --intrinsic-latency 100
 - [ ] Provide interpretation guidance
 
 ##### 15. OpenTelemetry Tracing Diagnostics
+
 **Inspired by:** CockroachDB trace bundles
 
 Expose trace sampling status and recent trace IDs:
+
 ```
 DEBUG TRACING STATUS
 DEBUG TRACING RECENT [count]
@@ -308,23 +365,23 @@ DEBUG TRACING RECENT [count]
 
 #### Summary Table
 
-| Priority | Feature | Complexity | Inspired By |
-|----------|---------|------------|-------------|
-| HIGH | Machine-Readable Status JSON | Medium | FoundationDB |
-| HIGH | Hot Shard Detection | Medium | CockroachDB |
-| HIGH | Latency Band Tracking | Low | FoundationDB |
-| HIGH | Admin Port Separation | Medium | DragonflyDB |
-| HIGH | Grafana Dashboard Templates | Low | DragonflyDB |
-| MEDIUM | Enhanced MEMORY DOCTOR | Medium | Redis |
-| MEDIUM | DEBUG HASHING | Low | FrogDB-specific |
-| MEDIUM | Enhanced LATENCY DOCTOR | Medium | Redis/CockroachDB |
-| MEDIUM | Client Connection Stats | Medium | CockroachDB |
-| MEDIUM | Persistence Lag Monitoring | Medium | FoundationDB |
-| NICE | Debug Diagnostic Bundles | High | CockroachDB |
-| NICE | Auto Alert Generation | Medium | CockroachDB |
-| NICE | DEBUG DUMP-VLL-QUEUE | Medium | FrogDB-specific |
-| NICE | Intrinsic Latency CLI | Low | Redis |
-| NICE | Tracing Diagnostics | Low | CockroachDB |
+| Priority | Feature                      | Complexity | Inspired By       |
+| -------- | ---------------------------- | ---------- | ----------------- |
+| HIGH     | Machine-Readable Status JSON | Medium     | FoundationDB      |
+| HIGH     | Hot Shard Detection          | Medium     | CockroachDB       |
+| HIGH     | Latency Band Tracking        | Low        | FoundationDB      |
+| HIGH     | Admin Port Separation        | Medium     | DragonflyDB       |
+| HIGH     | Grafana Dashboard Templates  | Low        | DragonflyDB       |
+| MEDIUM   | Enhanced MEMORY DOCTOR       | Medium     | Redis             |
+| MEDIUM   | DEBUG HASHING                | Low        | FrogDB-specific   |
+| MEDIUM   | Enhanced LATENCY DOCTOR      | Medium     | Redis/CockroachDB |
+| MEDIUM   | Client Connection Stats      | Medium     | CockroachDB       |
+| MEDIUM   | Persistence Lag Monitoring   | Medium     | FoundationDB      |
+| NICE     | Debug Diagnostic Bundles     | High       | CockroachDB       |
+| NICE     | Auto Alert Generation        | Medium     | CockroachDB       |
+| NICE     | DEBUG DUMP-VLL-QUEUE         | Medium     | FrogDB-specific   |
+| NICE     | Intrinsic Latency CLI        | Low        | Redis             |
+| NICE     | Tracing Diagnostics          | Low        | CockroachDB       |
 
 #### Key Implementation Files
 
@@ -348,52 +405,6 @@ DEBUG TRACING RECENT [count]
 
 ---
 
-## Phase 3: Benchmark Comparisons
-
-**Goal**: Performance comparison with Redis/Valkey/Dragonfly.
-
-- [x] Benchmark harness setup (Redis)
-- [ ] Valkey comparison benchmarks
-- [ ] Dragonfly comparison benchmarks
-- [ ] Performance report generation
-
----
-
-## Phase 4: Distributed Single-Node Testing
-
-**Goal**: Correctness testing for single-node operation.
-
-- [ ] Jepsen test harness integration
-
-### Very Light Locking (VLL) Implementation
-
-**Goal**: Provide same guarantees as Dragonflydb for multi-key operations
-
-- [ ] MSET/MGET full atomicity (currently per-key atomic; should be fully atomic like Redis/DragonflyDB)
-- [ ] transaction consistency behavior like dragonflydb
-- [ ] Lua script consistency behavior like dragonflydb
-- [ ] Check for potential performance bottlenecks.
-
-### Clustering / Replication
-
-**Goal**: Distributed operation support.
-
-- [ ] Replication via WAL streaming
-- [ ] CLUSTER commands
-- [ ] Hash slot migration
-- [ ] Failover
-- [ ] `ROLE` - Report replication role (primary/replica)
-- [ ] `BGREWRITEAOF` - Stub returning appropriate message (N/A for RocksDB)
-
-### Distributed Cluster Testing
-
-**Goal**: Correctness testing for clustered operation.
-
-- [ ] Cluster partition/chaos tests (Jepsen)
-- [ ] Cluster partition/chaos tests (Turmoil)
-- [ ] Cluster failover tests
-- [ ] Cluster linearizability tests
-
 ---
 
 ## Phase 7: Performance Optimizations
@@ -411,17 +422,6 @@ See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for detailed profiling infrastructure, 
 - Data Structure Optimizations
 - Concurrency Optimizations
 - Advanced Optimizations
-
----
-
-## Phase 9: Redis Functions
-
-**Goal**: Redis 7.0+ Functions support (alternative to Lua scripting).
-
-- [ ] `FUNCTION` command (LOAD, DELETE, DUMP, FLUSH, KILL, LIST, RESTORE, STATS)
-- [ ] `FCALL` - Execute function
-- [ ] `FCALL_RO` - Execute read-only function
-- [ ] Function library management and persistence
 
 ---
 
