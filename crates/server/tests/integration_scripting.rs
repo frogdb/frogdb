@@ -2,128 +2,13 @@
 //!
 //! These tests verify redis.call(), redis.pcall(), and redis.log() functionality.
 
+mod common;
+
 use bytes::Bytes;
+use common::test_server::TestServer;
 use frogdb_metrics::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
 use frogdb_protocol::Response;
-use frogdb_server::{Config, Server};
-use futures::{SinkExt, StreamExt};
-use redis_protocol::codec::Resp2;
-use redis_protocol::resp2::types::BytesFrame;
-use std::net::SocketAddr;
 use std::time::Duration;
-use tempfile::TempDir;
-use tokio::net::TcpStream;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
-use tokio::time::timeout;
-use tokio_util::codec::Framed;
-
-/// Helper struct for managing a test server.
-struct TestServer {
-    addr: SocketAddr,
-    metrics_addr: SocketAddr,
-    shutdown_tx: oneshot::Sender<()>,
-    handle: JoinHandle<()>,
-    #[allow(dead_code)]
-    temp_dir: TempDir,
-}
-
-impl TestServer {
-    /// Start a new test server on an available port.
-    async fn start() -> Self {
-        let temp_dir = TempDir::new().unwrap();
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-
-        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let metrics_addr = metrics_listener.local_addr().unwrap();
-        drop(metrics_listener);
-
-        let mut config = Config::default();
-        config.server.bind = "127.0.0.1".to_string();
-        config.server.port = addr.port();
-        config.server.num_shards = 1;
-        config.logging.level = "warn".to_string();
-        config.persistence.data_dir = temp_dir.path().to_path_buf();
-        config.metrics.bind = "127.0.0.1".to_string();
-        config.metrics.port = metrics_addr.port();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        let handle = tokio::spawn(async move {
-            let server = Server::new(config).await.unwrap();
-
-            tokio::select! {
-                result = server.run() => {
-                    if let Err(e) = result {
-                        eprintln!("Server error: {}", e);
-                    }
-                }
-                _ = shutdown_rx => {}
-            }
-        });
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        TestServer {
-            addr,
-            metrics_addr,
-            shutdown_tx,
-            handle,
-            temp_dir,
-        }
-    }
-
-    async fn connect(&self) -> TestClient {
-        let stream = TcpStream::connect(self.addr).await.unwrap();
-        let framed = Framed::new(stream, Resp2);
-        TestClient { framed }
-    }
-
-    async fn shutdown(self) {
-        let _ = self.shutdown_tx.send(());
-        let _ = self.handle.await;
-    }
-}
-
-struct TestClient {
-    framed: Framed<TcpStream, Resp2>,
-}
-
-impl TestClient {
-    async fn command(&mut self, args: &[&str]) -> Response {
-        let frame = BytesFrame::Array(
-            args.iter()
-                .map(|s| BytesFrame::BulkString(Bytes::from(s.to_string())))
-                .collect(),
-        );
-
-        self.framed.send(frame).await.unwrap();
-
-        let response_frame = timeout(Duration::from_secs(5), self.framed.next())
-            .await
-            .expect("timeout")
-            .expect("connection closed")
-            .expect("frame error");
-
-        frame_to_response(response_frame)
-    }
-}
-
-fn frame_to_response(frame: BytesFrame) -> Response {
-    match frame {
-        BytesFrame::SimpleString(s) => Response::Simple(s),
-        BytesFrame::Error(e) => Response::Error(e.into_inner()),
-        BytesFrame::Integer(n) => Response::Integer(n),
-        BytesFrame::BulkString(b) => Response::Bulk(Some(b)),
-        BytesFrame::Null => Response::Bulk(None),
-        BytesFrame::Array(items) => {
-            Response::Array(items.into_iter().map(frame_to_response).collect())
-        }
-    }
-}
 
 // =============================================================================
 // redis.call() Tests
@@ -131,11 +16,11 @@ fn frame_to_response(frame: BytesFrame) -> Response {
 
 #[tokio::test]
 async fn test_eval_redis_call_set_get() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // Get baseline metrics
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // Use redis.call to SET a value
     let response = client
@@ -162,7 +47,7 @@ async fn test_eval_redis_call_set_get() {
 
     // Verify metrics
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after)
         .assert_counter_increased("frogdb_commands_total", &[("command", "EVAL")], 2.0);
 
@@ -171,7 +56,7 @@ async fn test_eval_redis_call_set_get() {
 
 #[tokio::test]
 async fn test_eval_redis_call_incr() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // Use redis.call to INCR
@@ -201,7 +86,7 @@ async fn test_eval_redis_call_incr() {
 
 #[tokio::test]
 async fn test_eval_redis_call_multiple_commands() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // Script that sets two keys and returns array of values
@@ -228,14 +113,14 @@ async fn test_eval_redis_call_multiple_commands() {
 
 #[tokio::test]
 async fn test_eval_redis_call_raises_on_error() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // First set a string value
     client.command(&["SET", "stringkey", "value"]).await;
 
     // Get baseline metrics
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // Try to use INCR on a string (should cause error in redis.call)
     // Note: INCR on non-numeric string should fail
@@ -259,7 +144,7 @@ async fn test_eval_redis_call_raises_on_error() {
 
     // Verify metrics - EVAL command was executed (even though script errored)
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after)
         .assert_counter_increased("frogdb_commands_total", &[("command", "EVAL")], 1.0);
 
@@ -272,7 +157,7 @@ async fn test_eval_redis_call_raises_on_error() {
 
 #[tokio::test]
 async fn test_eval_redis_pcall_returns_error_table() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // First set a string value
@@ -305,7 +190,7 @@ async fn test_eval_redis_pcall_returns_error_table() {
 
 #[tokio::test]
 async fn test_eval_redis_pcall_success() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // pcall on successful operation should work normally
@@ -329,7 +214,7 @@ async fn test_eval_redis_pcall_success() {
 
 #[tokio::test]
 async fn test_eval_undeclared_key_error() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // Try to access a key that wasn't declared in KEYS
@@ -362,7 +247,7 @@ async fn test_eval_undeclared_key_error() {
 
 #[tokio::test]
 async fn test_eval_forbidden_command_blocked() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // EVAL should not be callable from within a script (nested scripts forbidden)
@@ -395,7 +280,7 @@ async fn test_eval_forbidden_command_blocked() {
 
 #[tokio::test]
 async fn test_eval_write_tracking() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // Execute a script that performs writes
@@ -426,7 +311,7 @@ async fn test_eval_write_tracking() {
 
 #[tokio::test]
 async fn test_eval_redis_log() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // redis.log should not error (we can't easily verify it logs, but we can verify it doesn't crash)
@@ -449,7 +334,7 @@ async fn test_eval_redis_log() {
 
 #[tokio::test]
 async fn test_eval_conditional_logic() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // Script with conditional logic
@@ -480,7 +365,7 @@ async fn test_eval_conditional_logic() {
 
 #[tokio::test]
 async fn test_eval_list_operations() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // Script using list operations
@@ -509,7 +394,7 @@ async fn test_eval_list_operations() {
 
 #[tokio::test]
 async fn test_evalsha_after_script_load() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // Load a script
@@ -522,7 +407,7 @@ async fn test_evalsha_after_script_load() {
     };
 
     // Get baseline metrics (after LOAD)
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // Execute using EVALSHA
     let response = client
@@ -536,7 +421,7 @@ async fn test_evalsha_after_script_load() {
 
     // Verify metrics - EVALSHA was executed
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after)
         .assert_counter_increased("frogdb_commands_total", &[("command", "EVALSHA")], 1.0);
 
