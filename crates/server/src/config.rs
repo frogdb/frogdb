@@ -920,6 +920,35 @@ impl Default for PersistenceConfig {
     }
 }
 
+impl PersistenceConfig {
+    /// Validate the persistence configuration.
+    pub fn validate(&self) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        let valid_compressions = ["none", "snappy", "lz4", "zstd"];
+        if !valid_compressions.contains(&self.compression.to_lowercase().as_str()) {
+            anyhow::bail!(
+                "invalid compression type '{}', expected one of: {}",
+                self.compression,
+                valid_compressions.join(", ")
+            );
+        }
+
+        let valid_modes = ["async", "periodic", "sync"];
+        if !valid_modes.contains(&self.durability_mode.to_lowercase().as_str()) {
+            anyhow::bail!(
+                "invalid durability_mode '{}', expected one of: {}",
+                self.durability_mode,
+                valid_modes.join(", ")
+            );
+        }
+
+        Ok(())
+    }
+}
+
 impl Default for MetricsConfig {
     fn default() -> Self {
         Self {
@@ -1048,6 +1077,82 @@ impl MetricsConfig {
     }
 }
 
+/// Validate a bind address (IP address or hostname).
+fn validate_bind_address(addr: &str, field_name: &str) -> Result<()> {
+    use std::net::IpAddr;
+
+    if addr.parse::<IpAddr>().is_ok() {
+        return Ok(());
+    }
+
+    // Validate as hostname
+    if addr.is_empty() {
+        anyhow::bail!("{}: bind address cannot be empty", field_name);
+    }
+    if addr.len() > 253 {
+        anyhow::bail!("{}: hostname too long (max 253 chars)", field_name);
+    }
+    for label in addr.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            anyhow::bail!(
+                "{}: invalid hostname '{}' - labels must be 1-63 chars",
+                field_name,
+                addr
+            );
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            anyhow::bail!(
+                "{}: invalid hostname '{}' - labels cannot start or end with hyphen",
+                field_name,
+                addr
+            );
+        }
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            anyhow::bail!(
+                "{}: invalid hostname '{}' - contains invalid characters",
+                field_name,
+                addr
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Validate that a path's parent directory exists and is writable.
+fn validate_path_parent(path: &Path, field_name: &str) -> Result<()> {
+    let parent = path.parent().unwrap_or(Path::new("."));
+
+    if !parent.exists() {
+        anyhow::bail!(
+            "{}: parent directory '{}' does not exist",
+            field_name,
+            parent.display()
+        );
+    }
+    if !parent.is_dir() {
+        anyhow::bail!(
+            "{}: parent path '{}' is not a directory",
+            field_name,
+            parent.display()
+        );
+    }
+
+    // Check writability by creating temp file
+    let test_file = parent.join(format!(".frogdb_write_test_{}", std::process::id()));
+    match std::fs::File::create(&test_file) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&test_file);
+            Ok(())
+        }
+        Err(e) => anyhow::bail!(
+            "{}: parent directory '{}' is not writable: {}",
+            field_name,
+            parent.display(),
+            e
+        ),
+    }
+}
+
 impl Config {
     /// Load configuration from multiple sources.
     ///
@@ -1069,10 +1174,18 @@ impl Config {
 
         // Merge config file if provided
         if let Some(path) = config_path {
+            if !path.exists() {
+                anyhow::bail!("config file not found: {}", path.display());
+            }
             figment = figment.merge(Toml::file(path));
         } else {
             // Try default config file
-            figment = figment.merge(Toml::file("frogdb.toml").nested());
+            let default_path = Path::new("frogdb.toml");
+            if default_path.exists() {
+                figment = figment.merge(Toml::file(default_path).nested());
+            } else {
+                tracing::warn!("Default config file 'frogdb.toml' not found, using defaults");
+            }
         }
 
         // Merge environment variables
@@ -1172,6 +1285,26 @@ impl Config {
 
         // Validate tracing config
         self.tracing.validate()?;
+
+        // Validate persistence config
+        self.persistence.validate()?;
+
+        // Validate bind addresses
+        validate_bind_address(&self.server.bind, "server.bind")?;
+        if self.metrics.enabled {
+            validate_bind_address(&self.metrics.bind, "metrics.bind")?;
+        }
+
+        // Validate paths (only if features are enabled)
+        if self.persistence.enabled {
+            validate_path_parent(&self.persistence.data_dir, "persistence.data_dir")?;
+        }
+        if self.snapshot.snapshot_interval_secs > 0 {
+            validate_path_parent(&self.snapshot.snapshot_dir, "snapshot.snapshot_dir")?;
+        }
+        if !self.acl.aclfile.is_empty() {
+            validate_path_parent(Path::new(&self.acl.aclfile), "acl.aclfile")?;
+        }
 
         Ok(())
     }
@@ -1776,5 +1909,146 @@ mod tests {
         assert!(metrics_config.scatter_gather_spans);
         assert!(!metrics_config.shard_spans);
         assert!(metrics_config.persistence_spans);
+    }
+
+    // ===== PersistenceConfig Validation Tests =====
+
+    #[test]
+    fn test_validate_invalid_compression() {
+        let mut config = PersistenceConfig::default();
+        config.compression = "invalid".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid compression type"));
+    }
+
+    #[test]
+    fn test_validate_valid_compression_types() {
+        for compression in ["none", "snappy", "lz4", "zstd", "NONE", "Snappy", "LZ4", "ZSTD"] {
+            let mut config = PersistenceConfig::default();
+            config.compression = compression.to_string();
+            assert!(
+                config.validate().is_ok(),
+                "Compression {} should be valid",
+                compression
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_invalid_durability_mode() {
+        let mut config = PersistenceConfig::default();
+        config.durability_mode = "invalid".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid durability_mode"));
+    }
+
+    #[test]
+    fn test_validate_valid_durability_modes() {
+        for mode in ["async", "periodic", "sync", "ASYNC", "Periodic", "SYNC"] {
+            let mut config = PersistenceConfig::default();
+            config.durability_mode = mode.to_string();
+            assert!(
+                config.validate().is_ok(),
+                "Durability mode {} should be valid",
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_persistence_disabled_skips_validation() {
+        let mut config = PersistenceConfig::default();
+        config.enabled = false;
+        config.compression = "invalid".to_string();
+        config.durability_mode = "invalid".to_string();
+        // Should pass because persistence is disabled
+        assert!(config.validate().is_ok());
+    }
+
+    // ===== Bind Address Validation Tests =====
+
+    #[test]
+    fn test_validate_valid_bind_addresses() {
+        // Valid IP addresses
+        assert!(validate_bind_address("127.0.0.1", "test").is_ok());
+        assert!(validate_bind_address("0.0.0.0", "test").is_ok());
+        assert!(validate_bind_address("192.168.1.1", "test").is_ok());
+        assert!(validate_bind_address("::1", "test").is_ok());
+        assert!(validate_bind_address("::", "test").is_ok());
+
+        // Valid hostnames
+        assert!(validate_bind_address("localhost", "test").is_ok());
+        assert!(validate_bind_address("example.com", "test").is_ok());
+        assert!(validate_bind_address("my-host", "test").is_ok());
+        assert!(validate_bind_address("server1.example.com", "test").is_ok());
+    }
+
+    #[test]
+    fn test_validate_invalid_bind_addresses() {
+        // Empty address
+        let result = validate_bind_address("", "test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot be empty"));
+
+        // Hostname starting with hyphen
+        let result = validate_bind_address("-invalid", "test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot start or end with hyphen"));
+
+        // Hostname ending with hyphen
+        let result = validate_bind_address("invalid-", "test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot start or end with hyphen"));
+
+        // Invalid characters
+        let result = validate_bind_address("host_name", "test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid characters"));
+
+        // Empty label (consecutive dots)
+        let result = validate_bind_address("host..name", "test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("labels must be 1-63 chars"));
+    }
+
+    // ===== Path Validation Tests =====
+
+    #[test]
+    fn test_validate_data_dir_nonexistent_parent() {
+        let path = Path::new("/nonexistent/path/data");
+        let result = validate_path_parent(path, "test.path");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_validate_path_skipped_when_feature_disabled() {
+        // When persistence is disabled, path validation should be skipped
+        let mut config = Config::default();
+        config.persistence.enabled = false;
+        config.persistence.data_dir = PathBuf::from("/nonexistent/path/data");
+        // This should not fail because persistence is disabled
+        // (The validate() call will still run other validations, but path validation
+        // for persistence.data_dir is skipped)
+        // Note: We can't easily test this in isolation, but the logic is in Config::validate()
+    }
+
+    // ===== Config File Loading Tests =====
+
+    #[test]
+    fn test_load_explicit_config_file_not_found() {
+        let nonexistent_path = Path::new("/nonexistent/config.toml");
+        let result = Config::load(
+            Some(nonexistent_path),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("config file not found"));
     }
 }

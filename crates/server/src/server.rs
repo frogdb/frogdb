@@ -673,10 +673,10 @@ fn parse_compression(s: &str) -> CompressionType {
         "snappy" => CompressionType::Snappy,
         "lz4" => CompressionType::Lz4,
         "zstd" => CompressionType::Zstd,
-        _ => {
-            warn!(compression = %s, "Unknown compression type, using LZ4");
-            CompressionType::Lz4
-        }
+        _ => unreachable!(
+            "Invalid compression '{}' should have been caught by validation",
+            s
+        ),
     }
 }
 
@@ -684,10 +684,14 @@ fn parse_compression(s: &str) -> CompressionType {
 fn build_wal_config(config: &PersistenceConfig) -> WalConfig {
     let mode = match config.durability_mode.to_lowercase().as_str() {
         "async" => DurabilityMode::Async,
-        "sync" => DurabilityMode::Sync,
-        _ => DurabilityMode::Periodic {
+        "periodic" => DurabilityMode::Periodic {
             interval_ms: config.sync_interval_ms,
         },
+        "sync" => DurabilityMode::Sync,
+        _ => unreachable!(
+            "Invalid durability_mode '{}' should have been caught by validation",
+            config.durability_mode
+        ),
     };
 
     WalConfig {
@@ -703,11 +707,10 @@ fn build_eviction_config(config: &MemoryConfig) -> EvictionConfig {
         .maxmemory_policy
         .parse::<EvictionPolicy>()
         .unwrap_or_else(|_| {
-            warn!(
-                policy = %config.maxmemory_policy,
-                "Unknown eviction policy, using noeviction"
-            );
-            EvictionPolicy::NoEviction
+            unreachable!(
+                "Invalid eviction policy '{}' should have been caught by validation",
+                config.maxmemory_policy
+            )
         });
 
     EvictionConfig {
