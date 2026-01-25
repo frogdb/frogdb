@@ -7,6 +7,7 @@
 //! - System metrics collection (CPU, memory, uptime)
 
 pub mod config;
+pub mod debug;
 pub mod health;
 pub mod otlp;
 pub mod prometheus_recorder;
@@ -22,6 +23,7 @@ use std::time::Instant;
 
 pub use config::MetricsConfig;
 pub use config::TracingConfig;
+pub use debug::{DebugState, ServerInfo};
 pub use health::HealthChecker;
 pub use prometheus_recorder::PrometheusRecorder;
 pub use server::MetricsServer;

@@ -136,6 +136,92 @@ impl PrometheusRecorder {
     fn labels_to_names<'a>(labels: &'a [(&'a str, &'a str)]) -> Vec<&'a str> {
         labels.iter().map(|(k, _)| *k).collect()
     }
+
+    /// Get the current value of a counter (summed across all label combinations).
+    ///
+    /// Returns None if the counter doesn't exist.
+    pub fn get_counter_value(&self, name: &str) -> Option<f64> {
+        let metric_families = self.registry.gather();
+        for mf in metric_families {
+            if mf.get_name() == name {
+                let mut total = 0.0;
+                for m in mf.get_metric() {
+                    total += m.get_counter().get_value();
+                }
+                return Some(total);
+            }
+        }
+        None
+    }
+
+    /// Get the current value of a gauge (returns the first one found, or summed if requested).
+    ///
+    /// Returns None if the gauge doesn't exist.
+    pub fn get_gauge_value(&self, name: &str) -> Option<f64> {
+        let metric_families = self.registry.gather();
+        for mf in metric_families {
+            if mf.get_name() == name {
+                let mut total = 0.0;
+                for m in mf.get_metric() {
+                    total += m.get_gauge().get_value();
+                }
+                return Some(total);
+            }
+        }
+        None
+    }
+
+    /// Get histogram quantiles for a metric.
+    ///
+    /// Returns (p50, p95, p99) or None if the histogram doesn't exist.
+    pub fn get_histogram_quantiles(&self, name: &str) -> Option<(f64, f64, f64)> {
+        let metric_families = self.registry.gather();
+        for mf in metric_families {
+            if mf.get_name() == name {
+                for m in mf.get_metric() {
+                    let h = m.get_histogram();
+                    let count = h.get_sample_count();
+                    if count == 0 {
+                        return Some((0.0, 0.0, 0.0));
+                    }
+
+                    // Calculate approximate quantiles from buckets
+                    let buckets = h.get_bucket();
+                    let p50_target = count as f64 * 0.5;
+                    let p95_target = count as f64 * 0.95;
+                    let p99_target = count as f64 * 0.99;
+
+                    let mut p50 = 0.0;
+                    let mut p95 = 0.0;
+                    let mut p99 = 0.0;
+                    let mut p50_found = false;
+                    let mut p95_found = false;
+                    let mut p99_found = false;
+
+                    for bucket in buckets {
+                        let upper = bucket.get_upper_bound();
+                        let cumulative = bucket.get_cumulative_count() as f64;
+
+                        if !p50_found && cumulative >= p50_target {
+                            p50 = upper * 1000.0; // Convert to ms
+                            p50_found = true;
+                        }
+                        if !p95_found && cumulative >= p95_target {
+                            p95 = upper * 1000.0;
+                            p95_found = true;
+                        }
+                        if !p99_found && cumulative >= p99_target {
+                            p99 = upper * 1000.0;
+                            p99_found = true;
+                        }
+                    }
+
+                    return Some((p50, p95, p99));
+                }
+            }
+        }
+        None
+    }
 }
 
 impl MetricsRecorder for PrometheusRecorder {

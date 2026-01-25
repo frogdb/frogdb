@@ -38,7 +38,10 @@
       "Bash(redis-benchmark:*)",
       "WebFetch(domain:tokio.rs)",
       "WebFetch(domain:www.cockroachlabs.com)",
-      "WebFetch(domain:apple.github.io)"
+      "WebFetch(domain:apple.github.io)",
+      "WebFetch(domain:unpkg.com)",
+      "WebFetch(domain:jenil.github.io)",
+      "WebFetch(domain:picocss.com)"
     ]
   },
   "enableAllProjectMcpServers": true,

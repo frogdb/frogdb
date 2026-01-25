@@ -1,6 +1,7 @@
 //! HTTP server for metrics and health endpoints.
 
 use crate::config::MetricsConfig;
+use crate::debug::{self, DebugState};
 use crate::health::HealthChecker;
 use crate::prometheus_recorder::PrometheusRecorder;
 use bytes::Bytes;
@@ -21,6 +22,7 @@ pub struct MetricsServer {
     config: MetricsConfig,
     recorder: Arc<PrometheusRecorder>,
     health: HealthChecker,
+    debug_state: Option<DebugState>,
 }
 
 impl MetricsServer {
@@ -34,7 +36,14 @@ impl MetricsServer {
             config,
             recorder,
             health,
+            debug_state: None,
         }
+    }
+
+    /// Set the debug state for the debug web UI.
+    pub fn with_debug_state(mut self, state: DebugState) -> Self {
+        self.debug_state = Some(state);
+        self
     }
 
     /// Start the HTTP server.
@@ -48,6 +57,7 @@ impl MetricsServer {
 
         let recorder = self.recorder;
         let health = self.health;
+        let debug_state = self.debug_state.map(Arc::new);
 
         loop {
             let (stream, peer_addr) = match listener.accept().await {
@@ -61,12 +71,14 @@ impl MetricsServer {
             let io = TokioIo::new(stream);
             let recorder = Arc::clone(&recorder);
             let health = health.clone();
+            let debug_state = debug_state.clone();
 
             tokio::spawn(async move {
                 let service = service_fn(move |req: Request<Incoming>| {
                     let recorder = Arc::clone(&recorder);
                     let health = health.clone();
-                    async move { handle_request(req, recorder, health).await }
+                    let debug_state = debug_state.clone();
+                    async move { handle_request(req, recorder, health, debug_state).await }
                 });
 
                 if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
@@ -91,6 +103,7 @@ async fn handle_request(
     req: Request<Incoming>,
     recorder: Arc<PrometheusRecorder>,
     health: HealthChecker,
+    debug_state: Option<Arc<DebugState>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let (method, path) = (req.method(), req.uri().path());
 
@@ -103,6 +116,19 @@ async fn handle_request(
         // Convenience aliases
         (&Method::GET, "/healthz") => handle_health_live(health),
         (&Method::GET, "/readyz") => handle_health_ready(health),
+        // Debug web UI
+        (&Method::GET, p) if p.starts_with("/debug") => {
+            if let Some(ref state) = debug_state {
+                debug::handle_debug_request(p, state, &recorder).await
+            } else {
+                // Debug UI not enabled, return a helpful message
+                Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header("Content-Type", "text/plain")
+                    .body(Full::new(Bytes::from("Debug UI not enabled")))
+                    .unwrap()
+            }
+        }
         _ => not_found(),
     };
 
