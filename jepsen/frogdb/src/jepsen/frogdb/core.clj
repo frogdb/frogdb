@@ -1,0 +1,191 @@
+(ns jepsen.frogdb.core
+  "Main entry point for FrogDB Jepsen tests.
+
+   Provides CLI interface for running various consistency tests
+   against FrogDB, including register and counter workloads with
+   optional crash testing."
+  (:require [clojure.string :as str]
+            [clojure.tools.logging :refer [info warn]]
+            [jepsen.checker :as checker]
+            [jepsen.cli :as cli]
+            [jepsen.generator :as gen]
+            [jepsen.os :as os]
+            [jepsen.tests :as tests]
+            [jepsen.frogdb.append :as append]
+            [jepsen.frogdb.client :as client]
+            [jepsen.frogdb.counter :as counter]
+            [jepsen.frogdb.db :as db]
+            [jepsen.frogdb.hash :as hash]
+            [jepsen.frogdb.nemesis :as nemesis]
+            [jepsen.frogdb.queue :as queue]
+            [jepsen.frogdb.register :as register]
+            [jepsen.frogdb.set :as set-workload]
+            [jepsen.frogdb.transaction :as transaction])
+  (:gen-class))
+
+;; ===========================================================================
+;; OS Implementation for Docker/Local
+;; ===========================================================================
+
+(def docker-os
+  "OS implementation for Docker containers.
+   FrogDB runs in pre-configured containers, so most OS operations are no-ops."
+  (reify os/OS
+    (setup! [_ test node]
+      (info "Docker OS setup for" node "(no-op)"))
+
+    (teardown! [_ test node]
+      (info "Docker OS teardown for" node "(no-op)"))))
+
+;; ===========================================================================
+;; Workload Selection
+;; ===========================================================================
+
+(def workloads
+  "Available workloads for testing."
+  {:register register/workload
+   :counter counter/workload
+   :append append/workload
+   :transaction transaction/workload
+   :queue queue/workload
+   :set set-workload/workload
+   :hash hash/workload})
+
+(defn get-workload
+  "Get a workload by name with options."
+  [name opts]
+  (if-let [workload-fn (get workloads (keyword name))]
+    (workload-fn opts)
+    (throw (IllegalArgumentException.
+             (str "Unknown workload: " name
+                  ". Available: " (str/join ", " (map clojure.core/name (keys workloads))))))))
+
+;; ===========================================================================
+;; Test Construction
+;; ===========================================================================
+
+(defn frogdb-test
+  "Construct a Jepsen test for FrogDB.
+
+   Options:
+   - :workload - workload name (register, counter)
+   - :nemesis - nemesis type (none, kill, pause, all)
+   - :rate - operations per second
+   - :time-limit - test duration in seconds
+   - :nodes - list of nodes to test"
+  [opts]
+  (let [workload (get-workload (:workload opts) opts)
+        nemesis-pkg (nemesis/nemesis-package (keyword (:nemesis opts)) opts)
+        local? (:local opts)
+        docker? (:docker opts)
+        nodes (if (or local? docker?) ["n1"] (or (:nodes opts) ["n1"]))]
+    (merge tests/noop-test
+           opts
+           {:name (str "frogdb-" (:workload opts)
+                       (when (not= "none" (:nemesis opts))
+                         (str "-" (:nemesis opts)))
+                       (when local? "-local")
+                       (when docker? "-docker"))
+            :nodes nodes
+            :os docker-os
+            :db (cond
+                  local?  (db/local-db)
+                  docker? (db/docker-db)
+                  :else   (db/docker-db))
+            ;; Use dummy SSH for docker/local modes - we use docker exec instead
+            :ssh (when (or local? docker?)
+                   {:dummy? true})
+            :client (:client workload)
+            :nemesis (:nemesis nemesis-pkg)
+            :checker (checker/compose
+                       {:workload (:checker workload)
+                        :stats (checker/stats)
+                        :exceptions (checker/unhandled-exceptions)
+                        :perf (checker/perf)})
+            :generator (gen/phases
+                         ;; Main test phase: mix client operations with nemesis
+                         (->> (:generator workload)
+                              (gen/nemesis (:generator nemesis-pkg))
+                              (gen/time-limit (:time-limit opts)))
+                         ;; Final recovery phase
+                         (gen/log "Recovering from faults...")
+                         (gen/nemesis (:final-generator nemesis-pkg))
+                         (gen/sleep 5)
+                         ;; Final reads to verify state
+                         (gen/log "Final reads...")
+                         (gen/clients
+                           (->> (gen/repeat {:f :read})
+                                (gen/limit 10)
+                                (gen/stagger 0.1))))})))
+
+;; ===========================================================================
+;; CLI Options
+;; ===========================================================================
+
+(def cli-opts
+  "CLI options for FrogDB Jepsen tests."
+  [["-w" "--workload WORKLOAD" "Workload to run (register, counter, append, transaction, queue, set, hash)"
+    :default "register"
+    :validate [#(contains? workloads (keyword %))
+               (str "Must be one of: " (str/join ", " (map name (keys workloads))))]]
+
+   [nil "--nemesis NEMESIS" "Nemesis type (none, kill, pause, rapid-kill, all)"
+    :default "none"
+    :validate [#(contains? #{:none :kill :pause :rapid-kill :all} (keyword %))
+               "Must be one of: none, kill, pause, rapid-kill, all"]]
+
+   ["-r" "--rate RATE" "Operations per second"
+    :default 10
+    :parse-fn #(Double/parseDouble %)
+    :validate [pos? "Must be positive"]]
+
+   [nil "--interval INTERVAL" "Nemesis interval in seconds"
+    :default 10
+    :parse-fn #(Long/parseLong %)
+    :validate [pos? "Must be positive"]]
+
+   [nil "--independent" "Use independent key testing for register workload"
+    :default false]
+
+   [nil "--local" "Local testing mode (FrogDB already running, no Docker)"
+    :default false]
+
+   [nil "--docker" "Docker testing mode (use docker-compose containers)"
+    :default false]])
+
+(def all-cli-opts
+  "All CLI options including Jepsen's standard options."
+  (concat cli-opts cli/test-opt-spec))
+
+;; ===========================================================================
+;; Commands
+;; ===========================================================================
+
+(defn test-cmd
+  "Run a single test."
+  []
+  {"test"
+   {:opt-spec all-cli-opts
+    :opt-fn cli/test-opt-fn
+    :usage "Run a FrogDB Jepsen test"
+    :run (fn [{:keys [options]}]
+           (info "Running FrogDB Jepsen test with options:" options)
+           (let [test (frogdb-test options)]
+             (jepsen.core/run! test)))}})
+
+;; ===========================================================================
+;; Main Entry Point
+;; ===========================================================================
+
+(defn -main
+  "Main entry point for FrogDB Jepsen tests.
+
+   Usage:
+     lein run test --workload register --nemesis none --time-limit 60
+     lein run test --workload counter --nemesis kill --time-limit 120"
+  [& args]
+  (cli/run!
+    (merge (cli/single-test-cmd {:test-fn frogdb-test
+                                 :opt-spec cli-opts})
+           (cli/serve-cmd))
+    args))
