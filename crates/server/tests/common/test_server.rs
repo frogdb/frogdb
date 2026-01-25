@@ -39,6 +39,8 @@ pub struct TestServerConfig {
     pub data_dir: Option<PathBuf>,
     /// Log level (default: "warn" to reduce test noise)
     pub log_level: Option<String>,
+    /// Password required for authentication (default: None)
+    pub requirepass: Option<String>,
 }
 
 /// A test server instance that can be used in integration tests.
@@ -92,6 +94,13 @@ impl TestServer {
         Self::start_standalone_with_config(TestServerConfig::default()).await
     }
 
+    /// Start a standalone server with security (password required).
+    pub async fn start_with_security(requirepass: &str) -> Self {
+        let mut config = TestServerConfig::default();
+        config.requirepass = Some(requirepass.to_string());
+        Self::start_standalone_with_config(config).await
+    }
+
     /// Start a standalone server with custom configuration.
     pub async fn start_standalone_with_config(test_config: TestServerConfig) -> Self {
         let port = Self::allocate_port();
@@ -114,6 +123,9 @@ impl TestServer {
         config.metrics.bind = "127.0.0.1".to_string();
         config.metrics.port = metrics_port;
         config.replication.role = "standalone".to_string();
+        if let Some(ref pass) = test_config.requirepass {
+            config.security.requirepass = pass.clone();
+        }
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -264,6 +276,26 @@ impl TestServer {
         SocketAddr::from(([127, 0, 0, 1], self.port))
     }
 
+    /// Get the metrics address as SocketAddr.
+    pub fn metrics_addr(&self) -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], self.metrics_port))
+    }
+
+    /// Get the metrics URL for a given path.
+    pub fn metrics_url(&self, path: &str) -> String {
+        format!("http://127.0.0.1:{}{}", self.metrics_port, path)
+    }
+
+    /// Fetch metrics as raw Prometheus text format.
+    pub async fn fetch_metrics(&self) -> String {
+        reqwest::get(self.metrics_url("/metrics"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+    }
+
     /// Connect to this server and return a TestClient.
     pub async fn connect(&self) -> TestClient {
         let stream = TcpStream::connect(self.socket_addr()).await.unwrap();
@@ -322,7 +354,8 @@ impl Drop for TestServer {
 
 /// A test client for sending RESP commands.
 pub struct TestClient {
-    framed: Framed<TcpStream, Resp2>,
+    /// The framed connection (public for direct access in some tests).
+    pub framed: Framed<TcpStream, Resp2>,
 }
 
 impl TestClient {
@@ -365,10 +398,16 @@ impl TestClient {
             _ => None,
         }
     }
+
+    /// Read a pushed message (for pub/sub subscribers).
+    /// Alias for `read_response` for compatibility with pub/sub test patterns.
+    pub async fn read_message(&mut self, timeout_duration: Duration) -> Option<Response> {
+        self.read_response(timeout_duration).await
+    }
 }
 
 /// Convert a BytesFrame to our Response type.
-fn frame_to_response(frame: BytesFrame) -> Response {
+pub fn frame_to_response(frame: BytesFrame) -> Response {
     match frame {
         BytesFrame::SimpleString(s) => Response::Simple(s),
         BytesFrame::Error(e) => Response::Error(e.into_inner()),
