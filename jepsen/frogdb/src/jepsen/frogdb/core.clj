@@ -12,14 +12,17 @@
             [jepsen.os :as os]
             [jepsen.tests :as tests]
             [jepsen.frogdb.append :as append]
+            [jepsen.frogdb.blocking :as blocking]
             [jepsen.frogdb.client :as client]
             [jepsen.frogdb.counter :as counter]
             [jepsen.frogdb.db :as db]
+            [jepsen.frogdb.expiry :as expiry]
             [jepsen.frogdb.hash :as hash]
             [jepsen.frogdb.nemesis :as nemesis]
             [jepsen.frogdb.queue :as queue]
             [jepsen.frogdb.register :as register]
             [jepsen.frogdb.set :as set-workload]
+            [jepsen.frogdb.sortedset :as sortedset]
             [jepsen.frogdb.transaction :as transaction])
   (:gen-class))
 
@@ -49,7 +52,10 @@
    :transaction transaction/workload
    :queue queue/workload
    :set set-workload/workload
-   :hash hash/workload})
+   :hash hash/workload
+   :sortedset sortedset/workload
+   :expiry expiry/workload
+   :blocking blocking/workload})
 
 (defn get-workload
   "Get a workload by name with options."
@@ -124,7 +130,7 @@
 
 (def cli-opts
   "CLI options for FrogDB Jepsen tests."
-  [["-w" "--workload WORKLOAD" "Workload to run (register, counter, append, transaction, queue, set, hash)"
+  [["-w" "--workload WORKLOAD" "Workload to run (register, counter, append, transaction, queue, set, hash, sortedset, expiry, blocking)"
     :default "register"
     :validate [#(contains? workloads (keyword %))
                (str "Must be one of: " (str/join ", " (map name (keys workloads))))]]

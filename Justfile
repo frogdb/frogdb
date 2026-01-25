@@ -198,6 +198,18 @@ jepsen-set *args:
 jepsen-hash *args:
     cd jepsen/frogdb && lein run test --workload hash --nemesis none {{args}}
 
+# Run Jepsen sorted set workload (score/ranking consistency)
+jepsen-sortedset *args:
+    cd jepsen/frogdb && lein run test --workload sortedset --nemesis none {{args}}
+
+# Run Jepsen expiry workload (TTL/expiration testing)
+jepsen-expiry *args:
+    cd jepsen/frogdb && lein run test --workload expiry --nemesis none {{args}}
+
+# Run Jepsen blocking workload (BLPOP/BRPOP semantics)
+jepsen-blocking *args:
+    cd jepsen/frogdb && lein run test --workload blocking --nemesis none {{args}}
+
 # Run Jepsen register workload with crash testing
 jepsen-crash *args:
     cd jepsen/frogdb && lein run test --workload register --nemesis kill {{args}}
@@ -217,6 +229,22 @@ jepsen-append-rapid *args:
 # Run Jepsen transaction workload with crash testing
 jepsen-transaction-crash *args:
     cd jepsen/frogdb && lein run test --workload transaction --nemesis kill {{args}}
+
+# Run Jepsen sorted set workload with crash testing
+jepsen-sortedset-crash *args:
+    cd jepsen/frogdb && lein run test --workload sortedset --nemesis kill {{args}}
+
+# Run Jepsen expiry workload with crash testing
+jepsen-expiry-crash *args:
+    cd jepsen/frogdb && lein run test --workload expiry --nemesis kill {{args}}
+
+# Run Jepsen expiry workload with rapid-kill (stress test TTL under crashes)
+jepsen-expiry-rapid *args:
+    cd jepsen/frogdb && lein run test --workload expiry --nemesis rapid-kill {{args}}
+
+# Run Jepsen blocking workload with crash testing
+jepsen-blocking-crash *args:
+    cd jepsen/frogdb && lein run test --workload blocking --nemesis kill {{args}}
 
 # Run nemesis test with kill (Docker mode)
 jepsen-nemesis-kill *args: jepsen-up
@@ -241,9 +269,15 @@ jepsen-all: jepsen-build jepsen-up
     just jepsen-queue --time-limit 30
     just jepsen-set --time-limit 30
     just jepsen-hash --time-limit 30
+    just jepsen-sortedset --time-limit 30
+    just jepsen-expiry --time-limit 30
+    just jepsen-blocking --time-limit 30
     just jepsen-crash --time-limit 60
     just jepsen-append-crash --time-limit 60
     just jepsen-transaction-crash --time-limit 60
+    just jepsen-sortedset-crash --time-limit 60
+    just jepsen-expiry-crash --time-limit 60
+    just jepsen-blocking-crash --time-limit 60
 
 # Clean Jepsen test results
 jepsen-clean:
