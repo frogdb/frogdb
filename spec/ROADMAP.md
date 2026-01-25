@@ -30,21 +30,43 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 ### Clustering / Replication
 
-**Goal**: Distributed operation support.
+**Goal**: Distributed operation support with primary-replica replication and Redis Cluster protocol compatibility.
 
-- [ ] Replication via WAL streaming
-- [ ] CLUSTER commands
-- [ ] Hash slot migration
-- [ ] Failover
-- [ ] `ROLE` - Report replication role (primary/replica)
+See [CLUSTER_PLAN.md](CLUSTER_PLAN.md) for the detailed implementation plan.
+
+**Implementation Phases:**
+
+| Phase | Description | Key Deliverables |
+|-------|-------------|------------------|
+| 1 | Primary-Replica Replication | PSYNC protocol, WAL streaming, WAIT command, ROLE/INFO |
+| 2 | Admin API & Cluster Topology | HTTP admin port, slot assignment, cluster state management |
+| 3 | Client Protocol & Redirects | MOVED/ASK redirects, CLUSTER commands, hash slot routing |
+| 4 | Failover Support | Replica promotion, REPLICAOF NO ONE, self-fencing |
+| 5 | Slot Migration | Live migration protocol, slot state machine |
+| 6 | Testing & Validation | Turmoil chaos tests, Jepsen linearizability, integration tests |
+
+**Phase 1 Tasks (First Milestone):**
+- [ ] Replication via WAL streaming (RocksDB `GetUpdatesSince`)
+- [ ] PSYNC/FULLRESYNC protocol implementation
+- [ ] REPLCONF handshake and ACK tracking
+- [ ] WAIT command with replica acknowledgment
+- [ ] ROLE command - Report replication role (primary/replica)
+- [ ] INFO replication section
+
+**Later Phases:**
+- [ ] Admin HTTP API (port 6380)
+- [ ] CLUSTER commands (SLOTS, NODES, KEYSLOT, etc.)
+- [ ] Hash slot routing and MOVED/ASK redirects
+- [ ] Failover and replica promotion
+- [ ] Live slot migration
 - [ ] `BGREWRITEAOF` - Stub returning appropriate message (N/A for RocksDB)
 
 ### Distributed Cluster Testing
 
 **Goal**: Correctness testing for clustered operation.
 
+- [ ] Turmoil deterministic simulation tests
 - [ ] Cluster partition/chaos tests (Jepsen)
-- [ ] Cluster partition/chaos tests (Turmoil)
 - [ ] Cluster failover tests
 - [ ] Cluster linearizability tests
 
