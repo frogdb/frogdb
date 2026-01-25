@@ -46,12 +46,16 @@ serde_json = { workspace = true }
 # Bytes
 bytes = { workspace = true }
 
+# Debug web UI
+rust-embed = { version = "8", features = ["compression"] }
+mime_guess = "2"
+
 # HTTP client for testing (optional)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tempfile = "3"
 frogdb-server = { path = "../server" }
 frogdb-protocol = { path = "../protocol" }

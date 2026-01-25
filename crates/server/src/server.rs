@@ -7,7 +7,7 @@ use frogdb_core::persistence::{
 };
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
 use frogdb_core::{AclManager, ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, NoopBroadcaster, SharedBroadcaster, ShardMessage, ShardWorker};
-use frogdb_metrics::{HealthChecker, MetricsServer, PrometheusRecorder, SharedTracer, SystemMetricsCollector};
+use frogdb_metrics::{DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo, SharedTracer, SystemMetricsCollector};
 use std::time::Duration;
 use tokio::signal;
 use tokio::sync::mpsc;
@@ -529,14 +529,25 @@ impl Server {
                 otlp_interval_secs: self.config.metrics.otlp_interval_secs,
             };
 
+            // Create debug state for the debug web UI
+            let debug_state = DebugState::new(ServerInfo {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                start_time: std::time::Instant::now(),
+                num_shards: self.shard_senders.len(),
+                bind_addr: self.config.server.bind.clone(),
+                port: self.config.server.port,
+            });
+
             let server = MetricsServer::new(
                 metrics_config,
                 prometheus.clone(),
                 self.health_checker.clone(),
-            );
+            )
+            .with_debug_state(debug_state);
 
             info!(
                 addr = %self.config.metrics.bind_addr(),
+                debug_ui = %format!("http://{}:{}/debug", self.config.metrics.bind, self.config.metrics.port),
                 "Metrics server starting"
             );
 
