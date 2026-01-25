@@ -153,3 +153,102 @@ profile-load workload="mixed" requests="10000" *args:
 # Profile with save-only (no auto-open)
 profile-load-save workload="mixed" requests="10000" *args:
     uv run tools/loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} --save-only {{args}}
+
+# Build FrogDB for Jepsen testing
+jepsen-build:
+    uv run jepsen/build.py
+
+# Start Jepsen test environment (FrogDB node only)
+jepsen-up:
+    docker compose -f jepsen/docker-compose.yml up -d n1
+
+# Stop Jepsen test environment
+jepsen-down:
+    docker compose -f jepsen/docker-compose.yml down -v
+
+# Enter Jepsen control node shell
+jepsen-shell:
+    docker compose -f jepsen/docker-compose.yml exec control bash
+
+# Run Jepsen register workload (no failures)
+jepsen-register *args:
+    cd jepsen/frogdb && lein run test --workload register --nemesis none {{args}}
+
+# Run Jepsen counter workload (no failures)
+jepsen-counter *args:
+    cd jepsen/frogdb && lein run test --workload counter --nemesis none {{args}}
+
+# Run Jepsen append workload (durability/crash recovery testing)
+jepsen-append *args:
+    cd jepsen/frogdb && lein run test --workload append --nemesis none {{args}}
+
+# Run Jepsen transaction workload (multi-key atomicity)
+jepsen-transaction *args:
+    cd jepsen/frogdb && lein run test --workload transaction --nemesis none {{args}}
+
+# Run Jepsen queue workload (FIFO ordering)
+jepsen-queue *args:
+    cd jepsen/frogdb && lein run test --workload queue --nemesis none {{args}}
+
+# Run Jepsen set workload (membership consistency)
+jepsen-set *args:
+    cd jepsen/frogdb && lein run test --workload set --nemesis none {{args}}
+
+# Run Jepsen hash workload (field-level atomicity)
+jepsen-hash *args:
+    cd jepsen/frogdb && lein run test --workload hash --nemesis none {{args}}
+
+# Run Jepsen register workload with crash testing
+jepsen-crash *args:
+    cd jepsen/frogdb && lein run test --workload register --nemesis kill {{args}}
+
+# Run Jepsen counter workload with crash testing
+jepsen-counter-crash *args:
+    cd jepsen/frogdb && lein run test --workload counter --nemesis kill {{args}}
+
+# Run Jepsen append workload with crash testing (primary durability test)
+jepsen-append-crash *args:
+    cd jepsen/frogdb && lein run test --workload append --nemesis kill {{args}}
+
+# Run Jepsen append workload with rapid-kill (stress test durability)
+jepsen-append-rapid *args:
+    cd jepsen/frogdb && lein run test --workload append --nemesis rapid-kill {{args}}
+
+# Run Jepsen transaction workload with crash testing
+jepsen-transaction-crash *args:
+    cd jepsen/frogdb && lein run test --workload transaction --nemesis kill {{args}}
+
+# Run nemesis test with kill (Docker mode)
+jepsen-nemesis-kill *args: jepsen-up
+    cd jepsen/frogdb && lein run test --docker --workload register --nemesis kill {{args}}
+
+# Run nemesis test with pause (Docker mode)
+jepsen-nemesis-pause *args: jepsen-up
+    cd jepsen/frogdb && lein run test --docker --workload register --nemesis pause {{args}}
+
+# Full nemesis test suite (build + kill + pause tests)
+jepsen-nemesis: jepsen-build
+    just jepsen-nemesis-kill --time-limit 60
+    just jepsen-nemesis-pause --time-limit 60
+    just jepsen-down
+
+# Run all Jepsen tests (build + all workloads)
+jepsen-all: jepsen-build jepsen-up
+    just jepsen-register --time-limit 30
+    just jepsen-counter --time-limit 30
+    just jepsen-append --time-limit 30
+    just jepsen-transaction --time-limit 30
+    just jepsen-queue --time-limit 30
+    just jepsen-set --time-limit 30
+    just jepsen-hash --time-limit 30
+    just jepsen-crash --time-limit 60
+    just jepsen-append-crash --time-limit 60
+    just jepsen-transaction-crash --time-limit 60
+
+# Clean Jepsen test results
+jepsen-clean:
+    rm -rf jepsen/frogdb/store/
+
+# Open Jepsen results in browser (macOS)
+jepsen-results:
+    open jepsen/frogdb/store/latest/
