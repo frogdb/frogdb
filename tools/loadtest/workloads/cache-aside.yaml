@@ -1,0 +1,38 @@
+# Cache-Aside Workload
+#
+# Classic cache-aside pattern where:
+# - Application first checks cache (GET)
+# - On miss, fetches from database and populates cache (SET)
+# - Occasional invalidation (DEL)
+#
+# This models real-world caching behavior with:
+# - High read ratio (cache should have high hit rate)
+# - Zipfian distribution (power law - most requests hit few keys)
+# - Large key space (representing diverse cached content)
+
+name: cache-aside
+description: "Cache-aside pattern (95% read, 4% write, 1% invalidate)"
+scenario: cache
+
+commands:
+  - GET: 95%
+  - SET: 4%
+  - DEL: 1%
+
+keys:
+  pattern: zipfian
+  space_size: 10000000
+  prefix: "cache:"
+
+data:
+  size_bytes: 1024
+  ttl_seconds: 3600
+
+concurrency:
+  clients: 100
+  threads: 4
+  pipeline: 1
+
+targets:
+  ops_per_sec: 80000
+  p99_latency_ms: 2.0

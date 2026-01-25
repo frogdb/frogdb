@@ -1,0 +1,40 @@
+# Counter Workload
+#
+# Simple atomic counters for:
+# - Page view counts
+# - Like/upvote counts
+# - API request counting
+# - Inventory tracking
+#
+# Characteristics:
+# - INCR (70%): Increment counter
+# - GET (25%): Read counter value
+# - DECR (5%): Decrement counter
+# - Zipfian distribution (popular content gets more hits)
+# - Medium contention (100K counters)
+
+name: counter
+description: "Atomic counters (page views, likes, inventory)"
+scenario: counter
+
+commands:
+  - INCR: 70%
+  - GET: 25%
+  - DECR: 5%
+
+keys:
+  pattern: zipfian
+  space_size: 100000
+  prefix: "count:"
+
+data:
+  size_bytes: 8
+
+concurrency:
+  clients: 100
+  threads: 4
+  pipeline: 1
+
+targets:
+  ops_per_sec: 100000
+  p99_latency_ms: 1.0

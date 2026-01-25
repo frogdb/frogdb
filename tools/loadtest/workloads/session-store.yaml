@@ -1,0 +1,39 @@
+# Session Store Workload
+#
+# User session management with typical read-heavy access pattern.
+# Sessions are frequently read (every request), occasionally updated
+# (user actions), and sometimes deleted (logout, expiration).
+#
+# Characteristics:
+# - 70% reads (session validation on every request)
+# - 25% writes (update session data, refresh expiration)
+# - 5% deletes (logout, explicit invalidation)
+# - Gaussian distribution (active users are "hot")
+# - TTL-based expiration (3600s = 1 hour)
+
+name: session-store
+description: "User session management with TTL"
+scenario: session-store
+
+commands:
+  - GET: 70%
+  - SET: 25%
+  - DEL: 5%
+
+keys:
+  pattern: gaussian
+  space_size: 100000
+  prefix: "session:"
+
+data:
+  size_bytes: 512
+  ttl_seconds: 3600
+
+concurrency:
+  clients: 100
+  threads: 4
+  pipeline: 1
+
+targets:
+  ops_per_sec: 50000
+  p99_latency_ms: 5.0

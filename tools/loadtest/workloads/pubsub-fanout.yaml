@@ -1,0 +1,41 @@
+# Pub/Sub Fanout Workload
+#
+# Real-time pub/sub messaging for:
+# - Live notifications
+# - Chat applications
+# - Real-time collaboration
+# - Event broadcasting
+#
+# Characteristics:
+# - PUBLISH (100%): Broadcast messages to channels
+# - 100 channels (topics)
+# - 10 subscribers per channel
+# - 128 byte messages
+#
+# Note: This workload only measures PUBLISH throughput.
+# Subscriber latency requires the full pub/sub runner.
+
+name: pubsub-fanout
+description: "Real-time pub/sub messaging"
+scenario: pubsub
+
+commands:
+  - PUBLISH: 100%
+
+keys:
+  pattern: uniform
+  space_size: 100
+  prefix: "channel:"
+
+concurrency:
+  clients: 50
+  threads: 4
+  pipeline: 1
+
+pubsub:
+  subscribers_per_channel: 10
+  message_size_bytes: 128
+
+targets:
+  ops_per_sec: 100000
+  p99_latency_ms: 2.0

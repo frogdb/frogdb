@@ -1,0 +1,42 @@
+# Geo Nearby Workload
+#
+# Location-based queries for:
+# - Store locators
+# - Ride-sharing (nearby drivers)
+# - Food delivery (nearby restaurants)
+# - Social features (nearby friends)
+#
+# Characteristics:
+# - GEOADD (20%): Add/update locations
+# - GEORADIUS (60%): Find nearby points
+# - GEODIST (20%): Calculate distances
+# - 10 geo indexes (e.g., per-city or per-region)
+# - 100,000 points per index
+# - 10km search radius
+
+name: geo-nearby
+description: "Location-based queries"
+scenario: geo
+
+commands:
+  - GEOADD: 20%
+  - GEORADIUS: 60%
+  - GEODIST: 20%
+
+keys:
+  pattern: uniform
+  space_size: 10
+  prefix: "geo:"
+
+concurrency:
+  clients: 50
+  threads: 4
+  pipeline: 1
+
+geo:
+  points_per_index: 100000
+  radius_km: 10.0
+
+targets:
+  ops_per_sec: 20000
+  p99_latency_ms: 10.0

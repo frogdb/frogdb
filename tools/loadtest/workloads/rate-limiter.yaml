@@ -1,0 +1,39 @@
+# Rate Limiter Workload
+#
+# High-contention rate limiting counters. This is one of the most
+# demanding workloads for any key-value store because:
+# - Extreme contention on a small key space
+# - Every request requires atomic increment
+# - Sub-millisecond latency is critical for user experience
+#
+# Characteristics:
+# - 90% INCR (increment rate limit counter)
+# - 10% GET (check current count)
+# - Zipfian distribution (some users/IPs much more active)
+# - Very small key space (extreme contention)
+# - Short TTL (sliding window)
+
+name: rate-limiter
+description: "High-contention rate limiting counters"
+scenario: rate-limiting
+
+commands:
+  - INCR: 90%
+  - GET: 10%
+
+keys:
+  pattern: zipfian
+  space_size: 1000
+  prefix: "ratelimit:"
+
+data:
+  ttl_seconds: 60
+
+concurrency:
+  clients: 200
+  threads: 4
+  pipeline: 1
+
+targets:
+  ops_per_sec: 100000
+  p99_latency_ms: 1.0
