@@ -567,6 +567,12 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<Result<(), String>>,
     },
 
+    /// Get VLL queue information from this shard.
+    GetVllQueueInfo {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<VllQueueInfo>,
+    },
+
     /// Shutdown signal.
     Shutdown,
 }
@@ -701,6 +707,60 @@ impl Default for WalLagStatsResponse {
             lag_stats: None,
         }
     }
+}
+
+/// Response for VLL queue info query.
+#[derive(Debug, Clone, Default)]
+pub struct VllQueueInfo {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// Number of pending operations in the queue.
+    pub queue_depth: usize,
+    /// Transaction ID currently executing (if any).
+    pub executing_txid: Option<u64>,
+    /// Continuation lock info (if held).
+    pub continuation_lock: Option<VllContinuationLockInfo>,
+    /// Pending operations in the queue.
+    pub pending_ops: Vec<VllPendingOpInfo>,
+    /// Intent table state.
+    pub intent_table: Vec<VllKeyIntentInfo>,
+}
+
+/// Information about a pending VLL operation.
+#[derive(Debug, Clone)]
+pub struct VllPendingOpInfo {
+    /// Transaction ID.
+    pub txid: u64,
+    /// Operation type as string.
+    pub operation: String,
+    /// Number of keys involved.
+    pub key_count: usize,
+    /// Current state.
+    pub state: String,
+    /// Age in milliseconds.
+    pub age_ms: u64,
+}
+
+/// Information about a continuation lock.
+#[derive(Debug, Clone)]
+pub struct VllContinuationLockInfo {
+    /// Transaction ID holding the lock.
+    pub txid: u64,
+    /// Connection ID that owns the lock.
+    pub conn_id: u64,
+    /// Age in milliseconds.
+    pub age_ms: u64,
+}
+
+/// Information about key intents.
+#[derive(Debug, Clone)]
+pub struct VllKeyIntentInfo {
+    /// Key (may be truncated).
+    pub key: String,
+    /// Transaction IDs with intents on this key.
+    pub txids: Vec<u64>,
+    /// Lock state as string.
+    pub lock_state: String,
 }
 
 /// Result from executing a transaction.
@@ -1663,6 +1723,11 @@ impl ShardWorker {
                                 Err("Raft not initialized".to_string())
                             };
                             let _ = response_tx.send(result);
+                        }
+
+                        ShardMessage::GetVllQueueInfo { response_tx } => {
+                            let info = self.collect_vll_queue_info();
+                            let _ = response_tx.send(info);
                         }
 
                         ShardMessage::Shutdown => {
@@ -3953,6 +4018,100 @@ impl ShardWorker {
             reads_per_sec,
             writes_per_sec,
             queue_depth: self.queue_depth.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Collect VLL queue information for debugging.
+    fn collect_vll_queue_info(&self) -> VllQueueInfo {
+        let mut info = VllQueueInfo {
+            shard_id: self.shard_id,
+            ..Default::default()
+        };
+
+        // Collect queue depth and pending ops
+        if let Some(ref tx_queue) = self.tx_queue {
+            info.queue_depth = tx_queue.len();
+
+            // Find executing txid (the one with Executing state)
+            for (_, op) in tx_queue.iter() {
+                if op.state == crate::vll::PendingOpState::Executing {
+                    info.executing_txid = Some(op.txid);
+                }
+
+                info.pending_ops.push(VllPendingOpInfo {
+                    txid: op.txid,
+                    operation: Self::format_scatter_op(&op.operation),
+                    key_count: op.keys.len(),
+                    state: format!("{:?}", op.state),
+                    age_ms: op.age().as_millis() as u64,
+                });
+            }
+        }
+
+        // Collect continuation lock info
+        if let Some(ref lock) = self.continuation_lock {
+            info.continuation_lock = Some(VllContinuationLockInfo {
+                txid: lock.txid,
+                conn_id: lock.conn_id,
+                age_ms: lock.age().as_millis() as u64,
+            });
+        }
+
+        // Collect intent table info
+        if let Some(ref intent_table) = self.intent_table {
+            for (key, txids) in intent_table.iter_keys() {
+                let lock_state = intent_table.get_lock_state_string(key);
+                info.intent_table.push(VllKeyIntentInfo {
+                    key: Self::format_key_for_display(key),
+                    txids,
+                    lock_state,
+                });
+            }
+        }
+
+        info
+    }
+
+    /// Format a ScatterOp for display.
+    fn format_scatter_op(op: &ScatterOp) -> String {
+        match op {
+            ScatterOp::MGet => "MGET".to_string(),
+            ScatterOp::MSet { .. } => "MSET".to_string(),
+            ScatterOp::Del => "DEL".to_string(),
+            ScatterOp::Exists => "EXISTS".to_string(),
+            ScatterOp::Touch => "TOUCH".to_string(),
+            ScatterOp::Unlink => "UNLINK".to_string(),
+            ScatterOp::Keys { .. } => "KEYS".to_string(),
+            ScatterOp::DbSize => "DBSIZE".to_string(),
+            ScatterOp::FlushDb => "FLUSHDB".to_string(),
+            ScatterOp::Scan { .. } => "SCAN".to_string(),
+            ScatterOp::Copy { .. } => "COPY".to_string(),
+            ScatterOp::CopySet { .. } => "COPYSET".to_string(),
+            ScatterOp::RandomKey => "RANDOMKEY".to_string(),
+            ScatterOp::Dump => "DUMP".to_string(),
+        }
+    }
+
+    /// Format a key for display, truncating if too long.
+    fn format_key_for_display(key: &Bytes) -> String {
+        const MAX_KEY_DISPLAY_LEN: usize = 64;
+        match std::str::from_utf8(key) {
+            Ok(s) => {
+                if s.len() > MAX_KEY_DISPLAY_LEN {
+                    format!("{}...", &s[..MAX_KEY_DISPLAY_LEN])
+                } else {
+                    s.to_string()
+                }
+            }
+            Err(_) => {
+                // Binary key - show hex
+                let hex: String = key.iter().take(32).map(|b| format!("{:02x}", b)).collect();
+                if key.len() > 32 {
+                    format!("0x{}...", hex)
+                } else {
+                    format!("0x{}", hex)
+                }
+            }
         }
     }
 }

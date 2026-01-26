@@ -1436,3 +1436,125 @@ async fn test_debug_tracing_no_subcommand() {
 
     server.shutdown().await;
 }
+
+// =========================================================================
+// DEBUG VLL tests
+// =========================================================================
+
+#[tokio::test]
+async fn test_debug_vll_empty() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // DEBUG VLL should work and show empty state
+    let response = client.command(&["DEBUG", "VLL"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let content = String::from_utf8_lossy(&data);
+            assert!(
+                content.contains("VLL queues are empty"),
+                "Expected empty VLL message, got: {}",
+                content
+            );
+        }
+        _ => panic!("Expected bulk response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_vll_specific_shard() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // DEBUG VLL 0 should work and show shard 0
+    let response = client.command(&["DEBUG", "VLL", "0"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let content = String::from_utf8_lossy(&data);
+            // Either empty message or shard:0 should be present
+            assert!(
+                content.contains("VLL queues are empty") || content.contains("shard:0"),
+                "Expected shard 0 info or empty message, got: {}",
+                content
+            );
+        }
+        _ => panic!("Expected bulk response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_vll_invalid_shard() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // DEBUG VLL 999 should return an error (assuming less than 1000 shards)
+    let response = client.command(&["DEBUG", "VLL", "999"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("invalid shard_id"),
+                "Error should mention invalid shard_id, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_vll_invalid_shard_format() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // DEBUG VLL abc should return an error
+    let response = client.command(&["DEBUG", "VLL", "abc"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("invalid shard_id"),
+                "Error should mention invalid shard_id, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_vll_with_pending_ops() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Run some operations to ensure the command doesn't crash during activity
+    for i in 0..10 {
+        let key = format!("test_key_{}", i);
+        let _: Response = client.command(&["SET", &key, "value"]).await;
+    }
+
+    // DEBUG VLL should not crash
+    let response = client.command(&["DEBUG", "VLL"]).await;
+    match response {
+        Response::Bulk(Some(_)) => {
+            // Success - command completed without error
+        }
+        Response::Error(e) => {
+            panic!(
+                "DEBUG VLL should not error during normal operation: {}",
+                String::from_utf8_lossy(&e)
+            );
+        }
+        _ => panic!("Expected bulk response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}

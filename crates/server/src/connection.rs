@@ -1632,6 +1632,10 @@ impl ConnectionHandler {
                         "ERR Unknown DEBUG TRACING subcommand. Use STATUS or RECENT [count].",
                     )];
                 }
+                // Check for DEBUG VLL subcommand
+                if !cmd.args.is_empty() && cmd.args[0].eq_ignore_ascii_case(b"VLL") {
+                    return vec![self.handle_debug_vll(&cmd.args).await];
+                }
                 // Fall through for other DEBUG subcommands
             }
             "SHUTDOWN" => return vec![self.handle_shutdown(&cmd.args).await],
@@ -5306,6 +5310,150 @@ impl ConnectionHandler {
             }
             None => Response::Array(vec![]),
         }
+    }
+
+    /// Handle DEBUG VLL [shard_id] command.
+    async fn handle_debug_vll(&self, args: &[Bytes]) -> Response {
+        // args[0] = "VLL", args[1] = optional shard_id
+        let shard_filter: Option<usize> = if args.len() > 1 {
+            match std::str::from_utf8(&args[1]) {
+                Ok(s) => match s.parse::<usize>() {
+                    Ok(id) => {
+                        if id >= self.shard_senders.len() {
+                            return Response::error(format!(
+                                "ERR invalid shard_id: {} (num_shards: {})",
+                                id,
+                                self.shard_senders.len()
+                            ));
+                        }
+                        Some(id)
+                    }
+                    Err(_) => {
+                        return Response::error("ERR invalid shard_id: must be a number");
+                    }
+                },
+                Err(_) => {
+                    return Response::error("ERR invalid shard_id: must be valid UTF-8");
+                }
+            }
+        } else {
+            None
+        };
+
+        let infos = self.gather_vll_queue_info(shard_filter).await;
+        self.format_vll_response(infos)
+    }
+
+    /// Gather VLL queue info from shards.
+    async fn gather_vll_queue_info(
+        &self,
+        shard_filter: Option<usize>,
+    ) -> Vec<frogdb_core::shard::VllQueueInfo> {
+        use tokio::sync::oneshot;
+
+        let mut results = Vec::new();
+        let timeout = std::time::Duration::from_secs(5);
+
+        let shard_ids: Vec<usize> = match shard_filter {
+            Some(id) => vec![id],
+            None => (0..self.shard_senders.len()).collect(),
+        };
+
+        for shard_id in shard_ids {
+            let (response_tx, response_rx) = oneshot::channel();
+
+            let send_result = self.shard_senders[shard_id]
+                .send(frogdb_core::shard::ShardMessage::GetVllQueueInfo { response_tx })
+                .await;
+
+            if send_result.is_err() {
+                tracing::warn!(shard_id, "Failed to send GetVllQueueInfo message");
+                continue;
+            }
+
+            match tokio::time::timeout(timeout, response_rx).await {
+                Ok(Ok(info)) => {
+                    results.push(info);
+                }
+                Ok(Err(_)) => {
+                    tracing::warn!(shard_id, "Channel closed while waiting for VLL info");
+                }
+                Err(_) => {
+                    tracing::warn!(shard_id, "Timeout waiting for VLL info");
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Format VLL queue info as a response.
+    fn format_vll_response(&self, infos: Vec<frogdb_core::shard::VllQueueInfo>) -> Response {
+        // Check if all queues are empty
+        let all_empty = infos.iter().all(|i| {
+            i.queue_depth == 0
+                && i.continuation_lock.is_none()
+                && i.intent_table.is_empty()
+        });
+
+        if all_empty {
+            return Response::Bulk(Some(Bytes::from("# VLL queues are empty")));
+        }
+
+        let mut lines = Vec::new();
+
+        for info in infos {
+            // Shard header
+            let mut header = format!("shard:{} queue_depth:{}", info.shard_id, info.queue_depth);
+            if let Some(txid) = info.executing_txid {
+                header.push_str(&format!(" executing_txid:{}", txid));
+            }
+            lines.push(header);
+
+            // Continuation lock
+            if let Some(ref lock) = info.continuation_lock {
+                lines.push(format!(
+                    "continuation_lock: txid:{} conn_id:{} age_ms:{}",
+                    lock.txid, lock.conn_id, lock.age_ms
+                ));
+            }
+
+            // Pending operations
+            if !info.pending_ops.is_empty() {
+                lines.push("pending:".to_string());
+                for op in &info.pending_ops {
+                    lines.push(format!(
+                        "  txid:{} operation:{} keys:{} state:{} age_ms:{}",
+                        op.txid, op.operation, op.key_count, op.state, op.age_ms
+                    ));
+                }
+            }
+
+            // Intent table
+            if !info.intent_table.is_empty() {
+                lines.push("intents:".to_string());
+                for intent in &info.intent_table {
+                    let txids_str: Vec<String> =
+                        intent.txids.iter().map(|t| t.to_string()).collect();
+                    lines.push(format!(
+                        "  key:{} txids:[{}] lock:{}",
+                        intent.key,
+                        txids_str.join(","),
+                        intent.lock_state
+                    ));
+                }
+            }
+
+            // Empty line between shards
+            lines.push(String::new());
+        }
+
+        // Remove trailing empty line
+        if lines.last().map(|s| s.is_empty()).unwrap_or(false) {
+            lines.pop();
+        }
+
+        Response::Bulk(Some(Bytes::from(lines.join("\n"))))
     }
 
     /// Handle SHUTDOWN command.
