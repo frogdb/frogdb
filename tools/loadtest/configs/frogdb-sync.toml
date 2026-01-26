@@ -22,7 +22,8 @@ batch_size_threshold_kb = 1
 batch_timeout_ms = 0
 
 [snapshot]
-enabled = false
+# Disable automatic snapshots for benchmarks (interval = 0)
+snapshot_interval_secs = 0
 
 [logging]
 level = "warn"
@@ -31,4 +32,4 @@ level = "warn"
 enabled = false
 
 [memory]
-maxmemory = "0"  # No limit for benchmarks
+maxmemory = 0  # No limit for benchmarks
