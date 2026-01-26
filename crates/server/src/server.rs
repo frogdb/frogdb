@@ -13,10 +13,19 @@ use frogdb_core::{
     ShardWorker,
 };
 use frogdb_metrics::{DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo, SharedTracer, StatusCollector, SystemMetricsCollector};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::time::Duration;
 use tokio::signal;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+
+/// Generate a deterministic node_id from a socket address.
+fn hash_addr_to_node_id(addr: &std::net::SocketAddr) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    addr.hash(&mut hasher);
+    hasher.finish()
+}
 
 use crate::acceptor::Acceptor;
 use crate::config::{Config, MemoryConfig, PersistenceConfig};
@@ -327,14 +336,12 @@ impl Server {
         // Initialize cluster state and Raft if cluster mode is enabled
         // NOTE: This must happen before shard creation so we can pass raft to workers
         let (cluster_state, node_id, raft) = if config.cluster.enabled {
-            let node_id = if config.cluster.node_id == 0 {
-                // Auto-generate node ID from timestamp
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as u64)
-                    .unwrap_or(1)
-            } else {
+            // Derive node_id from cluster_bus address for deterministic IDs
+            let cluster_addr = config.cluster.cluster_bus_socket_addr();
+            let node_id = if config.cluster.node_id != 0 {
                 config.cluster.node_id
+            } else {
+                hash_addr_to_node_id(&cluster_addr)
             };
 
             info!(
@@ -354,6 +361,41 @@ impl Server {
 
             // Initialize Raft network factory
             let network_factory = ClusterNetworkFactory::new();
+
+            // Process initial_nodes and register addresses
+            let mut initial_members: std::collections::BTreeMap<u64, openraft::BasicNode> =
+                std::collections::BTreeMap::new();
+
+            for addr_str in &config.cluster.initial_nodes {
+                if let Ok(peer_cluster_addr) = addr_str.parse::<std::net::SocketAddr>() {
+                    let peer_node_id = hash_addr_to_node_id(&peer_cluster_addr);
+                    network_factory.register_node(peer_node_id, peer_cluster_addr);
+                    initial_members.insert(
+                        peer_node_id,
+                        openraft::BasicNode {
+                            addr: peer_cluster_addr.to_string(),
+                        },
+                    );
+                    info!(peer_node_id = peer_node_id, addr = %peer_cluster_addr, "Registered initial cluster peer");
+                }
+            }
+
+            // Register this node's address
+            let cluster_bus_addr = config.cluster.cluster_bus_socket_addr();
+            network_factory.register_node(node_id, cluster_bus_addr);
+
+            // Ensure this node is in initial_members
+            if !initial_members.contains_key(&node_id) {
+                initial_members.insert(
+                    node_id,
+                    openraft::BasicNode {
+                        addr: cluster_bus_addr.to_string(),
+                    },
+                );
+            }
+
+            // Determine if this node should bootstrap (lowest node_id)
+            let should_bootstrap = initial_members.keys().next().copied() == Some(node_id);
 
             // Create Raft config
             let raft_config = openraft::Config {
@@ -376,7 +418,42 @@ impl Server {
 
             info!(node_id = node_id, "Raft initialized");
 
-            // Add this node to the cluster state
+            // Bootstrap Raft cluster if this is the bootstrap node
+            if should_bootstrap && !initial_members.is_empty() {
+                // Check if already initialized (restart case)
+                let metrics = raft.metrics().borrow().clone();
+                let already_initialized = metrics.membership_config.membership().nodes().count() > 0;
+
+                if !already_initialized {
+                    info!(
+                        node_id = node_id,
+                        member_count = initial_members.len(),
+                        "Bootstrapping Raft cluster"
+                    );
+                    if let Err(e) = raft.initialize(initial_members.clone()).await {
+                        warn!(error = %e, "Raft initialization error (may be already initialized)");
+                    }
+                } else {
+                    info!(node_id = node_id, "Raft already initialized, skipping bootstrap");
+                }
+            }
+
+            // Add all initial nodes to cluster_state
+            for (peer_id, basic_node) in &initial_members {
+                if let Ok(peer_cluster_addr) = basic_node.addr.parse::<std::net::SocketAddr>() {
+                    let client_port = peer_cluster_addr.port().saturating_sub(10000);
+                    let client_addr =
+                        std::net::SocketAddr::new(peer_cluster_addr.ip(), client_port);
+                    let peer_node = frogdb_core::cluster::NodeInfo::new_primary(
+                        *peer_id,
+                        client_addr,
+                        peer_cluster_addr,
+                    );
+                    cluster.add_node(peer_node);
+                }
+            }
+
+            // Add this node to the cluster state (ensure it's there even if not in initial_members)
             let client_addr = format!("{}:{}", config.server.bind, config.server.port)
                 .parse()
                 .map_err(|e| anyhow::anyhow!("Invalid bind address: {}", e))?;
