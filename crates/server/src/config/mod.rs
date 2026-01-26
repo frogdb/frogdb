@@ -1,5 +1,7 @@
 //! Configuration handling via Figment.
 
+pub mod validators;
+
 use anyhow::{Context, Result};
 use figment::{
     providers::{Env, Format, Serialized, Toml},
@@ -11,6 +13,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Main configuration struct.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// Server configuration.
     #[serde(default)]
@@ -75,6 +78,7 @@ pub struct Config {
 
 /// Security configuration.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
     /// Legacy password for the default user (like Redis requirepass).
     /// If set, clients must AUTH with this password before running commands.
@@ -84,6 +88,7 @@ pub struct SecurityConfig {
 
 /// ACL configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AclFileConfig {
     /// Path to the ACL file for SAVE/LOAD operations.
     /// If empty, ACL SAVE/LOAD will return an error.
@@ -110,6 +115,7 @@ fn default_acl_log_max_len() -> usize {
 
 /// Blocking commands configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BlockingConfig {
     /// Maximum waiters per key (0 = unlimited).
     #[serde(default = "default_max_waiters_per_key")]
@@ -122,6 +128,7 @@ pub struct BlockingConfig {
 
 /// VLL (Very Lightweight Locking) configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct VllConfig {
     /// Maximum queue depth per shard before rejecting new operations.
     #[serde(default = "default_vll_max_queue_depth")]
@@ -178,6 +185,7 @@ impl Default for VllConfig {
 
 /// Replication configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReplicationConfigSection {
     /// Replication role: "standalone", "primary", or "replica".
     /// - standalone: No replication (default)
@@ -388,6 +396,7 @@ impl Default for BlockingConfig {
 
 /// Slow query log configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SlowlogConfig {
     /// Threshold in microseconds. Commands slower than this are logged.
     /// Set to 0 to log all commands, -1 to disable logging.
@@ -427,6 +436,7 @@ impl Default for SlowlogConfig {
 
 /// JSON configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct JsonConfig {
     /// Maximum nesting depth for JSON documents.
     #[serde(default = "default_json_max_depth")]
@@ -661,6 +671,7 @@ impl ClusterConfigSection {
 /// Only available when compiled with `turmoil` feature.
 #[cfg(feature = "turmoil")]
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChaosConfig {
     /// Delay (ms) between scatter sends to different shards.
     /// Useful for testing interleaving of concurrent operations.
@@ -761,6 +772,7 @@ impl ChaosConfig {
 
 /// Metrics configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricsConfig {
     /// Whether metrics are enabled.
     #[serde(default = "default_metrics_enabled")]
@@ -789,6 +801,7 @@ pub struct MetricsConfig {
 
 /// Distributed tracing configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TracingConfig {
     /// Whether distributed tracing is enabled.
     #[serde(default)]
@@ -821,6 +834,7 @@ pub struct TracingConfig {
 
 /// Server-specific configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     /// Bind address.
     #[serde(default = "default_bind")]
@@ -847,6 +861,7 @@ pub struct ServerConfig {
 
 /// Logging configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
     /// Log level (trace, debug, info, warn, error).
     #[serde(default = "default_log_level")]
@@ -859,6 +874,7 @@ pub struct LoggingConfig {
 
 /// Persistence configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PersistenceConfig {
     /// Whether persistence is enabled.
     #[serde(default = "default_persistence_enabled")]
@@ -895,6 +911,7 @@ pub struct PersistenceConfig {
 
 /// Snapshot configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SnapshotConfig {
     /// Directory for storing snapshots.
     #[serde(default = "default_snapshot_dir")]
@@ -944,6 +961,7 @@ impl SnapshotConfig {
 
 /// Memory management configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MemoryConfig {
     /// Maximum memory limit in bytes. 0 means unlimited.
     /// Can use human-readable formats like "100mb", "1gb" in config files.
@@ -1505,6 +1523,11 @@ impl Config {
         if !self.acl.aclfile.is_empty() {
             validate_path_parent(Path::new(&self.acl.aclfile), "acl.aclfile")?;
         }
+
+        // Run cross-field validators
+        let report = validators::run_all_validators(self);
+        report.log_non_errors();
+        report.into_result()?;
 
         Ok(())
     }
@@ -2287,5 +2310,61 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("config file not found"));
+    }
+
+    // ===== Unknown Fields Rejection Tests =====
+
+    #[test]
+    fn test_reject_unknown_fields_in_server() {
+        let toml = r#"
+            [server]
+            unknown_field = "value"
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unknown field"));
+    }
+
+    #[test]
+    fn test_reject_unknown_fields_in_snapshot() {
+        let toml = r#"
+            [snapshot]
+            enabled = false
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unknown field"));
+    }
+
+    #[test]
+    fn test_reject_unknown_fields_at_root() {
+        let toml = r#"
+            [unknown_section]
+            key = "value"
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unknown field"));
+    }
+
+    #[test]
+    fn test_accept_valid_config() {
+        let toml = r#"
+            [server]
+            port = 6380
+            bind = "0.0.0.0"
+
+            [logging]
+            level = "debug"
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.server.port, 6380);
+        assert_eq!(config.server.bind, "0.0.0.0");
+        assert_eq!(config.logging.level, "debug");
     }
 }
