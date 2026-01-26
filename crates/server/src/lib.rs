@@ -9,6 +9,7 @@ pub mod cluster_bus;
 pub mod commands;
 pub mod config;
 pub mod connection;
+pub mod latency_test;
 pub mod migrate;
 pub mod net;
 pub mod replication;

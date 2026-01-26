@@ -29,6 +29,7 @@ fn hash_addr_to_node_id(addr: &std::net::SocketAddr) -> u64 {
 
 use crate::acceptor::Acceptor;
 use crate::config::{Config, MemoryConfig, PersistenceConfig};
+use crate::latency_test::{self, LatencyTestResult};
 use crate::net::{spawn, TcpListener};
 use crate::replication::PrimaryReplicationHandler;
 use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
@@ -132,6 +133,9 @@ pub struct Server {
 
     /// Optional Raft instance (only when cluster mode is enabled).
     raft: Option<Arc<ClusterRaft>>,
+
+    /// Latency baseline from startup test (if enabled).
+    latency_baseline: Option<LatencyTestResult>,
 }
 
 impl Server {
@@ -606,6 +610,7 @@ impl Server {
             cluster_state,
             node_id,
             raft,
+            latency_baseline: None,
         })
     }
 
@@ -728,6 +733,43 @@ impl Server {
     where
         F: std::future::Future<Output = ()>,
     {
+        // Run startup latency test if configured
+        if self.config.latency.startup_test {
+            info!("Running startup latency test for {} seconds...",
+                  self.config.latency.startup_test_duration_secs);
+
+            let result = latency_test::run_intrinsic_latency_test(
+                self.config.latency.startup_test_duration_secs,
+                None,
+            );
+
+            // Check against warning threshold
+            if result.max_us > self.config.latency.warning_threshold_us {
+                warn!(
+                    max_latency_us = result.max_us,
+                    threshold_us = self.config.latency.warning_threshold_us,
+                    "High intrinsic latency detected. This may indicate virtualization \
+                     overhead or system contention."
+                );
+            }
+
+            info!(
+                min_us = result.min_us,
+                max_us = result.max_us,
+                avg_us = format!("{:.1}", result.avg_us),
+                p99_us = result.p99_us,
+                samples = result.samples,
+                "Latency baseline established"
+            );
+
+            // Store globally for INFO command access
+            latency_test::set_global_baseline(
+                result.clone(),
+                self.config.latency.warning_threshold_us,
+            );
+            self.latency_baseline = Some(result);
+        }
+
         // Capture server start time
         let start_time = std::time::Instant::now();
 
@@ -1011,6 +1053,11 @@ impl Server {
     /// Get the snapshot coordinator.
     pub fn snapshot_coordinator(&self) -> &Arc<dyn SnapshotCoordinator> {
         &self.snapshot_coordinator
+    }
+
+    /// Get the latency baseline result from startup test (if available).
+    pub fn latency_baseline(&self) -> Option<&LatencyTestResult> {
+        self.latency_baseline.as_ref()
     }
 }
 

@@ -86,6 +86,46 @@ pub struct Config {
     /// Hot shard detection configuration.
     #[serde(default)]
     pub hotshards: HotShardsConfig,
+
+    /// Latency testing configuration.
+    #[serde(default)]
+    pub latency: LatencyConfig,
+}
+
+/// Latency testing configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LatencyConfig {
+    /// Run intrinsic latency test at startup before accepting connections.
+    #[serde(default)]
+    pub startup_test: bool,
+
+    /// Duration of the startup latency test in seconds.
+    #[serde(default = "default_latency_test_duration_secs")]
+    pub startup_test_duration_secs: u64,
+
+    /// Warning threshold for intrinsic latency in microseconds.
+    /// If max latency exceeds this, a warning is logged.
+    #[serde(default = "default_latency_warning_threshold_us")]
+    pub warning_threshold_us: u64,
+}
+
+fn default_latency_test_duration_secs() -> u64 {
+    5
+}
+
+fn default_latency_warning_threshold_us() -> u64 {
+    2000 // 2ms
+}
+
+impl Default for LatencyConfig {
+    fn default() -> Self {
+        Self {
+            startup_test: false,
+            startup_test_duration_secs: default_latency_test_duration_secs(),
+            warning_threshold_us: default_latency_warning_threshold_us(),
+        }
+    }
 }
 
 /// Status endpoint configuration for health thresholds.
@@ -2058,6 +2098,19 @@ memory_warning_percent = 90
 # Threshold percentage for connection warning.
 # Health status will show a warning when client connections exceed this threshold.
 connection_warning_percent = 90
+
+[latency]
+# Run intrinsic latency test at startup before accepting connections.
+# This measures the system's inherent scheduling latency (OS/hypervisor overhead).
+startup_test = false
+
+# Duration of the startup latency test in seconds.
+startup_test_duration_secs = 5
+
+# Warning threshold for intrinsic latency in microseconds.
+# If max latency exceeds this, a warning is logged but startup continues.
+# Results under 500us are typical for bare metal; over 2ms suggests virtualization.
+warning_threshold_us = 2000
 "#
         .to_string()
     }

@@ -11,11 +11,14 @@
 //! - replication: Master/replica replication info
 //! - cpu: CPU statistics
 //! - keyspace: Database key statistics
+//! - latency_baseline: Intrinsic latency test results (if startup test was run)
 
 use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::latency_test;
 
 // ============================================================================
 // INFO - Server information
@@ -57,6 +60,7 @@ impl Command for InfoCommand {
             Some(b"replication") => build_replication_info(ctx),
             Some(b"cpu") => build_cpu_info(),
             Some(b"keyspace") => build_keyspace_info(ctx),
+            Some(b"latency_baseline") => build_latency_baseline_info(),
             Some(other) => {
                 // Unknown section - return empty
                 return Err(CommandError::InvalidArgument {
@@ -86,6 +90,7 @@ fn build_all_info(ctx: &mut CommandContext) -> String {
     info.push_str(&build_replication_info(ctx));
     info.push_str(&build_cpu_info());
     info.push_str(&build_keyspace_info(ctx));
+    info.push_str(&build_latency_baseline_info());
     info
 }
 
@@ -375,5 +380,43 @@ fn build_keyspace_info(ctx: &mut CommandContext) -> String {
              db0:keys={},expires=0,avg_ttl=0\r\n\r\n",
             key_count
         )
+    }
+}
+
+fn build_latency_baseline_info() -> String {
+    match latency_test::get_global_baseline() {
+        Some(info) => {
+            let exceeded = if info.result.max_us > info.warning_threshold_us {
+                1
+            } else {
+                0
+            };
+
+            format!(
+                "# Latency_Baseline\r\n\
+                 baseline_test_run:1\r\n\
+                 baseline_duration_secs:{}\r\n\
+                 baseline_samples:{}\r\n\
+                 baseline_min_us:{}\r\n\
+                 baseline_max_us:{}\r\n\
+                 baseline_avg_us:{:.1}\r\n\
+                 baseline_p99_us:{}\r\n\
+                 baseline_warning_threshold_us:{}\r\n\
+                 baseline_exceeded_threshold:{}\r\n\r\n",
+                info.result.duration_secs,
+                info.result.samples,
+                info.result.min_us,
+                info.result.max_us,
+                info.result.avg_us,
+                info.result.p99_us,
+                info.warning_threshold_us,
+                exceeded,
+            )
+        }
+        None => {
+            "# Latency_Baseline\r\n\
+             baseline_test_run:0\r\n\r\n"
+                .to_string()
+        }
     }
 }
