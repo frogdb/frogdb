@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use frogdb_server::{Config, Server};
+use frogdb_server::{latency_test, Config, Server};
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -46,6 +46,14 @@ struct Cli {
     /// Generate default configuration file
     #[arg(long)]
     generate_config: bool,
+
+    /// Run intrinsic latency test for N seconds and exit (standalone mode)
+    #[arg(long, value_name = "SECONDS")]
+    intrinsic_latency: Option<u64>,
+
+    /// Run latency check at startup before accepting connections
+    #[arg(long)]
+    startup_latency_check: bool,
 }
 
 #[tokio::main]
@@ -59,8 +67,26 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Handle --intrinsic-latency (standalone mode)
+    if let Some(duration) = cli.intrinsic_latency {
+        println!(
+            "Running intrinsic latency test for {} seconds...",
+            duration
+        );
+        println!("(Press Ctrl+C to abort)\n");
+
+        let progress_callback: latency_test::ProgressCallback =
+            Box::new(|max_us| {
+                println!("Max latency so far: {} microseconds.", max_us);
+            });
+
+        let result = latency_test::run_intrinsic_latency_test(duration, Some(progress_callback));
+        latency_test::print_latency_report(&result);
+        return Ok(());
+    }
+
     // Load configuration
-    let config = Config::load(
+    let mut config = Config::load(
         cli.config.as_deref(),
         cli.bind,
         cli.port,
@@ -70,6 +96,11 @@ async fn main() -> Result<()> {
         cli.admin_bind,
         cli.admin_port,
     )?;
+
+    // Apply --startup-latency-check CLI override
+    if cli.startup_latency_check {
+        config.latency.startup_test = true;
+    }
 
     // Initialize logging
     config.init_logging()?;
