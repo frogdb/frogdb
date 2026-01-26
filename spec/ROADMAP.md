@@ -427,6 +427,50 @@ DEBUG TRACING RECENT [count]
 
 ---
 
+## Code Quality & Refactoring
+
+**Goal**: Reduce code duplication and improve maintainability of large files.
+
+**Completed:**
+- [x] Extract duplicated parsing functions (parse_i64, parse_u64, parse_f64, parse_usize, format_float) to shared utils.rs
+- [x] Extract duplicated get_or_create_* helpers to shared utils.rs
+- [x] Replace RDB magic numbers with named constants in primary.rs
+
+**Remaining Tasks:**
+
+##### Split connection.rs (HIGH effort)
+`crates/server/src/connection.rs` is 5,932 lines handling multiple concerns.
+
+- [ ] Extract auth handling to `connection/auth.rs`
+- [ ] Extract transaction handling to `connection/transaction.rs`
+- [ ] Extract pub/sub handling to `connection/pubsub.rs`
+- [ ] Extract blocking state to `connection/blocking.rs`
+- [ ] Extract routing logic to `connection/routing.rs`
+- [ ] Extract scatter-gather to `connection/scatter_gather.rs`
+
+##### Split shard.rs (MEDIUM effort)
+`crates/core/src/shard.rs` is 3,720 lines with eviction logic mixed in.
+
+- [ ] Extract eviction strategies to `shard/eviction.rs`
+
+##### Split types.rs (MEDIUM-HIGH effort)
+`crates/core/src/types.rs` is 3,668 lines containing all value types.
+
+- [ ] Extract string types to `types/string.rs`
+- [ ] Extract list types to `types/list.rs`
+- [ ] Extract set types to `types/set.rs`
+- [ ] Extract hash types to `types/hash.rs`
+- [ ] Extract sorted set types to `types/sorted_set.rs`
+- [ ] Extract stream types to `types/stream.rs`
+- [ ] Extract specialized types (BloomFilter, HyperLogLog, TimeSeries, Json) to `types/specialized.rs`
+
+##### Config magic numbers (LOW effort)
+- [ ] Define named constants for timeout values and sizes in `crates/server/src/config.rs`
+
+##### Sorted set parsing helpers (LOW effort)
+- [ ] Extract `parse_score_bound()` and `parse_lex_bound()` to utils.rs (if not already covered)
+- [ ] Extract `parse_set_op_options()` to utils.rs
+
 ---
 
 ## Phase 7: Performance Optimizations
