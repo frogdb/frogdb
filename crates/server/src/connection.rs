@@ -10,8 +10,8 @@ use anyhow::Result;
 use bytes::{Bytes, BytesMut};
 use frogdb_core::{
     generate_latency_graph, persistence::SnapshotCoordinator, shard_for_key, slot_for_key,
-    AclManager, AuthenticatedUser, ClientHandle, ClientRegistry, ClusterState, CommandCategory,
-    CommandFlags, CommandRegistry, ExecuteSignal, GlobPattern, IntrospectionRequest,
+    AclManager, AuthenticatedUser, ClientHandle, ClientRegistry, ClientStatsDelta, ClusterState,
+    CommandCategory, CommandFlags, CommandRegistry, ExecuteSignal, GlobPattern, IntrospectionRequest,
     IntrospectionResponse, KeyAccessType, LatencyEvent, LockMode, MetricsRecorder, PartialResult,
     PauseMode, PubSubMessage, PubSubSender, ReplicationTracker, ReplicationTrackerImpl, ScatterOp,
     ShardReadyResult, SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId,
@@ -151,6 +151,73 @@ pub enum ReplyMode {
     Off,
 }
 
+/// Interval for syncing local stats to the registry (in commands).
+const STATS_SYNC_INTERVAL_COMMANDS: u64 = 100;
+
+/// Interval for syncing local stats to the registry (in milliseconds).
+const STATS_SYNC_INTERVAL_MS: u64 = 1000;
+
+/// Connection-local stats accumulator.
+/// This is kept locally in the connection handler to minimize lock contention,
+/// and synced periodically to the ClientRegistry.
+#[derive(Debug, Default)]
+pub struct LocalClientStats {
+    /// Total commands processed since last sync.
+    pub commands_total: u64,
+    /// Total latency accumulated since last sync (microseconds).
+    pub latency_total_us: u64,
+    /// Total bytes received since last sync.
+    pub bytes_recv: u64,
+    /// Total bytes sent since last sync.
+    pub bytes_sent: u64,
+    /// Per-command latencies: (command_name, latency_us).
+    pub command_latencies: Vec<(String, u64)>,
+}
+
+impl LocalClientStats {
+    /// Record a command execution.
+    pub fn record_command(&mut self, cmd_name: &str, latency_us: u64) {
+        self.commands_total += 1;
+        self.latency_total_us += latency_us;
+        self.command_latencies.push((cmd_name.to_string(), latency_us));
+    }
+
+    /// Add bytes received.
+    pub fn add_bytes_recv(&mut self, bytes: u64) {
+        self.bytes_recv += bytes;
+    }
+
+    /// Add bytes sent.
+    pub fn add_bytes_sent(&mut self, bytes: u64) {
+        self.bytes_sent += bytes;
+    }
+
+    /// Convert to a ClientStatsDelta for syncing to the registry.
+    pub fn to_delta(&self) -> ClientStatsDelta {
+        ClientStatsDelta {
+            commands_processed: self.commands_total,
+            total_latency_us: self.latency_total_us,
+            bytes_recv: self.bytes_recv,
+            bytes_sent: self.bytes_sent,
+            command_latencies: self.command_latencies.clone(),
+        }
+    }
+
+    /// Check if there's data to sync.
+    pub fn has_data(&self) -> bool {
+        self.commands_total > 0 || self.bytes_recv > 0 || self.bytes_sent > 0
+    }
+
+    /// Clear after syncing.
+    pub fn clear(&mut self) {
+        self.commands_total = 0;
+        self.latency_total_us = 0;
+        self.bytes_recv = 0;
+        self.bytes_sent = 0;
+        self.command_latencies.clear();
+    }
+}
+
 /// Connection state.
 #[allow(dead_code)]
 pub struct ConnectionState {
@@ -198,14 +265,21 @@ pub struct ConnectionState {
 
     /// READONLY flag for allowing reads on cluster replicas.
     pub readonly: bool,
+
+    /// Local stats accumulator (synced to registry periodically).
+    pub local_stats: LocalClientStats,
+
+    /// Last sync time for stats.
+    pub last_stats_sync: std::time::Instant,
 }
 
 impl ConnectionState {
     fn new(id: u64, addr: SocketAddr, requires_auth: bool) -> Self {
+        let now = std::time::Instant::now();
         Self {
             id,
             addr,
-            created_at: std::time::Instant::now(),
+            created_at: now,
             protocol_version: ProtocolVersion::default(),
             hello_received: false,
             hello_at: None,
@@ -222,6 +296,8 @@ impl ConnectionState {
             skip_next_reply: false,
             asking: false,
             readonly: false,
+            local_stats: LocalClientStats::default(),
+            last_stats_sync: now,
         }
     }
 }
@@ -373,6 +449,113 @@ fn convert_direction(dir: frogdb_protocol::Direction) -> frogdb_core::Direction 
     }
 }
 
+/// Estimate the size of a RESP2 frame in bytes.
+/// This is an approximation based on the frame structure.
+fn estimate_resp2_frame_size(frame: &redis_protocol::resp2::types::BytesFrame) -> usize {
+    use redis_protocol::resp2::types::BytesFrame;
+    match frame {
+        BytesFrame::SimpleString(s) => 1 + s.len() + 2, // +, string, CRLF
+        BytesFrame::Error(e) => 1 + e.as_bytes().len() + 2, // -, message, CRLF
+        BytesFrame::Integer(i) => 1 + format!("{}", i).len() + 2, // :, number, CRLF
+        BytesFrame::BulkString(bs) => {
+            1 + format!("{}", bs.len()).len() + 2 + bs.len() + 2 // $, len, CRLF, data, CRLF
+        }
+        BytesFrame::Array(arr) => {
+            let header = 1 + format!("{}", arr.len()).len() + 2; // *, count, CRLF
+            let elements: usize = arr.iter().map(estimate_resp2_frame_size).sum();
+            header + elements
+        }
+        BytesFrame::Null => 5, // $-1\r\n
+    }
+}
+
+/// Estimate the size of a command in bytes (received from client).
+fn estimate_command_size(cmd: &ParsedCommand) -> usize {
+    // Account for RESP array header + name + all args
+    // Format: *<n>\r\n$<len>\r\n<name>\r\n$<len>\r\n<arg>\r\n...
+    let n = 1 + cmd.args.len(); // command name + args
+    let header = 1 + format!("{}", n).len() + 2; // *<n>\r\n
+
+    let name_size = 1 + format!("{}", cmd.name.len()).len() + 2 + cmd.name.len() + 2;
+    let args_size: usize = cmd
+        .args
+        .iter()
+        .map(|a| 1 + format!("{}", a.len()).len() + 2 + a.len() + 2)
+        .sum();
+
+    header + name_size + args_size
+}
+
+/// Format a single client's stats entry for CLIENT STATS output.
+fn format_client_stats_entry(
+    info: &frogdb_core::ClientInfo,
+    stats: &frogdb_core::ClientStats,
+) -> String {
+    use std::fmt::Write;
+
+    let mut output = String::new();
+
+    // Basic info line
+    let name_str = info
+        .name
+        .as_ref()
+        .map(|n| String::from_utf8_lossy(n).to_string())
+        .unwrap_or_default();
+
+    writeln!(
+        &mut output,
+        "id={} addr={} name={}",
+        info.id, info.addr, name_str
+    )
+    .unwrap();
+
+    // Stats line
+    writeln!(
+        &mut output,
+        "cmd_total={} bytes_recv={} bytes_sent={}",
+        stats.commands_total, stats.bytes_recv, stats.bytes_sent
+    )
+    .unwrap();
+
+    // Latency metrics
+    writeln!(
+        &mut output,
+        "latency_avg_us={} latency_p99_us={} latency_max_us={}",
+        stats.avg_latency_us(),
+        stats.p99_latency_us(),
+        stats.latency_max_us
+    )
+    .unwrap();
+
+    // Command breakdown (top 10 by count)
+    if !stats.command_counts.is_empty() {
+        output.push_str("# command breakdown (top 10):\n");
+
+        // Sort by count descending
+        let mut cmd_entries: Vec<_> = stats.command_counts.iter().collect();
+        cmd_entries.sort_by(|a, b| b.1.count.cmp(&a.1.count));
+
+        for (cmd_name, cmd_stats) in cmd_entries.iter().take(10) {
+            writeln!(
+                &mut output,
+                "{}: count={} avg_us={} max_us={}",
+                cmd_name,
+                cmd_stats.count,
+                cmd_stats.avg_latency_us(),
+                cmd_stats.latency_max_us
+            )
+            .unwrap();
+        }
+    }
+
+    // Remove trailing newline
+    if output.ends_with('\n') {
+        output.pop();
+    }
+
+    output
+}
+
 /// Format a Unix timestamp as ISO 8601 string.
 fn format_timestamp_iso(secs: u64) -> String {
     let days_since_epoch = secs / 86400;
@@ -513,6 +696,9 @@ impl ConnectionHandler {
             ProtocolVersion::Resp2 => {
                 // Use RESP2 encoding via the Framed codec
                 let frame = response.to_resp2_frame();
+                // Estimate frame size for stats tracking
+                let frame_size = estimate_resp2_frame_size(&frame);
+                self.state.local_stats.add_bytes_sent(frame_size as u64);
                 self.framed
                     .send(frame)
                     .await
@@ -524,6 +710,8 @@ impl ConnectionHandler {
                 let mut buf = BytesMut::new();
                 redis_protocol::resp3::encode::complete::extend_encode(&mut buf, &frame)
                     .map_err(|e| std::io::Error::other(e.to_string()))?;
+                // Track actual encoded size
+                self.state.local_stats.add_bytes_sent(buf.len() as u64);
                 self.framed.get_mut().write_all(&buf).await?;
                 self.framed.get_mut().flush().await
             }
@@ -590,6 +778,10 @@ impl ConnectionHandler {
                     // Update last command time for idle tracking
                     self.client_registry.update_last_command(self.state.id);
 
+                    // Track bytes received for this command
+                    let cmd_bytes = estimate_command_size(&cmd);
+                    self.state.local_stats.add_bytes_recv(cmd_bytes as u64);
+
                     // Handle QUIT specially (also clears transaction state)
                     if cmd.name.eq_ignore_ascii_case(b"QUIT") {
                         // Clear transaction state before quitting
@@ -619,6 +811,9 @@ impl ConnectionHandler {
                     // Calculate elapsed time in microseconds for slowlog
                     let elapsed_us = start_time.elapsed().as_micros() as u64;
 
+                    // Record per-client command statistics
+                    self.state.local_stats.record_command(&cmd_name_for_metrics, elapsed_us);
+
                     // Record metrics - check for errors in responses
                     let has_error = responses.iter().any(|r| matches!(r, Response::Error(_)));
                     if has_error {
@@ -642,6 +837,9 @@ impl ConnectionHandler {
 
                     // Log to slowlog if threshold exceeded and command not exempt
                     self.maybe_log_slow_query(&cmd, elapsed_us).await;
+
+                    // Periodically sync local stats to the registry
+                    self.maybe_sync_stats();
 
                     // Send response(s) based on reply mode
                     match self.state.reply_mode {
@@ -676,7 +874,10 @@ impl ConnectionHandler {
     }
 
     /// Notify all shards that this connection is closed.
-    async fn notify_connection_closed(&self) {
+    async fn notify_connection_closed(&mut self) {
+        // Final stats sync before closing
+        self.sync_stats_to_registry();
+
         // Notify if we had any subscriptions
         if self.state.pubsub.in_pubsub_mode() {
             for sender in self.shard_senders.iter() {
@@ -693,6 +894,27 @@ impl ConnectionHandler {
                     conn_id: self.state.id,
                 }).await;
             }
+        }
+    }
+
+    /// Periodically sync local stats to the registry.
+    /// Syncs every STATS_SYNC_INTERVAL_COMMANDS commands or STATS_SYNC_INTERVAL_MS milliseconds.
+    fn maybe_sync_stats(&mut self) {
+        let should_sync = self.state.local_stats.commands_total >= STATS_SYNC_INTERVAL_COMMANDS
+            || self.state.last_stats_sync.elapsed().as_millis() as u64 >= STATS_SYNC_INTERVAL_MS;
+
+        if should_sync && self.state.local_stats.has_data() {
+            self.sync_stats_to_registry();
+        }
+    }
+
+    /// Force sync local stats to the registry.
+    fn sync_stats_to_registry(&mut self) {
+        if self.state.local_stats.has_data() {
+            let delta = self.state.local_stats.to_delta();
+            self.client_registry.update_stats(self.state.id, &delta);
+            self.state.local_stats.clear();
+            self.state.last_stats_sync = std::time::Instant::now();
         }
     }
 
@@ -4819,6 +5041,7 @@ impl ConnectionHandler {
             "CACHING" => self.handle_client_caching(&args[1..]),
             "REPLY" => self.handle_client_reply(&args[1..]),
             "UNBLOCK" => self.handle_client_unblock(&args[1..]),
+            "STATS" => self.handle_client_stats(&args[1..]),
             "HELP" => self.handle_client_help(),
             _ => Response::error(format!(
                 "ERR unknown subcommand '{}'. Try CLIENT HELP.",
@@ -5317,6 +5540,63 @@ impl ConnectionHandler {
         }
     }
 
+    /// Handle CLIENT STATS [ID <client-id>] - return per-client command statistics.
+    fn handle_client_stats(&mut self, args: &[Bytes]) -> Response {
+        // Force sync our local stats first
+        self.sync_stats_to_registry();
+
+        if args.is_empty() {
+            // Return stats for all clients
+            return self.format_all_client_stats();
+        }
+
+        // CLIENT STATS ID <client-id>
+        if args.len() >= 2 && args[0].eq_ignore_ascii_case(b"ID") {
+            let client_id_str = String::from_utf8_lossy(&args[1]);
+            match client_id_str.parse::<u64>() {
+                Ok(client_id) => return self.format_single_client_stats(client_id),
+                Err(_) => {
+                    return Response::error(format!(
+                        "ERR Invalid client ID: {}",
+                        client_id_str
+                    ));
+                }
+            }
+        }
+
+        Response::error("ERR syntax error. Try CLIENT STATS [ID <client-id>]")
+    }
+
+    /// Format stats for a single client.
+    fn format_single_client_stats(&self, client_id: u64) -> Response {
+        match self.client_registry.get_with_stats(client_id) {
+            Some((info, stats)) => {
+                let output = format_client_stats_entry(&info, &stats);
+                Response::bulk(Bytes::from(output))
+            }
+            None => Response::error(format!("ERR No such client with ID {}", client_id)),
+        }
+    }
+
+    /// Format stats for all clients.
+    fn format_all_client_stats(&self) -> Response {
+        let all_stats = self.client_registry.get_all_stats();
+
+        let mut output = String::new();
+        for (_, info, stats) in &all_stats {
+            let entry = format_client_stats_entry(info, stats);
+            output.push_str(&entry);
+            output.push('\n');
+        }
+
+        // Remove trailing newline
+        if output.ends_with('\n') {
+            output.pop();
+        }
+
+        Response::bulk(Bytes::from(output))
+    }
+
     /// Handle CLIENT HELP - show help.
     fn handle_client_help(&self) -> Response {
         let help = vec![
@@ -5347,6 +5627,8 @@ impl ConnectionHandler {
             Response::bulk(Bytes::from_static(b"    Set client library info.")),
             Response::bulk(Bytes::from_static(b"SETNAME <name>")),
             Response::bulk(Bytes::from_static(b"    Set the name of the current connection.")),
+            Response::bulk(Bytes::from_static(b"STATS [ID <client-id>]")),
+            Response::bulk(Bytes::from_static(b"    Return per-client command statistics.")),
             Response::bulk(Bytes::from_static(b"TRACKINGINFO")),
             Response::bulk(Bytes::from_static(b"    Return tracking state for the current connection.")),
             Response::bulk(Bytes::from_static(b"UNBLOCK <client-id> [TIMEOUT|ERROR]")),
