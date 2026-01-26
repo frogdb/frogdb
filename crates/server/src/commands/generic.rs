@@ -8,7 +8,10 @@
 //! - OBJECT ENCODING/FREQ/IDLETIME - key introspection
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, Arity, Command, CommandContext, CommandError, CommandFlags, Value};
+use frogdb_core::{
+    extract_hash_tag, shard_for_key, slot_for_key, Arity, Command, CommandContext, CommandError,
+    CommandFlags, Value,
+};
 use frogdb_protocol::Response;
 
 // ============================================================================
@@ -542,6 +545,51 @@ impl Command for DebugCommand {
                     }),
                 }
             }
+            b"HASHING" => {
+                if args.len() < 2 {
+                    return Err(CommandError::WrongArity { command: "DEBUG" });
+                }
+
+                let num_shards = ctx.num_shards;
+                let results: Vec<String> = args[1..]
+                    .iter()
+                    .map(|key| {
+                        let hash_tag = extract_hash_tag(key);
+                        let hash_input = hash_tag.unwrap_or(key.as_ref());
+                        let raw_hash = crc16::State::<crc16::XMODEM>::calculate(hash_input);
+                        let slot = slot_for_key(key);
+                        let shard = shard_for_key(key, num_shards);
+
+                        let hash_tag_str = match hash_tag {
+                            Some(tag) => String::from_utf8_lossy(tag).to_string(),
+                            None => "(none)".to_string(),
+                        };
+
+                        format!(
+                            "key:{} hash_tag:{} hash:0x{:04x} slot:{} shard:{} num_shards:{}",
+                            String::from_utf8_lossy(key),
+                            hash_tag_str,
+                            raw_hash,
+                            slot,
+                            shard,
+                            num_shards
+                        )
+                    })
+                    .collect();
+
+                if results.len() == 1 {
+                    Ok(Response::Simple(Bytes::from(
+                        results.into_iter().next().unwrap(),
+                    )))
+                } else {
+                    Ok(Response::Array(
+                        results
+                            .into_iter()
+                            .map(|s| Response::bulk(Bytes::from(s)))
+                            .collect(),
+                    ))
+                }
+            }
             _ => Err(CommandError::InvalidArgument {
                 message: format!(
                     "Unknown subcommand or wrong number of arguments for '{}'",
@@ -557,6 +605,7 @@ impl Command for DebugCommand {
             if subcommand == b"OBJECT".as_slice() {
                 return vec![&args[1]];
             }
+            // HASHING doesn't need routing - it's pure computation
         }
         vec![]
     }

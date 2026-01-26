@@ -1019,3 +1019,176 @@ async fn test_config_set_immutable_param() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// DEBUG HASHING tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_debug_hashing_single_key() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // DEBUG HASHING with a single key should return a simple string
+    let response = client.command(&["DEBUG", "HASHING", "user:123"]).await;
+    match response {
+        Response::Simple(s) => {
+            let text = String::from_utf8_lossy(&s);
+            // Verify the output contains expected fields
+            assert!(text.contains("key:user:123"), "Should contain key name");
+            assert!(text.contains("hash_tag:(none)"), "Should show no hash tag");
+            assert!(text.contains("hash:0x"), "Should contain hash value");
+            assert!(text.contains("slot:"), "Should contain slot");
+            assert!(text.contains("shard:"), "Should contain shard");
+            assert!(text.contains("num_shards:"), "Should contain num_shards");
+        }
+        _ => panic!("Expected simple string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_hashing_multiple_keys() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // DEBUG HASHING with multiple keys should return an array
+    let response = client
+        .command(&["DEBUG", "HASHING", "key1", "key2", "key3"])
+        .await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 3, "Should return 3 items for 3 keys");
+
+            // Check first item
+            if let Response::Bulk(Some(first)) = &items[0] {
+                let text = String::from_utf8_lossy(first);
+                assert!(text.contains("key:key1"), "First item should be key1");
+            } else {
+                panic!("Expected bulk string in array");
+            }
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_hashing_with_hash_tag() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Keys with hash tags should show the extracted tag
+    let response = client.command(&["DEBUG", "HASHING", "{user}:profile"]).await;
+    match response {
+        Response::Simple(s) => {
+            let text = String::from_utf8_lossy(&s);
+            assert!(
+                text.contains("hash_tag:user"),
+                "Should show extracted hash tag 'user', got: {}",
+                text
+            );
+        }
+        _ => panic!("Expected simple string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_hashing_same_hash_tag_same_slot() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Keys with the same hash tag should have the same slot and shard
+    let response = client
+        .command(&["DEBUG", "HASHING", "{user}:profile", "{user}:settings"])
+        .await;
+    match response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 2, "Should return 2 items");
+
+            let first = match &items[0] {
+                Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+                _ => panic!("Expected bulk string"),
+            };
+            let second = match &items[1] {
+                Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+                _ => panic!("Expected bulk string"),
+            };
+
+            // Extract slot values from both
+            let slot1: u16 = first
+                .split_whitespace()
+                .find(|s| s.starts_with("slot:"))
+                .unwrap()
+                .strip_prefix("slot:")
+                .unwrap()
+                .parse()
+                .unwrap();
+            let slot2: u16 = second
+                .split_whitespace()
+                .find(|s| s.starts_with("slot:"))
+                .unwrap()
+                .strip_prefix("slot:")
+                .unwrap()
+                .parse()
+                .unwrap();
+
+            assert_eq!(slot1, slot2, "Keys with same hash tag should have same slot");
+
+            // Both should show the same hash tag
+            assert!(first.contains("hash_tag:user"), "First key should have hash tag 'user'");
+            assert!(second.contains("hash_tag:user"), "Second key should have hash tag 'user'");
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_hashing_empty_braces() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Empty braces {} should not be treated as a hash tag
+    let response = client.command(&["DEBUG", "HASHING", "{}:key"]).await;
+    match response {
+        Response::Simple(s) => {
+            let text = String::from_utf8_lossy(&s);
+            assert!(
+                text.contains("hash_tag:(none)"),
+                "Empty braces should not extract a hash tag, got: {}",
+                text
+            );
+        }
+        _ => panic!("Expected simple string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_hashing_no_args_error() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // DEBUG HASHING without keys should return an error
+    let response = client.command(&["DEBUG", "HASHING"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("wrong number of arguments"),
+                "Should report wrong arity, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}

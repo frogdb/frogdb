@@ -1175,6 +1175,7 @@ dependencies = [
  "bitvec",
  "bytes",
  "clap",
+ "crc16",
  "figment",
  "frogdb-core",
  "frogdb-metrics",
