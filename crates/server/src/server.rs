@@ -29,6 +29,7 @@ fn hash_addr_to_node_id(addr: &std::net::SocketAddr) -> u64 {
 
 use crate::acceptor::Acceptor;
 use crate::config::{Config, MemoryConfig, PersistenceConfig};
+use crate::failure_detector::{spawn_failure_detector_task, FailureDetector, FailureDetectorConfig};
 use crate::latency_test::{self, LatencyTestResult};
 use crate::net::{spawn, TcpListener};
 use crate::replication::PrimaryReplicationHandler;
@@ -142,6 +143,9 @@ pub struct Server {
 
     /// Optional network factory for cluster node management.
     network_factory: Option<Arc<ClusterNetworkFactory>>,
+
+    /// Optional failure detector task handle (only when cluster mode is enabled).
+    failure_detector_handle: Option<crate::net::JoinHandle<()>>,
 }
 
 impl Server {
@@ -638,6 +642,36 @@ impl Server {
             None
         };
 
+        // Initialize failure detector if cluster mode is enabled
+        let failure_detector_handle = if let (Some(ref raft), Some(ref state), Some(nid)) =
+            (&raft, &cluster_state, node_id)
+        {
+            let detector_config = FailureDetectorConfig {
+                check_interval_ms: config.cluster.heartbeat_interval_ms,
+                connect_timeout_ms: config.cluster.heartbeat_interval_ms / 2,
+                fail_threshold: config.cluster.fail_threshold,
+                auto_failover: config.cluster.auto_failover,
+            };
+
+            let detector = Arc::new(FailureDetector::new(
+                nid,
+                detector_config,
+                state.clone(),
+                raft.clone(),
+            ));
+
+            info!(
+                node_id = nid,
+                auto_failover = config.cluster.auto_failover,
+                fail_threshold = config.cluster.fail_threshold,
+                "Failure detector initialized"
+            );
+
+            Some(spawn_failure_detector_task(detector))
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             listener,
@@ -665,6 +699,7 @@ impl Server {
             latency_baseline: None,
             band_tracker,
             network_factory,
+            failure_detector_handle,
         })
     }
 
@@ -1081,6 +1116,11 @@ impl Server {
             handle.abort();
         }
         if let Some(handle) = cluster_bus_handle {
+            handle.abort();
+        }
+
+        // Stop failure detector task if running
+        if let Some(handle) = self.failure_detector_handle {
             handle.abort();
         }
 

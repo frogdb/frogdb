@@ -717,6 +717,16 @@ pub struct ClusterConfigSection {
     /// Request timeout for cluster bus RPCs in milliseconds.
     #[serde(default = "default_cluster_request_timeout_ms")]
     pub request_timeout_ms: u64,
+
+    /// Enable automatic failover when a primary fails (default: false).
+    /// When enabled, the leader will automatically promote a replica to primary
+    /// if the primary becomes unreachable.
+    #[serde(default)]
+    pub auto_failover: bool,
+
+    /// Number of consecutive failures before marking a node as FAIL (default: 5).
+    #[serde(default = "default_fail_threshold")]
+    pub fail_threshold: u32,
 }
 
 fn default_cluster_bus_addr() -> String {
@@ -743,6 +753,10 @@ fn default_cluster_request_timeout_ms() -> u64 {
     10000
 }
 
+fn default_fail_threshold() -> u32 {
+    5
+}
+
 impl Default for ClusterConfigSection {
     fn default() -> Self {
         Self {
@@ -756,6 +770,8 @@ impl Default for ClusterConfigSection {
             heartbeat_interval_ms: default_heartbeat_interval_ms(),
             connect_timeout_ms: default_cluster_connect_timeout_ms(),
             request_timeout_ms: default_cluster_request_timeout_ms(),
+            auto_failover: false,
+            fail_threshold: default_fail_threshold(),
         }
     }
 }
@@ -2142,6 +2158,15 @@ connect_timeout_ms = 5000
 
 # Request timeout for cluster bus RPCs in milliseconds.
 request_timeout_ms = 10000
+
+# Enable automatic failover when a primary fails.
+# When enabled, the leader will automatically promote a replica to primary
+# if the primary becomes unreachable.
+auto_failover = false
+
+# Number of consecutive failures before marking a node as FAIL.
+# Used by the failure detection system to determine when a node is down.
+fail_threshold = 5
 
 [admin]
 # Whether the admin HTTP API is enabled.

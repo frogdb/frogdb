@@ -180,10 +180,17 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
         // Check if we have a leader (quorum) via Raft metrics
         // We use millis_since_quorum_ack to detect if quorum has been lost.
         // If too much time has passed since a quorum ack, the cluster is unhealthy.
-        // Note: Full quorum detection requires Phase 4's heartbeat-based failure detection.
         const QUORUM_TIMEOUT_MS: u64 = 2000; // 2 seconds without quorum = fail
 
-        let cluster_state_str = if let Some(ref raft) = ctx.raft {
+        // Check for failed primaries - cluster is in fail state if any primary is marked failed
+        let has_failed_primary = snapshot
+            .nodes
+            .values()
+            .any(|n| n.is_primary() && n.flags.fail);
+
+        let cluster_state_str = if has_failed_primary {
+            "fail" // A primary is marked as failed
+        } else if let Some(ref raft) = ctx.raft {
             use openraft::ServerState;
             let metrics = raft.metrics().borrow().clone();
 
@@ -812,32 +819,88 @@ fn cluster_delslots(
 }
 
 /// CLUSTER FAILOVER - Initiates a manual failover.
+///
+/// This command must be run on a replica node. It promotes the replica
+/// to primary and takes over the slots from its former primary.
+///
+/// Options:
+/// - FORCE: Force failover even if the primary appears to be down
+/// - TAKEOVER: Force takeover without waiting for primary acknowledgment
 fn cluster_failover(
     ctx: &mut CommandContext,
     args: &[Bytes],
 ) -> Result<Response, CommandError> {
-    let _raft = ctx.raft.ok_or(CommandError::ClusterDisabled)?;
+    let node_id = ctx.node_id.ok_or(CommandError::ClusterDisabled)?;
+    let cluster_state = ctx.cluster_state.ok_or(CommandError::ClusterDisabled)?;
+
+    // Verify cluster mode is enabled
+    if ctx.raft.is_none() {
+        return Err(CommandError::ClusterDisabled);
+    }
 
     // Parse options: FORCE or TAKEOVER
-    let _force = args.iter().any(|a| {
+    let force = args.iter().any(|a| {
         std::str::from_utf8(a)
             .map(|s| s.eq_ignore_ascii_case("FORCE"))
             .unwrap_or(false)
     });
 
-    let _takeover = args.iter().any(|a| {
+    let takeover = args.iter().any(|a| {
         std::str::from_utf8(a)
             .map(|s| s.eq_ignore_ascii_case("TAKEOVER"))
             .unwrap_or(false)
     });
 
-    // TODO: Implement actual failover logic
-    // For now, return OK to indicate the command is recognized
-    // Full implementation requires:
-    // 1. Check if this node is a replica
-    // 2. Request promotion from primary (or force it)
-    // 3. Update cluster state via Raft
-    Ok(Response::ok())
+    // Get this node's info
+    let snapshot = cluster_state.snapshot();
+    let this_node = snapshot.nodes.get(&node_id).ok_or_else(|| {
+        CommandError::InvalidArgument {
+            message: "Node not found in cluster state".to_string(),
+        }
+    })?;
+
+    // Verify this node is a replica
+    if this_node.is_primary() {
+        return Err(CommandError::InvalidArgument {
+            message: "CLUSTER FAILOVER can only be run on a replica".to_string(),
+        });
+    }
+
+    // Get the primary we're replicating
+    let primary_id = this_node.primary_id.ok_or_else(|| {
+        CommandError::InvalidArgument {
+            message: "Replica has no primary configured".to_string(),
+        }
+    })?;
+
+    let primary = snapshot.nodes.get(&primary_id);
+
+    // If not FORCE/TAKEOVER, check primary is healthy
+    if !force && !takeover {
+        if let Some(p) = primary {
+            if p.flags.fail {
+                return Err(CommandError::InvalidArgument {
+                    message: "Primary is marked as failed. Use FORCE or TAKEOVER.".to_string(),
+                });
+            }
+        } else {
+            return Err(CommandError::InvalidArgument {
+                message: "Primary not found. Use FORCE or TAKEOVER.".to_string(),
+            });
+        }
+    }
+
+    // Return RaftNeeded to perform the failover asynchronously
+    // This will: 1) Change role to Primary, 2) Take over slots
+    Ok(Response::RaftNeeded {
+        op: RaftClusterOp::Failover {
+            replica_id: node_id,
+            primary_id,
+            force: force || takeover,
+        },
+        register_node: None,
+        unregister_node: None,
+    })
 }
 
 /// CLUSTER REPLICATE - Configures this node as a replica of another.
