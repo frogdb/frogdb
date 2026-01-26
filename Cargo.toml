@@ -92,6 +92,10 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 # Raft consensus
 openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 
+# HTTP server for admin API
+axum = "0.7"
+tower = "0.5"
+
 [profile.release]
 lto = true
 codegen-units = 1

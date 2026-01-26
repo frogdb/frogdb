@@ -5,9 +5,12 @@ use std::sync::Arc;
 use bitflags::bitflags;
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
+use parking_lot::RwLock;
 use tokio::sync::mpsc;
 
+use crate::cluster::ClusterState;
 use crate::error::CommandError;
+use crate::replication::{ReplicationState, ReplicationTrackerImpl};
 use crate::shard::ShardMessage;
 use crate::store::Store;
 
@@ -134,6 +137,18 @@ pub struct CommandContext<'a> {
 
     /// Protocol version for response encoding (RESP2 or RESP3).
     pub protocol_version: ProtocolVersion,
+
+    /// Optional replication tracker for WAIT command and replica ACKs.
+    pub replication_tracker: Option<&'a Arc<ReplicationTrackerImpl>>,
+
+    /// Optional replication state for INFO replication section.
+    pub replication_state: Option<&'a Arc<RwLock<ReplicationState>>>,
+
+    /// Optional cluster state for cluster commands and routing.
+    pub cluster_state: Option<&'a Arc<ClusterState>>,
+
+    /// This node's ID (for cluster mode).
+    pub node_id: Option<u64>,
 }
 
 impl<'a> CommandContext<'a> {
@@ -153,6 +168,38 @@ impl<'a> CommandContext<'a> {
             num_shards,
             conn_id,
             protocol_version,
+            replication_tracker: None,
+            replication_state: None,
+            cluster_state: None,
+            node_id: None,
+        }
+    }
+
+    /// Create a new command context with cluster/replication support.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_cluster(
+        store: &'a mut dyn Store,
+        shard_senders: &'a Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_id: usize,
+        num_shards: usize,
+        conn_id: u64,
+        protocol_version: ProtocolVersion,
+        replication_tracker: Option<&'a Arc<ReplicationTrackerImpl>>,
+        replication_state: Option<&'a Arc<RwLock<ReplicationState>>>,
+        cluster_state: Option<&'a Arc<ClusterState>>,
+        node_id: Option<u64>,
+    ) -> Self {
+        Self {
+            store,
+            shard_senders,
+            shard_id,
+            num_shards,
+            conn_id,
+            protocol_version,
+            replication_tracker,
+            replication_state,
+            cluster_state,
+            node_id,
         }
     }
 }

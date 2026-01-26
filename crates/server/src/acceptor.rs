@@ -5,7 +5,8 @@ use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use std::sync::atomic::AtomicI64;
 use frogdb_core::{
     persistence::SnapshotCoordinator, shard::NewConnection, AclManager, ClientRegistry,
-    CommandRegistry, MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    ClusterState, CommandRegistry, MetricsRecorder, ReplicationTrackerImpl, ShardMessage,
+    SharedFunctionRegistry,
 };
 use frogdb_metrics::{metric_names, SharedTracer};
 
@@ -92,6 +93,12 @@ pub struct Acceptor {
 
     /// Optional replication tracker for WAIT command.
     replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+
+    /// Optional cluster state (only when cluster mode is enabled).
+    cluster_state: Option<Arc<ClusterState>>,
+
+    /// This node's ID (for cluster mode).
+    node_id: Option<u64>,
 }
 
 impl Acceptor {
@@ -113,6 +120,8 @@ impl Acceptor {
         shared_tracer: Option<SharedTracer>,
         tracing_config: TracingConfig,
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+        cluster_state: Option<Arc<ClusterState>>,
+        node_id: Option<u64>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -133,6 +142,8 @@ impl Acceptor {
             shared_tracer,
             tracing_config,
             replication_tracker,
+            cluster_state,
+            node_id,
         }
     }
 
@@ -183,6 +194,8 @@ impl Acceptor {
                     let shared_tracer = self.shared_tracer.clone();
                     let tracing_config = self.tracing_config.clone();
                     let replication_tracker = self.replication_tracker.clone();
+                    let cluster_state = self.cluster_state.clone();
+                    let node_id = self.node_id;
 
                     spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -205,6 +218,8 @@ impl Acceptor {
                             shared_tracer,
                             tracing_config,
                             replication_tracker,
+                            cluster_state,
+                            node_id,
                         );
 
                         if let Err(e) = handler.run().await {
