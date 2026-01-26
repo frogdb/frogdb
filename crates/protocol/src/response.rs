@@ -163,6 +163,25 @@ pub enum RaftClusterOp {
     },
     /// Increment the config epoch.
     IncrementEpoch,
+    /// Failover: promote replica to primary and transfer slots.
+    Failover {
+        /// The replica node ID to promote.
+        replica_id: u64,
+        /// The primary node ID to take over from.
+        primary_id: u64,
+        /// Whether to force failover even if primary is unreachable.
+        force: bool,
+    },
+    /// Mark a node as failed.
+    MarkNodeFailed {
+        /// Node ID to mark as failed.
+        node_id: u64,
+    },
+    /// Mark a node as recovered.
+    MarkNodeRecovered {
+        /// Node ID to mark as recovered.
+        node_id: u64,
+    },
 }
 
 /// Response types that can be sent to clients.

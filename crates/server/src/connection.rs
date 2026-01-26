@@ -614,57 +614,70 @@ fn format_timestamp_iso(secs: u64) -> String {
 }
 
 /// Convert protocol RaftClusterOp to core ClusterCommand.
-fn convert_raft_cluster_op(op: RaftClusterOp) -> ClusterCommand {
+/// Returns None for operations that require special handling (e.g., Failover).
+fn convert_raft_cluster_op(op: &RaftClusterOp) -> Option<ClusterCommand> {
     match op {
         RaftClusterOp::AddNode {
             node_id,
             addr,
             cluster_addr,
-        } => ClusterCommand::AddNode {
-            node: NodeInfo::new_primary(node_id, addr, cluster_addr),
-        },
-        RaftClusterOp::RemoveNode { node_id } => ClusterCommand::RemoveNode { node_id },
-        RaftClusterOp::AssignSlots { node_id, slots } => ClusterCommand::AssignSlots {
-            node_id,
-            slots: slots.into_iter().map(SlotRange::single).collect(),
-        },
-        RaftClusterOp::RemoveSlots { node_id, slots } => ClusterCommand::RemoveSlots {
-            node_id,
-            slots: slots.into_iter().map(SlotRange::single).collect(),
-        },
+        } => Some(ClusterCommand::AddNode {
+            node: NodeInfo::new_primary(*node_id, *addr, *cluster_addr),
+        }),
+        RaftClusterOp::RemoveNode { node_id } => {
+            Some(ClusterCommand::RemoveNode { node_id: *node_id })
+        }
+        RaftClusterOp::AssignSlots { node_id, slots } => Some(ClusterCommand::AssignSlots {
+            node_id: *node_id,
+            slots: slots.iter().map(|&s| SlotRange::single(s)).collect(),
+        }),
+        RaftClusterOp::RemoveSlots { node_id, slots } => Some(ClusterCommand::RemoveSlots {
+            node_id: *node_id,
+            slots: slots.iter().map(|&s| SlotRange::single(s)).collect(),
+        }),
         RaftClusterOp::SetRole {
             node_id,
             is_replica,
             primary_id,
-        } => ClusterCommand::SetRole {
-            node_id,
-            role: if is_replica {
+        } => Some(ClusterCommand::SetRole {
+            node_id: *node_id,
+            role: if *is_replica {
                 NodeRole::Replica
             } else {
                 NodeRole::Primary
             },
-            primary_id,
-        },
+            primary_id: *primary_id,
+        }),
         RaftClusterOp::BeginSlotMigration {
             slot,
             source_node,
             target_node,
-        } => ClusterCommand::BeginSlotMigration {
-            slot,
-            source_node,
-            target_node,
-        },
+        } => Some(ClusterCommand::BeginSlotMigration {
+            slot: *slot,
+            source_node: *source_node,
+            target_node: *target_node,
+        }),
         RaftClusterOp::CompleteSlotMigration {
             slot,
             source_node,
             target_node,
-        } => ClusterCommand::CompleteSlotMigration {
-            slot,
-            source_node,
-            target_node,
-        },
-        RaftClusterOp::CancelSlotMigration { slot } => ClusterCommand::CancelSlotMigration { slot },
-        RaftClusterOp::IncrementEpoch => ClusterCommand::IncrementEpoch,
+        } => Some(ClusterCommand::CompleteSlotMigration {
+            slot: *slot,
+            source_node: *source_node,
+            target_node: *target_node,
+        }),
+        RaftClusterOp::CancelSlotMigration { slot } => {
+            Some(ClusterCommand::CancelSlotMigration { slot: *slot })
+        }
+        RaftClusterOp::IncrementEpoch => Some(ClusterCommand::IncrementEpoch),
+        RaftClusterOp::MarkNodeFailed { node_id } => {
+            Some(ClusterCommand::MarkNodeFailed { node_id: *node_id })
+        }
+        RaftClusterOp::MarkNodeRecovered { node_id } => {
+            Some(ClusterCommand::MarkNodeRecovered { node_id: *node_id })
+        }
+        // Failover requires special handling - multiple Raft commands
+        RaftClusterOp::Failover { .. } => None,
     }
 }
 
@@ -1147,8 +1160,23 @@ impl ConnectionHandler {
             None => return Response::error("ERR Cluster mode not enabled"),
         };
 
+        // Handle Failover specially - it requires multiple Raft commands
+        if let RaftClusterOp::Failover {
+            replica_id,
+            primary_id,
+            force: _,
+        } = &op
+        {
+            return self
+                .handle_failover_command(raft, *replica_id, *primary_id)
+                .await;
+        }
+
         // Convert protocol RaftClusterOp to core ClusterCommand
-        let cmd = convert_raft_cluster_op(op);
+        let cmd = match convert_raft_cluster_op(&op) {
+            Some(cmd) => cmd,
+            None => return Response::error("ERR Unsupported cluster operation"),
+        };
 
         // Execute the Raft command
         match raft.client_write(cmd).await {
@@ -1191,6 +1219,62 @@ impl ConnectionHandler {
                 Response::error(format!("ERR Raft error: {}", e))
             }
         }
+    }
+
+    /// Handle a CLUSTER FAILOVER command.
+    ///
+    /// This requires multiple Raft commands:
+    /// 1. SetRole - promote replica to primary
+    /// 2. AssignSlots - transfer slots from old primary to new primary
+    async fn handle_failover_command(
+        &self,
+        raft: &ClusterRaft,
+        replica_id: u64,
+        primary_id: u64,
+    ) -> Response {
+        // Get cluster state to find slots to transfer
+        let cluster_state = match &self.cluster_state {
+            Some(cs) => cs,
+            None => return Response::error("ERR Cluster state not available"),
+        };
+
+        // 1. Promote replica: change role to Primary
+        let role_cmd = ClusterCommand::SetRole {
+            node_id: replica_id,
+            role: NodeRole::Primary,
+            primary_id: None,
+        };
+
+        if let Err(e) = raft.client_write(role_cmd).await {
+            return Response::error(format!("ERR Failover failed to promote replica: {}", e));
+        }
+
+        // 2. Transfer slot ownership from old primary to new primary
+        let snapshot = cluster_state.snapshot();
+        let slots = snapshot.get_node_slots(primary_id);
+
+        for range in slots {
+            let slot_cmd = ClusterCommand::AssignSlots {
+                node_id: replica_id,
+                slots: vec![range],
+            };
+            if let Err(e) = raft.client_write(slot_cmd).await {
+                // Log warning but continue - partial failover is better than none
+                tracing::warn!(
+                    error = %e,
+                    slot_range = ?range,
+                    "Failed to transfer slots during failover"
+                );
+            }
+        }
+
+        tracing::info!(
+            new_primary = replica_id,
+            old_primary = primary_id,
+            "Manual failover completed"
+        );
+
+        Response::ok()
     }
 
     /// Handle a MIGRATE command asynchronously.

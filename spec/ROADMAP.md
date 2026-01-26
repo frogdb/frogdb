@@ -15,33 +15,6 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 Inspired by: **CockroachDB**, **DragonflyDB**, **FoundationDB**, **Redis**, **Valkey**
 
-#### HIGH PRIORITY - Essential for Production Readiness
-
-##### 3. Latency Band Tracking (SLO Monitoring)
-
-**Inspired by:** FoundationDB latency band tracking
-
-Server-side latency measurement against configurable thresholds:
-
-```toml
-[latency_bands]
-bands = [1, 5, 10, 50, 100, 500]  # ms
-```
-
-```
-LATENCY BANDS [command]
-```
-
-Reports: percentage of requests in each latency bucket.
-
-**Why:** SLO-based alerting without external aggregation; maps directly to business requirements.
-**Complexity:** Low
-
-- [ ] Add `[latency_bands]` configuration section
-- [ ] Track request counts per latency band
-- [ ] Implement `LATENCY BANDS` command
-- [ ] Export latency band metrics to Prometheus
-
 ##### 5. Grafana Dashboard Templates
 
 **Inspired by:** DragonflyDB Kubernetes dashboards
@@ -62,9 +35,6 @@ Ready-to-import JSON dashboards:
 - [ ] Create `deploy/grafana/persistence.json` dashboard
 - [ ] Add dashboard import instructions to documentation
 
-#### MEDIUM PRIORITY - Improves Debuggability
-
-
 ##### 8. Enhanced LATENCY DOCTOR
 
 **Inspired by:** Redis LATENCY DOCTOR, CockroachDB diagnostics
@@ -83,47 +53,6 @@ Deeper analysis with:
 - [ ] Analyze scatter-gather overhead for multi-shard operations
 - [ ] Generate actionable recommendations
 
-##### 9. Client Connection Statistics
-
-**Inspired by:** CockroachDB connection diagnostics
-
-Per-client command statistics:
-
-```
-CLIENT STATS [ID <client-id>]
-```
-
-Reports: commands processed, bytes sent/received, avg/p99 latency, command breakdown.
-
-**Why:** Identify misbehaving clients, "noisy neighbor" debugging.
-**Complexity:** Medium
-
-- [ ] Track per-client command counts and latencies
-- [ ] Implement `CLIENT STATS` command
-- [ ] Add client-level bytes sent/received tracking
-- [ ] Include command type breakdown per client
-
-#### NICE TO HAVE - Advanced Differentiation
-
-##### 11. Debug Diagnostic Bundles
-
-**Inspired by:** CockroachDB statement diagnostics
-
-Generate downloadable ZIP with traces, slowlog, config, stats:
-
-```
-DEBUG BUNDLE GENERATE [DURATION <seconds>]
-GET /debug/bundle
-```
-
-**Why:** Share with support teams; post-mortem analysis.
-**Complexity:** High
-
-- [ ] Implement diagnostic data collection
-- [ ] Create ZIP archive generation
-- [ ] Add `/debug/bundle` HTTP endpoint
-- [ ] Include: config, INFO, SLOWLOG, recent traces, memory stats
-
 ##### 12. Automated Alert Rule Generation
 
 **Inspired by:** CockroachDB alert generation
@@ -141,42 +70,6 @@ GET /alerts/prometheus
 - [ ] Implement `/alerts/prometheus` endpoint
 - [ ] Generate rules for memory, latency, connections, persistence
 - [ ] Include severity levels and recommended thresholds
-
-##### 13. DEBUG DUMP-VLL-QUEUE
-
-**Inspired by:** FrogDB VLL architecture
-
-Inspect VLL transaction queues:
-
-```
-DEBUG DUMP-VLL-QUEUE [shard_id]
-```
-
-**Why:** Debug VLL-related latency; unique to FrogDB.
-**Complexity:** Medium
-
-- [ ] Expose VLL queue state safely
-- [ ] Show pending transactions per shard
-- [ ] Include lock contention information
-- [ ] Add queue depth history
-
-##### 14. Intrinsic Latency Testing CLI
-
-**Inspired by:** Redis `redis-cli --intrinsic-latency`
-
-Measure baseline system latency:
-
-```bash
-frogdb-cli --intrinsic-latency 100
-```
-
-**Why:** Distinguish system vs FrogDB issues; essential for cloud/containers.
-**Complexity:** Low
-
-- [ ] Add `--intrinsic-latency <seconds>` flag to CLI
-- [ ] Measure scheduling/timer jitter
-- [ ] Report min/max/avg/p99 system latency
-- [ ] Provide interpretation guidance
 
 #### Summary Table
 
