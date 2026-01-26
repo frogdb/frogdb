@@ -2,7 +2,10 @@
     "cSpell.words": [
         "clippy",
         "frogdb",
+        "Jepsen",
+        "linearizability",
         "serde",
+        "SLOWLOG",
         "thiserror"
     ],
     "workbench.colorCustomizations": {

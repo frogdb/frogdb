@@ -6,6 +6,7 @@
 mod common;
 
 use common::TestServer;
+use frogdb_protocol::Response;
 use reqwest::StatusCode;
 
 // ============================================================================
@@ -549,6 +550,321 @@ async fn test_all_css_assets() {
             asset
         );
     }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Bundle API Tests
+// ============================================================================
+//
+// Note: Bundle support requires explicit configuration. These tests handle
+// both cases:
+// - 503 SERVICE_UNAVAILABLE: Bundle support not enabled (acceptable)
+// - 200 OK: Bundle support enabled, verify response
+
+#[tokio::test]
+async fn test_api_bundle_list() {
+    let server = TestServer::start().await;
+
+    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/list"))
+        .await
+        .unwrap();
+
+    // Bundle support may not be enabled - 503 is acceptable
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        server.shutdown().await;
+        return;
+    }
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("application/json"));
+
+    let json: serde_json::Value = resp.json().await.unwrap();
+    assert!(json.get("bundles").is_some(), "Should have bundles field");
+    assert!(json["bundles"].is_array(), "bundles should be an array");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_api_bundle_list_empty() {
+    let server = TestServer::start().await;
+
+    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/list"))
+        .await
+        .unwrap();
+
+    // Bundle support may not be enabled - 503 is acceptable
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        server.shutdown().await;
+        return;
+    }
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json: serde_json::Value = resp.json().await.unwrap();
+    let bundles = json["bundles"].as_array().unwrap();
+    // On a fresh server, bundles list should be empty or have very few entries
+    assert!(bundles.len() < 100, "Should not have excessive bundles");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_api_bundle_generate_instant() {
+    let server = TestServer::start().await;
+
+    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/generate"))
+        .await
+        .unwrap();
+
+    // Bundle support may not be enabled - 503 is acceptable
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        server.shutdown().await;
+        return;
+    }
+
+    // Should return OK with ZIP content
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("application/zip"));
+
+    // Verify ZIP data is valid
+    let data = resp.bytes().await.unwrap();
+    assert!(!data.is_empty(), "ZIP data should not be empty");
+    // ZIP files start with PK (0x50 0x4B)
+    assert_eq!(&data[0..2], b"PK", "Should be a valid ZIP file");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_api_bundle_generate_with_duration() {
+    let server = TestServer::start().await;
+
+    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/generate?duration=1"))
+        .await
+        .unwrap();
+
+    // Bundle support may not be enabled - 503 is acceptable
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        server.shutdown().await;
+        return;
+    }
+
+    // Should return OK with ZIP content
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("application/zip"));
+
+    // Verify ZIP data is valid
+    let data = resp.bytes().await.unwrap();
+    assert!(!data.is_empty(), "ZIP data should not be empty");
+    assert_eq!(&data[0..2], b"PK", "Should be a valid ZIP file");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_api_bundle_generate_content_type() {
+    let server = TestServer::start().await;
+
+    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/generate"))
+        .await
+        .unwrap();
+
+    // Bundle support may not be enabled - 503 is acceptable
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        server.shutdown().await;
+        return;
+    }
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .expect("Should have Content-Type header")
+        .to_str()
+        .unwrap();
+    assert!(
+        content_type.contains("application/zip"),
+        "Content-Type should be application/zip, got: {}",
+        content_type
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_api_bundle_generate_content_disposition() {
+    let server = TestServer::start().await;
+
+    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/generate"))
+        .await
+        .unwrap();
+
+    // Bundle support may not be enabled - 503 is acceptable
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        server.shutdown().await;
+        return;
+    }
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let disposition = resp
+        .headers()
+        .get("content-disposition")
+        .expect("Should have Content-Disposition header")
+        .to_str()
+        .unwrap();
+    assert!(
+        disposition.contains("attachment"),
+        "Content-Disposition should contain 'attachment', got: {}",
+        disposition
+    );
+    assert!(
+        disposition.contains("frogdb-bundle-"),
+        "Content-Disposition should contain 'frogdb-bundle-', got: {}",
+        disposition
+    );
+    assert!(
+        disposition.contains(".zip"),
+        "Content-Disposition should contain '.zip', got: {}",
+        disposition
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_api_bundle_download_by_id() {
+    let server = TestServer::start().await;
+
+    // Generate a new bundle via RESP to store it
+    let mut client = server.connect().await;
+    let response = client.command(&["DEBUG", "BUNDLE", "GENERATE"]).await;
+
+    // Extract the bundle ID if generation succeeded
+    if let Response::Bulk(Some(id_bytes)) = response {
+        let bundle_id = String::from_utf8_lossy(&id_bytes);
+
+        // Now download by ID
+        let download_resp = reqwest::get(server.metrics_url(&format!("/debug/api/bundle/{}", bundle_id)))
+            .await
+            .unwrap();
+
+        // Bundle support may not be enabled in HTTP layer - 503 is acceptable
+        if download_resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+            server.shutdown().await;
+            return;
+        }
+
+        assert_eq!(
+            download_resp.status(),
+            StatusCode::OK,
+            "Should be able to download bundle by ID"
+        );
+        assert!(download_resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("application/zip"));
+
+        let data = download_resp.bytes().await.unwrap();
+        assert!(!data.is_empty(), "Downloaded ZIP should not be empty");
+        assert_eq!(&data[0..2], b"PK", "Downloaded data should be a valid ZIP file");
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_api_bundle_download_not_found() {
+    let server = TestServer::start().await;
+
+    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/nonexistent-bundle-id"))
+        .await
+        .unwrap();
+
+    // Bundle support may not be enabled - 503 is acceptable
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        server.shutdown().await;
+        return;
+    }
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "Nonexistent bundle should return 404"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_api_bundle_zip_structure() {
+    let server = TestServer::start().await;
+
+    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/generate"))
+        .await
+        .unwrap();
+
+    // Bundle support may not be enabled - 503 is acceptable
+    if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
+        server.shutdown().await;
+        return;
+    }
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let data = resp.bytes().await.unwrap();
+
+    // Parse ZIP and verify contents
+    let cursor = std::io::Cursor::new(data.as_ref());
+    let archive = zip::ZipArchive::new(cursor).expect("Should be valid ZIP");
+
+    let file_names: Vec<_> = archive.file_names().collect();
+
+    // Check for expected files (they may be in a subdirectory)
+    let has_manifest = file_names.iter().any(|n| n.ends_with("manifest.json"));
+    let has_config = file_names.iter().any(|n| n.ends_with("config.json"));
+    let has_cluster = file_names.iter().any(|n| n.ends_with("cluster.json"));
+
+    assert!(
+        has_manifest,
+        "ZIP should contain manifest.json, found files: {:?}",
+        file_names
+    );
+    assert!(
+        has_config,
+        "ZIP should contain config.json, found files: {:?}",
+        file_names
+    );
+    assert!(
+        has_cluster,
+        "ZIP should contain cluster.json, found files: {:?}",
+        file_names
+    );
 
     server.shutdown().await;
 }
