@@ -6,6 +6,7 @@
 //! - Health check endpoints (`/health/live`, `/health/ready`)
 //! - System metrics collection (CPU, memory, uptime)
 
+pub mod bundle;
 pub mod config;
 pub mod debug;
 pub mod health;
@@ -45,6 +46,10 @@ pub use latency_bands::LatencyBandTracker;
 pub use tracing::{
     create_tracer, OtelTracer, RecentTraceEntry, RequestSpan, ScatterGatherSpan, SharedTracer,
     TracingStatus,
+};
+pub use bundle::{
+    BundleConfig, BundleGenerator, BundleInfo, BundleManifest, BundleStore, ClusterStateJson,
+    DiagnosticCollector, DiagnosticData, ShardMemoryJson, SlowlogEntryJson, TraceEntryJson,
 };
 
 #[cfg(feature = "testing")]

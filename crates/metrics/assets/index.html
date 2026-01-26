@@ -21,6 +21,7 @@
       <a :class="{ 'active': tab === 'metrics' }" @click="tab = 'metrics'">Metrics</a>
       <a :class="{ 'active': tab === 'slowlog' }" @click="tab = 'slowlog'">Slowlog</a>
       <a :class="{ 'active': tab === 'latency' }" @click="tab = 'latency'">Latency</a>
+      <a :class="{ 'active': tab === 'bundles' }" @click="tab = 'bundles'">Bundles</a>
     </nav>
 
     <!-- Cluster Tab -->
@@ -108,7 +109,21 @@
         <div class="loading">Loading latency data</div>
       </div>
     </div>
+
+    <!-- Bundles Tab -->
+    <div x-show="tab === 'bundles'" x-cloak>
+      <div
+        id="bundles-container"
+        hx-get="/debug/partials/bundles"
+        hx-trigger="load, bundleRefresh from:body"
+        hx-swap="innerHTML"
+      >
+        <div class="loading">Loading bundles...</div>
+      </div>
+    </div>
   </div>
+
+  <div id="toast-container"></div>
 
   <script src="/debug/assets/js/htmx.min.js"></script>
   <script src="/debug/assets/js/alpine.min.js" defer></script>
@@ -303,6 +318,63 @@
               }
             }
           });
+
+          // Listen for generate-bundle custom event from partial
+          window.addEventListener('generate-bundle', (evt) => {
+            this.generateBundle(evt.detail);
+          });
+        },
+
+        async generateBundle(duration) {
+          // Show generating toast
+          this.showToast('Generating bundle...', 'info', true);
+
+          try {
+            const url = `/debug/api/bundle/generate${duration > 0 ? `?duration=${duration}` : ''}`;
+            const response = await fetch(url);
+
+            if (response.ok) {
+              // Download the file
+              const blob = await response.blob();
+              const disposition = response.headers.get('content-disposition');
+              const filename = disposition?.match(/filename="?([^"]+)"?/)?.[1] || 'bundle.zip';
+
+              const a = document.createElement('a');
+              a.href = URL.createObjectURL(blob);
+              a.download = filename;
+              a.click();
+              URL.revokeObjectURL(a.href);
+
+              // Show success toast
+              this.showToast('Bundle generated successfully!', 'success');
+
+              // Trigger bundle list refresh
+              htmx.trigger(document.body, 'bundleRefresh');
+            } else {
+              const text = await response.text();
+              this.showToast(`Error: ${text}`, 'error');
+            }
+          } catch (e) {
+            this.showToast(`Error: ${e.message}`, 'error');
+          }
+        },
+
+        showToast(message, type = 'info', loading = false) {
+          const container = document.getElementById('toast-container');
+          // Remove existing toasts
+          container.innerHTML = '';
+
+          const toast = document.createElement('div');
+          toast.className = `toast toast-${type}`;
+          toast.innerHTML = loading
+            ? `<span class="toast-spinner"></span>${message}`
+            : message;
+
+          container.appendChild(toast);
+
+          if (!loading) {
+            setTimeout(() => toast.remove(), 4000);
+          }
         }
       };
     }

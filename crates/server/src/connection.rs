@@ -1716,9 +1716,21 @@ impl ConnectionHandler {
                         "ERR Unknown DEBUG TRACING subcommand. Use STATUS or RECENT [count].",
                     )];
                 }
-                // Check for DEBUG VLL subcommand
+// Check for DEBUG VLL subcommand
                 if !cmd.args.is_empty() && cmd.args[0].eq_ignore_ascii_case(b"VLL") {
                     return vec![self.handle_debug_vll(&cmd.args).await];
+                }
+                // Check for DEBUG BUNDLE subcommand
+                if !cmd.args.is_empty() && cmd.args[0].eq_ignore_ascii_case(b"BUNDLE") {
+                    if cmd.args.len() > 1 && cmd.args[1].eq_ignore_ascii_case(b"GENERATE") {
+                        return vec![self.handle_debug_bundle_generate(&cmd.args).await];
+                    }
+                    if cmd.args.len() > 1 && cmd.args[1].eq_ignore_ascii_case(b"LIST") {
+                        return vec![self.handle_debug_bundle_list()];
+                    }
+                    return vec![Response::error(
+                        "ERR Unknown DEBUG BUNDLE subcommand. Use GENERATE [DURATION <seconds>] or LIST.",
+                    )];
                 }
                 // Fall through for other DEBUG subcommands
             }
@@ -5396,7 +5408,7 @@ impl ConnectionHandler {
         }
     }
 
-    /// Handle DEBUG VLL [shard_id] command.
+/// Handle DEBUG VLL [shard_id] command.
     async fn handle_debug_vll(&self, args: &[Bytes]) -> Response {
         // args[0] = "VLL", args[1] = optional shard_id
         let shard_filter: Option<usize> = if args.len() > 1 {
@@ -5538,6 +5550,93 @@ impl ConnectionHandler {
         }
 
         Response::Bulk(Some(Bytes::from(lines.join("\n"))))
+    }
+
+    /// Handle DEBUG BUNDLE GENERATE [DURATION <seconds>] command.
+    ///
+    /// Generates a diagnostic bundle and returns the bundle ID.
+    /// The bundle can be downloaded via HTTP: GET /debug/api/bundle/<id>
+    async fn handle_debug_bundle_generate(&self, args: &[Bytes]) -> Response {
+        // args[0] = "BUNDLE", args[1] = "GENERATE", args[2..] = optional DURATION <seconds>
+        let mut duration_secs: u64 = 0;
+
+        // Parse optional DURATION argument
+        let mut i = 2;
+        while i < args.len() {
+            if args[i].eq_ignore_ascii_case(b"DURATION") {
+                if i + 1 >= args.len() {
+                    return Response::error("ERR DURATION requires a value in seconds");
+                }
+                match std::str::from_utf8(&args[i + 1])
+                    .ok()
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    Some(d) => duration_secs = d,
+                    None => return Response::error("ERR DURATION must be a positive integer"),
+                }
+                i += 2;
+            } else {
+                return Response::error(format!(
+                    "ERR Unknown argument '{}' for DEBUG BUNDLE GENERATE",
+                    String::from_utf8_lossy(&args[i])
+                ));
+            }
+        }
+
+        // Create bundle config and collector
+        let config = frogdb_metrics::BundleConfig::default();
+        let collector = frogdb_metrics::DiagnosticCollector::new(
+            self.shard_senders.clone(),
+            self.shared_tracer.clone(),
+            config.clone(),
+        );
+
+        // Collect diagnostic data
+        let data = if duration_secs == 0 {
+            collector.collect_instant().await
+        } else {
+            collector.collect_with_duration(duration_secs).await
+        };
+
+        // Generate the bundle
+        let generator = frogdb_metrics::BundleGenerator::new(config.clone());
+        let id = frogdb_metrics::BundleGenerator::generate_id();
+
+        match generator.create_zip(&id, &data, duration_secs) {
+            Ok(zip_data) => {
+                // Try to store the bundle for later HTTP download
+                let store = frogdb_metrics::BundleStore::new(config);
+                if let Err(e) = store.store(&id, &zip_data) {
+                    tracing::warn!(error = %e, "Failed to store bundle (HTTP download may not work)");
+                }
+
+                // Return the bundle ID
+                Response::Bulk(Some(Bytes::from(id)))
+            }
+            Err(e) => Response::error(format!("ERR Failed to generate bundle: {}", e)),
+        }
+    }
+
+    /// Handle DEBUG BUNDLE LIST command.
+    ///
+    /// Lists all available bundles with their ID, timestamp, and size.
+    fn handle_debug_bundle_list(&self) -> Response {
+        let config = frogdb_metrics::BundleConfig::default();
+        let store = frogdb_metrics::BundleStore::new(config);
+        let bundles = store.list();
+
+        let entries: Vec<Response> = bundles
+            .into_iter()
+            .map(|b| {
+                Response::Array(vec![
+                    Response::Bulk(Some(Bytes::from(b.id))),
+                    Response::Bulk(Some(Bytes::from(b.created_at))),
+                    Response::Integer(b.size_bytes as i64),
+                ])
+            })
+            .collect();
+
+        Response::Array(entries)
     }
 
     /// Handle SHUTDOWN command.

@@ -149,7 +149,7 @@ async fn handle_request(
         // Debug web UI
         (&Method::GET, p) if p.starts_with("/debug") => {
             if let Some(ref state) = debug_state {
-                debug::handle_debug_request(p, state, &recorder).await
+                debug::handle_debug_request(req.uri(), state, &recorder).await
             } else {
                 // Debug UI not enabled, return a helpful message
                 Response::builder()
