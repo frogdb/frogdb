@@ -136,6 +136,9 @@ pub struct Server {
 
     /// Latency baseline from startup test (if enabled).
     latency_baseline: Option<LatencyTestResult>,
+
+    /// Optional latency band tracker for SLO monitoring.
+    band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
 }
 
 impl Server {
@@ -586,6 +589,18 @@ impl Server {
         ));
         config_manager.set_shard_notifier(shard_notifier);
 
+        // Create latency band tracker if enabled
+        let band_tracker = if config.latency_bands.enabled {
+            let tracker = frogdb_metrics::LatencyBandTracker::new(config.latency_bands.bands.clone());
+            info!(
+                bands = ?config.latency_bands.bands,
+                "Latency band tracking enabled"
+            );
+            Some(Arc::new(tracker))
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             listener,
@@ -611,6 +626,7 @@ impl Server {
             node_id,
             raft,
             latency_baseline: None,
+            band_tracker,
         })
     }
 
@@ -818,13 +834,18 @@ impl Server {
                 mode,
             ));
 
-            let server = MetricsServer::new(
+            let mut server = MetricsServer::new(
                 metrics_config,
                 prometheus.clone(),
                 self.health_checker.clone(),
             )
             .with_debug_state(debug_state)
             .with_status_collector(status_collector);
+
+            // Add band tracker if configured
+            if let Some(tracker) = &self.band_tracker {
+                server = server.with_band_tracker(tracker.clone());
+            }
 
             info!(
                 addr = %self.config.metrics.bind_addr(),
@@ -916,6 +937,7 @@ impl Server {
             admin_enabled,
             self.config.hotshards.to_collector_config(),
             self.config.memory.to_diag_config(),
+            self.band_tracker.clone(),
         );
 
         // Spawn main acceptor task
@@ -949,6 +971,7 @@ impl Server {
                 admin_enabled,
                 self.config.hotshards.to_collector_config(),
                 self.config.memory.to_diag_config(),
+                self.band_tracker.clone(),
             );
 
             Some(spawn(async move {

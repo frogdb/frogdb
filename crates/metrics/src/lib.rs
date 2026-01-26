@@ -10,6 +10,7 @@ pub mod config;
 pub mod debug;
 pub mod health;
 pub mod hotshards;
+pub mod latency_bands;
 pub mod memorydiag;
 pub mod otlp;
 pub mod prometheus_recorder;
@@ -40,6 +41,7 @@ pub use memorydiag::{
     calculate_variance, format_report as format_memory_report, MemoryDiagCollector,
     MemoryDiagConfig, MemoryDiagReport, MemorySummary, ShardMemoryVariance,
 };
+pub use latency_bands::LatencyBandTracker;
 pub use tracing::{
     create_tracer, OtelTracer, RecentTraceEntry, RequestSpan, ScatterGatherSpan, SharedTracer,
     TracingStatus,
@@ -139,6 +141,9 @@ pub mod metric_names {
     pub const SCATTER_GATHER_DURATION: &str = "frogdb_scatter_gather_duration_seconds";
     pub const SCATTER_GATHER_SHARDS: &str = "frogdb_scatter_gather_shards";
 
+    // Latency band metrics
+    pub const LATENCY_BAND_REQUESTS: &str = "frogdb_latency_band_requests_total";
+
     // Additional metrics from OBSERVABILITY.md spec
     pub const SHARD_QUEUE_LATENCY: &str = "frogdb_shard_queue_latency_seconds";
     pub const CONNECTIONS_MAX: &str = "frogdb_connections_max";
@@ -174,6 +179,7 @@ pub struct CommandTimer {
     start: Instant,
     command: String,
     recorder: Arc<dyn MetricsRecorder>,
+    band_tracker: Option<Arc<LatencyBandTracker>>,
 }
 
 impl CommandTimer {
@@ -183,12 +189,29 @@ impl CommandTimer {
             start: Instant::now(),
             command,
             recorder,
+            band_tracker: None,
+        }
+    }
+
+    /// Start timing a command with latency band tracking.
+    pub fn with_band_tracker(
+        command: String,
+        recorder: Arc<dyn MetricsRecorder>,
+        band_tracker: Option<Arc<LatencyBandTracker>>,
+    ) -> Self {
+        Self {
+            start: Instant::now(),
+            command,
+            recorder,
+            band_tracker,
         }
     }
 
     /// Record the command completion (success).
     pub fn finish(self) {
-        let elapsed = self.start.elapsed().as_secs_f64();
+        let elapsed = self.start.elapsed();
+        let elapsed_secs = elapsed.as_secs_f64();
+
         self.recorder.increment_counter(
             metric_names::COMMANDS_TOTAL,
             1,
@@ -196,14 +219,21 @@ impl CommandTimer {
         );
         self.recorder.record_histogram(
             metric_names::COMMANDS_DURATION,
-            elapsed,
+            elapsed_secs,
             &[("command", &self.command)],
         );
+
+        // Record to latency band tracker
+        if let Some(tracker) = &self.band_tracker {
+            tracker.record(elapsed.as_millis() as u64);
+        }
     }
 
     /// Record a command error.
     pub fn finish_with_error(self, error_type: &str) {
-        let elapsed = self.start.elapsed().as_secs_f64();
+        let elapsed = self.start.elapsed();
+        let elapsed_secs = elapsed.as_secs_f64();
+
         self.recorder.increment_counter(
             metric_names::COMMANDS_TOTAL,
             1,
@@ -211,7 +241,7 @@ impl CommandTimer {
         );
         self.recorder.record_histogram(
             metric_names::COMMANDS_DURATION,
-            elapsed,
+            elapsed_secs,
             &[("command", &self.command)],
         );
         self.recorder.increment_counter(
@@ -219,6 +249,11 @@ impl CommandTimer {
             1,
             &[("command", &self.command), ("error", error_type)],
         );
+
+        // Record to latency band tracker (errors still count for latency)
+        if let Some(tracker) = &self.band_tracker {
+            tracker.record(elapsed.as_millis() as u64);
+        }
     }
 }
 

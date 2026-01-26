@@ -111,6 +111,9 @@ pub struct Acceptor {
 
     /// Memory diagnostics configuration.
     memory_diag_config: frogdb_metrics::MemoryDiagConfig,
+
+    /// Optional latency band tracker for SLO monitoring.
+    band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
 }
 
 impl Acceptor {
@@ -138,6 +141,7 @@ impl Acceptor {
         admin_enabled: bool,
         hotshards_config: frogdb_metrics::HotShardConfig,
         memory_diag_config: frogdb_metrics::MemoryDiagConfig,
+        band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -164,6 +168,7 @@ impl Acceptor {
             admin_enabled,
             hotshards_config,
             memory_diag_config,
+            band_tracker,
         }
     }
 
@@ -220,6 +225,7 @@ impl Acceptor {
                     let admin_enabled = self.admin_enabled;
                     let hotshards_config = self.hotshards_config.clone();
                     let memory_diag_config = self.memory_diag_config.clone();
+                    let band_tracker = self.band_tracker.clone();
 
                     spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -248,6 +254,7 @@ impl Acceptor {
                             admin_enabled,
                             hotshards_config,
                             memory_diag_config,
+                            band_tracker,
                         );
 
                         if let Err(e) = handler.run().await {

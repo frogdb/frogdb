@@ -381,6 +381,9 @@ pub struct ConnectionHandler {
 
     /// Memory diagnostics configuration.
     memory_diag_config: frogdb_metrics::MemoryDiagConfig,
+
+    /// Optional latency band tracker for SLO monitoring.
+    band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
 }
 
 /// Determine key access type from command flags.
@@ -647,6 +650,7 @@ impl ConnectionHandler {
         admin_enabled: bool,
         hotshards_config: frogdb_metrics::HotShardConfig,
         memory_diag_config: frogdb_metrics::MemoryDiagConfig,
+        band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
     ) -> Self {
         let framed = Framed::new(socket, Resp2);
         let requires_auth = acl_manager.requires_auth();
@@ -684,6 +688,7 @@ impl ConnectionHandler {
             admin_enabled,
             hotshards_config,
             memory_diag_config,
+            band_tracker,
         }
     }
 
@@ -796,9 +801,10 @@ impl ConnectionHandler {
                     // Start timing for both metrics and slowlog
                     let start_time = std::time::Instant::now();
                     let cmd_name_for_metrics = String::from_utf8_lossy(&cmd.name).to_uppercase();
-                    let timer = frogdb_metrics::CommandTimer::new(
+                    let timer = frogdb_metrics::CommandTimer::with_band_tracker(
                         cmd_name_for_metrics.clone(),
                         self.metrics_recorder.clone(),
+                        self.band_tracker.clone(),
                     );
 
                     // Start request span for distributed tracing (if enabled)
@@ -6149,6 +6155,7 @@ impl ConnectionHandler {
         let subcommand_str = String::from_utf8_lossy(&subcommand);
 
         match subcommand_str.as_ref() {
+            "BANDS" => self.handle_latency_bands(&args[1..]),
             "DOCTOR" => self.handle_latency_doctor().await,
             "GRAPH" => self.handle_latency_graph(&args[1..]).await,
             "HELP" => self.handle_latency_help(),
@@ -6161,6 +6168,44 @@ impl ConnectionHandler {
                 subcommand_str
             )),
         }
+    }
+
+    /// Handle LATENCY BANDS [RESET] - show or reset latency band statistics.
+    fn handle_latency_bands(&self, args: &[Bytes]) -> Response {
+        let Some(tracker) = &self.band_tracker else {
+            return Response::error("ERR latency bands not enabled. Set latency_bands.enabled = true in config.");
+        };
+
+        // Handle RESET subcommand
+        if !args.is_empty() {
+            let subcommand = String::from_utf8_lossy(&args[0]).to_ascii_uppercase();
+            if subcommand == "RESET" {
+                tracker.reset();
+                return Response::ok();
+            } else {
+                return Response::error(format!(
+                    "ERR unknown option '{}'. Try LATENCY BANDS or LATENCY BANDS RESET.",
+                    subcommand
+                ));
+            }
+        }
+
+        // Build report showing band percentages
+        let total = tracker.total();
+        let percentages = tracker.get_percentages();
+
+        let mut lines = vec![
+            format!("Total requests: {}", total),
+            String::new(),
+            "Band            Count      Percentage".to_string(),
+            "----            -----      ----------".to_string(),
+        ];
+
+        for (band, count, pct) in &percentages {
+            lines.push(format!("{:<15} {:>10} {:>10.2}%", band, count, pct));
+        }
+
+        Response::bulk(Bytes::from(lines.join("\r\n")))
     }
 
     /// Handle LATENCY DOCTOR - diagnose latency issues.
@@ -6227,6 +6272,10 @@ impl ConnectionHandler {
         let help = vec![
             Response::bulk(Bytes::from_static(
                 b"LATENCY <subcommand> [<arg> ...]. Subcommands are:",
+            )),
+            Response::bulk(Bytes::from_static(b"BANDS [RESET]")),
+            Response::bulk(Bytes::from_static(
+                b"    Show SLO latency band statistics, or reset counters.",
             )),
             Response::bulk(Bytes::from_static(b"DOCTOR")),
             Response::bulk(Bytes::from_static(

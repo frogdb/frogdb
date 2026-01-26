@@ -90,6 +90,10 @@ pub struct Config {
     /// Latency testing configuration.
     #[serde(default)]
     pub latency: LatencyConfig,
+
+    /// Latency bands configuration for SLO monitoring.
+    #[serde(default)]
+    pub latency_bands: LatencyBandsConfig,
 }
 
 /// Latency testing configuration.
@@ -124,6 +128,36 @@ impl Default for LatencyConfig {
             startup_test: false,
             startup_test_duration_secs: default_latency_test_duration_secs(),
             warning_threshold_us: default_latency_warning_threshold_us(),
+        }
+    }
+}
+
+/// Latency bands configuration for SLO-focused monitoring.
+///
+/// Tracks cumulative request counts in configurable latency buckets,
+/// enabling direct SLO monitoring without external aggregation.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LatencyBandsConfig {
+    /// Whether latency band tracking is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Latency band thresholds in milliseconds.
+    /// Requests are counted in cumulative buckets (<=1ms, <=5ms, etc.)
+    #[serde(default = "default_latency_bands")]
+    pub bands: Vec<u64>,
+}
+
+fn default_latency_bands() -> Vec<u64> {
+    vec![1, 5, 10, 50, 100, 500]
+}
+
+impl Default for LatencyBandsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bands: default_latency_bands(),
         }
     }
 }
@@ -2141,6 +2175,16 @@ startup_test_duration_secs = 5
 # If max latency exceeds this, a warning is logged but startup continues.
 # Results under 500us are typical for bare metal; over 2ms suggests virtualization.
 warning_threshold_us = 2000
+
+[latency_bands]
+# Whether SLO-focused latency band tracking is enabled.
+# When enabled, tracks cumulative request counts per latency bucket for SLO monitoring.
+enabled = false
+
+# Latency band thresholds in milliseconds.
+# Requests are counted in cumulative buckets (<=1ms, <=5ms, etc.)
+# Use LATENCY BANDS command to view counts and percentages.
+bands = [1, 5, 10, 50, 100, 500]
 "#
         .to_string()
     }
