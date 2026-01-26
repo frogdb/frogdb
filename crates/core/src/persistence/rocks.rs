@@ -387,6 +387,68 @@ impl RocksStore {
     pub fn path(&self) -> &Path {
         self.db.path()
     }
+
+    /// Load a staged checkpoint if one exists.
+    ///
+    /// This is called during server startup to check for a replica checkpoint
+    /// that was received during full sync. If found, it replaces the current
+    /// database with the checkpoint data.
+    ///
+    /// The checkpoint is expected at `{rocksdb_dir}/../checkpoint_ready` (sibling directory).
+    ///
+    /// # Arguments
+    ///
+    /// * `rocksdb_dir` - The RocksDB database directory
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if a checkpoint was loaded, `false` otherwise.
+    pub fn load_staged_checkpoint(rocksdb_dir: &Path) -> std::io::Result<bool> {
+        let parent_dir = match rocksdb_dir.parent() {
+            Some(p) => p,
+            None => return Ok(false),
+        };
+
+        let checkpoint_ready_dir = parent_dir.join("checkpoint_ready");
+
+        if !checkpoint_ready_dir.exists() {
+            return Ok(false);
+        }
+
+        info!(
+            checkpoint_dir = %checkpoint_ready_dir.display(),
+            "Found staged checkpoint, loading..."
+        );
+
+        // Back up existing database if it exists
+        if rocksdb_dir.exists() {
+            let backup_dir = parent_dir.join(format!(
+                "{}_backup_{}",
+                rocksdb_dir.file_name().and_then(|n| n.to_str()).unwrap_or("db"),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            ));
+            info!(
+                from = %rocksdb_dir.display(),
+                to = %backup_dir.display(),
+                "Backing up existing database"
+            );
+            std::fs::rename(rocksdb_dir, &backup_dir)?;
+        }
+
+        // Move checkpoint to the RocksDB directory
+        info!(
+            from = %checkpoint_ready_dir.display(),
+            to = %rocksdb_dir.display(),
+            "Installing checkpoint as new database"
+        );
+        std::fs::rename(&checkpoint_ready_dir, rocksdb_dir)?;
+
+        info!("Checkpoint loaded successfully");
+        Ok(true)
+    }
 }
 
 /// Iterator over RocksDB key-value pairs.

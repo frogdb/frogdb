@@ -6,7 +6,12 @@ use frogdb_core::persistence::{
     RocksConfig, RocksSnapshotCoordinator, RocksStore, SnapshotCoordinator, WalConfig,
 };
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
-use frogdb_core::{AclManager, ClientRegistry, ClusterState, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, NoopBroadcaster, ReplicationTrackerImpl, SharedBroadcaster, ShardMessage, ShardWorker};
+use frogdb_core::{
+    AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
+    ClusterStateMachine, ClusterStorage, CommandRegistry, EvictionConfig, EvictionPolicy,
+    MetricsRecorder, NoopBroadcaster, ReplicationTrackerImpl, SharedBroadcaster, ShardMessage,
+    ShardWorker,
+};
 use frogdb_metrics::{DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo, SharedTracer, SystemMetricsCollector};
 use std::time::Duration;
 use tokio::signal;
@@ -112,6 +117,9 @@ pub struct Server {
 
     /// This node's ID (for cluster mode).
     node_id: Option<u64>,
+
+    /// Optional Raft instance (only when cluster mode is enabled).
+    raft: Option<Arc<ClusterRaft>>,
 }
 
 impl Server {
@@ -401,8 +409,8 @@ impl Server {
         ));
         config_manager.set_shard_notifier(shard_notifier);
 
-        // Initialize cluster state if cluster mode is enabled
-        let (cluster_state, node_id) = if config.cluster.enabled {
+        // Initialize cluster state and Raft if cluster mode is enabled
+        let (cluster_state, node_id, raft) = if config.cluster.enabled {
             let node_id = if config.cluster.node_id == 0 {
                 // Auto-generate node ID from timestamp
                 std::time::SystemTime::now()
@@ -419,10 +427,42 @@ impl Server {
                 "Cluster mode enabled"
             );
 
-            let cluster = Arc::new(ClusterState::new());
-            (Some(cluster), Some(node_id))
+            // Initialize Raft storage
+            let raft_path = config.persistence.data_dir.join("raft");
+            let raft_storage = ClusterStorage::open(&raft_path)
+                .map_err(|e| anyhow::anyhow!("Failed to open Raft storage: {}", e))?;
+
+            // Initialize Raft state machine with cluster state
+            let cluster = ClusterState::new();
+            let state_machine = ClusterStateMachine::with_state(cluster.clone());
+
+            // Initialize Raft network factory
+            let network_factory = ClusterNetworkFactory::new();
+
+            // Create Raft config
+            let raft_config = openraft::Config {
+                election_timeout_min: config.cluster.election_timeout_ms,
+                election_timeout_max: config.cluster.election_timeout_ms * 2,
+                heartbeat_interval: config.cluster.heartbeat_interval_ms,
+                ..Default::default()
+            };
+
+            // Initialize Raft instance
+            let raft = openraft::Raft::new(
+                node_id,
+                Arc::new(raft_config),
+                network_factory,
+                raft_storage,
+                state_machine,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize Raft: {}", e))?;
+
+            info!(node_id = node_id, "Raft initialized");
+
+            (Some(Arc::new(cluster)), Some(node_id), Some(Arc::new(raft)))
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         Ok(Self {
@@ -447,6 +487,7 @@ impl Server {
             replication_tracker,
             cluster_state,
             node_id,
+            raft,
         })
     }
 
@@ -499,6 +540,20 @@ impl Server {
 
         // Ensure data directory exists
         fs::create_dir_all(&config.data_dir)?;
+
+        // Check for and load staged checkpoint from replica full sync
+        match RocksStore::load_staged_checkpoint(&config.data_dir) {
+            Ok(true) => {
+                info!("Loaded staged checkpoint from replica full sync");
+            }
+            Ok(false) => {
+                // No checkpoint to load, continue normally
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to load staged checkpoint");
+                return Err(anyhow::anyhow!("Failed to load staged checkpoint: {}", e));
+            }
+        }
 
         // Build RocksDB config
         let rocks_config = RocksConfig {
@@ -631,6 +686,19 @@ impl Server {
             None
         };
 
+        // Start cluster bus TCP server if cluster mode is enabled
+        let cluster_bus_handle = if let Some(ref raft) = self.raft {
+            let addr = self.config.cluster.cluster_bus_socket_addr();
+            let raft = raft.clone();
+            Some(spawn(async move {
+                if let Err(e) = crate::cluster_bus::run(addr, raft).await {
+                    error!(error = %e, "Cluster bus server error");
+                }
+            }))
+        } else {
+            None
+        };
+
         let acceptor = Acceptor::new(
             self.listener,
             self.new_conn_senders,
@@ -703,7 +771,7 @@ impl Server {
             info!("Snapshot completed");
         }
 
-        // Stop metrics server, system collector, and admin server
+        // Stop metrics server, system collector, admin server, and cluster bus
         if let Some(handle) = metrics_server_handle {
             handle.abort();
         }
@@ -711,6 +779,9 @@ impl Server {
             handle.abort();
         }
         if let Some(handle) = admin_server_handle {
+            handle.abort();
+        }
+        if let Some(handle) = cluster_bus_handle {
             handle.abort();
         }
 
