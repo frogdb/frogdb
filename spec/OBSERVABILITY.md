@@ -9,6 +9,8 @@ FrogDB integrates with standard observability tools:
 - **Tracing**: Distributed tracing via OpenTelemetry (OTLP)
 - **Metrics**: Prometheus endpoint + OTLP export
 - **Debugging**: Redis-compatible INFO, SLOWLOG, CLIENT, MEMORY commands
+- **Status Endpoint**: HTTP and Redis protocol status reporting
+- **Debug UI**: Interactive web dashboard for real-time monitoring
 
 ---
 
@@ -655,6 +657,131 @@ livenessProbe:
   initialDelaySeconds: 5
   periodSeconds: 10
 ```
+
+---
+
+## Status Endpoint
+
+Comprehensive server status reporting via HTTP and Redis protocol.
+
+### Configuration
+
+```toml
+[status]
+memory_warning_percent = 90      # Threshold for memory pressure warning
+connection_warning_percent = 90  # Threshold for connection limit warning
+```
+
+### HTTP Endpoint
+
+```
+GET /status/json                 # Returns comprehensive status as JSON
+```
+
+### Redis Protocol
+
+```
+STATUS JSON                      # Returns status as JSON bulk string
+STATUS HELP                      # Shows available subcommands
+```
+
+### Response Structure
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `frogdb` | object | Server info (version, uptime_secs, process_id, timestamp, timestamp_iso) |
+| `cluster` | object | Mode (standalone/cluster/primary/replica), database_available, num_shards |
+| `health` | object | Overall status (healthy/degraded/unhealthy) and issues array |
+| `clients` | object | Connected count, max_clients, blocked count |
+| `memory` | object | used_bytes, peak_bytes, limit_bytes, fragmentation_ratio, rss_bytes |
+| `persistence` | object | Enabled flag, durability_mode, snapshot/WAL status |
+| `shards` | array | Per-shard id, keys, memory_bytes, peak_memory_bytes |
+| `keyspace` | object | total_keys, expired_keys_total |
+| `commands` | object | total_processed, ops_per_sec |
+
+### Example Response
+
+```json
+{
+  "frogdb": {
+    "version": "0.1.0",
+    "uptime_secs": 3600,
+    "process_id": 12345,
+    "timestamp": 1706284800,
+    "timestamp_iso": "2024-01-26T12:00:00Z"
+  },
+  "cluster": { "database_available": true, "mode": "standalone", "num_shards": 4 },
+  "health": { "status": "healthy", "issues": [] },
+  "clients": { "connected": 42, "max_clients": 10000, "blocked": 0 },
+  "memory": { "used_bytes": 104857600, "peak_bytes": 125829120, "limit_bytes": 1073741824, "fragmentation_ratio": 1.02 },
+  "persistence": { "enabled": true, "durability_mode": "periodic", "snapshot": { "in_progress": false }, "wal": { "total_writes": 10000 } },
+  "shards": [{ "id": 0, "keys": 1000, "memory_bytes": 26214400 }, ...],
+  "keyspace": { "total_keys": 4000, "expired_keys_total": 0 },
+  "commands": { "total_processed": 50000, "ops_per_sec": 150.0 }
+}
+```
+
+### Health Issues
+
+When problems are detected, the `health.issues` array contains:
+
+| Code | Severity | Description |
+|------|----------|-------------|
+| `MEMORY_PRESSURE` | warning/critical | Memory usage exceeds threshold (critical at 95%+) |
+| `NEAR_CONNECTION_LIMIT` | warning | Connection count near max_clients |
+| `NOT_READY` | warning | Server not ready to accept commands |
+
+---
+
+## Debug UI
+
+Interactive web dashboard for real-time server monitoring and debugging.
+
+### Configuration
+
+The debug UI is enabled when the metrics server is started with debug state. Enable via the metrics server configuration:
+
+```toml
+[metrics]
+prometheus_enabled = true
+prometheus_port = 9090
+debug_ui_enabled = true          # Enable the debug dashboard
+```
+
+### HTTP Routes
+
+**Main Dashboard:**
+```
+GET /debug                       # Interactive debug dashboard
+```
+
+**JSON APIs:**
+
+| Endpoint | Description |
+|----------|-------------|
+| `/debug/api/cluster` | Server and cluster information |
+| `/debug/api/config` | Configuration entries |
+| `/debug/api/metrics` | Performance metrics (throughput, latency, memory) |
+| `/debug/api/slowlog` | Slow query log entries |
+| `/debug/api/latency` | Latency distribution data |
+
+### Dashboard Tabs
+
+| Tab | Content | Refresh Interval |
+|-----|---------|------------------|
+| Cluster | Server role, uptime, shards, version | 5 seconds |
+| Config | Configuration key-value entries | Once (static) |
+| Metrics | Real-time charts: throughput, latency percentiles, memory, connections | 2 seconds |
+| Slowlog | Slow query entries | 10 seconds |
+| Latency | Latency distribution analytics | 5 seconds |
+
+### Technology Stack
+
+The debug UI uses:
+- **Alpine.js** - Reactive state management
+- **HTMX** - Dynamic content loading
+- **uPlot.js** - Real-time performance charts
+- **Chota** - Minimal CSS framework
 
 ---
 
