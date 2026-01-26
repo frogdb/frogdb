@@ -1102,6 +1102,18 @@ impl ConnectionHandler {
                 if !cmd.args.is_empty() && cmd.args[0].eq_ignore_ascii_case(b"SLEEP") {
                     return vec![self.handle_debug_sleep(&cmd.args).await];
                 }
+                // Check for DEBUG TRACING subcommand
+                if !cmd.args.is_empty() && cmd.args[0].eq_ignore_ascii_case(b"TRACING") {
+                    if cmd.args.len() > 1 && cmd.args[1].eq_ignore_ascii_case(b"STATUS") {
+                        return vec![self.handle_debug_tracing_status()];
+                    }
+                    if cmd.args.len() > 1 && cmd.args[1].eq_ignore_ascii_case(b"RECENT") {
+                        return vec![self.handle_debug_tracing_recent(&cmd.args)];
+                    }
+                    return vec![Response::error(
+                        "ERR Unknown DEBUG TRACING subcommand. Use STATUS or RECENT [count].",
+                    )];
+                }
                 // Fall through for other DEBUG subcommands
             }
             "SHUTDOWN" => return vec![self.handle_shutdown(&cmd.args).await],
@@ -4708,6 +4720,56 @@ impl ConnectionHandler {
         tokio::time::sleep(Duration::from_millis(duration_ms)).await;
 
         Response::ok()
+    }
+
+    /// Handle DEBUG TRACING STATUS command.
+    fn handle_debug_tracing_status(&self) -> Response {
+        match &self.shared_tracer {
+            Some(tracer) => {
+                let status = tracer.get_status();
+                let lines = vec![
+                    format!("enabled:{}", if status.enabled { "yes" } else { "no" }),
+                    format!("sampling_rate:{}", status.sampling_rate),
+                    format!("otlp_endpoint:{}", status.otlp_endpoint),
+                    format!("service_name:{}", status.service_name),
+                    format!("recent_traces_count:{}", status.recent_traces_count),
+                    format!("scatter_gather_spans:{}", status.scatter_gather_spans),
+                    format!("shard_spans:{}", status.shard_spans),
+                    format!("persistence_spans:{}", status.persistence_spans),
+                ];
+                Response::Bulk(Some(Bytes::from(lines.join("\r\n"))))
+            }
+            None => Response::Bulk(Some(Bytes::from("enabled:no\r\nreason:tracer not configured"))),
+        }
+    }
+
+    /// Handle DEBUG TRACING RECENT [count] command.
+    fn handle_debug_tracing_recent(&self, args: &[Bytes]) -> Response {
+        // args[0] = "TRACING", args[1] = "RECENT", args[2] = optional count
+        let count = args
+            .get(2)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(10);
+
+        match &self.shared_tracer {
+            Some(tracer) => {
+                let traces = tracer.get_recent_traces(count);
+                let entries: Vec<Response> = traces
+                    .iter()
+                    .map(|t| {
+                        Response::Array(vec![
+                            Response::Bulk(Some(Bytes::from(t.trace_id.clone()))),
+                            Response::Integer(t.timestamp_ms as i64),
+                            Response::Bulk(Some(Bytes::from(t.command.clone()))),
+                            Response::Integer(if t.sampled { 1 } else { 0 }),
+                        ])
+                    })
+                    .collect();
+                Response::Array(entries)
+            }
+            None => Response::Array(vec![]),
+        }
     }
 
     /// Handle SHUTDOWN command.

@@ -117,6 +117,10 @@ pub struct TracingConfig {
     /// Enable persistence spans (WAL writes, snapshots).
     #[serde(default)]
     pub persistence_spans: bool,
+
+    /// Maximum number of recent traces to retain for DEBUG TRACING RECENT.
+    #[serde(default = "default_recent_traces_max")]
+    pub recent_traces_max: usize,
 }
 
 fn default_tracing_endpoint() -> String {
@@ -131,6 +135,10 @@ fn default_service_name() -> String {
     "frogdb".to_string()
 }
 
+fn default_recent_traces_max() -> usize {
+    100
+}
+
 impl Default for TracingConfig {
     fn default() -> Self {
         Self {
@@ -141,6 +149,7 @@ impl Default for TracingConfig {
             scatter_gather_spans: false,
             shard_spans: false,
             persistence_spans: false,
+            recent_traces_max: default_recent_traces_max(),
         }
     }
 }
@@ -218,6 +227,7 @@ mod tests {
         assert!(!config.scatter_gather_spans);
         assert!(!config.shard_spans);
         assert!(!config.persistence_spans);
+        assert_eq!(config.recent_traces_max, 100);
     }
 
     #[test]
