@@ -324,92 +324,8 @@ impl Server {
                 (Arc::new(NoopBroadcaster), None)
             };
 
-        for (shard_id, (msg_rx, conn_rx)) in shard_receivers
-            .into_iter()
-            .zip(new_conn_receivers.into_iter())
-            .enumerate()
-        {
-            let mut worker = if let Some(ref rocks) = rocks_store {
-                // Get recovered store for this shard
-                let (store, _expiry_index) = recovered_iter
-                    .as_mut()
-                    .and_then(|iter| iter.next())
-                    .unwrap_or_default();
-
-                ShardWorker::with_persistence(
-                    shard_id,
-                    num_shards,
-                    store,
-                    msg_rx,
-                    conn_rx,
-                    shard_senders.clone(),
-                    registry.clone(),
-                    rocks.clone(),
-                    wal_config.clone(),
-                    snapshot_coordinator.clone(),
-                    eviction_config.clone(),
-                    metrics_recorder.clone(),
-                    slowlog_next_id.clone(),
-                    replication_broadcaster.clone(),
-                )
-            } else {
-                ShardWorker::with_eviction(
-                    shard_id,
-                    num_shards,
-                    msg_rx,
-                    conn_rx,
-                    shard_senders.clone(),
-                    registry.clone(),
-                    eviction_config.clone(),
-                    metrics_recorder.clone(),
-                    slowlog_next_id.clone(),
-                    replication_broadcaster.clone(),
-                )
-            };
-
-            // Set function registry on each shard
-            worker.set_function_registry(function_registry.clone());
-
-            let handle = spawn(async move {
-                worker.run().await;
-            });
-
-            shard_handles.push(handle);
-        }
-
-        // Create ACL manager
-        let acl_manager = AclManager::new(config.to_acl_config());
-
-        // Initialize distributed tracer if enabled
-        let shared_tracer = if config.tracing.enabled {
-            let tracing_config = config.tracing.to_metrics_config();
-            match frogdb_metrics::create_tracer(&tracing_config) {
-                Ok(tracer) => {
-                    info!(
-                        endpoint = %config.tracing.otlp_endpoint,
-                        sampling_rate = %config.tracing.sampling_rate,
-                        "Distributed tracing enabled"
-                    );
-                    Some(tracer)
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to initialize tracer, continuing without tracing");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        // Create shard config notifier for propagating runtime config changes
-        let shard_notifier = Arc::new(ShardConfigNotifier::new(
-            shard_senders.clone(),
-            config_manager.runtime_ref(),
-            num_shards,
-        ));
-        config_manager.set_shard_notifier(shard_notifier);
-
         // Initialize cluster state and Raft if cluster mode is enabled
+        // NOTE: This must happen before shard creation so we can pass raft to workers
         let (cluster_state, node_id, raft) = if config.cluster.enabled {
             let node_id = if config.cluster.node_id == 0 {
                 // Auto-generate node ID from timestamp
@@ -460,10 +376,119 @@ impl Server {
 
             info!(node_id = node_id, "Raft initialized");
 
+            // Add this node to the cluster state
+            let client_addr = format!("{}:{}", config.server.bind, config.server.port)
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Invalid bind address: {}", e))?;
+            let cluster_bus_addr = config.cluster.cluster_bus_socket_addr();
+            let this_node = frogdb_core::cluster::NodeInfo::new_primary(
+                node_id,
+                client_addr,
+                cluster_bus_addr,
+            );
+            cluster.add_node(this_node);
+            info!(node_id = node_id, "Node added to cluster state");
+
             (Some(Arc::new(cluster)), Some(node_id), Some(Arc::new(raft)))
         } else {
             (None, None, None)
         };
+
+        for (shard_id, (msg_rx, conn_rx)) in shard_receivers
+            .into_iter()
+            .zip(new_conn_receivers.into_iter())
+            .enumerate()
+        {
+            let mut worker = if let Some(ref rocks) = rocks_store {
+                // Get recovered store for this shard
+                let (store, _expiry_index) = recovered_iter
+                    .as_mut()
+                    .and_then(|iter| iter.next())
+                    .unwrap_or_default();
+
+                ShardWorker::with_persistence(
+                    shard_id,
+                    num_shards,
+                    store,
+                    msg_rx,
+                    conn_rx,
+                    shard_senders.clone(),
+                    registry.clone(),
+                    rocks.clone(),
+                    wal_config.clone(),
+                    snapshot_coordinator.clone(),
+                    eviction_config.clone(),
+                    metrics_recorder.clone(),
+                    slowlog_next_id.clone(),
+                    replication_broadcaster.clone(),
+                )
+            } else {
+                ShardWorker::with_eviction(
+                    shard_id,
+                    num_shards,
+                    msg_rx,
+                    conn_rx,
+                    shard_senders.clone(),
+                    registry.clone(),
+                    eviction_config.clone(),
+                    metrics_recorder.clone(),
+                    slowlog_next_id.clone(),
+                    replication_broadcaster.clone(),
+                )
+            };
+
+            // Set function registry on each shard
+            worker.set_function_registry(function_registry.clone());
+
+            // Set cluster-related fields if cluster mode is enabled
+            if let Some(ref raft_instance) = raft {
+                worker.set_raft(raft_instance.clone());
+            }
+            if let Some(ref state) = cluster_state {
+                worker.set_cluster_state(state.clone());
+            }
+            if let Some(id) = node_id {
+                worker.set_node_id(id);
+            }
+
+            let handle = spawn(async move {
+                worker.run().await;
+            });
+
+            shard_handles.push(handle);
+        }
+
+        // Create ACL manager
+        let acl_manager = AclManager::new(config.to_acl_config());
+
+        // Initialize distributed tracer if enabled
+        let shared_tracer = if config.tracing.enabled {
+            let tracing_config = config.tracing.to_metrics_config();
+            match frogdb_metrics::create_tracer(&tracing_config) {
+                Ok(tracer) => {
+                    info!(
+                        endpoint = %config.tracing.otlp_endpoint,
+                        sampling_rate = %config.tracing.sampling_rate,
+                        "Distributed tracing enabled"
+                    );
+                    Some(tracer)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to initialize tracer, continuing without tracing");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Create shard config notifier for propagating runtime config changes
+        let shard_notifier = Arc::new(ShardConfigNotifier::new(
+            shard_senders.clone(),
+            config_manager.runtime_ref(),
+            num_shards,
+        ));
+        config_manager.set_shard_notifier(shard_notifier);
 
         Ok(Self {
             config,

@@ -105,6 +105,16 @@ impl ClusterState {
         self.inner.read().migrations.get(&slot).cloned()
     }
 
+    /// Add a node to the cluster state directly (for local initialization).
+    /// This bypasses Raft consensus and should only be used during node startup.
+    pub fn add_node(&self, node: NodeInfo) {
+        let mut inner = self.inner.write();
+        if !inner.nodes.contains_key(&node.id) {
+            tracing::info!(node_id = node.id, addr = %node.addr, "Adding node to local cluster state");
+            inner.nodes.insert(node.id, node);
+        }
+    }
+
     /// Apply a command to the state.
     fn apply_command(&self, cmd: ClusterCommand) -> Result<ClusterResponse, ClusterError> {
         let mut inner = self.inner.write();
