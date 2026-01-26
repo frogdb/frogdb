@@ -78,6 +78,50 @@ pub struct Config {
     /// Admin API configuration.
     #[serde(default)]
     pub admin: AdminConfig,
+
+    /// Status endpoint configuration.
+    #[serde(default)]
+    pub status: StatusConfig,
+}
+
+/// Status endpoint configuration for health thresholds.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatusConfig {
+    /// Threshold percentage for memory warning (0-100).
+    #[serde(default = "default_memory_warning_percent")]
+    pub memory_warning_percent: u8,
+
+    /// Threshold percentage for connection warning (0-100).
+    #[serde(default = "default_connection_warning_percent")]
+    pub connection_warning_percent: u8,
+}
+
+fn default_memory_warning_percent() -> u8 {
+    90
+}
+
+fn default_connection_warning_percent() -> u8 {
+    90
+}
+
+impl Default for StatusConfig {
+    fn default() -> Self {
+        Self {
+            memory_warning_percent: default_memory_warning_percent(),
+            connection_warning_percent: default_connection_warning_percent(),
+        }
+    }
+}
+
+impl StatusConfig {
+    /// Convert to StatusCollectorConfig.
+    pub fn to_collector_config(&self) -> frogdb_metrics::StatusCollectorConfig {
+        frogdb_metrics::StatusCollectorConfig {
+            memory_warning_percent: self.memory_warning_percent,
+            connection_warning_percent: self.connection_warning_percent,
+        }
+    }
 }
 
 /// Security configuration.
@@ -1900,6 +1944,15 @@ port = 6380
 
 # Bind address for the admin HTTP server.
 bind = "127.0.0.1"
+
+[status]
+# Threshold percentage for memory warning.
+# Health status will show a warning when memory usage exceeds this threshold.
+memory_warning_percent = 90
+
+# Threshold percentage for connection warning.
+# Health status will show a warning when client connections exceed this threshold.
+connection_warning_percent = 90
 "#
         .to_string()
     }

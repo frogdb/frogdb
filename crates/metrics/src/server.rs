@@ -4,6 +4,7 @@ use crate::config::MetricsConfig;
 use crate::debug::{self, DebugState};
 use crate::health::HealthChecker;
 use crate::prometheus_recorder::PrometheusRecorder;
+use crate::status::StatusCollector;
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::body::Incoming;
@@ -23,6 +24,7 @@ pub struct MetricsServer {
     recorder: Arc<PrometheusRecorder>,
     health: HealthChecker,
     debug_state: Option<DebugState>,
+    status_collector: Option<Arc<StatusCollector>>,
 }
 
 impl MetricsServer {
@@ -37,12 +39,19 @@ impl MetricsServer {
             recorder,
             health,
             debug_state: None,
+            status_collector: None,
         }
     }
 
     /// Set the debug state for the debug web UI.
     pub fn with_debug_state(mut self, state: DebugState) -> Self {
         self.debug_state = Some(state);
+        self
+    }
+
+    /// Set the status collector for the /status/json endpoint.
+    pub fn with_status_collector(mut self, collector: Arc<StatusCollector>) -> Self {
+        self.status_collector = Some(collector);
         self
     }
 
@@ -58,6 +67,7 @@ impl MetricsServer {
         let recorder = self.recorder;
         let health = self.health;
         let debug_state = self.debug_state.map(Arc::new);
+        let status_collector = self.status_collector;
 
         loop {
             let (stream, peer_addr) = match listener.accept().await {
@@ -72,13 +82,15 @@ impl MetricsServer {
             let recorder = Arc::clone(&recorder);
             let health = health.clone();
             let debug_state = debug_state.clone();
+            let status_collector = status_collector.clone();
 
             tokio::spawn(async move {
                 let service = service_fn(move |req: Request<Incoming>| {
                     let recorder = Arc::clone(&recorder);
                     let health = health.clone();
                     let debug_state = debug_state.clone();
-                    async move { handle_request(req, recorder, health, debug_state).await }
+                    let status_collector = status_collector.clone();
+                    async move { handle_request(req, recorder, health, debug_state, status_collector).await }
                 });
 
                 if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
@@ -104,6 +116,7 @@ async fn handle_request(
     recorder: Arc<PrometheusRecorder>,
     health: HealthChecker,
     debug_state: Option<Arc<DebugState>>,
+    status_collector: Option<Arc<StatusCollector>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let (method, path) = (req.method(), req.uri().path());
 
@@ -116,6 +129,8 @@ async fn handle_request(
         // Convenience aliases
         (&Method::GET, "/healthz") => handle_health_live(health),
         (&Method::GET, "/readyz") => handle_health_ready(health),
+        // Status JSON endpoint
+        (&Method::GET, "/status/json") => handle_status_json(status_collector).await,
         // Debug web UI
         (&Method::GET, p) if p.starts_with("/debug") => {
             if let Some(ref state) = debug_state {
@@ -180,6 +195,31 @@ fn handle_health_ready(health: HealthChecker) -> Response<Full<Bytes>> {
         .header("Content-Type", "application/json")
         .body(Full::new(Bytes::from(body)))
         .unwrap()
+}
+
+/// Handle GET /status/json - machine-readable server status.
+async fn handle_status_json(
+    status_collector: Option<Arc<StatusCollector>>,
+) -> Response<Full<Bytes>> {
+    match status_collector {
+        Some(collector) => {
+            let status = collector.collect().await;
+            let body = collector.to_json(&status);
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Full::new(Bytes::from(body)))
+                .unwrap()
+        }
+        None => Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("Content-Type", "application/json")
+            .body(Full::new(Bytes::from(
+                r#"{"error": "Status collector not configured"}"#,
+            )))
+            .unwrap(),
+    }
 }
 
 /// Handle unknown paths.
