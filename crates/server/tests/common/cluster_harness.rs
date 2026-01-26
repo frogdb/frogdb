@@ -107,16 +107,13 @@ impl ClusterTestNode {
         dir
     }
 
-    /// Generate a unique node ID.
-    fn generate_node_id() -> u64 {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        // Combine timestamp with counter for uniqueness
-        (timestamp << 16) | (id & 0xFFFF)
+    /// Generate a node ID from cluster port (deterministic).
+    fn generate_node_id_from_port(cluster_port: u16) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", cluster_port).parse().unwrap();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        addr.hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Start a cluster node with the given configuration.
@@ -127,7 +124,7 @@ impl ClusterTestNode {
 
         let data_dir = config.data_dir.clone().unwrap_or_else(Self::create_temp_dir);
         let node_id = if config.node_id == 0 {
-            Self::generate_node_id()
+            Self::generate_node_id_from_port(cluster_port)
         } else {
             config.node_id
         };
@@ -409,10 +406,10 @@ impl ClusterTestHarness {
         // Pre-allocate ports for all nodes
         let mut node_ports: Vec<(u64, u16, u16, u16)> = Vec::new();
         for _ in 0..num_nodes {
-            let node_id = ClusterTestNode::generate_node_id();
             let client_port = ClusterTestNode::allocate_port();
             let cluster_port = ClusterTestNode::allocate_port();
             let metrics_port = ClusterTestNode::allocate_port();
+            let node_id = ClusterTestNode::generate_node_id_from_port(cluster_port);
             node_ports.push((node_id, client_port, cluster_port, metrics_port));
         }
 
