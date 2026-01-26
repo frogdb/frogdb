@@ -6,7 +6,7 @@ use frogdb_core::persistence::{
     RocksConfig, RocksSnapshotCoordinator, RocksStore, SnapshotCoordinator, WalConfig,
 };
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
-use frogdb_core::{AclManager, ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, NoopBroadcaster, ReplicationTrackerImpl, SharedBroadcaster, ShardMessage, ShardWorker};
+use frogdb_core::{AclManager, ClientRegistry, ClusterState, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, NoopBroadcaster, ReplicationTrackerImpl, SharedBroadcaster, ShardMessage, ShardWorker};
 use frogdb_metrics::{DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo, SharedTracer, SystemMetricsCollector};
 use std::time::Duration;
 use tokio::signal;
@@ -106,6 +106,12 @@ pub struct Server {
 
     /// Optional replication tracker for WAIT command (only when running as primary).
     replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+
+    /// Optional cluster state (only when cluster mode is enabled).
+    cluster_state: Option<Arc<ClusterState>>,
+
+    /// This node's ID (for cluster mode).
+    node_id: Option<u64>,
 }
 
 impl Server {
@@ -395,6 +401,30 @@ impl Server {
         ));
         config_manager.set_shard_notifier(shard_notifier);
 
+        // Initialize cluster state if cluster mode is enabled
+        let (cluster_state, node_id) = if config.cluster.enabled {
+            let node_id = if config.cluster.node_id == 0 {
+                // Auto-generate node ID from timestamp
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(1)
+            } else {
+                config.cluster.node_id
+            };
+
+            info!(
+                node_id = node_id,
+                cluster_bus_addr = %config.cluster.cluster_bus_addr,
+                "Cluster mode enabled"
+            );
+
+            let cluster = Arc::new(ClusterState::new());
+            (Some(cluster), Some(node_id))
+        } else {
+            (None, None)
+        };
+
         Ok(Self {
             config,
             listener,
@@ -415,6 +445,8 @@ impl Server {
             function_registry,
             shared_tracer,
             replication_tracker,
+            cluster_state,
+            node_id,
         })
     }
 
@@ -571,6 +603,34 @@ impl Server {
             None
         };
 
+        // Start admin server if enabled
+        let admin_server_handle = if self.config.admin.enabled {
+            use crate::admin::{server::AdminState, AdminServer};
+
+            let admin_state = AdminState {
+                cluster_state: self.cluster_state.clone(),
+                replication_tracker: self.replication_tracker.clone(),
+                node_id: self.node_id,
+                client_addr: self.config.bind_addr(),
+                cluster_bus_addr: if self.config.cluster.enabled {
+                    Some(self.config.cluster.cluster_bus_addr.clone())
+                } else {
+                    None
+                },
+            };
+
+            let admin_server =
+                crate::admin::AdminServer::new(self.config.admin.clone(), admin_state);
+
+            Some(spawn(async move {
+                if let Err(e) = admin_server.run().await {
+                    error!(error = %e, "Admin server error");
+                }
+            }))
+        } else {
+            None
+        };
+
         let acceptor = Acceptor::new(
             self.listener,
             self.new_conn_senders,
@@ -587,6 +647,8 @@ impl Server {
             self.shared_tracer.clone(),
             self.config.tracing.clone(),
             self.replication_tracker.clone(),
+            self.cluster_state.clone(),
+            self.node_id,
         );
 
         // Spawn acceptor task
@@ -641,11 +703,14 @@ impl Server {
             info!("Snapshot completed");
         }
 
-        // Stop metrics server and system collector
+        // Stop metrics server, system collector, and admin server
         if let Some(handle) = metrics_server_handle {
             handle.abort();
         }
         if let Some(handle) = system_collector_handle {
+            handle.abort();
+        }
+        if let Some(handle) = admin_server_handle {
             handle.abort();
         }
 

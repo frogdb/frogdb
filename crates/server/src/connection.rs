@@ -9,12 +9,13 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::{Bytes, BytesMut};
 use frogdb_core::{
-    generate_latency_graph, persistence::SnapshotCoordinator, shard_for_key, AclManager,
-    AuthenticatedUser, ClientHandle, ClientRegistry, CommandCategory, CommandFlags, CommandRegistry,
-    ExecuteSignal, GlobPattern, IntrospectionRequest, IntrospectionResponse, KeyAccessType,
-    LatencyEvent, LockMode, MetricsRecorder, PartialResult, PauseMode, PubSubMessage, PubSubSender,
-    ReplicationTracker, ReplicationTrackerImpl, ScatterOp, ShardReadyResult, SharedFunctionRegistry,
-    ShardMemoryStats, ShardMessage, StreamId, TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+    generate_latency_graph, persistence::SnapshotCoordinator, shard_for_key, slot_for_key,
+    AclManager, AuthenticatedUser, ClientHandle, ClientRegistry, ClusterState, CommandCategory,
+    CommandFlags, CommandRegistry, ExecuteSignal, GlobPattern, IntrospectionRequest,
+    IntrospectionResponse, KeyAccessType, LatencyEvent, LockMode, MetricsRecorder, PartialResult,
+    PauseMode, PubSubMessage, PubSubSender, ReplicationTracker, ReplicationTrackerImpl, ScatterOp,
+    ShardReadyResult, SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId,
+    TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 use frogdb_metrics::SharedTracer;
@@ -190,6 +191,12 @@ pub struct ConnectionState {
 
     /// Skip the next reply (for CLIENT REPLY SKIP).
     pub skip_next_reply: bool,
+
+    /// ASKING flag for cluster slot migration (cleared after use).
+    pub asking: bool,
+
+    /// READONLY flag for allowing reads on cluster replicas.
+    pub readonly: bool,
 }
 
 impl ConnectionState {
@@ -212,6 +219,8 @@ impl ConnectionState {
             blocked: None,
             reply_mode: ReplyMode::default(),
             skip_next_reply: false,
+            asking: false,
+            readonly: false,
         }
     }
 }
@@ -277,6 +286,12 @@ pub struct ConnectionHandler {
 
     /// Optional replication tracker for WAIT command.
     replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+
+    /// Optional cluster state (only when cluster mode is enabled).
+    cluster_state: Option<Arc<ClusterState>>,
+
+    /// This node's ID (for cluster mode).
+    node_id: Option<u64>,
 }
 
 /// Determine key access type from command flags.
@@ -385,6 +400,8 @@ impl ConnectionHandler {
         shared_tracer: Option<SharedTracer>,
         tracing_config: TracingConfig,
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+        cluster_state: Option<Arc<ClusterState>>,
+        node_id: Option<u64>,
     ) -> Self {
         let framed = Framed::new(socket, Resp2);
         let requires_auth = acl_manager.requires_auth();
@@ -416,6 +433,8 @@ impl ConnectionHandler {
             shared_tracer,
             tracing_config,
             replication_tracker,
+            cluster_state,
+            node_id,
         }
     }
 
@@ -1019,6 +1038,29 @@ impl ConnectionHandler {
             return vec![self.queue_command(cmd)];
         }
 
+        // Handle ASKING command (sets connection flag)
+        if cmd_name_str == "ASKING" {
+            self.state.asking = true;
+            return vec![Response::ok()];
+        }
+
+        // Handle READONLY command (sets connection flag)
+        if cmd_name_str == "READONLY" {
+            self.state.readonly = true;
+            return vec![Response::ok()];
+        }
+
+        // Handle READWRITE command (clears readonly flag)
+        if cmd_name_str == "READWRITE" {
+            self.state.readonly = false;
+            return vec![Response::ok()];
+        }
+
+        // Validate cluster slot ownership (returns CROSSSLOT/MOVED/ASK errors)
+        if let Some(cluster_error) = self.validate_cluster_slots(cmd) {
+            return vec![cluster_error];
+        }
+
         // Normal execution
         let response = self.route_and_execute(cmd).await;
 
@@ -1050,6 +1092,107 @@ impl ConnectionHandler {
     /// Check if a command is exempt from authentication requirements.
     fn is_auth_exempt(cmd: &str) -> bool {
         matches!(cmd, "AUTH" | "QUIT" | "HELLO" | "PING")
+    }
+
+    /// Check if a command is exempt from slot validation in cluster mode.
+    fn is_cluster_exempt(cmd: &str) -> bool {
+        matches!(
+            cmd,
+            "CLUSTER" | "ASKING" | "READONLY" | "READWRITE" | "AUTH" | "HELLO" | "QUIT"
+                | "PING" | "INFO" | "CONFIG" | "CLIENT" | "DEBUG" | "COMMAND" | "TIME"
+                | "DBSIZE" | "LASTSAVE" | "BGSAVE" | "BGREWRITEAOF" | "SLOWLOG" | "ACL"
+                | "MEMORY" | "LATENCY" | "MODULE"
+        )
+    }
+
+    /// Validate slot ownership for keys in cluster mode.
+    /// Returns Some(Response) if validation fails, None if OK.
+    fn validate_cluster_slots(&mut self, cmd: &ParsedCommand) -> Option<Response> {
+        // Only validate if cluster mode is enabled
+        let cluster_state = self.cluster_state.as_ref()?;
+        let node_id = self.node_id?;
+
+        let cmd_name_bytes = cmd.name_uppercase();
+        let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
+
+        // Skip cluster-exempt commands
+        if Self::is_cluster_exempt(&cmd_name) {
+            return None;
+        }
+
+        // Get keys from command using the registry
+        let keys = if let Some(cmd_impl) = self.registry.get(&cmd_name) {
+            cmd_impl.keys(&cmd.args)
+        } else {
+            return None; // Unknown command, let execute handle it
+        };
+
+        // No keys = no slot validation needed
+        if keys.is_empty() {
+            return None;
+        }
+
+        // Calculate slot for first key
+        let first_slot = slot_for_key(keys[0]);
+
+        // CROSSSLOT check - all keys must hash to same slot
+        for key in &keys[1..] {
+            let slot = slot_for_key(key);
+            if slot != first_slot {
+                return Some(Response::error(
+                    "CROSSSLOT Keys in request don't hash to the same slot",
+                ));
+            }
+        }
+
+        // Check slot ownership
+        let snapshot = cluster_state.snapshot();
+
+        match snapshot.slot_assignment.get(&first_slot) {
+            Some(&owner) if owner == node_id => {
+                // We own this slot - check for migration
+                if let Some(migration) = snapshot.migrations.get(&first_slot) {
+                    // Slot is being migrated
+                    if !self.state.asking {
+                        // Client needs to follow the migration
+                        if let Some(target_node) = snapshot.nodes.get(&migration.target_node) {
+                            return Some(Response::error(format!(
+                                "ASK {} {}:{}",
+                                first_slot,
+                                target_node.addr.ip(),
+                                target_node.addr.port()
+                            )));
+                        }
+                    }
+                    // Clear ASKING flag after use
+                    self.state.asking = false;
+                }
+                None // We own it and no migration issues
+            }
+            Some(&owner) => {
+                // Another node owns this slot
+                if let Some(owner_node) = snapshot.nodes.get(&owner) {
+                    Some(Response::error(format!(
+                        "MOVED {} {}:{}",
+                        first_slot,
+                        owner_node.addr.ip(),
+                        owner_node.addr.port()
+                    )))
+                } else {
+                    Some(Response::error(format!(
+                        "CLUSTERDOWN Hash slot {} not served",
+                        first_slot
+                    )))
+                }
+            }
+            None => {
+                // Slot not assigned
+                Some(Response::error(format!(
+                    "CLUSTERDOWN Hash slot {} not served",
+                    first_slot
+                )))
+            }
+        }
     }
 
     /// Get client info string for ACL logging.

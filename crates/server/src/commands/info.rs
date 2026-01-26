@@ -54,7 +54,7 @@ impl Command for InfoCommand {
             Some(b"memory") => build_memory_info(ctx),
             Some(b"persistence") => build_persistence_info(),
             Some(b"stats") => build_stats_info(ctx),
-            Some(b"replication") => build_replication_info(),
+            Some(b"replication") => build_replication_info(ctx),
             Some(b"cpu") => build_cpu_info(),
             Some(b"keyspace") => build_keyspace_info(ctx),
             Some(other) => {
@@ -83,7 +83,7 @@ fn build_all_info(ctx: &mut CommandContext) -> String {
     info.push_str(&build_memory_info(ctx));
     info.push_str(&build_persistence_info());
     info.push_str(&build_stats_info(ctx));
-    info.push_str(&build_replication_info());
+    info.push_str(&build_replication_info(ctx));
     info.push_str(&build_cpu_info());
     info.push_str(&build_keyspace_info(ctx));
     info
@@ -289,30 +289,69 @@ fn build_stats_info(ctx: &mut CommandContext) -> String {
     )
 }
 
-fn build_replication_info() -> String {
-    // TODO: Wire ReplicationTrackerImpl into CommandContext to provide real values.
-    // This requires adding the tracker to the server's shard execution path.
-    // For now, return static values indicating standalone mode.
-    //
-    // Full implementation should report:
-    // - role: master or slave
-    // - connected_slaves: N
-    // - slaveN: ip=...,port=...,state=...,offset=...,lag=...
-    // - master_replid: actual 40-char replication ID
-    // - master_repl_offset: current WAL position
-    "# Replication\r\n\
-     role:master\r\n\
-     connected_slaves:0\r\n\
-     master_failover_state:no-failover\r\n\
-     master_replid:0000000000000000000000000000000000000000\r\n\
-     master_replid2:0000000000000000000000000000000000000000\r\n\
-     master_repl_offset:0\r\n\
-     second_repl_offset:-1\r\n\
-     repl_backlog_active:0\r\n\
-     repl_backlog_size:1048576\r\n\
-     repl_backlog_first_byte_offset:0\r\n\
-     repl_backlog_histlen:0\r\n\r\n"
-        .to_string()
+fn build_replication_info(ctx: &CommandContext) -> String {
+    // Check if we have a replication tracker (running as primary)
+    if let Some(ref tracker) = ctx.replication_tracker {
+        let replicas = tracker.get_streaming_replicas();
+        let repl_offset = tracker.current_offset();
+        let connected_slaves = replicas.len();
+
+        let mut info = format!(
+            "# Replication\r\n\
+             role:master\r\n\
+             connected_slaves:{}\r\n",
+            connected_slaves
+        );
+
+        // Add info for each connected replica
+        for (i, replica) in replicas.iter().enumerate() {
+            info.push_str(&format!(
+                "slave{}:ip={},port={},state=online,offset={},lag=0\r\n",
+                i,
+                replica.address.ip(),
+                replica.listening_port,
+                replica.acked_offset
+            ));
+        }
+
+        // Add replication IDs and offset info
+        let repl_id = format!("{:040x}", ctx.node_id.unwrap_or(0));
+        info.push_str(&format!(
+            "master_failover_state:no-failover\r\n\
+             master_replid:{}\r\n\
+             master_replid2:0000000000000000000000000000000000000000\r\n\
+             master_repl_offset:{}\r\n\
+             second_repl_offset:-1\r\n\
+             repl_backlog_active:{}\r\n\
+             repl_backlog_size:1048576\r\n\
+             repl_backlog_first_byte_offset:0\r\n\
+             repl_backlog_histlen:{}\r\n\r\n",
+            repl_id,
+            repl_offset,
+            if connected_slaves > 0 { 1 } else { 0 },
+            repl_offset,
+        ));
+
+        info
+    } else {
+        // Standalone mode or replica mode - return default info
+        let repl_id = format!("{:040x}", ctx.node_id.unwrap_or(0));
+        format!(
+            "# Replication\r\n\
+             role:master\r\n\
+             connected_slaves:0\r\n\
+             master_failover_state:no-failover\r\n\
+             master_replid:{}\r\n\
+             master_replid2:0000000000000000000000000000000000000000\r\n\
+             master_repl_offset:0\r\n\
+             second_repl_offset:-1\r\n\
+             repl_backlog_active:0\r\n\
+             repl_backlog_size:1048576\r\n\
+             repl_backlog_first_byte_offset:0\r\n\
+             repl_backlog_histlen:0\r\n\r\n",
+            repl_id,
+        )
+    }
 }
 
 fn build_cpu_info() -> String {

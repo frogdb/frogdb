@@ -37,6 +37,8 @@ hex.workspace = true
 shuttle = { workspace = true, optional = true }
 turmoil = { workspace = true, optional = true }
 openraft.workspace = true
+axum.workspace = true
+tower.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

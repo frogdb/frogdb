@@ -151,10 +151,53 @@ impl Command for ClusterCommand {
 }
 
 /// CLUSTER INFO - Returns cluster state information.
-fn cluster_info(_ctx: &mut CommandContext) -> Result<Response, CommandError> {
-    // For now, return standalone mode info
-    // When cluster is enabled, this will be populated from ClusterState
-    let info = "\
+fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
+    // Use ClusterState if available, otherwise return standalone mode info
+    if let Some(ref cluster_state) = ctx.cluster_state {
+        let snapshot = cluster_state.snapshot();
+        let slots_assigned = snapshot.slot_assignment.len() as u16;
+        let known_nodes = snapshot.nodes.len();
+
+        // Count primaries (cluster_size)
+        let cluster_size = snapshot.nodes.values().filter(|n| n.is_primary()).count();
+
+        // Get current node's epoch
+        let my_epoch = ctx
+            .node_id
+            .and_then(|id| snapshot.nodes.get(&id))
+            .map(|n| n.config_epoch)
+            .unwrap_or(0);
+
+        let info = format!(
+            "\
+cluster_state:ok\r\n\
+cluster_slots_assigned:{}\r\n\
+cluster_slots_ok:{}\r\n\
+cluster_slots_pfail:0\r\n\
+cluster_slots_fail:0\r\n\
+cluster_known_nodes:{}\r\n\
+cluster_size:{}\r\n\
+cluster_current_epoch:{}\r\n\
+cluster_my_epoch:{}\r\n\
+cluster_stats_messages_ping_sent:0\r\n\
+cluster_stats_messages_pong_sent:0\r\n\
+cluster_stats_messages_sent:0\r\n\
+cluster_stats_messages_ping_received:0\r\n\
+cluster_stats_messages_pong_received:0\r\n\
+cluster_stats_messages_received:0\r\n\
+total_cluster_links_buffer_limit_exceeded:0\r\n",
+            slots_assigned,
+            slots_assigned, // slots_ok = slots_assigned for now
+            known_nodes,
+            cluster_size,
+            snapshot.config_epoch,
+            my_epoch,
+        );
+
+        Ok(Response::bulk(Bytes::from(info)))
+    } else {
+        // Standalone mode - return default info
+        let info = "\
 cluster_state:ok\r\n\
 cluster_slots_assigned:16384\r\n\
 cluster_slots_ok:16384\r\n\
@@ -172,77 +215,296 @@ cluster_stats_messages_pong_received:0\r\n\
 cluster_stats_messages_received:0\r\n\
 total_cluster_links_buffer_limit_exceeded:0\r\n";
 
-    Ok(Response::bulk(Bytes::from(info)))
+        Ok(Response::bulk(Bytes::from(info)))
+    }
 }
 
 /// CLUSTER NODES - Returns the cluster nodes configuration.
-fn cluster_nodes(_ctx: &mut CommandContext) -> Result<Response, CommandError> {
-    // For standalone mode, return self as a single primary with all slots
+fn cluster_nodes(ctx: &mut CommandContext) -> Result<Response, CommandError> {
     // Format: <id> <ip:port@cport> <flags> <master> <ping-sent> <pong-recv> <config-epoch> <link-state> <slot> <slot> ... <slot>
-    let node_id = "0000000000000000000000000000000000000001";
-    let info = format!(
-        "{} 127.0.0.1:6379@16379 myself,master - 0 0 0 connected 0-16383\n",
-        node_id
-    );
+    if let Some(ref cluster_state) = ctx.cluster_state {
+        let snapshot = cluster_state.snapshot();
+        let my_id = ctx.node_id.unwrap_or(0);
 
-    Ok(Response::bulk(Bytes::from(info)))
+        let mut lines = Vec::new();
+        for node in snapshot.nodes.values() {
+            // Build flags string
+            let mut flags = Vec::new();
+            if node.id == my_id {
+                flags.push("myself");
+            }
+            if node.is_primary() {
+                flags.push("master");
+            }
+            if node.is_replica() {
+                flags.push("slave");
+            }
+            if node.flags.fail {
+                flags.push("fail");
+            }
+            if node.flags.pfail {
+                flags.push("fail?");
+            }
+            if node.flags.handshake {
+                flags.push("handshake");
+            }
+            if node.flags.noaddr {
+                flags.push("noaddr");
+            }
+            let flags_str = if flags.is_empty() {
+                "noflags".to_string()
+            } else {
+                flags.join(",")
+            };
+
+            // Get master id (- for primary)
+            let master_id = node
+                .primary_id
+                .map(|id| format!("{:040x}", id))
+                .unwrap_or_else(|| "-".to_string());
+
+            // Get slot ranges for this node
+            let slot_ranges = snapshot.get_node_slots(node.id);
+            let slots_str: String = slot_ranges
+                .iter()
+                .map(|r| {
+                    if r.start == r.end {
+                        format!("{}", r.start)
+                    } else {
+                        format!("{}-{}", r.start, r.end)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            // Build line
+            let line = format!(
+                "{:040x} {}:{}@{} {} {} 0 0 {} connected {}",
+                node.id,
+                node.addr.ip(),
+                node.addr.port(),
+                node.cluster_addr.port(),
+                flags_str,
+                master_id,
+                node.config_epoch,
+                slots_str
+            );
+
+            lines.push(line);
+        }
+
+        Ok(Response::bulk(Bytes::from(lines.join("\n") + "\n")))
+    } else {
+        // Standalone mode - return self as a single primary with all slots
+        let node_id = ctx.node_id.unwrap_or(1);
+        let info = format!(
+            "{:040x} 127.0.0.1:6379@16379 myself,master - 0 0 0 connected 0-16383\n",
+            node_id
+        );
+
+        Ok(Response::bulk(Bytes::from(info)))
+    }
 }
 
 /// CLUSTER MYID - Returns this node's unique ID.
-fn cluster_myid(_ctx: &mut CommandContext) -> Result<Response, CommandError> {
-    // For standalone mode, return a static ID
-    // When cluster is enabled, this will return the actual node ID
-    Ok(Response::bulk(Bytes::from(
-        "0000000000000000000000000000000000000001",
-    )))
+fn cluster_myid(ctx: &mut CommandContext) -> Result<Response, CommandError> {
+    // Return this node's ID (40-character hex string)
+    let node_id = ctx.node_id.unwrap_or(1);
+    Ok(Response::bulk(Bytes::from(format!("{:040x}", node_id))))
 }
 
 /// CLUSTER SLOTS - Returns slot to node mappings (deprecated, use CLUSTER SHARDS).
-fn cluster_slots(_ctx: &mut CommandContext) -> Result<Response, CommandError> {
-    // For standalone mode, return all slots assigned to self
+fn cluster_slots(ctx: &mut CommandContext) -> Result<Response, CommandError> {
     // Format: [[start, end, [ip, port, id], [replica_ip, replica_port, replica_id], ...], ...]
-    let slot_info = vec![Response::Array(vec![
-        Response::Integer(0),      // start slot
-        Response::Integer(16383),  // end slot
-        Response::Array(vec![
-            Response::bulk(Bytes::from("127.0.0.1")),
-            Response::Integer(6379),
-            Response::bulk(Bytes::from("0000000000000000000000000000000000000001")),
-        ]),
-    ])];
+    if let Some(ref cluster_state) = ctx.cluster_state {
+        let snapshot = cluster_state.snapshot();
+        let mut slot_info = Vec::new();
 
-    Ok(Response::Array(slot_info))
+        // Group slots by primary node
+        let mut node_slots: std::collections::HashMap<u64, Vec<(u16, u16)>> =
+            std::collections::HashMap::new();
+
+        for (slot, node_id) in &snapshot.slot_assignment {
+            // Find the primary for this slot
+            let primary_id = if let Some(node) = snapshot.nodes.get(node_id) {
+                node.primary_id.unwrap_or(*node_id)
+            } else {
+                *node_id
+            };
+            node_slots
+                .entry(primary_id)
+                .or_default()
+                .push((*slot, *slot));
+        }
+
+        // Convert to slot ranges and build response
+        for (node_id, slots) in node_slots {
+            if let Some(node) = snapshot.nodes.get(&node_id) {
+                // Merge consecutive slots into ranges
+                let ranges = snapshot.get_node_slots(node_id);
+
+                for range in ranges {
+                    let mut entry = vec![
+                        Response::Integer(range.start as i64),
+                        Response::Integer(range.end as i64),
+                        Response::Array(vec![
+                            Response::bulk(Bytes::from(node.addr.ip().to_string())),
+                            Response::Integer(node.addr.port() as i64),
+                            Response::bulk(Bytes::from(format!("{:040x}", node.id))),
+                        ]),
+                    ];
+
+                    // Add replicas
+                    for replica in snapshot.nodes.values() {
+                        if replica.primary_id == Some(node_id) {
+                            entry.push(Response::Array(vec![
+                                Response::bulk(Bytes::from(replica.addr.ip().to_string())),
+                                Response::Integer(replica.addr.port() as i64),
+                                Response::bulk(Bytes::from(format!("{:040x}", replica.id))),
+                            ]));
+                        }
+                    }
+
+                    slot_info.push(Response::Array(entry));
+                }
+            }
+        }
+
+        Ok(Response::Array(slot_info))
+    } else {
+        // Standalone mode - return all slots assigned to self
+        let node_id = ctx.node_id.unwrap_or(1);
+        let slot_info = vec![Response::Array(vec![
+            Response::Integer(0),
+            Response::Integer(16383),
+            Response::Array(vec![
+                Response::bulk(Bytes::from("127.0.0.1")),
+                Response::Integer(6379),
+                Response::bulk(Bytes::from(format!("{:040x}", node_id))),
+            ]),
+        ])];
+
+        Ok(Response::Array(slot_info))
+    }
 }
 
 /// CLUSTER SHARDS - Returns information about cluster shards (Redis 7.0+).
-fn cluster_shards(_ctx: &mut CommandContext) -> Result<Response, CommandError> {
-    // Return shard information in the new format
-    let shard = Response::Array(vec![
-        Response::bulk(Bytes::from("slots")),
-        Response::Array(vec![
-            Response::Integer(0),
-            Response::Integer(16383),
-        ]),
-        Response::bulk(Bytes::from("nodes")),
-        Response::Array(vec![Response::Array(vec![
-            Response::bulk(Bytes::from("id")),
-            Response::bulk(Bytes::from("0000000000000000000000000000000000000001")),
-            Response::bulk(Bytes::from("port")),
-            Response::Integer(6379),
-            Response::bulk(Bytes::from("ip")),
-            Response::bulk(Bytes::from("127.0.0.1")),
-            Response::bulk(Bytes::from("endpoint")),
-            Response::bulk(Bytes::from("127.0.0.1")),
-            Response::bulk(Bytes::from("role")),
-            Response::bulk(Bytes::from("master")),
-            Response::bulk(Bytes::from("replication-offset")),
-            Response::Integer(0),
-            Response::bulk(Bytes::from("health")),
-            Response::bulk(Bytes::from("online")),
-        ])]),
-    ]);
+fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
+    if let Some(ref cluster_state) = ctx.cluster_state {
+        let snapshot = cluster_state.snapshot();
+        let mut shards = Vec::new();
 
-    Ok(Response::Array(vec![shard]))
+        // Group nodes by primary (each primary + its replicas = one shard)
+        let mut primary_nodes: Vec<_> = snapshot
+            .nodes
+            .values()
+            .filter(|n| n.is_primary())
+            .collect();
+        primary_nodes.sort_by_key(|n| n.id);
+
+        for primary in primary_nodes {
+            let slot_ranges = snapshot.get_node_slots(primary.id);
+
+            // Build slots array [start1, end1, start2, end2, ...]
+            let mut slots = Vec::new();
+            for range in &slot_ranges {
+                slots.push(Response::Integer(range.start as i64));
+                slots.push(Response::Integer(range.end as i64));
+            }
+
+            // Build nodes array
+            let mut nodes = Vec::new();
+
+            // Add primary node
+            nodes.push(Response::Array(vec![
+                Response::bulk(Bytes::from("id")),
+                Response::bulk(Bytes::from(format!("{:040x}", primary.id))),
+                Response::bulk(Bytes::from("port")),
+                Response::Integer(primary.addr.port() as i64),
+                Response::bulk(Bytes::from("ip")),
+                Response::bulk(Bytes::from(primary.addr.ip().to_string())),
+                Response::bulk(Bytes::from("endpoint")),
+                Response::bulk(Bytes::from(primary.addr.ip().to_string())),
+                Response::bulk(Bytes::from("role")),
+                Response::bulk(Bytes::from("master")),
+                Response::bulk(Bytes::from("replication-offset")),
+                Response::Integer(0), // TODO: Track replication offset in cluster state
+                Response::bulk(Bytes::from("health")),
+                Response::bulk(Bytes::from(if primary.flags.fail {
+                    "fail"
+                } else if primary.flags.pfail {
+                    "loading"
+                } else {
+                    "online"
+                })),
+            ]));
+
+            // Add replicas
+            for replica in snapshot.nodes.values() {
+                if replica.primary_id == Some(primary.id) {
+                    nodes.push(Response::Array(vec![
+                        Response::bulk(Bytes::from("id")),
+                        Response::bulk(Bytes::from(format!("{:040x}", replica.id))),
+                        Response::bulk(Bytes::from("port")),
+                        Response::Integer(replica.addr.port() as i64),
+                        Response::bulk(Bytes::from("ip")),
+                        Response::bulk(Bytes::from(replica.addr.ip().to_string())),
+                        Response::bulk(Bytes::from("endpoint")),
+                        Response::bulk(Bytes::from(replica.addr.ip().to_string())),
+                        Response::bulk(Bytes::from("role")),
+                        Response::bulk(Bytes::from("slave")),
+                        Response::bulk(Bytes::from("replication-offset")),
+                        Response::Integer(0), // TODO: Track replication offset in cluster state
+                        Response::bulk(Bytes::from("health")),
+                        Response::bulk(Bytes::from(if replica.flags.fail {
+                            "fail"
+                        } else if replica.flags.pfail {
+                            "loading"
+                        } else {
+                            "online"
+                        })),
+                    ]));
+                }
+            }
+
+            let shard = Response::Array(vec![
+                Response::bulk(Bytes::from("slots")),
+                Response::Array(slots),
+                Response::bulk(Bytes::from("nodes")),
+                Response::Array(nodes),
+            ]);
+
+            shards.push(shard);
+        }
+
+        Ok(Response::Array(shards))
+    } else {
+        // Standalone mode - return single shard
+        let node_id = ctx.node_id.unwrap_or(1);
+        let shard = Response::Array(vec![
+            Response::bulk(Bytes::from("slots")),
+            Response::Array(vec![Response::Integer(0), Response::Integer(16383)]),
+            Response::bulk(Bytes::from("nodes")),
+            Response::Array(vec![Response::Array(vec![
+                Response::bulk(Bytes::from("id")),
+                Response::bulk(Bytes::from(format!("{:040x}", node_id))),
+                Response::bulk(Bytes::from("port")),
+                Response::Integer(6379),
+                Response::bulk(Bytes::from("ip")),
+                Response::bulk(Bytes::from("127.0.0.1")),
+                Response::bulk(Bytes::from("endpoint")),
+                Response::bulk(Bytes::from("127.0.0.1")),
+                Response::bulk(Bytes::from("role")),
+                Response::bulk(Bytes::from("master")),
+                Response::bulk(Bytes::from("replication-offset")),
+                Response::Integer(0),
+                Response::bulk(Bytes::from("health")),
+                Response::bulk(Bytes::from("online")),
+            ])]),
+        ]);
+
+        Ok(Response::Array(vec![shard]))
+    }
 }
 
 /// CLUSTER KEYSLOT - Returns the hash slot for a key.

@@ -485,14 +485,7 @@ mod tests {
     fn create_test_context() -> CommandContext<'static> {
         let store = Box::leak(Box::new(HashMapStore::new()));
         let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
-        CommandContext {
-            store,
-            shard_senders,
-            shard_id: 0,
-            num_shards: 1,
-            conn_id: 0,
-            protocol_version: ProtocolVersion::Resp2,
-        }
+        CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2)
     }
 
     #[test]

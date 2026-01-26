@@ -74,6 +74,10 @@ pub struct Config {
     /// Cluster configuration.
     #[serde(default)]
     pub cluster: ClusterConfigSection,
+
+    /// Admin API configuration.
+    #[serde(default)]
+    pub admin: AdminConfig,
 }
 
 /// Security configuration.
@@ -664,6 +668,60 @@ impl ClusterConfigSection {
             election_timeout_ms: self.election_timeout_ms,
             heartbeat_interval_ms: self.heartbeat_interval_ms,
         }
+    }
+}
+
+/// Admin API configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AdminConfig {
+    /// Whether the admin API is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Port for the admin HTTP server.
+    #[serde(default = "default_admin_port")]
+    pub port: u16,
+
+    /// Bind address for the admin HTTP server.
+    #[serde(default = "default_admin_bind")]
+    pub bind: String,
+}
+
+fn default_admin_port() -> u16 {
+    6380
+}
+
+fn default_admin_bind() -> String {
+    "127.0.0.1".to_string()
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_admin_port(),
+            bind: default_admin_bind(),
+        }
+    }
+}
+
+impl AdminConfig {
+    /// Get the full bind address.
+    pub fn bind_addr(&self) -> String {
+        format!("{}:{}", self.bind, self.port)
+    }
+
+    /// Validate the admin configuration.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        if self.port == 0 {
+            anyhow::bail!("admin.port cannot be 0");
+        }
+
+        Ok(())
     }
 }
 
@@ -1507,10 +1565,16 @@ impl Config {
         // Validate cluster config
         self.cluster.validate()?;
 
+        // Validate admin config
+        self.admin.validate()?;
+
         // Validate bind addresses
         validate_bind_address(&self.server.bind, "server.bind")?;
         if self.metrics.enabled {
             validate_bind_address(&self.metrics.bind, "metrics.bind")?;
+        }
+        if self.admin.enabled {
+            validate_bind_address(&self.admin.bind, "admin.bind")?;
         }
 
         // Validate paths (only if features are enabled)
@@ -1825,6 +1889,17 @@ connect_timeout_ms = 5000
 
 # Request timeout for cluster bus RPCs in milliseconds.
 request_timeout_ms = 10000
+
+[admin]
+# Whether the admin HTTP API is enabled.
+# The admin API provides cluster management and health check endpoints.
+enabled = false
+
+# Port for the admin HTTP server.
+port = 6380
+
+# Bind address for the admin HTTP server.
+bind = "127.0.0.1"
 "#
         .to_string()
     }
