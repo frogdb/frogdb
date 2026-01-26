@@ -8,6 +8,7 @@ use bytes::Bytes;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::cluster::{ClusterRaft, ClusterState};
 use crate::command::CommandContext;
 use crate::error::CommandError;
 use crate::eviction::{EvictionCandidate, EvictionConfig, EvictionPolicy, EvictionPool};
@@ -929,6 +930,15 @@ pub struct ShardWorker {
 
     /// Replication broadcaster for streaming writes to replicas.
     replication_broadcaster: SharedBroadcaster,
+
+    /// Optional Raft instance for cluster command execution.
+    raft: Option<Arc<ClusterRaft>>,
+
+    /// Optional cluster state for cluster commands and routing.
+    cluster_state: Option<Arc<ClusterState>>,
+
+    /// This node's ID (for cluster mode).
+    node_id: Option<u64>,
 }
 
 impl ShardWorker {
@@ -1015,6 +1025,9 @@ impl ShardWorker {
             continuation_lock: None,
             pending_continuation_release: None,
             replication_broadcaster,
+            raft: None,
+            cluster_state: None,
+            node_id: None,
         }
     }
 
@@ -1089,6 +1102,9 @@ impl ShardWorker {
             continuation_lock: None,
             pending_continuation_release: None,
             replication_broadcaster,
+            raft: None,
+            cluster_state: None,
+            node_id: None,
         }
     }
 
@@ -1103,6 +1119,24 @@ impl ShardWorker {
     /// when the primary replication handler is initialized separately from the shards.
     pub fn set_replication_broadcaster(&mut self, broadcaster: SharedBroadcaster) {
         self.replication_broadcaster = broadcaster;
+    }
+
+    /// Set the Raft instance for cluster commands.
+    ///
+    /// This allows setting the Raft instance after construction, which is needed
+    /// because Raft initialization may happen after shard workers are created.
+    pub fn set_raft(&mut self, raft: Arc<ClusterRaft>) {
+        self.raft = Some(raft);
+    }
+
+    /// Set the cluster state for cluster commands.
+    pub fn set_cluster_state(&mut self, cluster_state: Arc<ClusterState>) {
+        self.cluster_state = Some(cluster_state);
+    }
+
+    /// Set this node's ID for cluster mode.
+    pub fn set_node_id(&mut self, node_id: u64) {
+        self.node_id = Some(node_id);
     }
 
     /// Get the snapshot coordinator.
@@ -1992,13 +2026,18 @@ impl ShardWorker {
         // Note: We need a mutable reference to the store, but we're inside ShardWorker
         // This is safe because each shard is single-threaded
         let store = &mut self.store as &mut dyn Store;
-        let mut ctx = CommandContext::new(
+        let mut ctx = CommandContext::with_cluster(
             store,
             &self.shard_senders,
             self.shard_id,
             self.num_shards,
             conn_id,
             protocol_version,
+            None, // replication_tracker - not available in shard
+            None, // replication_state - not available in shard
+            self.cluster_state.as_ref(),
+            self.node_id,
+            self.raft.as_ref(),
         );
 
         // Execute
@@ -2713,13 +2752,18 @@ impl ShardWorker {
         };
 
         let store = &mut self.store as &mut dyn Store;
-        let mut ctx = CommandContext::new(
+        let mut ctx = CommandContext::with_cluster(
             store,
             &self.shard_senders,
             self.shard_id,
             self.num_shards,
             conn_id,
             protocol_version,
+            None,
+            None,
+            self.cluster_state.as_ref(),
+            self.node_id,
+            self.raft.as_ref(),
         );
 
         let result = executor.eval(script_source, keys, argv, &mut ctx, &self.registry);
@@ -2775,13 +2819,18 @@ impl ShardWorker {
         };
 
         let store = &mut self.store as &mut dyn Store;
-        let mut ctx = CommandContext::new(
+        let mut ctx = CommandContext::with_cluster(
             store,
             &self.shard_senders,
             self.shard_id,
             self.num_shards,
             conn_id,
             protocol_version,
+            None,
+            None,
+            self.cluster_state.as_ref(),
+            self.node_id,
+            self.raft.as_ref(),
         );
 
         let result = executor.evalsha(script_sha, keys, argv, &mut ctx, &self.registry);
@@ -2950,13 +2999,18 @@ impl ShardWorker {
         };
 
         let store = &mut self.store as &mut dyn Store;
-        let mut ctx = CommandContext::new(
+        let mut ctx = CommandContext::with_cluster(
             store,
             &self.shard_senders,
             self.shard_id,
             self.num_shards,
             conn_id,
             protocol_version,
+            None,
+            None,
+            self.cluster_state.as_ref(),
+            self.node_id,
+            self.raft.as_ref(),
         );
 
         match executor.execute_function(
