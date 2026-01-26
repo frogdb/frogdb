@@ -89,6 +89,9 @@ frogdb-testing = { path = "crates/testing" }
 # Benchmarking
 criterion = { version = "0.5", features = ["async_tokio"] }
 
+# Raft consensus
+openraft = { version = "0.10", features = ["serde", "storage-v2"] }
+
 [profile.release]
 lto = true
 codegen-units = 1
