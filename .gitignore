@@ -51,3 +51,17 @@ tools/loadtest/reports/
 
 # jepsen test results
 jepsen/frogdb/store
+
+# Code coverage profiling
+*.profraw
+*.profdata
+coverage/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Editor swap/backup files
+*.swp
+*.swo
+*~
