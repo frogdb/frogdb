@@ -8,6 +8,7 @@
 
 use bytes::BytesMut;
 use frogdb_core::{ReplicationFrame, ReplicationFrameCodec, ReplicationState};
+use serde_json;
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -415,8 +416,12 @@ impl ReplicaConnection {
     async fn receive_checkpoint(&mut self, file_count: usize) -> io::Result<()> {
         tracing::info!(file_count = file_count, "Receiving FrogDB checkpoint");
 
-        // Create checkpoint directory
-        let checkpoint_dir = self.data_dir.join("checkpoint_incoming");
+        // Create checkpoint directory as a sibling to the data directory
+        // This is because data_dir IS the RocksDB directory
+        let parent_dir = self.data_dir.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "data_dir has no parent directory")
+        })?;
+        let checkpoint_dir = parent_dir.join("checkpoint_incoming");
         fs::create_dir_all(&checkpoint_dir).await?;
 
         let mut total_bytes = 0u64;
@@ -485,16 +490,61 @@ impl ReplicaConnection {
         // Verify checksum
         // TODO: For now we trust the checksum, but we should verify against received files
 
-        // TODO: Load checkpoint into RocksDB
-        // This requires:
-        // 1. Stop current database
-        // 2. Move/backup current data
-        // 3. Restore checkpoint
-        // 4. Resume operations
-        // For now, we just clean up and proceed to streaming
-        if let Err(e) = fs::remove_dir_all(&checkpoint_dir).await {
-            tracing::warn!(error = %e, "Failed to clean up checkpoint directory");
+        // Stage checkpoint for loading
+        // Move from "checkpoint_incoming" to "checkpoint_ready" to signal it's complete
+        // Both are sibling directories to the data_dir (which is the RocksDB directory)
+        let checkpoint_ready_dir = parent_dir.join("checkpoint_ready");
+
+        // Remove any existing staged checkpoint
+        if checkpoint_ready_dir.exists() {
+            if let Err(e) = fs::remove_dir_all(&checkpoint_ready_dir).await {
+                tracing::warn!(error = %e, "Failed to remove old staged checkpoint");
+            }
         }
+
+        // Move the incoming checkpoint to the ready location
+        if let Err(e) = fs::rename(&checkpoint_dir, &checkpoint_ready_dir).await {
+            tracing::error!(error = %e, "Failed to stage checkpoint for loading");
+            // Clean up on failure
+            let _ = fs::remove_dir_all(&checkpoint_dir).await;
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Failed to stage checkpoint: {}", e),
+            ));
+        }
+
+        // Write metadata to indicate replication state after loading
+        let metadata_path = checkpoint_ready_dir.join("replication_metadata.json");
+        let metadata_json = serde_json::json!({
+            "replication_id": metadata.replication_id,
+            "replication_offset": metadata.replication_offset,
+            "checksum": hex::encode(&metadata.checksum),
+        });
+        if let Err(e) = fs::write(&metadata_path, metadata_json.to_string()).await {
+            tracing::warn!(error = %e, "Failed to write replication metadata");
+        }
+
+        tracing::info!(
+            checkpoint_dir = %checkpoint_ready_dir.display(),
+            replication_id = %metadata.replication_id,
+            offset = metadata.replication_offset,
+            "Checkpoint staged for loading - server restart required to apply"
+        );
+
+        // Update replication state
+        {
+            let mut state = self.state.write().await;
+            state.replication_id = metadata.replication_id.clone();
+            state.replication_offset = metadata.replication_offset;
+        }
+
+        // TODO: Implement hot-reload of checkpoint without server restart
+        // This would require:
+        // 1. A channel/signal to pause all shard workers
+        // 2. Dropping/replacing the RocksStore
+        // 3. Reloading all shard data from the new RocksDB
+        // 4. Resuming shard workers
+        // For now, a server restart is required to load the checkpoint.
 
         self.connection_state = ConnectionState::Streaming;
         Ok(())
