@@ -17,47 +17,6 @@ Inspired by: **CockroachDB**, **DragonflyDB**, **FoundationDB**, **Redis**, **Va
 
 #### HIGH PRIORITY - Essential for Production Readiness
 
-##### 1. Machine-Readable Status JSON Endpoint
-
-**Inspired by:** FoundationDB `status json`
-
-Comprehensive JSON snapshot of server health accessible via HTTP or command:
-
-```
-GET /status/json
-STATUS JSON  # Redis command
-```
-
-Returns: server info, memory stats, per-shard health, client counts, persistence status, health issues.
-
-**Why:** Enables programmatic monitoring, automation decisions, custom dashboards.
-**Complexity:** Medium
-
-- [ ] Implement `/status/json` HTTP endpoint
-- [ ] Implement `STATUS JSON` Redis-protocol command
-- [ ] Include all health indicators in response
-
-##### 2. Hot Shard Detection
-
-**Inspired by:** CockroachDB Hot Ranges, Redis hot key detection
-
-Identifies shards receiving disproportionate traffic:
-
-```
-DEBUG HOTSHARDS [PERIOD <seconds>]
-INFO hotshards
-```
-
-Reports: ops/sec per shard, percentage distribution, queue depths, recommendations.
-
-**Why:** Critical for FrogDB's shared-nothing architecture; identifies poor key distribution.
-**Complexity:** Medium
-
-- [ ] Track per-shard operation counts with windowed aggregation
-- [ ] Implement `DEBUG HOTSHARDS` command
-- [ ] Add `hotshards` section to INFO output
-- [ ] Generate recommendations when imbalance detected
-
 ##### 3. Latency Band Tracking (SLO Monitoring)
 
 **Inspired by:** FoundationDB latency band tracking
@@ -83,26 +42,6 @@ Reports: percentage of requests in each latency bucket.
 - [ ] Implement `LATENCY BANDS` command
 - [ ] Export latency band metrics to Prometheus
 
-##### 4. Admin Port Separation
-
-**Inspired by:** DragonflyDB `--admin_bind`, `--admin_port`
-
-Separate port for administrative commands:
-
-```toml
-[admin]
-bind = "127.0.0.1"
-port = 6380
-```
-
-**Why:** Security (network-level ACL), availability (no competition with client traffic), compliance.
-**Complexity:** Medium
-
-- [ ] Add `[admin]` configuration section
-- [ ] Create separate listener for admin port
-- [ ] Route admin-only commands (DEBUG, CONFIG SET, SHUTDOWN) to admin port
-- [ ] Document recommended firewall rules
-
 ##### 5. Grafana Dashboard Templates
 
 **Inspired by:** DragonflyDB Kubernetes dashboards
@@ -125,40 +64,6 @@ Ready-to-import JSON dashboards:
 
 #### MEDIUM PRIORITY - Improves Debuggability
 
-##### 6. Enhanced MEMORY DOCTOR
-
-**Inspired by:** Redis MEMORY DOCTOR
-
-Extend with actionable recommendations:
-
-- Identify specific big keys (>1MB)
-- Detect shard memory imbalance
-- Provide specific remediation steps
-
-**Complexity:** Medium
-
-- [ ] Scan for big keys during MEMORY DOCTOR
-- [ ] Calculate shard memory variance
-- [ ] Generate specific remediation recommendations
-- [ ] Add estimated memory savings per recommendation
-
-##### 7. DEBUG HASHING Command
-
-**Inspired by:** FrogDB-specific need
-
-Show key-to-shard mapping:
-
-```
-DEBUG HASHING user:123
-key:user:123 hash:0x7f1234... shard:3 num_shards:8
-```
-
-**Why:** Essential for debugging hotspots; understand hash tag behavior.
-**Complexity:** Low
-
-- [ ] Implement `DEBUG HASHING <key>` command
-- [ ] Show hash value, shard assignment, hash tag detection
-- [ ] Support multiple keys in single command
 
 ##### 8. Enhanced LATENCY DOCTOR
 
@@ -197,26 +102,6 @@ Reports: commands processed, bytes sent/received, avg/p99 latency, command break
 - [ ] Implement `CLIENT STATS` command
 - [ ] Add client-level bytes sent/received tracking
 - [ ] Include command type breakdown per client
-
-##### 10. Persistence Lag Monitoring
-
-**Inspired by:** FoundationDB durability lag
-
-Track how far behind persistence is:
-
-```
-INFO persistence
-```
-
-Reports: WAL lag (operations, bytes), last sync time/latency, durability lag in ms.
-
-**Why:** Critical for understanding data durability guarantees.
-**Complexity:** Medium
-
-- [ ] Track uncommitted WAL operations count
-- [ ] Calculate durability lag in milliseconds
-- [ ] Add `persistence` section to INFO with lag metrics
-- [ ] Export persistence lag metrics to Prometheus
 
 #### NICE TO HAVE - Advanced Differentiation
 
@@ -292,25 +177,6 @@ frogdb-cli --intrinsic-latency 100
 - [ ] Measure scheduling/timer jitter
 - [ ] Report min/max/avg/p99 system latency
 - [ ] Provide interpretation guidance
-
-##### 15. OpenTelemetry Tracing Diagnostics
-
-**Inspired by:** CockroachDB trace bundles
-
-Expose trace sampling status and recent trace IDs:
-
-```
-DEBUG TRACING STATUS
-DEBUG TRACING RECENT [count]
-```
-
-**Why:** Correlate FrogDB traces with application traces.
-**Complexity:** Low
-
-- [ ] Implement `DEBUG TRACING STATUS` command
-- [ ] Track recent trace IDs with timestamps
-- [ ] Implement `DEBUG TRACING RECENT` command
-- [ ] Show sampling rate and export status
 
 #### Summary Table
 
