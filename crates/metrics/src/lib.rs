@@ -85,6 +85,14 @@ pub mod metric_names {
     pub const SNAPSHOT_IN_PROGRESS: &str = "frogdb_snapshot_in_progress";
     pub const SNAPSHOT_LAST_TIMESTAMP: &str = "frogdb_snapshot_last_timestamp";
 
+    // Persistence lag metrics
+    pub const WAL_PENDING_OPS: &str = "frogdb_wal_pending_ops";
+    pub const WAL_PENDING_BYTES: &str = "frogdb_wal_pending_bytes";
+    pub const WAL_DURABILITY_LAG_MS: &str = "frogdb_wal_durability_lag_ms";
+    pub const WAL_SYNC_LAG_MS: &str = "frogdb_wal_sync_lag_ms";
+    pub const WAL_LAST_FLUSH_TIMESTAMP: &str = "frogdb_wal_last_flush_timestamp";
+    pub const WAL_LAST_SYNC_TIMESTAMP: &str = "frogdb_wal_last_sync_timestamp";
+
     // Pub/Sub metrics
     pub const PUBSUB_CHANNELS: &str = "frogdb_pubsub_channels";
     pub const PUBSUB_PATTERNS: &str = "frogdb_pubsub_patterns";

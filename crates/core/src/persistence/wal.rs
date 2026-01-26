@@ -8,7 +8,7 @@
 use rocksdb::{WriteBatch, WriteOptions};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, trace};
 
@@ -59,6 +59,31 @@ impl Default for WalConfig {
     }
 }
 
+/// Lag statistics for a WAL writer.
+///
+/// Tracks how far behind persistence is relative to in-memory state.
+/// This is critical for understanding data durability guarantees,
+/// especially in `Async` and `Periodic` durability modes.
+#[derive(Debug, Clone)]
+pub struct WalLagStats {
+    /// Number of operations in batch not yet flushed.
+    pub pending_ops: usize,
+    /// Bytes in batch not yet flushed.
+    pub pending_bytes: usize,
+    /// Time since last batch flush in milliseconds.
+    pub durability_lag_ms: u64,
+    /// Time since last fsync in milliseconds (only relevant for Periodic mode).
+    pub sync_lag_ms: Option<u64>,
+    /// Current sequence number.
+    pub sequence: u64,
+    /// Shard ID this writer is associated with.
+    pub shard_id: usize,
+    /// Unix timestamp of last flush (milliseconds since epoch).
+    pub last_flush_timestamp_ms: u64,
+    /// Unix timestamp of last sync (milliseconds since epoch, if applicable).
+    pub last_sync_timestamp_ms: Option<u64>,
+}
+
 /// WAL writer that persists operations to RocksDB.
 ///
 /// Accumulates writes in a batch and flushes based on size/time thresholds.
@@ -69,12 +94,28 @@ pub struct RocksWalWriter {
     sequence: AtomicU64,
     config: WalConfig,
     metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+    /// Unix timestamp (ms) of last sync (for Periodic mode tracking).
+    last_sync_timestamp_ms: AtomicU64,
 }
 
 struct BatchState {
     batch: WriteBatch,
+    /// Current batch size in bytes.
     size: usize,
+    /// Number of operations in current batch.
+    ops_count: usize,
+    /// Instant of last flush (for batch timing).
     last_flush: Instant,
+    /// Unix timestamp (ms) of last flush.
+    last_flush_timestamp_ms: u64,
+}
+
+/// Get current unix timestamp in milliseconds.
+fn current_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 impl RocksWalWriter {
@@ -92,17 +133,22 @@ impl RocksWalWriter {
         };
         debug!(shard_id, durability_mode = %durability_mode, "WAL writer created");
 
+        let now_ms = current_timestamp_ms();
+
         Self {
             rocks,
             shard_id,
             pending_batch: Mutex::new(BatchState {
                 batch: WriteBatch::default(),
                 size: 0,
+                ops_count: 0,
                 last_flush: Instant::now(),
+                last_flush_timestamp_ms: now_ms,
             }),
             sequence: AtomicU64::new(0),
             config,
             metrics_recorder,
+            last_sync_timestamp_ms: AtomicU64::new(now_ms),
         }
     }
 
@@ -134,6 +180,7 @@ impl RocksWalWriter {
 
         // Estimate delete size (key + overhead)
         state.size += key.len() + 32;
+        state.ops_count += 1;
 
         self.maybe_flush_locked(&mut state).await?;
 
@@ -151,6 +198,7 @@ impl RocksWalWriter {
 
         let bytes_written = key.len() + value.len() + 32; // Add overhead
         state.size += bytes_written;
+        state.ops_count += 1;
 
         // Record WAL metrics
         let shard_label = self.shard_id.to_string();
@@ -194,11 +242,14 @@ impl RocksWalWriter {
         let batch_len = batch.len();
         let bytes = state.size;
         state.size = 0;
+        state.ops_count = 0;
         state.last_flush = Instant::now();
+        state.last_flush_timestamp_ms = current_timestamp_ms();
 
         let mut write_opts = WriteOptions::default();
 
         // Configure sync based on durability mode
+        let is_sync = matches!(&self.config.mode, DurabilityMode::Sync);
         match &self.config.mode {
             DurabilityMode::Sync => {
                 write_opts.set_sync(true);
@@ -214,6 +265,12 @@ impl RocksWalWriter {
                 error!(shard_id = self.shard_id, error = %e, "WAL flush failed");
                 std::io::Error::other(e)
             })?;
+
+        // In Sync mode, flush is also a sync
+        if is_sync {
+            self.last_sync_timestamp_ms
+                .store(current_timestamp_ms(), Ordering::Release);
+        }
 
         // Record flush duration
         let duration = start.elapsed();
@@ -240,6 +297,51 @@ impl RocksWalWriter {
     pub async fn flush_async(&self) -> std::io::Result<()> {
         let mut state = self.pending_batch.lock().await;
         self.do_flush_locked(&mut state).await
+    }
+
+    /// Get lag statistics for this WAL writer.
+    ///
+    /// Returns information about pending operations and durability lag.
+    pub async fn lag_stats(&self) -> WalLagStats {
+        let state = self.pending_batch.lock().await;
+        let now_ms = current_timestamp_ms();
+
+        // Calculate durability lag (time since last flush)
+        let durability_lag_ms = now_ms.saturating_sub(state.last_flush_timestamp_ms);
+
+        // Calculate sync lag (only relevant for Periodic mode)
+        let (sync_lag_ms, last_sync_timestamp_ms) = match &self.config.mode {
+            DurabilityMode::Periodic { .. } => {
+                let last_sync = self.last_sync_timestamp_ms.load(Ordering::Acquire);
+                (Some(now_ms.saturating_sub(last_sync)), Some(last_sync))
+            }
+            DurabilityMode::Sync => {
+                // In sync mode, sync lag equals durability lag
+                let last_sync = self.last_sync_timestamp_ms.load(Ordering::Acquire);
+                (Some(now_ms.saturating_sub(last_sync)), Some(last_sync))
+            }
+            DurabilityMode::Async => {
+                // No sync tracking in async mode
+                (None, None)
+            }
+        };
+
+        WalLagStats {
+            pending_ops: state.ops_count,
+            pending_bytes: state.size,
+            durability_lag_ms,
+            sync_lag_ms,
+            sequence: self.sequence.load(Ordering::SeqCst),
+            shard_id: self.shard_id,
+            last_flush_timestamp_ms: state.last_flush_timestamp_ms,
+            last_sync_timestamp_ms,
+        }
+    }
+
+    /// Record that a sync operation occurred (called by periodic sync task).
+    pub fn record_sync(&self) {
+        self.last_sync_timestamp_ms
+            .store(current_timestamp_ms(), Ordering::Release);
     }
 
     /// Get the current sequence number.
@@ -273,6 +375,7 @@ impl WalWriter for RocksWalWriter {
                             .rocks
                             .batch_put(&mut state.batch, self.shard_id, key, &serialized);
                         state.size += key.len() + serialized.len() + 32;
+                        state.ops_count += 1;
                         let _ = self.maybe_flush_locked(&mut state).await;
                     });
                 }
@@ -297,6 +400,7 @@ impl WalWriter for RocksWalWriter {
                             .rocks
                             .batch_put(&mut state.batch, self.shard_id, key, &serialized);
                         state.size += key.len() + serialized.len() + 32;
+                        state.ops_count += 1;
                         let _ = self.maybe_flush_locked(&mut state).await;
                     });
                 }
@@ -311,6 +415,7 @@ impl WalWriter for RocksWalWriter {
                         let mut state = self.pending_batch.lock().await;
                         let _ = self.rocks.batch_delete(&mut state.batch, self.shard_id, key);
                         state.size += key.len() + 32;
+                        state.ops_count += 1;
                         let _ = self.maybe_flush_locked(&mut state).await;
                     });
                 }

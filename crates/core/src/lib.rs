@@ -48,7 +48,7 @@ pub use persistence::{
     DurabilityMode, NoopSnapshotCoordinator, OnWriteHook, RecoveryStats, RocksConfig,
     RocksSnapshotCoordinator, RocksStore, RocksWalWriter, SerializationError, SnapshotConfig,
     SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata, SnapshotMetadataFile,
-    WalConfig, HEADER_SIZE,
+    WalConfig, WalLagStats, HEADER_SIZE,
 };
 pub use registry::CommandRegistry;
 pub use pubsub::{
@@ -59,7 +59,7 @@ pub use pubsub::{
 pub use shard::{
     extract_hash_tag, shard_for_key, slot_for_key, BigKeyInfo, BigKeysScanResponse,
     HotShardStatsResponse, PartialResult, ScatterOp, ShardMemoryStats, ShardMessage,
-    ShardWorker, ShardWaitQueue, TransactionResult, WaitEntry, REDIS_CLUSTER_SLOTS,
+    ShardWorker, ShardWaitQueue, TransactionResult, WaitEntry, WalLagStatsResponse, REDIS_CLUSTER_SLOTS,
 };
 pub use store::{HashMapStore, Store};
 pub use types::{
