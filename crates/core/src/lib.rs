@@ -57,8 +57,9 @@ pub use pubsub::{
     MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 pub use shard::{
-    extract_hash_tag, shard_for_key, slot_for_key, PartialResult, ScatterOp, ShardMemoryStats,
-    ShardMessage, ShardWorker, ShardWaitQueue, TransactionResult, WaitEntry, REDIS_CLUSTER_SLOTS,
+    extract_hash_tag, shard_for_key, slot_for_key, BigKeyInfo, BigKeysScanResponse,
+    HotShardStatsResponse, PartialResult, ScatterOp, ShardMemoryStats, ShardMessage,
+    ShardWorker, ShardWaitQueue, TransactionResult, WaitEntry, REDIS_CLUSTER_SLOTS,
 };
 pub use store::{HashMapStore, Store};
 pub use types::{

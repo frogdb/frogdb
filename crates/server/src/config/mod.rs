@@ -82,6 +82,10 @@ pub struct Config {
     /// Status endpoint configuration.
     #[serde(default)]
     pub status: StatusConfig,
+
+    /// Hot shard detection configuration.
+    #[serde(default)]
+    pub hotshards: HotShardsConfig,
 }
 
 /// Status endpoint configuration for health thresholds.
@@ -120,6 +124,56 @@ impl StatusConfig {
         frogdb_metrics::StatusCollectorConfig {
             memory_warning_percent: self.memory_warning_percent,
             connection_warning_percent: self.connection_warning_percent,
+        }
+    }
+}
+
+/// Hot shard detection configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HotShardsConfig {
+    /// Threshold percentage for "HOT" status (default: 20.0).
+    #[serde(default = "default_hot_threshold_percent")]
+    pub hot_threshold_percent: f64,
+
+    /// Threshold percentage for "WARM" status (default: 15.0).
+    #[serde(default = "default_warm_threshold_percent")]
+    pub warm_threshold_percent: f64,
+
+    /// Default period for stats collection in seconds (default: 10).
+    #[serde(default = "default_hotshards_period_secs")]
+    pub default_period_secs: u64,
+}
+
+fn default_hot_threshold_percent() -> f64 {
+    20.0
+}
+
+fn default_warm_threshold_percent() -> f64 {
+    15.0
+}
+
+fn default_hotshards_period_secs() -> u64 {
+    10
+}
+
+impl Default for HotShardsConfig {
+    fn default() -> Self {
+        Self {
+            hot_threshold_percent: default_hot_threshold_percent(),
+            warm_threshold_percent: default_warm_threshold_percent(),
+            default_period_secs: default_hotshards_period_secs(),
+        }
+    }
+}
+
+impl HotShardsConfig {
+    /// Convert to HotShardConfig for the metrics crate.
+    pub fn to_collector_config(&self) -> frogdb_metrics::HotShardConfig {
+        frogdb_metrics::HotShardConfig {
+            hot_threshold_percent: self.hot_threshold_percent,
+            warm_threshold_percent: self.warm_threshold_percent,
+            default_period_secs: self.default_period_secs,
         }
     }
 }
@@ -1087,6 +1141,21 @@ pub struct MemoryConfig {
     /// LFU decay time in minutes - counter decays by 1 every N minutes.
     #[serde(default = "default_lfu_decay_time")]
     pub lfu_decay_time: u64,
+
+    /// Threshold in bytes for MEMORY DOCTOR big key detection.
+    /// Keys larger than this will be flagged. Default: 1MB (1048576 bytes).
+    #[serde(default = "default_doctor_big_key_threshold")]
+    pub doctor_big_key_threshold: u64,
+
+    /// Maximum number of big keys to report per shard in MEMORY DOCTOR.
+    /// Default: 100.
+    #[serde(default = "default_doctor_max_big_keys")]
+    pub doctor_max_big_keys: usize,
+
+    /// Threshold for shard memory imbalance detection (coefficient of variation).
+    /// Shards with memory CV higher than this will trigger a warning. Default: 25%.
+    #[serde(default = "default_doctor_imbalance_threshold")]
+    pub doctor_imbalance_threshold: f64,
 }
 
 fn default_bind() -> String {
@@ -1187,6 +1256,18 @@ fn default_lfu_log_factor() -> u8 {
 
 fn default_lfu_decay_time() -> u64 {
     1
+}
+
+fn default_doctor_big_key_threshold() -> u64 {
+    1_048_576 // 1MB
+}
+
+fn default_doctor_max_big_keys() -> usize {
+    100
+}
+
+fn default_doctor_imbalance_threshold() -> f64 {
+    25.0 // 25% coefficient of variation
 }
 
 fn default_tracing_endpoint() -> String {
@@ -1329,6 +1410,9 @@ impl Default for MemoryConfig {
             maxmemory_samples: default_maxmemory_samples(),
             lfu_log_factor: default_lfu_log_factor(),
             lfu_decay_time: default_lfu_decay_time(),
+            doctor_big_key_threshold: default_doctor_big_key_threshold(),
+            doctor_max_big_keys: default_doctor_max_big_keys(),
+            doctor_imbalance_threshold: default_doctor_imbalance_threshold(),
         }
     }
 }
@@ -1367,6 +1451,15 @@ impl MemoryConfig {
     /// Check if memory limit is enabled.
     pub fn has_limit(&self) -> bool {
         self.maxmemory > 0
+    }
+
+    /// Convert to MemoryDiagConfig for the metrics crate.
+    pub fn to_diag_config(&self) -> frogdb_metrics::MemoryDiagConfig {
+        frogdb_metrics::MemoryDiagConfig {
+            big_key_threshold_bytes: self.doctor_big_key_threshold as usize,
+            max_big_keys_per_shard: self.doctor_max_big_keys,
+            imbalance_threshold_percent: self.doctor_imbalance_threshold,
+        }
     }
 }
 

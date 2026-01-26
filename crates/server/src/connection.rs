@@ -299,6 +299,12 @@ pub struct ConnectionHandler {
 
     /// Whether admin port separation is enabled.
     admin_enabled: bool,
+
+    /// Hot shard detection configuration.
+    hotshards_config: frogdb_metrics::HotShardConfig,
+
+    /// Memory diagnostics configuration.
+    memory_diag_config: frogdb_metrics::MemoryDiagConfig,
 }
 
 /// Determine key access type from command flags.
@@ -456,6 +462,8 @@ impl ConnectionHandler {
         node_id: Option<u64>,
         is_admin: bool,
         admin_enabled: bool,
+        hotshards_config: frogdb_metrics::HotShardConfig,
+        memory_diag_config: frogdb_metrics::MemoryDiagConfig,
     ) -> Self {
         let framed = Framed::new(socket, Resp2);
         let requires_auth = acl_manager.requires_auth();
@@ -491,6 +499,8 @@ impl ConnectionHandler {
             node_id,
             is_admin,
             admin_enabled,
+            hotshards_config,
+            memory_diag_config,
         }
     }
 
@@ -5587,74 +5597,15 @@ impl ConnectionHandler {
 
     /// Handle MEMORY DOCTOR - diagnose memory issues.
     async fn handle_memory_doctor(&self) -> Response {
-        let stats = self.gather_memory_stats().await;
+        let collector = frogdb_metrics::MemoryDiagCollector::new(
+            self.shard_senders.clone(),
+            self.memory_diag_config.clone(),
+        );
 
-        let mut report = Vec::new();
+        let report = collector.collect().await;
+        let formatted = frogdb_metrics::format_memory_report(&report);
 
-        // Analyze memory usage
-        let total_data_memory: usize = stats.iter().map(|s| s.data_memory).sum();
-        let total_keys: usize = stats.iter().map(|s| s.keys).sum();
-        let total_peak: u64 = stats.iter().map(|s| s.peak_memory).max().unwrap_or(0);
-        let total_limit: u64 = stats.iter().map(|s| s.memory_limit).sum();
-
-        report.push(format!("Sam, I have a few things to report:"));
-
-        // Check memory usage ratio
-        if total_limit > 0 {
-            let usage_ratio = total_data_memory as f64 / total_limit as f64;
-            if usage_ratio > 0.9 {
-                report.push(format!(
-                    "* High memory usage: {:.1}% of {} bytes limit",
-                    usage_ratio * 100.0,
-                    total_limit
-                ));
-            } else if usage_ratio > 0.75 {
-                report.push(format!(
-                    "* Moderate memory usage: {:.1}% of {} bytes limit",
-                    usage_ratio * 100.0,
-                    total_limit
-                ));
-            }
-        }
-
-        // Check for memory fragmentation
-        let total_overhead: usize = stats.iter().map(|s| s.overhead_estimate).sum();
-        let overhead_ratio = if total_data_memory > 0 {
-            total_overhead as f64 / total_data_memory as f64
-        } else {
-            0.0
-        };
-
-        if overhead_ratio > 0.5 {
-            report.push(format!(
-                "* High overhead ratio: {:.1}% overhead detected",
-                overhead_ratio * 100.0
-            ));
-        }
-
-        // Report peak memory if significantly higher than current
-        if total_peak > 0 && total_data_memory > 0 {
-            let peak_ratio = total_peak as f64 / total_data_memory as f64;
-            if peak_ratio > 1.5 {
-                report.push(format!(
-                    "* Peak memory was {:.1}x higher than current usage",
-                    peak_ratio
-                ));
-            }
-        }
-
-        if report.len() == 1 {
-            report.push("* No memory issues detected.".to_string());
-        }
-
-        report.push(format!(
-            "\nSummary: {} keys, {} bytes data, {} shards",
-            total_keys,
-            total_data_memory,
-            stats.len()
-        ));
-
-        Response::bulk(Bytes::from(report.join("\n")))
+        Response::bulk(Bytes::from(formatted))
     }
 
     /// Handle MEMORY HELP - show help text.
