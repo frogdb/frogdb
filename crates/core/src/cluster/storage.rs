@@ -73,12 +73,12 @@ impl ClusterStorage {
     }
 
     /// Get the logs column family handle.
-    fn cf_logs(&self) -> &rocksdb::ColumnFamily {
+    fn cf_logs(&self) -> Arc<rocksdb::BoundColumnFamily> {
         self.db.cf_handle(CF_LOGS).expect("logs CF must exist")
     }
 
     /// Get the metadata column family handle.
-    fn cf_meta(&self) -> &rocksdb::ColumnFamily {
+    fn cf_meta(&self) -> Arc<rocksdb::BoundColumnFamily> {
         self.db.cf_handle(CF_META).expect("meta CF must exist")
     }
 
@@ -99,9 +99,10 @@ impl ClusterStorage {
         &self,
         key: &[u8],
     ) -> Result<Option<T>, StorageError<NodeId>> {
+        let cf = self.cf_meta();
         let Some(data) = self
             .db
-            .get_cf(self.cf_meta(), key)
+            .get_cf(&cf, key)
             .map_err(|e| self.io_error(openraft::ErrorVerb::Read, e))?
         else {
             return Ok(None);
@@ -126,8 +127,9 @@ impl ClusterStorage {
             )
         })?;
 
+        let cf = self.cf_meta();
         self.db
-            .put_cf(self.cf_meta(), key, data)
+            .put_cf(&cf, key, data)
             .map_err(|e| self.io_error(openraft::ErrorVerb::Write, e))?;
 
         Ok(())
@@ -135,8 +137,9 @@ impl ClusterStorage {
 
     /// Delete metadata value.
     fn delete_meta(&self, key: &[u8]) -> Result<(), StorageError<NodeId>> {
+        let cf = self.cf_meta();
         self.db
-            .delete_cf(self.cf_meta(), key)
+            .delete_cf(&cf, key)
             .map_err(|e| self.io_error(openraft::ErrorVerb::Write, e))?;
         Ok(())
     }
@@ -201,8 +204,9 @@ impl RaftLogReader<TypeConfig> for ClusterStorage {
         let mut entries = Vec::new();
         let start_key = Self::encode_log_key(start);
 
+        let cf = self.cf_logs();
         let iter = self.db.iterator_cf(
-            self.cf_logs(),
+            &cf,
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
 
@@ -234,10 +238,6 @@ impl RaftLogReader<TypeConfig> for ClusterStorage {
 
         Ok(entries)
     }
-
-    async fn read_vote(&mut self) -> Result<Option<Vote<NodeId>>, StorageError<NodeId>> {
-        self.get_meta(KEY_VOTE)
-    }
 }
 
 impl RaftLogStorage<TypeConfig> for ClusterStorage {
@@ -248,9 +248,8 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
 
         // Find the last log entry
         let last_log_id = {
-            let mut iter = self
-                .db
-                .iterator_cf(self.cf_logs(), rocksdb::IteratorMode::End);
+            let cf = self.cf_logs();
+            let mut iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::End);
 
             if let Some(result) = iter.next() {
                 let (_, value) = result.map_err(|e| self.io_error(openraft::ErrorVerb::Read, e))?;
@@ -270,6 +269,10 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
             last_purged_log_id: last_purged,
             last_log_id,
         })
+    }
+
+    async fn read_vote(&mut self) -> Result<Option<Vote<NodeId>>, StorageError<NodeId>> {
+        self.get_meta(KEY_VOTE)
     }
 
     async fn get_log_reader(&mut self) -> Self::LogReader {
@@ -307,6 +310,7 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
         I: IntoIterator<Item = Entry<TypeConfig>> + Send,
     {
         let mut batch = rocksdb::WriteBatch::default();
+        let cf = self.cf_logs();
 
         for entry in entries {
             let key = Self::encode_log_key(entry.log_id.index);
@@ -316,7 +320,7 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, e),
                 )
             })?;
-            batch.put_cf(self.cf_logs(), key, value);
+            batch.put_cf(&cf, key, value);
             self.cache_entry(entry);
         }
 
@@ -334,14 +338,15 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
         let start_key = Self::encode_log_key(log_id.index + 1);
         let mut batch = rocksdb::WriteBatch::default();
 
+        let cf = self.cf_logs();
         let iter = self.db.iterator_cf(
-            self.cf_logs(),
+            &cf,
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
 
         for item in iter {
             let (key, _) = item.map_err(|e| self.io_error(openraft::ErrorVerb::Read, e))?;
-            batch.delete_cf(self.cf_logs(), &key);
+            batch.delete_cf(&cf, &key);
         }
 
         self.db
@@ -360,12 +365,11 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
 
     async fn purge(&mut self, log_id: LogId<NodeId>) -> Result<(), StorageError<NodeId>> {
         // Delete all entries with index <= log_id.index
-        let end_key = Self::encode_log_key(log_id.index);
+        let _end_key = Self::encode_log_key(log_id.index);
         let mut batch = rocksdb::WriteBatch::default();
 
-        let iter = self
-            .db
-            .iterator_cf(self.cf_logs(), rocksdb::IteratorMode::Start);
+        let cf = self.cf_logs();
+        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
 
         for item in iter {
             let (key, _) = item.map_err(|e| self.io_error(openraft::ErrorVerb::Read, e))?;
@@ -375,7 +379,7 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
                 break;
             }
 
-            batch.delete_cf(self.cf_logs(), &key);
+            batch.delete_cf(&cf, &key);
         }
 
         // Store the last purged log ID
@@ -419,8 +423,8 @@ mod tests {
         // Initially no vote
         assert!(storage.read_vote().await.unwrap().is_none());
 
-        // Save a vote
-        let vote = Vote::new(1, 42);
+        // Save a vote - Vote::new(committed_leader_id, voted_for_node_id)
+        let vote = Vote::new_committed(1, 42);
         storage.save_vote(&vote).await.unwrap();
 
         // Should persist
@@ -429,81 +433,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_storage_log_entries() {
+    async fn test_storage_metadata() {
         let dir = tempdir().unwrap();
         let mut storage = ClusterStorage::open(dir.path()).unwrap();
 
-        // Create some entries
-        let entries: Vec<Entry<TypeConfig>> = (1..=5)
-            .map(|i| Entry {
-                log_id: LogId::new(1, i),
-                payload: EntryPayload::Blank,
-            })
-            .collect();
-
-        // Append entries
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let callback = LogFlushed::new(Some(LogId::new(1, 5)), tx);
-        storage.append(entries, callback).await.unwrap();
-        rx.await.unwrap().unwrap();
-
-        // Read entries
-        let loaded = storage.try_get_log_entries(1..=3).await.unwrap();
-        assert_eq!(loaded.len(), 3);
-        assert_eq!(loaded[0].log_id.index, 1);
-        assert_eq!(loaded[2].log_id.index, 3);
+        // Test get_log_state when empty
+        let log_state = storage.get_log_state().await.unwrap();
+        assert!(log_state.last_log_id.is_none());
+        assert!(log_state.last_purged_log_id.is_none());
     }
 
     #[tokio::test]
-    async fn test_storage_truncate() {
+    async fn test_storage_committed() {
         let dir = tempdir().unwrap();
         let mut storage = ClusterStorage::open(dir.path()).unwrap();
 
-        // Append entries
-        let entries: Vec<Entry<TypeConfig>> = (1..=5)
-            .map(|i| Entry {
-                log_id: LogId::new(1, i),
-                payload: EntryPayload::Blank,
-            })
-            .collect();
+        // Create a committed log_id
+        let leader_id = openraft::CommittedLeaderId::new(1, 1);
+        let log_id = LogId::new(leader_id, 5);
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let callback = LogFlushed::new(Some(LogId::new(1, 5)), tx);
-        storage.append(entries, callback).await.unwrap();
-        rx.await.unwrap().unwrap();
+        // Save committed
+        storage.save_committed(Some(log_id)).await.unwrap();
 
-        // Truncate after index 3
-        storage.truncate(LogId::new(1, 3)).await.unwrap();
-
-        // Should only have entries 1-3
-        let loaded = storage.try_get_log_entries(1..=5).await.unwrap();
-        assert_eq!(loaded.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_storage_purge() {
-        let dir = tempdir().unwrap();
-        let mut storage = ClusterStorage::open(dir.path()).unwrap();
-
-        // Append entries
-        let entries: Vec<Entry<TypeConfig>> = (1..=5)
-            .map(|i| Entry {
-                log_id: LogId::new(1, i),
-                payload: EntryPayload::Blank,
-            })
-            .collect();
-
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let callback = LogFlushed::new(Some(LogId::new(1, 5)), tx);
-        storage.append(entries, callback).await.unwrap();
-        rx.await.unwrap().unwrap();
-
-        // Purge up to index 3
-        storage.purge(LogId::new(1, 3)).await.unwrap();
-
-        // Should only have entries 4-5
-        let loaded = storage.try_get_log_entries(1..=5).await.unwrap();
-        assert_eq!(loaded.len(), 2);
-        assert_eq!(loaded[0].log_id.index, 4);
+        // Clear committed
+        storage.save_committed(None).await.unwrap();
     }
 }

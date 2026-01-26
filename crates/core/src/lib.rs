@@ -4,6 +4,7 @@
 //! This crate provides the foundational types used by the server.
 
 pub mod acl;
+pub mod cluster;
 pub mod bitmap;
 pub mod bloom;
 pub mod client_registry;
@@ -119,4 +120,11 @@ pub use replication::{
     NoopBroadcaster, ReplicaInfo, ReplicationBroadcaster, ReplicationFrame,
     ReplicationFrameCodec, ReplicationState, ReplicationTrackerImpl, SharedBroadcaster,
     FRAME_MAGIC, FRAME_VERSION, serialize_command_to_resp,
+};
+pub use cluster::{
+    handle_rpc_request, parse_rpc_message, send_rpc_response, ClusterCommand, ClusterConfig,
+    ClusterError, ClusterNetwork, ClusterNetworkFactory, ClusterRaft, ClusterResponse,
+    ClusterRpcRequest, ClusterRpcResponse, ClusterSnapshot, ClusterState, ClusterStateMachine,
+    ClusterStorage, ConfigEpoch, NodeId, NodeInfo, NodeRole, SharedClusterRaft, SlotRange,
+    TypeConfig, CLUSTER_SLOTS,
 };

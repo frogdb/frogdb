@@ -109,38 +109,6 @@ stub_command!(
 );
 
 // =============================================================================
-// Cluster Commands
-// =============================================================================
-
-stub_command!(
-    ClusterCommand,
-    "CLUSTER",
-    Arity::AtLeast(1),
-    CommandFlags::ADMIN | CommandFlags::STALE
-);
-
-stub_command!(
-    AskingCommand,
-    "ASKING",
-    Arity::Fixed(0),
-    CommandFlags::FAST | CommandFlags::STALE
-);
-
-stub_command!(
-    ReadonlyCommand,
-    "READONLY",
-    Arity::Fixed(0),
-    CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
-);
-
-stub_command!(
-    ReadwriteCommand,
-    "READWRITE",
-    Arity::Fixed(0),
-    CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
-);
-
-// =============================================================================
 // Replication Commands
 // =============================================================================
 
