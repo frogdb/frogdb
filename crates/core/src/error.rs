@@ -43,6 +43,19 @@ pub enum CommandError {
     #[error("CROSSSLOT Keys in request don't hash to the same slot")]
     CrossSlot,
 
+    // === Cluster Errors ===
+    /// Cluster mode is not enabled.
+    #[error("ERR This instance has cluster support disabled")]
+    ClusterDisabled,
+
+    /// Cluster command requires being the leader.
+    #[error("CLUSTERDOWN The cluster is down")]
+    ClusterDown,
+
+    /// Wrong number of arguments for a dynamic command string.
+    #[error("ERR wrong number of arguments for '{command}' command")]
+    WrongArgCount { command: String },
+
     // === Key State Errors ===
     /// Target key already exists (for RESTORE without REPLACE).
     #[error("BUSYKEY Target key name already exists")]
@@ -107,6 +120,13 @@ impl CommandError {
             Self::NotFloat => Bytes::from_static(b"ERR value is not a valid float"),
             Self::CrossSlot => {
                 Bytes::from_static(b"CROSSSLOT Keys in request don't hash to the same slot")
+            }
+            Self::ClusterDisabled => {
+                Bytes::from_static(b"ERR This instance has cluster support disabled")
+            }
+            Self::ClusterDown => Bytes::from_static(b"CLUSTERDOWN The cluster is down"),
+            Self::WrongArgCount { command } => {
+                Bytes::from(format!("ERR wrong number of arguments for '{}' command", command))
             }
             Self::BusyKey => Bytes::from_static(b"BUSYKEY Target key name already exists"),
             Self::BusyGroup => {

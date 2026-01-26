@@ -1052,10 +1052,10 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::stub::PubsubCommand);
 
     // Cluster
-    registry.register(crate::commands::stub::ClusterCommand);
-    registry.register(crate::commands::stub::AskingCommand);
-    registry.register(crate::commands::stub::ReadonlyCommand);
-    registry.register(crate::commands::stub::ReadwriteCommand);
+    registry.register(crate::commands::cluster::ClusterCommand);
+    registry.register(crate::commands::cluster::AskingCommand);
+    registry.register(crate::commands::cluster::ReadonlyCommand);
+    registry.register(crate::commands::cluster::ReadwriteCommand);
 
     // Replication
     registry.register(crate::replication::ReplicaofCommand);

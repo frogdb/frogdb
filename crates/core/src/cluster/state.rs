@@ -172,10 +172,10 @@ impl ClusterState {
                 role,
                 primary_id,
             } => {
-                let node = inner
-                    .nodes
-                    .get_mut(&node_id)
-                    .ok_or(ClusterError::NodeNotFound(node_id))?;
+                // Validate node exists first
+                if !inner.nodes.contains_key(&node_id) {
+                    return Err(ClusterError::NodeNotFound(node_id));
+                }
 
                 // Validate primary_id if setting replica role
                 if role == NodeRole::Replica {
@@ -190,6 +190,8 @@ impl ClusterState {
                     }
                 }
 
+                // Now we can safely modify
+                let node = inner.nodes.get_mut(&node_id).unwrap();
                 node.role = role;
                 node.primary_id = primary_id;
                 tracing::info!(node_id, ?role, "Set node role");
@@ -399,7 +401,7 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
 
         let mut inner = self.state.inner.write();
         *inner = snapshot_state;
-        inner.last_applied_log = Some(meta.last_log_id);
+        inner.last_applied_log = meta.last_log_id;
         inner.last_membership = meta.last_membership.clone();
 
         tracing::info!(
@@ -428,7 +430,7 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
 
         let snapshot = Snapshot {
             meta: SnapshotMeta {
-                last_log_id: last_applied_log,
+                last_log_id: Some(last_applied_log),
                 last_membership: inner.last_membership.clone(),
                 snapshot_id: format!("snapshot-{}", last_applied_log.index),
             },
@@ -443,7 +445,7 @@ impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for ClusterStateMachine 
     async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, StorageError<NodeId>> {
         let inner = self.state.inner.read();
 
-        let last_applied_log = inner.last_applied_log.unwrap_or_default();
+        let last_applied_log = inner.last_applied_log;
 
         let data = serde_json::to_vec(&*inner).map_err(|e| {
             StorageError::from_io_error(
@@ -453,11 +455,16 @@ impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for ClusterStateMachine 
             )
         })?;
 
+        let snapshot_id = match last_applied_log {
+            Some(log_id) => format!("snapshot-{}", log_id.index),
+            None => "snapshot-0".to_string(),
+        };
+
         let snapshot = Snapshot {
             meta: SnapshotMeta {
                 last_log_id: last_applied_log,
                 last_membership: inner.last_membership.clone(),
-                snapshot_id: format!("snapshot-{}", last_applied_log.index),
+                snapshot_id,
             },
             snapshot: Box::new(Cursor::new(data)),
         };

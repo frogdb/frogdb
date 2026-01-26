@@ -47,12 +47,15 @@ pub mod state;
 pub mod storage;
 pub mod types;
 
-pub use network::{ClusterNetwork, ClusterNetworkFactory};
+pub use network::{
+    handle_rpc_request, parse_rpc_message, send_rpc_response, ClusterNetwork,
+    ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse,
+};
 pub use state::{ClusterState, ClusterStateMachine};
 pub use storage::ClusterStorage;
 pub use types::{
-    ClusterCommand, ClusterConfig, ClusterError, ClusterResponse, ConfigEpoch, NodeId, NodeInfo,
-    NodeRole, SlotRange, TypeConfig,
+    ClusterCommand, ClusterConfig, ClusterError, ClusterResponse, ClusterSnapshot, ConfigEpoch,
+    NodeId, NodeInfo, NodeRole, SlotRange, TypeConfig, CLUSTER_SLOTS,
 };
 
 use openraft::Raft;
