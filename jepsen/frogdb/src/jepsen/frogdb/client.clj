@@ -318,3 +318,145 @@
         (do
           (Thread/sleep interval-ms)
           (recur))))))
+
+;; ===========================================================================
+;; Multi-Node Connection Support
+;; ===========================================================================
+
+(def node-ports
+  "Map of node names to their ports (for multi-node testing)."
+  {"n1" 6379
+   "n2" 6380
+   "n3" 6381})
+
+(defn conn-for-node
+  "Create a connection spec for a specific node in multi-node mode.
+   Uses docker-host-map for port resolution when running from host."
+  [node docker-host?]
+  (let [resolved (if docker-host?
+                   (get docker-host-map node {:host node :port default-port})
+                   {:host node :port default-port})]
+    {:pool {}
+     :spec {:host (:host resolved)
+            :port (:port resolved)
+            :timeout-ms default-timeout-ms}}))
+
+(defn all-node-conns
+  "Create connections to all nodes in the cluster.
+   Returns a map of {node -> conn-spec}."
+  [nodes docker-host?]
+  (into {} (for [node nodes]
+             [node (conn-for-node node docker-host?)])))
+
+;; ===========================================================================
+;; Replication Commands
+;; ===========================================================================
+
+(defn wait!
+  "WAIT command - block until numreplicas have acknowledged writes.
+   Returns the number of replicas that acknowledged.
+
+   Arguments:
+   - numreplicas: Number of replicas that need to ACK (0 = return immediately)
+   - timeout-ms: Timeout in milliseconds (0 = block forever)
+
+   Returns: Integer count of replicas that acknowledged."
+  [conn numreplicas timeout-ms]
+  (wcar conn (car/redis-call ["WAIT" numreplicas timeout-ms])))
+
+(defn role
+  "ROLE command - get the role of the server (master/slave).
+   Returns a vector with role info:
+   - For master: [\"master\" offset [[replica-ip port offset] ...]]
+   - For slave: [\"slave\" master-ip master-port state offset]"
+  [conn]
+  (wcar conn (car/redis-call ["ROLE"])))
+
+(defn is-primary?
+  "Check if the connected node is a primary (master)."
+  [conn]
+  (let [r (role conn)]
+    (and (vector? r) (= "master" (first r)))))
+
+(defn is-replica?
+  "Check if the connected node is a replica (slave)."
+  [conn]
+  (let [r (role conn)]
+    (and (vector? r) (= "slave" (first r)))))
+
+(defn info-replication
+  "INFO REPLICATION command - get replication info.
+   Returns a map of replication-related info."
+  [conn]
+  (let [info-str (wcar conn (car/info "replication"))]
+    (when info-str
+      (->> (clojure.string/split info-str #"\r?\n")
+           (remove clojure.string/blank?)
+           (remove #(clojure.string/starts-with? % "#"))
+           (map #(clojure.string/split % #":"))
+           (filter #(= 2 (count %)))
+           (into {})))))
+
+(defn replicaof!
+  "REPLICAOF command - configure replication.
+   Use host/port to replicate from a master.
+   Use \"NO\" \"ONE\" to promote to master (stop replicating)."
+  [conn host port]
+  (wcar conn (car/redis-call ["REPLICAOF" host port])))
+
+(defn slaveof!
+  "SLAVEOF command - alias for REPLICAOF (for compatibility)."
+  [conn host port]
+  (wcar conn (car/redis-call ["SLAVEOF" host port])))
+
+(defn promote-to-primary!
+  "Promote a replica to primary by issuing REPLICAOF NO ONE."
+  [conn]
+  (replicaof! conn "NO" "ONE"))
+
+(defn get-replication-offset
+  "Get the current replication offset from INFO REPLICATION."
+  [conn]
+  (let [info (info-replication conn)]
+    (when-let [offset-str (or (get info "master_repl_offset")
+                              (get info "slave_repl_offset"))]
+      (Long/parseLong offset-str))))
+
+(defn get-connected-replicas
+  "Get the number of connected replicas from INFO REPLICATION."
+  [conn]
+  (let [info (info-replication conn)]
+    (when-let [count-str (get info "connected_slaves")]
+      (Integer/parseInt count-str))))
+
+;; ===========================================================================
+;; Write Durability Helpers
+;; ===========================================================================
+
+(defn write-durable!
+  "Write a value with durability guarantee.
+   Waits for at least one replica to acknowledge.
+
+   Arguments:
+   - key: The key to write
+   - value: The value to write
+   - replicas: Number of replicas to wait for (default 1)
+   - timeout-ms: Wait timeout in ms (default 5000)
+
+   Returns: {:acked n} where n is the number of replicas that acknowledged,
+            or {:timeout true :acked n} if timeout occurred."
+  ([conn key value]
+   (write-durable! conn key value 1 5000))
+  ([conn key value replicas timeout-ms]
+   (wcar conn (car/set key (str value)))
+   (let [acked (wait! conn replicas timeout-ms)]
+     (if (>= acked replicas)
+       {:acked acked}
+       {:timeout true :acked acked}))))
+
+(defn write-async!
+  "Write a value without waiting for replica acknowledgment.
+   This is the standard SET operation - included for API symmetry."
+  [conn key value]
+  (wcar conn (car/set key (str value)))
+  {:acked 0})

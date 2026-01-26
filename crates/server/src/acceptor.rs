@@ -5,7 +5,7 @@ use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use std::sync::atomic::AtomicI64;
 use frogdb_core::{
     persistence::SnapshotCoordinator, shard::NewConnection, AclManager, ClientRegistry,
-    CommandRegistry, MetricsRecorder, ShardMessage, SharedFunctionRegistry,
+    CommandRegistry, MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
 };
 use frogdb_metrics::{metric_names, SharedTracer};
 
@@ -89,6 +89,9 @@ pub struct Acceptor {
 
     /// Tracing configuration.
     tracing_config: TracingConfig,
+
+    /// Optional replication tracker for WAIT command.
+    replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
 }
 
 impl Acceptor {
@@ -109,6 +112,7 @@ impl Acceptor {
         function_registry: SharedFunctionRegistry,
         shared_tracer: Option<SharedTracer>,
         tracing_config: TracingConfig,
+        replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -128,6 +132,7 @@ impl Acceptor {
             function_registry,
             shared_tracer,
             tracing_config,
+            replication_tracker,
         }
     }
 
@@ -177,6 +182,7 @@ impl Acceptor {
                     let function_registry = self.function_registry.clone();
                     let shared_tracer = self.shared_tracer.clone();
                     let tracing_config = self.tracing_config.clone();
+                    let replication_tracker = self.replication_tracker.clone();
 
                     spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -198,6 +204,7 @@ impl Acceptor {
                             function_registry,
                             shared_tracer,
                             tracing_config,
+                            replication_tracker,
                         );
 
                         if let Err(e) = handler.run().await {

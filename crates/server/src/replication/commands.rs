@@ -418,14 +418,13 @@ impl Command for WaitCommand {
             "WAIT command"
         );
 
-        // The actual wait is performed asynchronously by the connection handler.
-        // This command returns a BlockingNeeded response that tells the handler
-        // to perform the wait operation.
-        //
-        // For now, return 0 replicas since the replication tracker isn't
-        // connected yet. The full implementation will use the replication
-        // tracker to wait for ACKs.
-        Ok(Response::Integer(0))
+        // Return a BlockingNeeded response that tells the connection handler
+        // to perform the wait operation using the replication tracker.
+        Ok(Response::BlockingNeeded {
+            keys: vec![], // WAIT doesn't use keys, it waits for replica ACKs
+            timeout: timeout_ms as f64 / 1000.0, // Convert ms to seconds for consistency
+            op: frogdb_protocol::BlockingOp::Wait { num_replicas, timeout_ms },
+        })
     }
 
     fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {

@@ -48,3 +48,6 @@ tools/loadtest/reports/
 
 # redis dump files
 *.rdb
+
+# jepsen test results
+jepsen/frogdb/store

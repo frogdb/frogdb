@@ -6,7 +6,7 @@ use frogdb_core::persistence::{
     RocksConfig, RocksSnapshotCoordinator, RocksStore, SnapshotCoordinator, WalConfig,
 };
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
-use frogdb_core::{AclManager, ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, NoopBroadcaster, SharedBroadcaster, ShardMessage, ShardWorker};
+use frogdb_core::{AclManager, ClientRegistry, CommandRegistry, EvictionConfig, EvictionPolicy, MetricsRecorder, NoopBroadcaster, ReplicationTrackerImpl, SharedBroadcaster, ShardMessage, ShardWorker};
 use frogdb_metrics::{DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo, SharedTracer, SystemMetricsCollector};
 use std::time::Duration;
 use tokio::signal;
@@ -103,6 +103,9 @@ pub struct Server {
 
     /// Optional shared tracer for distributed tracing.
     shared_tracer: Option<SharedTracer>,
+
+    /// Optional replication tracker for WAIT command (only when running as primary).
+    replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
 }
 
 impl Server {
@@ -278,33 +281,34 @@ impl Server {
         // Convert recovered stores to an iterator if available
         let mut recovered_iter = recovered_stores.map(|v| v.into_iter());
 
-        // Create replication broadcaster
-        let replication_broadcaster: SharedBroadcaster = if config.replication.is_primary() {
-            // Initialize PrimaryReplicationHandler for primary role
-            let state_path = config.persistence.data_dir.join(&config.replication.state_file);
-            let repl_state = frogdb_core::ReplicationState::load_or_create(&state_path)
-                .map_err(|e| anyhow::anyhow!("Failed to load replication state: {}", e))?;
+        // Create replication broadcaster and tracker
+        let (replication_broadcaster, replication_tracker): (SharedBroadcaster, Option<Arc<ReplicationTrackerImpl>>) =
+            if config.replication.is_primary() {
+                // Initialize PrimaryReplicationHandler for primary role
+                let state_path = config.persistence.data_dir.join(&config.replication.state_file);
+                let repl_state = frogdb_core::ReplicationState::load_or_create(&state_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to load replication state: {}", e))?;
 
-            info!(
-                replication_id = %repl_state.replication_id,
-                offset = repl_state.replication_offset,
-                "Initialized primary replication state"
-            );
+                info!(
+                    replication_id = %repl_state.replication_id,
+                    offset = repl_state.replication_offset,
+                    "Initialized primary replication state"
+                );
 
-            let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
-            tracker.set_offset(repl_state.replication_offset);
+                let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
+                tracker.set_offset(repl_state.replication_offset);
 
-            let handler = Arc::new(PrimaryReplicationHandler::new(
-                repl_state,
-                tracker,
-                rocks_store.clone(),
-                config.persistence.data_dir.clone(),
-            ));
+                let handler = Arc::new(PrimaryReplicationHandler::new(
+                    repl_state,
+                    tracker.clone(),
+                    rocks_store.clone(),
+                    config.persistence.data_dir.clone(),
+                ));
 
-            handler as SharedBroadcaster
-        } else {
-            Arc::new(NoopBroadcaster)
-        };
+                (handler as SharedBroadcaster, Some(tracker))
+            } else {
+                (Arc::new(NoopBroadcaster), None)
+            };
 
         for (shard_id, (msg_rx, conn_rx)) in shard_receivers
             .into_iter()
@@ -410,6 +414,7 @@ impl Server {
             acl_manager,
             function_registry,
             shared_tracer,
+            replication_tracker,
         })
     }
 
@@ -581,6 +586,7 @@ impl Server {
             self.function_registry.clone(),
             self.shared_tracer.clone(),
             self.config.tracing.clone(),
+            self.replication_tracker.clone(),
         );
 
         // Spawn acceptor task

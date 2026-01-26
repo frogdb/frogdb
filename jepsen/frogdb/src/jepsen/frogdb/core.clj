@@ -18,12 +18,16 @@
             [jepsen.frogdb.db :as db]
             [jepsen.frogdb.expiry :as expiry]
             [jepsen.frogdb.hash :as hash]
+            [jepsen.frogdb.lag :as lag]
             [jepsen.frogdb.nemesis :as nemesis]
             [jepsen.frogdb.queue :as queue]
             [jepsen.frogdb.register :as register]
+            [jepsen.frogdb.replication :as replication]
             [jepsen.frogdb.set :as set-workload]
             [jepsen.frogdb.sortedset :as sortedset]
-            [jepsen.frogdb.transaction :as transaction])
+            [jepsen.frogdb.split-brain :as split-brain]
+            [jepsen.frogdb.transaction :as transaction]
+            [jepsen.frogdb.zombie :as zombie])
   (:gen-class))
 
 ;; ===========================================================================
@@ -55,7 +59,12 @@
    :hash hash/workload
    :sortedset sortedset/workload
    :expiry expiry/workload
-   :blocking blocking/workload})
+   :blocking blocking/workload
+   ;; Replication workloads
+   :replication replication/workload
+   :split-brain split-brain/workload
+   :zombie zombie/workload
+   :lag lag/workload})
 
 (defn get-workload
   "Get a workload by name with options."
@@ -74,32 +83,44 @@
   "Construct a Jepsen test for FrogDB.
 
    Options:
-   - :workload - workload name (register, counter)
-   - :nemesis - nemesis type (none, kill, pause, all)
+   - :workload - workload name (register, counter, replication, etc.)
+   - :nemesis - nemesis type (none, kill, pause, partition, all, all-replication)
    - :rate - operations per second
    - :time-limit - test duration in seconds
-   - :nodes - list of nodes to test"
+   - :nodes - list of nodes to test
+   - :replication - if true, use 3-node replication cluster"
   [opts]
   (let [workload (get-workload (:workload opts) opts)
         nemesis-pkg (nemesis/nemesis-package (keyword (:nemesis opts)) opts)
         local? (:local opts)
         docker? (:docker opts)
-        nodes (if (or local? docker?) ["n1"] (or (:nodes opts) ["n1"]))]
+        replication? (:replication opts)
+        ;; Replication workloads default to multi-node
+        replication-workload? (contains? #{:replication :split-brain :zombie :lag}
+                                         (keyword (:workload opts)))
+        multi-node? (or replication? replication-workload?)
+        nodes (cond
+                local? ["n1"]
+                multi-node? ["n1" "n2" "n3"]
+                docker? ["n1"]
+                :else (or (:nodes opts) ["n1"]))]
     (merge tests/noop-test
            opts
            {:name (str "frogdb-" (:workload opts)
                        (when (not= "none" (:nemesis opts))
                          (str "-" (:nemesis opts)))
                        (when local? "-local")
-                       (when docker? "-docker"))
+                       (when docker? "-docker")
+                       (when multi-node? "-replication"))
             :nodes nodes
             :os docker-os
             :db (cond
-                  local?  (db/local-db)
+                  local? (db/local-db)
+                  multi-node? (db/replication-db)
                   docker? (db/docker-db)
-                  :else   (db/docker-db))
+                  :else (db/docker-db))
             ;; Use dummy SSH for docker/local modes - we use docker exec instead
-            :ssh (when (or local? docker?)
+            :ssh (when (or local? docker? multi-node?)
                    {:dummy? true})
             :client (:client workload)
             :nemesis (:nemesis nemesis-pkg)
@@ -130,15 +151,15 @@
 
 (def cli-opts
   "CLI options for FrogDB Jepsen tests."
-  [["-w" "--workload WORKLOAD" "Workload to run (register, counter, append, transaction, queue, set, hash, sortedset, expiry, blocking)"
+  [["-w" "--workload WORKLOAD" "Workload to run (register, counter, append, transaction, queue, set, hash, sortedset, expiry, blocking, replication, split-brain, zombie, lag)"
     :default "register"
     :validate [#(contains? workloads (keyword %))
                (str "Must be one of: " (str/join ", " (map name (keys workloads))))]]
 
-   [nil "--nemesis NEMESIS" "Nemesis type (none, kill, pause, rapid-kill, all)"
+   [nil "--nemesis NEMESIS" "Nemesis type (none, kill, pause, rapid-kill, partition, all, all-replication)"
     :default "none"
-    :validate [#(contains? #{:none :kill :pause :rapid-kill :all} (keyword %))
-               "Must be one of: none, kill, pause, rapid-kill, all"]]
+    :validate [#(contains? #{:none :kill :pause :rapid-kill :partition :all :all-replication} (keyword %))
+               "Must be one of: none, kill, pause, rapid-kill, partition, all, all-replication"]]
 
    ["-r" "--rate RATE" "Operations per second"
     :default 10
@@ -157,6 +178,9 @@
     :default false]
 
    [nil "--docker" "Docker testing mode (use docker-compose containers)"
+    :default false]
+
+   [nil "--replication" "Use 3-node replication cluster"
     :default false]])
 
 (def all-cli-opts

@@ -1,0 +1,118 @@
+# Jepsen 3-node replication cluster for FrogDB
+# Used for replication and distributed systems testing
+#
+# Topology:
+#   n1 - Primary node (accepts writes, replicates to n2, n3)
+#   n2 - Replica node (replicates from n1)
+#   n3 - Replica node (replicates from n1)
+#
+# Ports (from host):
+#   n1: localhost:6379
+#   n2: localhost:6380
+#   n3: localhost:6381
+
+services:
+  n1:
+    image: frogdb:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: frogdb-n1
+    hostname: n1
+    ports:
+      - "6379:6379"
+    volumes:
+      - frogdb-n1-data:/data
+    environment:
+      FROGDB_PORT: 6379
+      FROGDB_DATA_DIR: /data
+      FROGDB_ROLE: primary
+      # Enable replication listener
+      FROGDB_REPLICATION_LISTEN: "0.0.0.0:6380"
+    cap_add:
+      - NET_ADMIN  # For iptables-based partition testing
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks:
+      frogdb-net:
+        ipv4_address: 172.20.0.2
+
+  n2:
+    image: frogdb:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: frogdb-n2
+    hostname: n2
+    ports:
+      - "6380:6379"
+    volumes:
+      - frogdb-n2-data:/data
+    environment:
+      FROGDB_PORT: 6379
+      FROGDB_DATA_DIR: /data
+      FROGDB_ROLE: replica
+      # Connect to n1 as primary
+      FROGDB_REPLICAOF: "n1 6379"
+    cap_add:
+      - NET_ADMIN  # For iptables-based partition testing
+    restart: unless-stopped
+    depends_on:
+      n1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks:
+      frogdb-net:
+        ipv4_address: 172.20.0.3
+
+  n3:
+    image: frogdb:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: frogdb-n3
+    hostname: n3
+    ports:
+      - "6381:6379"
+    volumes:
+      - frogdb-n3-data:/data
+    environment:
+      FROGDB_PORT: 6379
+      FROGDB_DATA_DIR: /data
+      FROGDB_ROLE: replica
+      # Connect to n1 as primary
+      FROGDB_REPLICAOF: "n1 6379"
+    cap_add:
+      - NET_ADMIN  # For iptables-based partition testing
+    restart: unless-stopped
+    depends_on:
+      n1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks:
+      frogdb-net:
+        ipv4_address: 172.20.0.4
+
+volumes:
+  frogdb-n1-data:
+  frogdb-n2-data:
+  frogdb-n3-data:
+
+networks:
+  frogdb-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
