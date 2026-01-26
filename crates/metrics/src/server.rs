@@ -3,8 +3,11 @@
 use crate::config::MetricsConfig;
 use crate::debug::{self, DebugState};
 use crate::health::HealthChecker;
+use crate::latency_bands::LatencyBandTracker;
+use crate::metric_names;
 use crate::prometheus_recorder::PrometheusRecorder;
 use crate::status::StatusCollector;
+use frogdb_core::MetricsRecorder;
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::body::Incoming;
@@ -25,6 +28,7 @@ pub struct MetricsServer {
     health: HealthChecker,
     debug_state: Option<DebugState>,
     status_collector: Option<Arc<StatusCollector>>,
+    band_tracker: Option<Arc<LatencyBandTracker>>,
 }
 
 impl MetricsServer {
@@ -40,6 +44,7 @@ impl MetricsServer {
             health,
             debug_state: None,
             status_collector: None,
+            band_tracker: None,
         }
     }
 
@@ -52,6 +57,12 @@ impl MetricsServer {
     /// Set the status collector for the /status/json endpoint.
     pub fn with_status_collector(mut self, collector: Arc<StatusCollector>) -> Self {
         self.status_collector = Some(collector);
+        self
+    }
+
+    /// Set the latency band tracker for Prometheus export.
+    pub fn with_band_tracker(mut self, tracker: Arc<LatencyBandTracker>) -> Self {
+        self.band_tracker = Some(tracker);
         self
     }
 
@@ -68,6 +79,7 @@ impl MetricsServer {
         let health = self.health;
         let debug_state = self.debug_state.map(Arc::new);
         let status_collector = self.status_collector;
+        let band_tracker = self.band_tracker;
 
         loop {
             let (stream, peer_addr) = match listener.accept().await {
@@ -83,6 +95,7 @@ impl MetricsServer {
             let health = health.clone();
             let debug_state = debug_state.clone();
             let status_collector = status_collector.clone();
+            let band_tracker = band_tracker.clone();
 
             tokio::spawn(async move {
                 let service = service_fn(move |req: Request<Incoming>| {
@@ -90,7 +103,8 @@ impl MetricsServer {
                     let health = health.clone();
                     let debug_state = debug_state.clone();
                     let status_collector = status_collector.clone();
-                    async move { handle_request(req, recorder, health, debug_state, status_collector).await }
+                    let band_tracker = band_tracker.clone();
+                    async move { handle_request(req, recorder, health, debug_state, status_collector, band_tracker).await }
                 });
 
                 if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
@@ -117,13 +131,14 @@ async fn handle_request(
     health: HealthChecker,
     debug_state: Option<Arc<DebugState>>,
     status_collector: Option<Arc<StatusCollector>>,
+    band_tracker: Option<Arc<LatencyBandTracker>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let (method, path) = (req.method(), req.uri().path());
 
     debug!(method = %method, path = %path, "Metrics server request");
 
     let response = match (method, path) {
-        (&Method::GET, "/metrics") => handle_metrics(recorder),
+        (&Method::GET, "/metrics") => handle_metrics(recorder, band_tracker),
         (&Method::GET, "/health/live") => handle_health_live(health),
         (&Method::GET, "/health/ready") => handle_health_ready(health),
         // Convenience aliases
@@ -151,7 +166,22 @@ async fn handle_request(
 }
 
 /// Handle GET /metrics - return Prometheus format metrics.
-fn handle_metrics(recorder: Arc<PrometheusRecorder>) -> Response<Full<Bytes>> {
+fn handle_metrics(
+    recorder: Arc<PrometheusRecorder>,
+    band_tracker: Option<Arc<LatencyBandTracker>>,
+) -> Response<Full<Bytes>> {
+    // Update latency band gauges before encoding (if tracker is configured)
+    if let Some(tracker) = band_tracker {
+        // Export cumulative counts with "le" labels (like histogram buckets)
+        for (label, count) in tracker.get_counts() {
+            recorder.record_gauge(
+                metric_names::LATENCY_BAND_REQUESTS,
+                count as f64,
+                &[("le", &label)],
+            );
+        }
+    }
+
     let body = recorder.encode();
 
     Response::builder()
@@ -241,7 +271,7 @@ mod tests {
         let recorder = Arc::new(PrometheusRecorder::new());
         recorder.increment_counter("test_metric", 1, &[("label", "value")]);
 
-        let response = handle_metrics(recorder);
+        let response = handle_metrics(recorder, None);
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response
             .headers()
@@ -250,6 +280,25 @@ mod tests {
             .to_str()
             .unwrap()
             .contains("text/plain"));
+    }
+
+    #[test]
+    fn test_handle_metrics_with_band_tracker() {
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let tracker = Arc::new(LatencyBandTracker::new(vec![5, 10, 50]));
+
+        // Record some latencies
+        tracker.record(3);  // <= 5ms
+        tracker.record(7);  // <= 10ms
+        tracker.record(100); // overflow
+
+        let response = handle_metrics(recorder.clone(), Some(tracker));
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the encoded metrics contain band data
+        let body = recorder.encode();
+        assert!(body.contains("frogdb_latency_band_requests_total"));
+        assert!(body.contains("le="));
     }
 
     #[test]
