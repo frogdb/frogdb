@@ -8,6 +8,7 @@ use tracing::{debug, warn};
 
 use crate::glob::glob_match;
 use crate::noop::ExpiryIndex;
+use crate::shard::slot_for_key;
 use crate::types::{KeyMetadata, KeyType, SetCondition, SetOptions, SetResult, Value};
 
 /// Storage trait for key-value operations.
@@ -192,6 +193,24 @@ pub trait Store: Send {
     fn get_lfu_value(&self, key: &[u8], decay_time: u64) -> Option<u8> {
         let _ = (key, decay_time);
         None
+    }
+
+    // ========================================================================
+    // Cluster slot support methods (for slot-based routing)
+    // ========================================================================
+
+    /// Get keys in a specific slot (for CLUSTER GETKEYSINSLOT).
+    ///
+    /// Returns up to `count` keys that hash to the given slot.
+    fn keys_in_slot(&self, slot: u16, count: usize) -> Vec<Bytes> {
+        let _ = (slot, count);
+        vec![]
+    }
+
+    /// Count keys in a specific slot (for CLUSTER COUNTKEYSINSLOT).
+    fn count_keys_in_slot(&self, slot: u16) -> usize {
+        let _ = slot;
+        0
     }
 }
 
@@ -621,6 +640,26 @@ impl Store for HashMapStore {
                 .as_secs() / 60;
             crate::eviction::lfu_decay(e.metadata.lfu_counter, minutes_since, decay_time)
         })
+    }
+
+    // ========================================================================
+    // Cluster slot support methods
+    // ========================================================================
+
+    fn keys_in_slot(&self, slot: u16, count: usize) -> Vec<Bytes> {
+        self.data
+            .keys()
+            .filter(|k| slot_for_key(k) == slot)
+            .take(count)
+            .cloned()
+            .collect()
+    }
+
+    fn count_keys_in_slot(&self, slot: u16) -> usize {
+        self.data
+            .keys()
+            .filter(|k| slot_for_key(k) == slot)
+            .count()
     }
 }
 

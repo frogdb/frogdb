@@ -9,17 +9,20 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::{Bytes, BytesMut};
 use frogdb_core::{
+    cluster::{ClusterCommand, NodeInfo, NodeRole, SlotRange},
     generate_latency_graph, persistence::SnapshotCoordinator, shard_for_key, slot_for_key,
-    AclManager, AuthenticatedUser, ClientHandle, ClientRegistry, ClientStatsDelta, ClusterState,
-    CommandCategory, CommandFlags, CommandRegistry, ExecuteSignal, GlobPattern, IntrospectionRequest,
-    IntrospectionResponse, KeyAccessType, LatencyEvent, LockMode, MetricsRecorder, PartialResult,
-    PauseMode, PubSubMessage, PubSubSender, ReplicationTracker, ReplicationTrackerImpl, ScatterOp,
+    AclManager, AuthenticatedUser, ClientHandle, ClientRegistry, ClientStatsDelta,
+    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandCategory, CommandFlags,
+    CommandRegistry, ExecuteSignal, GlobPattern, IntrospectionRequest, IntrospectionResponse,
+    KeyAccessType, LatencyEvent, LockMode, MetricsRecorder, PartialResult, PauseMode,
+    PubSubMessage, PubSubSender, ReplicationTracker, ReplicationTrackerImpl, ScatterOp,
     ShardReadyResult, SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId,
     TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
+use openraft::error::{ClientWriteError, RaftError};
 use frogdb_metrics::SharedTracer;
-use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
+use frogdb_protocol::{ParsedCommand, ProtocolVersion, RaftClusterOp, Response};
 use futures::{SinkExt, StreamExt};
 use redis_protocol::codec::Resp2;
 use tokio::io::AsyncWriteExt;
@@ -384,6 +387,12 @@ pub struct ConnectionHandler {
 
     /// Optional latency band tracker for SLO monitoring.
     band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
+
+    /// Optional Raft instance (only when cluster mode is enabled).
+    raft: Option<Arc<ClusterRaft>>,
+
+    /// Optional network factory for cluster node management.
+    network_factory: Option<Arc<ClusterNetworkFactory>>,
 }
 
 /// Determine key access type from command flags.
@@ -604,6 +613,61 @@ fn format_timestamp_iso(secs: u64) -> String {
     )
 }
 
+/// Convert protocol RaftClusterOp to core ClusterCommand.
+fn convert_raft_cluster_op(op: RaftClusterOp) -> ClusterCommand {
+    match op {
+        RaftClusterOp::AddNode {
+            node_id,
+            addr,
+            cluster_addr,
+        } => ClusterCommand::AddNode {
+            node: NodeInfo::new_primary(node_id, addr, cluster_addr),
+        },
+        RaftClusterOp::RemoveNode { node_id } => ClusterCommand::RemoveNode { node_id },
+        RaftClusterOp::AssignSlots { node_id, slots } => ClusterCommand::AssignSlots {
+            node_id,
+            slots: slots.into_iter().map(SlotRange::single).collect(),
+        },
+        RaftClusterOp::RemoveSlots { node_id, slots } => ClusterCommand::RemoveSlots {
+            node_id,
+            slots: slots.into_iter().map(SlotRange::single).collect(),
+        },
+        RaftClusterOp::SetRole {
+            node_id,
+            is_replica,
+            primary_id,
+        } => ClusterCommand::SetRole {
+            node_id,
+            role: if is_replica {
+                NodeRole::Replica
+            } else {
+                NodeRole::Primary
+            },
+            primary_id,
+        },
+        RaftClusterOp::BeginSlotMigration {
+            slot,
+            source_node,
+            target_node,
+        } => ClusterCommand::BeginSlotMigration {
+            slot,
+            source_node,
+            target_node,
+        },
+        RaftClusterOp::CompleteSlotMigration {
+            slot,
+            source_node,
+            target_node,
+        } => ClusterCommand::CompleteSlotMigration {
+            slot,
+            source_node,
+            target_node,
+        },
+        RaftClusterOp::CancelSlotMigration { slot } => ClusterCommand::CancelSlotMigration { slot },
+        RaftClusterOp::IncrementEpoch => ClusterCommand::IncrementEpoch,
+    }
+}
+
 /// Commands that have subcommands (container commands in Redis terminology).
 const CONTAINER_COMMANDS: &[&str] = &[
     "ACL", "CLIENT", "CONFIG", "CLUSTER", "DEBUG", "MEMORY", "MODULE",
@@ -651,6 +715,8 @@ impl ConnectionHandler {
         hotshards_config: frogdb_metrics::HotShardConfig,
         memory_diag_config: frogdb_metrics::MemoryDiagConfig,
         band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
+        raft: Option<Arc<ClusterRaft>>,
+        network_factory: Option<Arc<ClusterNetworkFactory>>,
     ) -> Self {
         let framed = Framed::new(socket, Resp2);
         let requires_auth = acl_manager.requires_auth();
@@ -689,6 +755,8 @@ impl ConnectionHandler {
             hotshards_config,
             memory_diag_config,
             band_tracker,
+            raft,
+            network_factory,
         }
     }
 
@@ -1062,6 +1130,228 @@ impl ConnectionHandler {
         }
     }
 
+    /// Handle a Raft cluster command asynchronously.
+    ///
+    /// This method is called when a cluster command (MEET, FORGET, ADDSLOTS, etc.)
+    /// returns `Response::RaftNeeded`. It executes the Raft operation asynchronously
+    /// and updates the NetworkFactory after successful commit.
+    async fn handle_raft_command(
+        &self,
+        op: RaftClusterOp,
+        register_node: Option<(u64, std::net::SocketAddr)>,
+        unregister_node: Option<u64>,
+    ) -> Response {
+        // Get the Raft instance
+        let raft = match &self.raft {
+            Some(r) => r,
+            None => return Response::error("ERR Cluster mode not enabled"),
+        };
+
+        // Convert protocol RaftClusterOp to core ClusterCommand
+        let cmd = convert_raft_cluster_op(op);
+
+        // Execute the Raft command
+        match raft.client_write(cmd).await {
+            Ok(_) => {
+                // Update NetworkFactory after successful Raft commit
+                if let Some((node_id, addr)) = register_node {
+                    if let Some(ref factory) = self.network_factory {
+                        factory.register_node(node_id, addr);
+                    }
+                }
+                if let Some(node_id) = unregister_node {
+                    if let Some(ref factory) = self.network_factory {
+                        factory.remove_node(node_id);
+                    }
+                }
+                Response::ok()
+            }
+            Err(e) => {
+                // Check if this is a ForwardToLeader error
+                if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
+                    // Try to get the leader's client address from ClusterState
+                    if let Some(leader_id) = forward.leader_id {
+                        if let Some(ref cluster_state) = self.cluster_state {
+                            if let Some(leader_info) = cluster_state.get_node(leader_id) {
+                                // Return redirect error with leader's client address
+                                return Response::error(format!(
+                                    "REDIRECT {} {}",
+                                    leader_id, leader_info.addr
+                                ));
+                            }
+                        }
+                    }
+                    // Leader unknown - return error with whatever info we have
+                    return Response::error(format!(
+                        "CLUSTERDOWN No leader available: {:?}",
+                        forward.leader_id
+                    ));
+                }
+                // Other errors
+                Response::error(format!("ERR Raft error: {}", e))
+            }
+        }
+    }
+
+    /// Handle a MIGRATE command asynchronously.
+    ///
+    /// This method performs the actual key migration:
+    /// 1. Serialize the key(s) with DUMP format
+    /// 2. Connect to the target server
+    /// 3. Authenticate if needed
+    /// 4. Send RESTORE command(s)
+    /// 5. Delete local key(s) if not COPY
+    async fn handle_migrate_command(&mut self, args: Vec<Bytes>) -> Response {
+        use crate::migrate::{MigrateArgs, MigrateClient};
+        use std::time::Duration;
+
+        // Parse arguments
+        let migrate_args = match MigrateArgs::parse(&args) {
+            Ok(args) => args,
+            Err(e) => return Response::error(e),
+        };
+
+        // Must have at least one key to migrate
+        if migrate_args.keys.is_empty() {
+            return Response::error("ERR No keys to migrate");
+        }
+
+        let timeout = Duration::from_millis(migrate_args.timeout_ms);
+
+        // Connect to target server
+        let mut client =
+            match MigrateClient::connect(&migrate_args.host, migrate_args.port, timeout).await {
+                Ok(c) => c,
+                Err(e) => return Response::error(format!("IOERR error or timeout {}", e)),
+            };
+
+        // Authenticate if needed
+        if let Some(ref auth) = migrate_args.auth {
+            if let Err(e) = client.auth(&auth.password, auth.username.as_deref()).await {
+                return Response::error(format!("ERR Target authentication error: {}", e));
+            }
+        }
+
+        // Select database if not 0
+        if migrate_args.dest_db != 0 {
+            if let Err(e) = client.select_db(migrate_args.dest_db).await {
+                return Response::error(format!("ERR Target database error: {}", e));
+            }
+        }
+
+        // Process each key
+        let mut migrated_count = 0;
+        for key in &migrate_args.keys {
+            // Get the key's serialized data using DUMP format
+            // We need to send a command to the shard to serialize the key
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            let target_shard = shard_for_key(key, self.num_shards);
+
+            if let Some(sender) = self.shard_senders.get(target_shard) {
+                let dump_cmd = ParsedCommand::new(Bytes::from("DUMP"), vec![key.clone()]);
+                if sender
+                    .send(ShardMessage::Execute {
+                        command: dump_cmd,
+                        conn_id: self.state.id,
+                        txid: None,
+                        protocol_version: self.state.protocol_version,
+                        response_tx,
+                    })
+                    .await
+                    .is_err()
+                {
+                    return Response::error("ERR Internal error: shard unreachable");
+                }
+            } else {
+                return Response::error("ERR Internal error: invalid shard");
+            }
+
+            let dump_response = match response_rx.await {
+                Ok(r) => r,
+                Err(_) => return Response::error("ERR Internal error: no response from shard"),
+            };
+
+            // Check if key exists (DUMP returns null for missing keys)
+            let serialized = match &dump_response {
+                Response::Bulk(Some(data)) => data.clone(),
+                Response::Bulk(None) | Response::Null => {
+                    // Key doesn't exist, skip it (Redis behavior)
+                    continue;
+                }
+                Response::Error(e) => {
+                    return Response::error(format!(
+                        "ERR Error dumping key: {}",
+                        String::from_utf8_lossy(e)
+                    ));
+                }
+                _ => return Response::error("ERR Unexpected DUMP response"),
+            };
+
+            // Get TTL for the key
+            let (ttl_tx, ttl_rx) = tokio::sync::oneshot::channel();
+            if let Some(sender) = self.shard_senders.get(target_shard) {
+                let pttl_cmd = ParsedCommand::new(Bytes::from("PTTL"), vec![key.clone()]);
+                if sender
+                    .send(ShardMessage::Execute {
+                        command: pttl_cmd,
+                        conn_id: self.state.id,
+                        txid: None,
+                        protocol_version: self.state.protocol_version,
+                        response_tx: ttl_tx,
+                    })
+                    .await
+                    .is_err()
+                {
+                    return Response::error("ERR Internal error: shard unreachable");
+                }
+            }
+
+            let ttl = match ttl_rx.await {
+                Ok(Response::Integer(t)) => {
+                    if t < 0 {
+                        0 // No TTL or key doesn't exist
+                    } else {
+                        t
+                    }
+                }
+                _ => 0,
+            };
+
+            // RESTORE the key on target
+            if let Err(e) = client
+                .restore(key, ttl, &serialized, migrate_args.replace)
+                .await
+            {
+                return Response::error(format!("ERR Target error: {}", e));
+            }
+
+            // Delete local key if not COPY
+            if !migrate_args.copy {
+                let (del_tx, _del_rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = self.shard_senders.get(target_shard) {
+                    let del_cmd = ParsedCommand::new(Bytes::from("DEL"), vec![key.clone()]);
+                    let _ = sender
+                        .send(ShardMessage::Execute {
+                            command: del_cmd,
+                            conn_id: self.state.id,
+                            txid: None,
+                            protocol_version: self.state.protocol_version,
+                            response_tx: del_tx,
+                        })
+                        .await;
+                }
+            }
+
+            migrated_count += 1;
+        }
+
+        if migrated_count == 0 && !migrate_args.keys.is_empty() {
+            Response::Simple(Bytes::from("NOKEY"))
+        } else {
+            Response::ok()
+        }
+    }
+
     /// Route and execute a command, handling transaction and pub/sub modes.
     /// Returns a Vec of responses since pub/sub commands can return multiple messages.
     async fn route_and_execute_with_transaction(&mut self, cmd: &ParsedCommand) -> Vec<Response> {
@@ -1389,6 +1679,24 @@ impl ConnectionHandler {
         // Check if this is a blocking command that needs to wait
         if let Response::BlockingNeeded { keys, timeout, op } = response {
             return vec![self.handle_blocking_wait(keys, timeout, op).await];
+        }
+
+        // Check if this is a Raft cluster command that needs async execution
+        if let Response::RaftNeeded {
+            op,
+            register_node,
+            unregister_node,
+        } = response
+        {
+            return vec![
+                self.handle_raft_command(op, register_node, unregister_node)
+                    .await,
+            ];
+        }
+
+        // Check if this is a MIGRATE command that needs async execution
+        if let Response::MigrateNeeded { args } = response {
+            return vec![self.handle_migrate_command(args).await];
         }
 
         vec![response]

@@ -8,7 +8,7 @@ use frogdb_protocol::{ProtocolVersion, Response};
 use parking_lot::RwLock;
 use tokio::sync::mpsc;
 
-use crate::cluster::{ClusterRaft, ClusterState};
+use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::error::CommandError;
 use crate::replication::{ReplicationState, ReplicationTrackerImpl};
 use crate::shard::ShardMessage;
@@ -152,6 +152,9 @@ pub struct CommandContext<'a> {
 
     /// Optional Raft instance for cluster command execution.
     pub raft: Option<&'a Arc<ClusterRaft>>,
+
+    /// Optional network factory for cluster node management.
+    pub network_factory: Option<&'a Arc<ClusterNetworkFactory>>,
 }
 
 impl<'a> CommandContext<'a> {
@@ -176,6 +179,7 @@ impl<'a> CommandContext<'a> {
             cluster_state: None,
             node_id: None,
             raft: None,
+            network_factory: None,
         }
     }
 
@@ -193,6 +197,7 @@ impl<'a> CommandContext<'a> {
         cluster_state: Option<&'a Arc<ClusterState>>,
         node_id: Option<u64>,
         raft: Option<&'a Arc<ClusterRaft>>,
+        network_factory: Option<&'a Arc<ClusterNetworkFactory>>,
     ) -> Self {
         Self {
             store,
@@ -206,6 +211,7 @@ impl<'a> CommandContext<'a> {
             cluster_state,
             node_id,
             raft,
+            network_factory,
         }
     }
 }

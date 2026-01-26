@@ -94,6 +94,77 @@ pub enum BlockingOp {
     },
 }
 
+/// Raft cluster operation types for Response::RaftNeeded.
+///
+/// This is a serializable representation of cluster commands that lives in the
+/// protocol crate (which cannot depend on core). The connection handler converts
+/// these to the appropriate core `ClusterCommand` types.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RaftClusterOp {
+    /// Add a node to the cluster.
+    AddNode {
+        /// Node ID.
+        node_id: u64,
+        /// Client-facing address (ip:port).
+        addr: std::net::SocketAddr,
+        /// Cluster bus address (ip:cluster_port).
+        cluster_addr: std::net::SocketAddr,
+    },
+    /// Remove a node from the cluster.
+    RemoveNode {
+        /// Node ID to remove.
+        node_id: u64,
+    },
+    /// Assign slots to a node.
+    AssignSlots {
+        /// Target node ID.
+        node_id: u64,
+        /// Slot numbers to assign.
+        slots: Vec<u16>,
+    },
+    /// Remove slot assignments from a node.
+    RemoveSlots {
+        /// Target node ID.
+        node_id: u64,
+        /// Slot numbers to remove.
+        slots: Vec<u16>,
+    },
+    /// Set a node's role.
+    SetRole {
+        /// Target node ID.
+        node_id: u64,
+        /// Whether the node is a replica (true) or primary (false).
+        is_replica: bool,
+        /// Primary ID if this is a replica.
+        primary_id: Option<u64>,
+    },
+    /// Begin slot migration.
+    BeginSlotMigration {
+        /// Slot being migrated.
+        slot: u16,
+        /// Source node ID.
+        source_node: u64,
+        /// Target node ID.
+        target_node: u64,
+    },
+    /// Complete slot migration.
+    CompleteSlotMigration {
+        /// Slot being migrated.
+        slot: u16,
+        /// Source node ID.
+        source_node: u64,
+        /// Target node ID.
+        target_node: u64,
+    },
+    /// Cancel slot migration.
+    CancelSlotMigration {
+        /// Slot whose migration to cancel.
+        slot: u16,
+    },
+    /// Increment the config epoch.
+    IncrementEpoch,
+}
+
 /// Response types that can be sent to clients.
 ///
 /// Includes both RESP2 types (fully implemented) and RESP3 types
@@ -160,6 +231,24 @@ pub enum Response {
         timeout: f64,
         /// The blocking operation to perform when data arrives.
         op: BlockingOp,
+    },
+
+    /// Signal that a Raft cluster command needs to be executed.
+    /// This is intercepted by the connection handler and never sent on the wire.
+    RaftNeeded {
+        /// The Raft cluster operation to execute.
+        op: RaftClusterOp,
+        /// For AddNode: register in NetworkFactory after commit.
+        register_node: Option<(u64, std::net::SocketAddr)>,
+        /// For RemoveNode: unregister from NetworkFactory after commit.
+        unregister_node: Option<u64>,
+    },
+
+    /// Signal that a MIGRATE command needs to be executed.
+    /// This is intercepted by the connection handler and never sent on the wire.
+    MigrateNeeded {
+        /// The raw arguments for the MIGRATE command.
+        args: Vec<Bytes>,
     },
 }
 
@@ -257,6 +346,12 @@ impl Response {
             Response::BlockingNeeded { .. } => {
                 panic!("BlockingNeeded response should be intercepted by connection handler")
             }
+            Response::RaftNeeded { .. } => {
+                panic!("RaftNeeded response should be intercepted by connection handler")
+            }
+            Response::MigrateNeeded { .. } => {
+                panic!("MigrateNeeded response should be intercepted by connection handler")
+            }
         }
     }
 
@@ -335,6 +430,12 @@ impl Response {
             // Internal types - should never reach serialization
             Response::BlockingNeeded { .. } => {
                 panic!("BlockingNeeded response should be intercepted by connection handler")
+            }
+            Response::RaftNeeded { .. } => {
+                panic!("RaftNeeded response should be intercepted by connection handler")
+            }
+            Response::MigrateNeeded { .. } => {
+                panic!("MigrateNeeded response should be intercepted by connection handler")
             }
         }
     }

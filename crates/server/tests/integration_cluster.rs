@@ -402,9 +402,12 @@ async fn test_node_restart_rejoins_cluster() {
 }
 
 /// Tests that a minority partition cannot elect a leader.
-/// NOTE: Ignored until CLUSTER commands return actual cluster state.
+/// NOTE: This test requires Phase 4 (Failure Detection) implementation to work correctly.
+/// Currently, Raft doesn't immediately detect quorum loss without active writes.
+/// The cluster needs a background heartbeat task that monitors node liveness and
+/// updates cluster_state accordingly.
 #[tokio::test]
-#[ignore = "Requires full cluster mode implementation"]
+#[ignore = "Requires Phase 4 (Failure Detection) - heartbeat-based quorum monitoring"]
 async fn test_minority_partition_cannot_elect_leader() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(5).await.unwrap();
@@ -420,14 +423,16 @@ async fn test_minority_partition_cannot_elect_leader() {
     harness.kill_node(nodes[2]);
 
     // Remaining 2 nodes should not be able to elect leader
+    // Note: After Phase 4, surviving nodes should detect quorum loss via heartbeat failures
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    // Cluster should be down
+    // Cluster should be down - requires Phase 4's failure detection to work
     let surviving_node = harness.node(nodes[3]).unwrap();
     let response = surviving_node.send("CLUSTER", &["INFO"]).await;
     let info = parse_cluster_info(&response).unwrap();
 
     // State should be "fail" since quorum lost
+    // Note: Currently reports "ok" because Raft doesn't detect quorum loss without writes
     assert_eq!(info.cluster_state, "fail");
 
     harness.shutdown_all().await;

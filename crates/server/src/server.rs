@@ -139,6 +139,9 @@ pub struct Server {
 
     /// Optional latency band tracker for SLO monitoring.
     band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
+
+    /// Optional network factory for cluster node management.
+    network_factory: Option<Arc<ClusterNetworkFactory>>,
 }
 
 impl Server {
@@ -357,7 +360,7 @@ impl Server {
 
         // Initialize cluster state and Raft if cluster mode is enabled
         // NOTE: This must happen before shard creation so we can pass raft to workers
-        let (cluster_state, node_id, raft) = if config.cluster.enabled {
+        let (cluster_state, node_id, raft, network_factory) = if config.cluster.enabled {
             // Derive node_id from cluster_bus address for deterministic IDs
             let cluster_addr = config.cluster.cluster_bus_socket_addr();
             let node_id = if config.cluster.node_id != 0 {
@@ -427,6 +430,9 @@ impl Server {
                 ..Default::default()
             };
 
+            // Clone network factory before passing to Raft (so we can use it later for CLUSTER MEET/FORGET)
+            let network_factory_clone = network_factory.clone();
+
             // Initialize Raft instance
             let raft = openraft::Raft::new(
                 node_id,
@@ -488,9 +494,37 @@ impl Server {
             cluster.add_node(this_node);
             info!(node_id = node_id, "Node added to cluster state");
 
-            (Some(Arc::new(cluster)), Some(node_id), Some(Arc::new(raft)))
+            // Auto-assign slots evenly on bootstrap
+            // Only the bootstrap node assigns slots to avoid conflicts
+            if should_bootstrap && !initial_members.is_empty() && !cluster.all_slots_assigned() {
+                let node_ids: Vec<u64> = initial_members.keys().copied().collect();
+                let num_nodes = node_ids.len();
+                let slots_per_node = 16384 / num_nodes;
+
+                for (i, &nid) in node_ids.iter().enumerate() {
+                    let start = i * slots_per_node;
+                    let end = if i == num_nodes - 1 {
+                        16384 // Last node gets remainder
+                    } else {
+                        (i + 1) * slots_per_node
+                    };
+                    cluster.assign_slots(nid, (start as u16)..(end as u16));
+                }
+                info!(
+                    node_count = num_nodes,
+                    slots_per_node = slots_per_node,
+                    "Auto-assigned slots to cluster nodes"
+                );
+            }
+
+            (
+                Some(Arc::new(cluster)),
+                Some(node_id),
+                Some(Arc::new(raft)),
+                Some(Arc::new(network_factory_clone)),
+            )
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
 
         for (shard_id, (msg_rx, conn_rx)) in shard_receivers
@@ -548,6 +582,9 @@ impl Server {
             }
             if let Some(id) = node_id {
                 worker.set_node_id(id);
+            }
+            if let Some(ref factory) = network_factory {
+                worker.set_network_factory(factory.clone());
             }
 
             let handle = spawn(async move {
@@ -627,6 +664,7 @@ impl Server {
             raft,
             latency_baseline: None,
             band_tracker,
+            network_factory,
         })
     }
 
@@ -938,6 +976,8 @@ impl Server {
             self.config.hotshards.to_collector_config(),
             self.config.memory.to_diag_config(),
             self.band_tracker.clone(),
+            self.raft.clone(),
+            self.network_factory.clone(),
         );
 
         // Spawn main acceptor task
@@ -972,6 +1012,8 @@ impl Server {
                 self.config.hotshards.to_collector_config(),
                 self.config.memory.to_diag_config(),
                 self.band_tracker.clone(),
+                self.raft.clone(),
+                self.network_factory.clone(),
             );
 
             Some(spawn(async move {
@@ -1280,6 +1322,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::persistence::LastsaveCommand);
     registry.register(crate::commands::persistence::DumpCommand);
     registry.register(crate::commands::persistence::RestoreCommand);
+
+    // Migration commands
+    registry.register(crate::commands::migrate_cmd::MigrateCommand);
 
     // Hash commands
     registry.register(crate::commands::hash::HsetCommand);

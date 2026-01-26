@@ -5,8 +5,8 @@ use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use std::sync::atomic::AtomicI64;
 use frogdb_core::{
     persistence::SnapshotCoordinator, shard::NewConnection, AclManager, ClientRegistry,
-    ClusterState, CommandRegistry, MetricsRecorder, ReplicationTrackerImpl, ShardMessage,
-    SharedFunctionRegistry,
+    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry, MetricsRecorder,
+    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
 };
 use frogdb_metrics::{metric_names, SharedTracer};
 
@@ -114,6 +114,12 @@ pub struct Acceptor {
 
     /// Optional latency band tracker for SLO monitoring.
     band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
+
+    /// Optional Raft instance (only when cluster mode is enabled).
+    raft: Option<Arc<ClusterRaft>>,
+
+    /// Optional network factory for cluster node management.
+    network_factory: Option<Arc<ClusterNetworkFactory>>,
 }
 
 impl Acceptor {
@@ -142,6 +148,8 @@ impl Acceptor {
         hotshards_config: frogdb_metrics::HotShardConfig,
         memory_diag_config: frogdb_metrics::MemoryDiagConfig,
         band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
+        raft: Option<Arc<ClusterRaft>>,
+        network_factory: Option<Arc<ClusterNetworkFactory>>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -169,6 +177,8 @@ impl Acceptor {
             hotshards_config,
             memory_diag_config,
             band_tracker,
+            raft,
+            network_factory,
         }
     }
 
@@ -226,6 +236,8 @@ impl Acceptor {
                     let hotshards_config = self.hotshards_config.clone();
                     let memory_diag_config = self.memory_diag_config.clone();
                     let band_tracker = self.band_tracker.clone();
+                    let raft = self.raft.clone();
+                    let network_factory = self.network_factory.clone();
 
                     spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -255,6 +267,8 @@ impl Acceptor {
                             hotshards_config,
                             memory_diag_config,
                             band_tracker,
+                            raft,
+                            network_factory,
                         );
 
                         if let Err(e) = handler.run().await {
