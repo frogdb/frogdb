@@ -15,29 +15,7 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Parse a string as i64.
-fn parse_i64(arg: &[u8]) -> Result<i64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse a string as u64.
-fn parse_u64(arg: &[u8]) -> Result<u64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse a string as f64.
-fn parse_f64(arg: &[u8]) -> Result<f64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotFloat)
-}
+use super::utils::{format_float, parse_f64, parse_i64, parse_u64};
 
 // ============================================================================
 // SETNX - SET if Not eXists
@@ -836,22 +814,6 @@ impl Command for IncrbyfloatCommand {
             vec![&args[0]]
         }
     }
-}
-
-/// Format a float for Redis compatibility.
-fn format_float(f: f64) -> String {
-    if f == 0.0 {
-        return "0".to_string();
-    }
-
-    if f.fract() == 0.0 && f.abs() < 1e15 {
-        return format!("{:.0}", f);
-    }
-
-    let s = format!("{:.17}", f);
-    let s = s.trim_end_matches('0');
-    let s = s.trim_end_matches('.');
-    s.to_string()
 }
 
 // ============================================================================

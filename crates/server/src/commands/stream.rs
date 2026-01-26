@@ -19,25 +19,11 @@ use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, StreamAddError, StreamEntry,
     StreamGroupError, StreamId, StreamIdParseError, StreamTrimMode, StreamTrimOptions,
-    StreamTrimStrategy, StreamValue, Value,
+    StreamTrimStrategy, Value,
 };
 use frogdb_protocol::{BlockingOp, Response};
 
-/// Parse a string as u64.
-fn parse_u64(arg: &[u8]) -> Result<u64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse a string as usize.
-fn parse_usize(arg: &[u8]) -> Result<usize, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
+use super::utils::{get_or_create_stream, parse_u64, parse_usize};
 
 /// Convert StreamIdParseError to CommandError.
 fn stream_id_error(_: StreamIdParseError) -> CommandError {
@@ -60,28 +46,6 @@ fn stream_group_error(e: StreamGroupError) -> CommandError {
         StreamGroupError::GroupExists => CommandError::BusyGroup,
         StreamGroupError::NoGroup => CommandError::NoGroup,
     }
-}
-
-/// Get or create a stream, returning an error if the key exists but is wrong type.
-fn get_or_create_stream<'a>(
-    ctx: &'a mut CommandContext,
-    key: &Bytes,
-) -> Result<&'a mut StreamValue, CommandError> {
-    // Check if key exists and is wrong type
-    if let Some(value) = ctx.store.get(key) {
-        if value.as_stream().is_none() {
-            return Err(CommandError::WrongType);
-        }
-    } else {
-        // Create new stream
-        ctx.store.set(key.clone(), Value::stream());
-    }
-
-    // Now get mutable reference
-    ctx.store
-        .get_mut(key)
-        .and_then(|v| v.as_stream_mut())
-        .ok_or(CommandError::WrongType)
 }
 
 /// Format a stream entry as a Response.

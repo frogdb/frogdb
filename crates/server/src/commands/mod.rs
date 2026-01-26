@@ -35,6 +35,7 @@ pub mod string;
 pub mod stub;
 pub mod timeseries;
 pub mod transaction;
+pub mod utils;
 
 pub use acl::*;
 pub use auth::*;

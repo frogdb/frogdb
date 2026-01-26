@@ -7,6 +7,8 @@ use bytes::Bytes;
 use frogdb_core::{shard_for_key, Arity, Command, CommandContext, CommandError, CommandFlags, Value};
 use frogdb_protocol::Response;
 
+use super::utils::{parse_f64, parse_i64};
+
 /// Options parsed from SORT/SORT_RO arguments.
 #[derive(Debug)]
 struct SortOptions {
@@ -102,24 +104,6 @@ impl SortOptions {
             store,
         })
     }
-}
-
-/// Parse a string as i64.
-fn parse_i64(arg: &[u8]) -> Result<i64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse a string as f64.
-fn parse_f64(arg: &[u8]) -> Result<f64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| CommandError::InvalidArgument {
-            message: "One or more scores can't be converted into double".to_string(),
-        })
 }
 
 /// Extract elements from a List, Set, or Sorted Set.
@@ -947,7 +931,8 @@ mod tests {
         let cmd = SortCommand;
         let result = cmd.execute(&mut ctx, &[Bytes::from("mylist")]);
 
-        assert!(matches!(result, Err(CommandError::InvalidArgument { .. })));
+        // parse_f64 returns NotFloat for values that can't be parsed as float
+        assert!(matches!(result, Err(CommandError::NotFloat)));
     }
 
     #[test]

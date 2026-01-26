@@ -27,6 +27,22 @@ use crate::replication::fullsync::{
     calculate_file_checksum, stream_file_to_writer, FullSyncMetadata, FullSyncState,
 };
 
+// ============================================================================
+// RDB Format Constants
+// ============================================================================
+
+/// RDB auxiliary field opcode (key-value metadata).
+const RDB_OPCODE_AUX: u8 = 0xFA;
+
+/// RDB database selector opcode.
+const RDB_OPCODE_SELECTDB: u8 = 0xFE;
+
+/// RDB resize database opcode (hash table size hints).
+const RDB_OPCODE_RESIZEDB: u8 = 0xFB;
+
+/// RDB end-of-file opcode.
+const RDB_OPCODE_EOF: u8 = 0xFF;
+
 /// Primary replication handler.
 ///
 /// Manages all replica connections and coordinates WAL streaming.
@@ -575,23 +591,22 @@ fn create_minimal_rdb() -> Vec<u8> {
     rdb.extend_from_slice(b"0011");
 
     // Auxiliary fields (optional, but good for compatibility)
-    // FA = auxiliary field
-    rdb.push(0xFA);
+    rdb.push(RDB_OPCODE_AUX);
     // redis-ver
     rdb.extend_from_slice(b"\x09redis-ver");
     rdb.extend_from_slice(b"\x057.2.0");
 
-    // FE = database selector
-    rdb.push(0xFE);
+    // Database selector
+    rdb.push(RDB_OPCODE_SELECTDB);
     rdb.push(0x00); // DB 0
 
-    // FB = resizedb (hash table sizes)
-    rdb.push(0xFB);
+    // Resize database (hash table sizes)
+    rdb.push(RDB_OPCODE_RESIZEDB);
     rdb.push(0x00); // DB hash table size
     rdb.push(0x00); // Expires hash table size
 
-    // FF = EOF
-    rdb.push(0xFF);
+    // End of file
+    rdb.push(RDB_OPCODE_EOF);
 
     // 8-byte checksum (CRC64)
     // For simplicity, we'll use zeros. A real implementation would calculate CRC64.

@@ -10,126 +10,16 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    shard_for_key, Arity, Command, CommandContext, CommandError, CommandFlags, LexBound,
-    ScoreBound, SortedSetValue, Value,
+    shard_for_key, Arity, Command, CommandContext, CommandError, CommandFlags, SortedSetValue,
+    Value,
 };
 use frogdb_protocol::Response;
 use std::collections::HashMap;
 
-/// Parse a string as f64.
-fn parse_f64(arg: &[u8]) -> Result<f64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| {
-            if s.eq_ignore_ascii_case("inf") || s.eq_ignore_ascii_case("+inf") {
-                Some(f64::INFINITY)
-            } else if s.eq_ignore_ascii_case("-inf") {
-                Some(f64::NEG_INFINITY)
-            } else {
-                s.parse().ok()
-            }
-        })
-        .ok_or(CommandError::NotFloat)
-}
-
-/// Parse a string as i64.
-fn parse_i64(arg: &[u8]) -> Result<i64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse a string as usize.
-fn parse_usize(arg: &[u8]) -> Result<usize, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse a score bound (for ZRANGEBYSCORE, ZCOUNT, etc.).
-fn parse_score_bound(arg: &[u8]) -> Result<ScoreBound, CommandError> {
-    let s = std::str::from_utf8(arg).map_err(|_| CommandError::SyntaxError)?;
-
-    if s.eq_ignore_ascii_case("-inf") {
-        return Ok(ScoreBound::NegInf);
-    }
-    if s.eq_ignore_ascii_case("+inf") || s.eq_ignore_ascii_case("inf") {
-        return Ok(ScoreBound::PosInf);
-    }
-
-    if let Some(rest) = s.strip_prefix('(') {
-        // Exclusive bound
-        let value: f64 = rest.parse().map_err(|_| CommandError::NotFloat)?;
-        Ok(ScoreBound::Exclusive(value))
-    } else {
-        // Inclusive bound
-        let value: f64 = s.parse().map_err(|_| CommandError::NotFloat)?;
-        Ok(ScoreBound::Inclusive(value))
-    }
-}
-
-/// Parse a lex bound (for ZRANGEBYLEX, ZLEXCOUNT, etc.).
-fn parse_lex_bound(arg: &[u8]) -> Result<LexBound, CommandError> {
-    if arg.is_empty() {
-        return Err(CommandError::SyntaxError);
-    }
-
-    match arg[0] {
-        b'-' if arg.len() == 1 => Ok(LexBound::Min),
-        b'+' if arg.len() == 1 => Ok(LexBound::Max),
-        b'[' => Ok(LexBound::Inclusive(Bytes::copy_from_slice(&arg[1..]))),
-        b'(' => Ok(LexBound::Exclusive(Bytes::copy_from_slice(&arg[1..]))),
-        _ => Err(CommandError::InvalidArgument {
-            message: "min or max not valid string range item".to_string(),
-        }),
-    }
-}
-
-/// Format a float for Redis compatibility.
-fn format_float(f: f64) -> String {
-    if f == f64::INFINITY {
-        return "inf".to_string();
-    }
-    if f == f64::NEG_INFINITY {
-        return "-inf".to_string();
-    }
-    if f == 0.0 {
-        return "0".to_string();
-    }
-
-    if f.fract() == 0.0 && f.abs() < 1e15 {
-        return format!("{:.0}", f);
-    }
-
-    let s = format!("{:.17}", f);
-    let s = s.trim_end_matches('0');
-    let s = s.trim_end_matches('.');
-    s.to_string()
-}
-
-/// Get or create a sorted set, returning an error if the key exists but is wrong type.
-fn get_or_create_zset<'a>(
-    ctx: &'a mut CommandContext,
-    key: &Bytes,
-) -> Result<&'a mut SortedSetValue, CommandError> {
-    // Check if key exists and is wrong type
-    if let Some(value) = ctx.store.get(key) {
-        if value.as_sorted_set().is_none() {
-            return Err(CommandError::WrongType);
-        }
-    } else {
-        // Create new sorted set
-        ctx.store.set(key.clone(), Value::sorted_set());
-    }
-
-    // Now get mutable reference
-    ctx.store
-        .get_mut(key)
-        .and_then(|v| v.as_sorted_set_mut())
-        .ok_or(CommandError::WrongType)
-}
+use super::utils::{
+    format_float, get_or_create_zset, parse_f64, parse_i64, parse_lex_bound, parse_score_bound,
+    parse_usize,
+};
 
 // ============================================================================
 // ZADD - Add members to sorted set

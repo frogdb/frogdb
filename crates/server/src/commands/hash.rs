@@ -8,86 +8,10 @@
 //! - HSCAN, HRANDFIELD - iteration & random
 
 use bytes::Bytes;
-use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, HashValue, Value,
-};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
 use frogdb_protocol::Response;
 
-/// Parse a string as i64.
-fn parse_i64(arg: &[u8]) -> Result<i64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse a string as f64.
-fn parse_f64(arg: &[u8]) -> Result<f64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| {
-            if s.eq_ignore_ascii_case("inf") || s.eq_ignore_ascii_case("+inf") {
-                Some(f64::INFINITY)
-            } else if s.eq_ignore_ascii_case("-inf") {
-                Some(f64::NEG_INFINITY)
-            } else {
-                s.parse().ok()
-            }
-        })
-        .ok_or(CommandError::NotFloat)
-}
-
-/// Parse a string as usize.
-fn parse_usize(arg: &[u8]) -> Result<usize, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Format a float for Redis compatibility.
-fn format_float(f: f64) -> String {
-    if f == f64::INFINITY {
-        return "inf".to_string();
-    }
-    if f == f64::NEG_INFINITY {
-        return "-inf".to_string();
-    }
-    if f == 0.0 {
-        return "0".to_string();
-    }
-
-    if f.fract() == 0.0 && f.abs() < 1e15 {
-        return format!("{:.0}", f);
-    }
-
-    let s = format!("{:.17}", f);
-    let s = s.trim_end_matches('0');
-    let s = s.trim_end_matches('.');
-    s.to_string()
-}
-
-/// Get or create a hash, returning an error if the key exists but is wrong type.
-fn get_or_create_hash<'a>(
-    ctx: &'a mut CommandContext,
-    key: &Bytes,
-) -> Result<&'a mut HashValue, CommandError> {
-    // Check if key exists and is wrong type
-    if let Some(value) = ctx.store.get(key) {
-        if value.as_hash().is_none() {
-            return Err(CommandError::WrongType);
-        }
-    } else {
-        // Create new hash
-        ctx.store.set(key.clone(), Value::hash());
-    }
-
-    // Now get mutable reference
-    ctx.store
-        .get_mut(key)
-        .and_then(|v| v.as_hash_mut())
-        .ok_or(CommandError::WrongType)
-}
+use super::utils::{format_float, get_or_create_hash, parse_f64, parse_i64, parse_usize};
 
 // ============================================================================
 // HSET - Set hash fields
