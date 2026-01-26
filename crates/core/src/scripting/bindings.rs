@@ -150,6 +150,18 @@ pub fn response_to_lua(lua: &mlua::Lua, response: Response) -> LuaResult<Value> 
             table.set("err", "ERR blocking commands not allowed inside scripts")?;
             Ok(Value::Table(table))
         }
+        Response::RaftNeeded { .. } => {
+            // Cluster commands requiring Raft are forbidden in scripts.
+            let table = lua.create_table()?;
+            table.set("err", "ERR cluster commands not allowed inside scripts")?;
+            Ok(Value::Table(table))
+        }
+        Response::MigrateNeeded { .. } => {
+            // MIGRATE command is forbidden in scripts.
+            let table = lua.create_table()?;
+            table.set("err", "ERR MIGRATE not allowed inside scripts")?;
+            Ok(Value::Table(table))
+        }
     }
 }
 

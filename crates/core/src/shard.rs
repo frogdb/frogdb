@@ -8,7 +8,7 @@ use bytes::Bytes;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::cluster::{ClusterRaft, ClusterState};
+use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::CommandContext;
 use crate::error::CommandError;
 use crate::eviction::{EvictionCandidate, EvictionConfig, EvictionPolicy, EvictionPool};
@@ -550,6 +550,21 @@ pub enum ShardMessage {
         ready_tx: oneshot::Sender<ShardReadyResult>,
         /// Channel to receive release signal.
         release_rx: oneshot::Receiver<()>,
+    },
+
+    // =========================================================================
+    // Cluster / Raft messages
+    // =========================================================================
+
+    /// Execute a Raft command asynchronously.
+    /// Used by cluster commands (CLUSTER MEET, CLUSTER FORGET, etc.) that need
+    /// to call async Raft operations from synchronous command handlers.
+    /// The shard worker uses its own Raft reference (set via set_raft()).
+    RaftCommand {
+        /// The Raft command to execute.
+        cmd: crate::cluster::ClusterCommand,
+        /// Response channel for the result.
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
 
     /// Shutdown signal.
@@ -1158,6 +1173,9 @@ pub struct ShardWorker {
     /// Current queue depth (messages waiting to be processed).
     /// Shared so it can be read from outside the worker.
     queue_depth: Arc<AtomicUsize>,
+
+    /// Optional network factory for cluster node management.
+    network_factory: Option<Arc<ClusterNetworkFactory>>,
 }
 
 impl ShardWorker {
@@ -1249,6 +1267,7 @@ impl ShardWorker {
             node_id: None,
             operation_counters: OperationCounters::new(),
             queue_depth: Arc::new(AtomicUsize::new(0)),
+            network_factory: None,
         }
     }
 
@@ -1328,6 +1347,7 @@ impl ShardWorker {
             node_id: None,
             operation_counters: OperationCounters::new(),
             queue_depth: Arc::new(AtomicUsize::new(0)),
+            network_factory: None,
         }
     }
 
@@ -1360,6 +1380,11 @@ impl ShardWorker {
     /// Set this node's ID for cluster mode.
     pub fn set_node_id(&mut self, node_id: u64) {
         self.node_id = Some(node_id);
+    }
+
+    /// Set the network factory for cluster node management.
+    pub fn set_network_factory(&mut self, network_factory: Arc<ClusterNetworkFactory>) {
+        self.network_factory = Some(network_factory);
     }
 
     /// Get the snapshot coordinator.
@@ -1626,6 +1651,18 @@ impl ShardWorker {
                         }
                         ShardMessage::VllContinuationLock { txid, conn_id, ready_tx, release_rx } => {
                             self.handle_vll_continuation_lock(txid, conn_id, ready_tx, release_rx).await;
+                        }
+
+                        // Cluster / Raft message handlers
+                        ShardMessage::RaftCommand { cmd, response_tx } => {
+                            let result = if let Some(ref raft) = self.raft {
+                                raft.client_write(cmd).await
+                                    .map(|_| ())
+                                    .map_err(|e| e.to_string())
+                            } else {
+                                Err("Raft not initialized".to_string())
+                            };
+                            let _ = response_tx.send(result);
                         }
 
                         ShardMessage::Shutdown => {
@@ -2274,6 +2311,7 @@ impl ShardWorker {
             self.cluster_state.as_ref(),
             self.node_id,
             self.raft.as_ref(),
+            self.network_factory.as_ref(),
         );
 
         // Execute
@@ -3000,6 +3038,7 @@ impl ShardWorker {
             self.cluster_state.as_ref(),
             self.node_id,
             self.raft.as_ref(),
+            self.network_factory.as_ref(),
         );
 
         let result = executor.eval(script_source, keys, argv, &mut ctx, &self.registry);
@@ -3067,6 +3106,7 @@ impl ShardWorker {
             self.cluster_state.as_ref(),
             self.node_id,
             self.raft.as_ref(),
+            self.network_factory.as_ref(),
         );
 
         let result = executor.evalsha(script_sha, keys, argv, &mut ctx, &self.registry);
@@ -3247,6 +3287,7 @@ impl ShardWorker {
             self.cluster_state.as_ref(),
             self.node_id,
             self.raft.as_ref(),
+            self.network_factory.as_ref(),
         );
 
         match executor.execute_function(

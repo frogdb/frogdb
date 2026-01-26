@@ -526,11 +526,104 @@ impl ClusterTestHarness {
         let config = self.base_config.clone();
         let node = ClusterTestNode::start(config, initial_nodes).await;
         let node_id = node.node_id();
+        let new_node_client_port = node.client_port();
+        let new_node_cluster_port = node.cluster_port();
 
         self.nodes.insert(node_id, node);
         self.node_order.push(node_id);
 
-        Ok(node_id)
+        // Issue CLUSTER MEET from an existing node to add the new node to the cluster
+        // This registers the new node in the Raft membership and network factory
+        // CLUSTER MEET <ip> <client-port> [<cluster-bus-port>]
+        // Try each existing node until one succeeds (handles leader forwarding)
+        let mut last_error = None;
+        let existing_node_ids: Vec<u64> = self
+            .node_order
+            .iter()
+            .filter(|&&id| id != node_id)
+            .copied()
+            .collect();
+
+        for existing_node_id in existing_node_ids {
+            if let Some(existing_node) = self.nodes.get(&existing_node_id) {
+                let response = existing_node
+                    .send(
+                        "CLUSTER",
+                        &[
+                            "MEET",
+                            "127.0.0.1",
+                            &new_node_client_port.to_string(),
+                            &new_node_cluster_port.to_string(),
+                        ],
+                    )
+                    .await;
+                // Check if CLUSTER MEET succeeded
+                match &response {
+                    frogdb_protocol::Response::Simple(s) if s.as_ref() == b"OK" => {
+                        return Ok(node_id);
+                    }
+                    frogdb_protocol::Response::Error(e) => {
+                        let error_msg = String::from_utf8_lossy(e);
+                        // Check if this is a REDIRECT error - try to find the leader
+                        if error_msg.starts_with("REDIRECT ") {
+                            // Parse "REDIRECT <node_id> <addr>" and find the leader
+                            let parts: Vec<&str> = error_msg.split_whitespace().collect();
+                            if parts.len() >= 3 {
+                                let leader_addr = parts[2];
+                                // Find the node with this address and retry
+                                for (&nid, n) in &self.nodes {
+                                    if nid != node_id && n.client_addr() == leader_addr {
+                                        let retry_response = n
+                                            .send(
+                                                "CLUSTER",
+                                                &[
+                                                    "MEET",
+                                                    "127.0.0.1",
+                                                    &new_node_client_port.to_string(),
+                                                    &new_node_cluster_port.to_string(),
+                                                ],
+                                            )
+                                            .await;
+                                        match &retry_response {
+                                            frogdb_protocol::Response::Simple(s)
+                                                if s.as_ref() == b"OK" =>
+                                            {
+                                                return Ok(node_id);
+                                            }
+                                            frogdb_protocol::Response::Error(e2) => {
+                                                last_error = Some(format!(
+                                                    "CLUSTER MEET failed on leader: {}",
+                                                    String::from_utf8_lossy(e2)
+                                                ));
+                                            }
+                                            _ => {
+                                                last_error = Some(format!(
+                                                    "Unexpected response from leader: {:?}",
+                                                    retry_response
+                                                ));
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        last_error = Some(format!("CLUSTER MEET failed: {}", error_msg));
+                    }
+                    _ => {
+                        last_error = Some(format!(
+                            "Unexpected CLUSTER MEET response: {:?}",
+                            response
+                        ));
+                    }
+                }
+            }
+        }
+
+        // If we get here, none of the attempts succeeded
+        Err(ClusterError::new(
+            last_error.unwrap_or_else(|| "No existing nodes to send CLUSTER MEET".to_string()),
+        ))
     }
 
     /// Remove a node from the cluster.

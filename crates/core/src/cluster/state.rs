@@ -115,6 +115,30 @@ impl ClusterState {
         }
     }
 
+    /// Assign slots to a node directly (for local initialization during bootstrap).
+    /// This bypasses Raft consensus and should only be used during initial cluster formation.
+    pub fn assign_slots(&self, node_id: NodeId, slots: impl IntoIterator<Item = u16>) {
+        let mut inner = self.inner.write();
+        if !inner.nodes.contains_key(&node_id) {
+            tracing::warn!(node_id, "Cannot assign slots to unknown node");
+            return;
+        }
+        let mut count = 0;
+        for slot in slots {
+            if slot < CLUSTER_SLOTS {
+                inner.slot_assignment.insert(slot, node_id);
+                count += 1;
+            }
+        }
+        tracing::info!(node_id, slot_count = count, "Assigned slots to node");
+    }
+
+    /// Check if all slots are assigned.
+    pub fn all_slots_assigned(&self) -> bool {
+        let inner = self.inner.read();
+        inner.slot_assignment.len() == CLUSTER_SLOTS as usize
+    }
+
     /// Apply a command to the state.
     fn apply_command(&self, cmd: ClusterCommand) -> Result<ClusterResponse, ClusterError> {
         let mut inner = self.inner.write();

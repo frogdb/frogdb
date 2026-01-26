@@ -5,14 +5,17 @@
 //! - Cluster topology management (MEET, FORGET, ADDSLOTS, DELSLOTS)
 //! - Key routing (KEYSLOT, COUNTKEYSINSLOT)
 //! - Failover coordination (FAILOVER)
+//!
+//! Cluster commands that modify state (MEET, FORGET, ADDSLOTS, etc.) return
+//! `Response::RaftNeeded` which is intercepted by the connection handler.
+//! The connection handler executes the Raft operation asynchronously and
+//! updates the NetworkFactory after successful commit.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use bytes::Bytes;
-use frogdb_core::cluster::{ClusterCommand as RaftClusterCommand, ClusterRaft, NodeInfo, NodeRole, SlotRange};
 use frogdb_core::{slot_for_key, Arity, Command, CommandContext, CommandError, CommandFlags};
-use frogdb_protocol::Response;
+use frogdb_protocol::{RaftClusterOp, Response};
 
 // ============================================================================
 // CLUSTER - Cluster management command
@@ -86,7 +89,9 @@ impl Command for ClusterCommand {
                         command: "CLUSTER MEET".to_string(),
                     });
                 }
-                cluster_meet(ctx, &args[1], &args[2])
+                // CLUSTER MEET <ip> <port> [<cluster-bus-port>]
+                let cluster_bus_port = if args.len() > 3 { Some(&args[3]) } else { None };
+                cluster_meet(ctx, &args[1], &args[2], cluster_bus_port)
             }
             "FORGET" => {
                 if args.len() < 2 {
@@ -172,9 +177,33 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             .map(|n| n.config_epoch)
             .unwrap_or(0);
 
+        // Check if we have a leader (quorum) via Raft metrics
+        // We use millis_since_quorum_ack to detect if quorum has been lost.
+        // If too much time has passed since a quorum ack, the cluster is unhealthy.
+        // Note: Full quorum detection requires Phase 4's heartbeat-based failure detection.
+        const QUORUM_TIMEOUT_MS: u64 = 2000; // 2 seconds without quorum = fail
+
+        let cluster_state_str = if let Some(ref raft) = ctx.raft {
+            use openraft::ServerState;
+            let metrics = raft.metrics().borrow().clone();
+
+            match (metrics.state, metrics.current_leader, metrics.millis_since_quorum_ack) {
+                (ServerState::Candidate, _, _) => "fail", // Trying to elect but can't get quorum
+                (_, None, _) => "fail",                   // No leader known
+                // Check if quorum ack is stale (leader hasn't heard from majority recently)
+                (ServerState::Leader, _, Some(millis)) if millis > QUORUM_TIMEOUT_MS => "fail",
+                // For followers/leaders with known leader
+                (ServerState::Follower, Some(_), _) => "ok",
+                (ServerState::Leader, _, _) => "ok",
+                _ => "ok", // Learner with leader, etc.
+            }
+        } else {
+            "ok" // No Raft = standalone mode, always ok
+        };
+
         let info = format!(
             "\
-cluster_state:ok\r\n\
+cluster_state:{}\r\n\
 cluster_slots_assigned:{}\r\n\
 cluster_slots_ok:{}\r\n\
 cluster_slots_pfail:0\r\n\
@@ -190,6 +219,7 @@ cluster_stats_messages_ping_received:0\r\n\
 cluster_stats_messages_pong_received:0\r\n\
 cluster_stats_messages_received:0\r\n\
 total_cluster_links_buffer_limit_exceeded:0\r\n",
+            cluster_state_str,
             slots_assigned,
             slots_assigned, // slots_ok = slots_assigned for now
             known_nodes,
@@ -519,7 +549,7 @@ fn cluster_keyslot(key: &Bytes) -> Result<Response, CommandError> {
 
 /// CLUSTER COUNTKEYSINSLOT - Returns the number of keys in a slot.
 fn cluster_countkeysinslot(
-    _ctx: &mut CommandContext,
+    ctx: &mut CommandContext,
     slot_arg: &Bytes,
 ) -> Result<Response, CommandError> {
     let slot: u16 = std::str::from_utf8(slot_arg)
@@ -537,14 +567,14 @@ fn cluster_countkeysinslot(
         });
     }
 
-    // In standalone mode, we don't track keys by slot
-    // When cluster is enabled, this will query the actual slot key count
-    Ok(Response::Integer(0))
+    // Query the actual key count for this slot from the store
+    let count = ctx.store.count_keys_in_slot(slot);
+    Ok(Response::Integer(count as i64))
 }
 
 /// CLUSTER GETKEYSINSLOT - Returns keys in a slot.
 fn cluster_getkeysinslot(
-    _ctx: &mut CommandContext,
+    ctx: &mut CommandContext,
     slot_arg: &Bytes,
     count_arg: &Bytes,
 ) -> Result<Response, CommandError> {
@@ -557,7 +587,7 @@ fn cluster_getkeysinslot(
             message: "invalid slot".to_string(),
         })?;
 
-    let _count: usize = std::str::from_utf8(count_arg)
+    let count: usize = std::str::from_utf8(count_arg)
         .map_err(|_| CommandError::InvalidArgument {
             message: "invalid count".to_string(),
         })?
@@ -572,35 +602,30 @@ fn cluster_getkeysinslot(
         });
     }
 
-    // In standalone mode, return empty array
-    // When cluster is enabled, this will return actual keys
-    Ok(Response::Array(vec![]))
+    // Query the actual keys in this slot from the store
+    let keys = ctx.store.keys_in_slot(slot, count);
+    let response_keys: Vec<Response> = keys
+        .into_iter()
+        .map(Response::bulk)
+        .collect();
+    Ok(Response::Array(response_keys))
 }
 
-/// Execute a Raft command and return the result.
-/// Uses block_on since Command::execute is synchronous.
-fn execute_raft_command(
-    raft: &Arc<ClusterRaft>,
-    cmd: RaftClusterCommand,
-) -> Result<(), CommandError> {
-    let handle = tokio::runtime::Handle::current();
-    handle.block_on(async {
-        raft.client_write(cmd)
-            .await
-            .map_err(|e| CommandError::Internal {
-                message: format!("Raft error: {}", e),
-            })?;
-        Ok(())
-    })
-}
 
 /// CLUSTER MEET - Adds a node to the cluster.
+/// Syntax: CLUSTER MEET <ip> <port> [<cluster-bus-port>]
+///
+/// Returns `RaftNeeded` response which is intercepted by the connection handler.
 fn cluster_meet(
     ctx: &mut CommandContext,
     host: &Bytes,
     port: &Bytes,
+    cluster_bus_port_arg: Option<&Bytes>,
 ) -> Result<Response, CommandError> {
-    let raft = ctx.raft.ok_or(CommandError::ClusterDisabled)?;
+    // Verify cluster mode is enabled
+    if ctx.raft.is_none() {
+        return Err(CommandError::ClusterDisabled);
+    }
 
     let host_str = std::str::from_utf8(host)
         .map_err(|_| CommandError::InvalidArgument {
@@ -623,8 +648,21 @@ fn cluster_meet(
             message: "invalid address".to_string(),
         })?;
 
-    // Cluster bus port is typically client port + 10000
-    let cluster_port = port_num + 10000;
+    // Cluster bus port: use explicit value if provided, otherwise client port + 10000
+    let cluster_port: u16 = if let Some(cbp) = cluster_bus_port_arg {
+        std::str::from_utf8(cbp)
+            .map_err(|_| CommandError::InvalidArgument {
+                message: "invalid cluster bus port".to_string(),
+            })?
+            .parse()
+            .map_err(|_| CommandError::InvalidArgument {
+                message: "invalid cluster bus port number".to_string(),
+            })?
+    } else {
+        port_num.checked_add(10000).ok_or(CommandError::InvalidArgument {
+            message: "port number too high (would overflow when adding cluster bus offset)".to_string(),
+        })?
+    };
     let cluster_addr: SocketAddr = format!("{}:{}", host_str, cluster_port)
         .parse()
         .map_err(|_| CommandError::InvalidArgument {
@@ -637,16 +675,27 @@ fn cluster_meet(
     addr.hash(&mut hasher);
     let node_id = hasher.finish();
 
-    let node = NodeInfo::new_primary(node_id, addr, cluster_addr);
-    let cmd = RaftClusterCommand::AddNode { node };
-
-    execute_raft_command(raft, cmd)?;
-    Ok(Response::ok())
+    // Return RaftNeeded - the connection handler will execute this asynchronously
+    // and update the NetworkFactory after successful Raft commit
+    Ok(Response::RaftNeeded {
+        op: RaftClusterOp::AddNode {
+            node_id,
+            addr,
+            cluster_addr,
+        },
+        register_node: Some((node_id, cluster_addr)),
+        unregister_node: None,
+    })
 }
 
 /// CLUSTER FORGET - Removes a node from the cluster.
+///
+/// Returns `RaftNeeded` response which is intercepted by the connection handler.
 fn cluster_forget(ctx: &mut CommandContext, node_id_arg: &Bytes) -> Result<Response, CommandError> {
-    let raft = ctx.raft.ok_or(CommandError::ClusterDisabled)?;
+    // Verify cluster mode is enabled
+    if ctx.raft.is_none() {
+        return Err(CommandError::ClusterDisabled);
+    }
 
     // Node ID is a 40-character hex string
     let node_id_str = std::str::from_utf8(node_id_arg)
@@ -659,21 +708,31 @@ fn cluster_forget(ctx: &mut CommandContext, node_id_arg: &Bytes) -> Result<Respo
             message: "invalid node ID format".to_string(),
         })?;
 
-    let cmd = RaftClusterCommand::RemoveNode { node_id };
-    execute_raft_command(raft, cmd)?;
-    Ok(Response::ok())
+    // Return RaftNeeded - the connection handler will execute this asynchronously
+    // and update the NetworkFactory after successful Raft commit
+    Ok(Response::RaftNeeded {
+        op: RaftClusterOp::RemoveNode { node_id },
+        register_node: None,
+        unregister_node: Some(node_id),
+    })
 }
 
 /// CLUSTER ADDSLOTS - Assigns hash slots to this node.
+///
+/// Returns `RaftNeeded` response which is intercepted by the connection handler.
 fn cluster_addslots(
     ctx: &mut CommandContext,
     slots: &[Bytes],
 ) -> Result<Response, CommandError> {
-    let raft = ctx.raft.ok_or(CommandError::ClusterDisabled)?;
     let node_id = ctx.node_id.ok_or(CommandError::ClusterDisabled)?;
 
+    // Verify cluster mode is enabled
+    if ctx.raft.is_none() {
+        return Err(CommandError::ClusterDisabled);
+    }
+
     // Parse slot numbers
-    let mut slot_ranges = Vec::new();
+    let mut parsed_slots = Vec::new();
     for slot_arg in slots {
         let slot_str = std::str::from_utf8(slot_arg)
             .map_err(|_| CommandError::InvalidArgument {
@@ -691,27 +750,36 @@ fn cluster_addslots(
             });
         }
 
-        slot_ranges.push(SlotRange::single(slot));
+        parsed_slots.push(slot);
     }
 
-    let cmd = RaftClusterCommand::AssignSlots {
-        node_id,
-        slots: slot_ranges,
-    };
-    execute_raft_command(raft, cmd)?;
-    Ok(Response::ok())
+    // Return RaftNeeded - the connection handler will execute this asynchronously
+    Ok(Response::RaftNeeded {
+        op: RaftClusterOp::AssignSlots {
+            node_id,
+            slots: parsed_slots,
+        },
+        register_node: None,
+        unregister_node: None,
+    })
 }
 
 /// CLUSTER DELSLOTS - Removes hash slot assignments from this node.
+///
+/// Returns `RaftNeeded` response which is intercepted by the connection handler.
 fn cluster_delslots(
     ctx: &mut CommandContext,
     slots: &[Bytes],
 ) -> Result<Response, CommandError> {
-    let raft = ctx.raft.ok_or(CommandError::ClusterDisabled)?;
     let node_id = ctx.node_id.ok_or(CommandError::ClusterDisabled)?;
 
+    // Verify cluster mode is enabled
+    if ctx.raft.is_none() {
+        return Err(CommandError::ClusterDisabled);
+    }
+
     // Parse slot numbers
-    let mut slot_ranges = Vec::new();
+    let mut parsed_slots = Vec::new();
     for slot_arg in slots {
         let slot_str = std::str::from_utf8(slot_arg)
             .map_err(|_| CommandError::InvalidArgument {
@@ -729,15 +797,18 @@ fn cluster_delslots(
             });
         }
 
-        slot_ranges.push(SlotRange::single(slot));
+        parsed_slots.push(slot);
     }
 
-    let cmd = RaftClusterCommand::RemoveSlots {
-        node_id,
-        slots: slot_ranges,
-    };
-    execute_raft_command(raft, cmd)?;
-    Ok(Response::ok())
+    // Return RaftNeeded - the connection handler will execute this asynchronously
+    Ok(Response::RaftNeeded {
+        op: RaftClusterOp::RemoveSlots {
+            node_id,
+            slots: parsed_slots,
+        },
+        register_node: None,
+        unregister_node: None,
+    })
 }
 
 /// CLUSTER FAILOVER - Initiates a manual failover.
@@ -770,12 +841,18 @@ fn cluster_failover(
 }
 
 /// CLUSTER REPLICATE - Configures this node as a replica of another.
+///
+/// Returns `RaftNeeded` response which is intercepted by the connection handler.
 fn cluster_replicate(
     ctx: &mut CommandContext,
     primary_id_arg: &Bytes,
 ) -> Result<Response, CommandError> {
-    let raft = ctx.raft.ok_or(CommandError::ClusterDisabled)?;
     let node_id = ctx.node_id.ok_or(CommandError::ClusterDisabled)?;
+
+    // Verify cluster mode is enabled
+    if ctx.raft.is_none() {
+        return Err(CommandError::ClusterDisabled);
+    }
 
     // Parse primary node ID (40-character hex string)
     let primary_id_str = std::str::from_utf8(primary_id_arg)
@@ -788,13 +865,16 @@ fn cluster_replicate(
             message: "invalid node ID format".to_string(),
         })?;
 
-    let cmd = RaftClusterCommand::SetRole {
-        node_id,
-        role: NodeRole::Replica,
-        primary_id: Some(primary_id),
-    };
-    execute_raft_command(raft, cmd)?;
-    Ok(Response::ok())
+    // Return RaftNeeded - the connection handler will execute this asynchronously
+    Ok(Response::RaftNeeded {
+        op: RaftClusterOp::SetRole {
+            node_id,
+            is_replica: true,
+            primary_id: Some(primary_id),
+        },
+        register_node: None,
+        unregister_node: None,
+    })
 }
 
 /// CLUSTER RESET - Resets cluster state.
@@ -828,11 +908,16 @@ fn cluster_saveconfig(ctx: &mut CommandContext) -> Result<Response, CommandError
 }
 
 /// CLUSTER SET-CONFIG-EPOCH - Sets the configuration epoch.
+///
+/// Returns `RaftNeeded` response which is intercepted by the connection handler.
 fn cluster_set_config_epoch(
     ctx: &mut CommandContext,
     epoch: &Bytes,
 ) -> Result<Response, CommandError> {
-    let raft = ctx.raft.ok_or(CommandError::ClusterDisabled)?;
+    // Verify cluster mode is enabled
+    if ctx.raft.is_none() {
+        return Err(CommandError::ClusterDisabled);
+    }
 
     let _epoch_num: u64 = std::str::from_utf8(epoch)
         .map_err(|_| CommandError::InvalidArgument {
@@ -845,19 +930,27 @@ fn cluster_set_config_epoch(
 
     // For now, just increment the epoch via Raft
     // A full implementation would set it to a specific value
-    let cmd = RaftClusterCommand::IncrementEpoch;
-    execute_raft_command(raft, cmd)?;
-    Ok(Response::ok())
+    Ok(Response::RaftNeeded {
+        op: RaftClusterOp::IncrementEpoch,
+        register_node: None,
+        unregister_node: None,
+    })
 }
 
 /// CLUSTER SETSLOT - Sets slot state for migration.
 /// Syntax: CLUSTER SETSLOT <slot> IMPORTING|MIGRATING|NODE|STABLE [<node-id>]
+///
+/// Returns `RaftNeeded` response which is intercepted by the connection handler.
 fn cluster_setslot(
     ctx: &mut CommandContext,
     args: &[Bytes],
 ) -> Result<Response, CommandError> {
-    let raft = ctx.raft.ok_or(CommandError::ClusterDisabled)?;
     let my_node_id = ctx.node_id.ok_or(CommandError::ClusterDisabled)?;
+
+    // Verify cluster mode is enabled
+    if ctx.raft.is_none() {
+        return Err(CommandError::ClusterDisabled);
+    }
 
     if args.is_empty() {
         return Err(CommandError::WrongArgCount {
@@ -910,12 +1003,15 @@ fn cluster_setslot(
                     message: "invalid node ID format".to_string(),
                 })?;
 
-            let cmd = RaftClusterCommand::BeginSlotMigration {
-                slot,
-                source_node,
-                target_node: my_node_id,
-            };
-            execute_raft_command(raft, cmd)?;
+            Ok(Response::RaftNeeded {
+                op: RaftClusterOp::BeginSlotMigration {
+                    slot,
+                    source_node,
+                    target_node: my_node_id,
+                },
+                register_node: None,
+                unregister_node: None,
+            })
         }
         "MIGRATING" => {
             // Mark slot as migrating to target node
@@ -933,12 +1029,15 @@ fn cluster_setslot(
                     message: "invalid node ID format".to_string(),
                 })?;
 
-            let cmd = RaftClusterCommand::BeginSlotMigration {
-                slot,
-                source_node: my_node_id,
-                target_node,
-            };
-            execute_raft_command(raft, cmd)?;
+            Ok(Response::RaftNeeded {
+                op: RaftClusterOp::BeginSlotMigration {
+                    slot,
+                    source_node: my_node_id,
+                    target_node,
+                },
+                register_node: None,
+                unregister_node: None,
+            })
         }
         "NODE" => {
             // Assign slot to specified node (completes migration)
@@ -961,37 +1060,43 @@ fn cluster_setslot(
                 if let Some(migration) = cluster_state.get_slot_migration(slot) {
                     if migration.target_node == target_node {
                         // Complete the migration
-                        let cmd = RaftClusterCommand::CompleteSlotMigration {
-                            slot,
-                            source_node: migration.source_node,
-                            target_node,
-                        };
-                        execute_raft_command(raft, cmd)?;
-                        return Ok(Response::ok());
+                        return Ok(Response::RaftNeeded {
+                            op: RaftClusterOp::CompleteSlotMigration {
+                                slot,
+                                source_node: migration.source_node,
+                                target_node,
+                            },
+                            register_node: None,
+                            unregister_node: None,
+                        });
                     }
                 }
             }
 
             // No migration in progress, just assign the slot
-            let cmd = RaftClusterCommand::AssignSlots {
-                node_id: target_node,
-                slots: vec![SlotRange::single(slot)],
-            };
-            execute_raft_command(raft, cmd)?;
+            Ok(Response::RaftNeeded {
+                op: RaftClusterOp::AssignSlots {
+                    node_id: target_node,
+                    slots: vec![slot],
+                },
+                register_node: None,
+                unregister_node: None,
+            })
         }
         "STABLE" => {
             // Cancel any migration for this slot
-            let cmd = RaftClusterCommand::CancelSlotMigration { slot };
-            execute_raft_command(raft, cmd)?;
+            Ok(Response::RaftNeeded {
+                op: RaftClusterOp::CancelSlotMigration { slot },
+                register_node: None,
+                unregister_node: None,
+            })
         }
         _ => {
-            return Err(CommandError::InvalidArgument {
+            Err(CommandError::InvalidArgument {
                 message: format!("Unknown SETSLOT subcommand: {}", subcommand),
-            });
+            })
         }
     }
-
-    Ok(Response::ok())
 }
 
 /// CLUSTER HELP - Returns help for CLUSTER commands.
