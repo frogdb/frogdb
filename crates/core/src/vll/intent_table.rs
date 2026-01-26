@@ -178,6 +178,29 @@ impl IntentTable {
             self.intents_by_key.contains_key(key) || lock.is_locked()
         });
     }
+
+    /// Iterate over all keys with intents.
+    pub fn iter_keys(&self) -> impl Iterator<Item = (&Bytes, Vec<u64>)> {
+        self.intents_by_key
+            .iter()
+            .map(|(key, intents)| (key, intents.keys().copied().collect()))
+    }
+
+    /// Get the lock state for a key as a human-readable string.
+    pub fn get_lock_state_string(&self, key: &Bytes) -> String {
+        match self.key_locks.get(key) {
+            Some(lock) => {
+                if lock.is_write_locked() {
+                    "write".to_string()
+                } else if lock.is_read_locked() {
+                    format!("read:{}", lock.reader_count())
+                } else {
+                    "unlocked".to_string()
+                }
+            }
+            None => "unlocked".to_string(),
+        }
+    }
 }
 
 #[cfg(test)]
