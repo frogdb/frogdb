@@ -2,66 +2,7 @@
 
 This document tracks the implementation progress of FrogDB. Each phase has specific deliverables with checkboxes for progress tracking.
 
-## Design Principles
-
-1. **Build the skeleton first** - Establish correct abstractions from Phase 1, even as noops
-2. **Avoid large refactors** - Include sharding infrastructure from day one
-3. **Test as you go** - Each phase includes testing requirements
-4. **Future features as noops** - WAL, ACL, replication hooks exist from Phase 1
-
----
-
-## Current Status
-
-**Completed**: Foundation, Sorted Sets, Multi-Shard Operations, Hash/List/Set Types, Transactions & Pub/Sub, Lua Scripting, Key Iteration & Server Commands, Blocking Commands, RESP3 Protocol, Streams, String Commands & TTL, Persistence, Production Readiness, Property Testing, Protocol Completion
-**In Progress**: Phase 1 (SORT only remaining)
-**Next Milestone**: Complete Phase 1, 3-4, then Phase 5 (Clustering)
-
----
-
-## Benchmark Comparisons
-
-**Goal**: Performance comparison with Redis/Valkey/Dragonfly.
-
-- [x] Benchmark harness setup (Redis)
-- [ ] Valkey comparison benchmarks
-- [ ] Dragonfly comparison benchmarks
-- [ ] Performance report generation
-
-### Clustering / Replication
-
-**Goal**: Distributed operation support with primary-replica replication and Redis Cluster protocol compatibility.
-
-See [CLUSTER_PLAN.md](CLUSTER_PLAN.md) for the detailed implementation plan.
-
-**Implementation Phases:**
-
-| Phase | Description | Key Deliverables |
-|-------|-------------|------------------|
-| 1 | Primary-Replica Replication | PSYNC protocol, WAL streaming, WAIT command, ROLE/INFO |
-| 2 | Admin API & Cluster Topology | HTTP admin port, slot assignment, cluster state management |
-| 3 | Client Protocol & Redirects | MOVED/ASK redirects, CLUSTER commands, hash slot routing |
-| 4 | Failover Support | Replica promotion, REPLICAOF NO ONE, self-fencing |
-| 5 | Slot Migration | Live migration protocol, slot state machine |
-| 6 | Testing & Validation | Turmoil chaos tests, Jepsen linearizability, integration tests |
-
-**Phase 1 Tasks (First Milestone):**
-- [ ] Replication via WAL streaming (RocksDB `GetUpdatesSince`)
-- [ ] PSYNC/FULLRESYNC protocol implementation
-- [ ] REPLCONF handshake and ACK tracking
-- [ ] WAIT command with replica acknowledgment
-- [ ] ROLE command - Report replication role (primary/replica)
-- [ ] INFO replication section
-
-**Later Phases:**
-- [ ] Admin HTTP API (port 6380)
-- [ ] CLUSTER commands (SLOTS, NODES, KEYSLOT, etc.)
-- [ ] Hash slot routing and MOVED/ASK redirects
-- [ ] Failover and replica promotion
-- [ ] Live slot migration
-- [ ] `BGREWRITEAOF` - Stub returning appropriate message (N/A for RocksDB)
-
-### Distributed Cluster Testing
+## Distributed Cluster Testing
 
 **Goal**: Correctness testing for clustered operation.
 
@@ -70,21 +11,7 @@ See [CLUSTER_PLAN.md](CLUSTER_PLAN.md) for the detailed implementation plan.
 - [ ] Cluster failover tests
 - [ ] Cluster linearizability tests
 
-## Distributed Single-Node Testing
-
-**Goal**: Correctness testing for single-node operation.
-
-- [ ] Jepsen test harness integration
-
-### Config validation audit
-
-- [ ] Validation + errors for invalid config
-
-### Observability audit
-
-- [ ] Could a skilled software reliability engineer be able to easily diagnose issues with frogdb?
-
-### Operational Readiness
+## Operational Readiness
 
 Inspired by: **CockroachDB**, **DragonflyDB**, **FoundationDB**, **Redis**, **Valkey**
 
@@ -429,16 +356,8 @@ DEBUG TRACING RECENT [count]
 
 ## Code Quality & Refactoring
 
-**Goal**: Reduce code duplication and improve maintainability of large files.
-
-**Completed:**
-- [x] Extract duplicated parsing functions (parse_i64, parse_u64, parse_f64, parse_usize, format_float) to shared utils.rs
-- [x] Extract duplicated get_or_create_* helpers to shared utils.rs
-- [x] Replace RDB magic numbers with named constants in primary.rs
-
-**Remaining Tasks:**
-
 ##### Split connection.rs (HIGH effort)
+
 `crates/server/src/connection.rs` is 5,932 lines handling multiple concerns.
 
 - [ ] Extract auth handling to `connection/auth.rs`
@@ -449,11 +368,13 @@ DEBUG TRACING RECENT [count]
 - [ ] Extract scatter-gather to `connection/scatter_gather.rs`
 
 ##### Split shard.rs (MEDIUM effort)
+
 `crates/core/src/shard.rs` is 3,720 lines with eviction logic mixed in.
 
 - [ ] Extract eviction strategies to `shard/eviction.rs`
 
 ##### Split types.rs (MEDIUM-HIGH effort)
+
 `crates/core/src/types.rs` is 3,668 lines containing all value types.
 
 - [ ] Extract string types to `types/string.rs`
@@ -465,9 +386,11 @@ DEBUG TRACING RECENT [count]
 - [ ] Extract specialized types (BloomFilter, HyperLogLog, TimeSeries, Json) to `types/specialized.rs`
 
 ##### Config magic numbers (LOW effort)
+
 - [ ] Define named constants for timeout values and sizes in `crates/server/src/config.rs`
 
 ##### Sorted set parsing helpers (LOW effort)
+
 - [ ] Extract `parse_score_bound()` and `parse_lex_bound()` to utils.rs (if not already covered)
 - [ ] Extract `parse_set_op_options()` to utils.rs
 
