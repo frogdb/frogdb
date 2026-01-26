@@ -444,6 +444,12 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<ShardMemoryStats>,
     },
 
+    /// Get WAL lag statistics from this shard.
+    WalLagStats {
+        /// Response channel.
+        response_tx: oneshot::Sender<WalLagStatsResponse>,
+    },
+
     /// Scan for big keys (keys larger than threshold).
     ScanBigKeys {
         /// Minimum size in bytes to consider a key "big".
@@ -659,6 +665,27 @@ pub struct BigKeysScanResponse {
     pub keys_scanned: usize,
     /// Whether the scan was truncated due to max_keys limit.
     pub truncated: bool,
+}
+
+/// Response for WAL lag statistics query.
+#[derive(Debug, Clone)]
+pub struct WalLagStatsResponse {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// Whether persistence is enabled for this shard.
+    pub persistence_enabled: bool,
+    /// Lag statistics (None if persistence is disabled).
+    pub lag_stats: Option<crate::persistence::WalLagStats>,
+}
+
+impl Default for WalLagStatsResponse {
+    fn default() -> Self {
+        Self {
+            shard_id: 0,
+            persistence_enabled: false,
+            lag_stats: None,
+        }
+    }
 }
 
 /// Result from executing a transaction.
@@ -1540,6 +1567,10 @@ impl ShardWorker {
                         }
                         ShardMessage::MemoryStats { response_tx } => {
                             let stats = self.collect_memory_stats();
+                            let _ = response_tx.send(stats);
+                        }
+                        ShardMessage::WalLagStats { response_tx } => {
+                            let stats = self.collect_wal_lag_stats().await;
                             let _ = response_tx.send(stats);
                         }
                         ShardMessage::ScanBigKeys { threshold_bytes, max_keys, response_tx } => {
@@ -3812,6 +3843,24 @@ impl ShardWorker {
             peak_memory: self.peak_memory,
             memory_limit: self.memory_limit,
             overhead_estimate,
+        }
+    }
+
+    /// Collect WAL lag statistics for this shard.
+    async fn collect_wal_lag_stats(&self) -> WalLagStatsResponse {
+        if let Some(ref wal_writer) = self.wal_writer {
+            let lag_stats = wal_writer.lag_stats().await;
+            WalLagStatsResponse {
+                shard_id: self.shard_id,
+                persistence_enabled: true,
+                lag_stats: Some(lag_stats),
+            }
+        } else {
+            WalLagStatsResponse {
+                shard_id: self.shard_id,
+                persistence_enabled: false,
+                lag_stats: None,
+            }
         }
     }
 

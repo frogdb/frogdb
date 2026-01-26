@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
 
-use frogdb_core::{ClientFlags, ClientRegistry, ShardMemoryStats, ShardMessage};
+use frogdb_core::{ClientFlags, ClientRegistry, ShardMemoryStats, ShardMessage, WalLagStatsResponse};
 
 use crate::health::HealthChecker;
 use crate::prometheus_recorder::PrometheusRecorder;
@@ -23,6 +23,10 @@ pub struct StatusCollectorConfig {
     pub memory_warning_percent: u8,
     /// Threshold percentage for connection warning (default 90).
     pub connection_warning_percent: u8,
+    /// Durability lag warning threshold in milliseconds (default 5000 = 5 seconds).
+    pub durability_lag_warning_ms: u64,
+    /// Durability lag critical threshold in milliseconds (default 30000 = 30 seconds).
+    pub durability_lag_critical_ms: u64,
 }
 
 impl Default for StatusCollectorConfig {
@@ -30,6 +34,8 @@ impl Default for StatusCollectorConfig {
         Self {
             memory_warning_percent: 90,
             connection_warning_percent: 90,
+            durability_lag_warning_ms: 5000,   // 5 seconds
+            durability_lag_critical_ms: 30000, // 30 seconds
         }
     }
 }
@@ -163,6 +169,44 @@ pub struct WalStatus {
     pub total_writes: u64,
     /// Total WAL bytes written.
     pub total_bytes: u64,
+    /// Lag statistics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lag: Option<WalLagStatus>,
+}
+
+/// WAL lag status for durability monitoring.
+#[derive(Debug, Clone, Serialize)]
+pub struct WalLagStatus {
+    /// Total pending operations across all shards.
+    pub pending_ops_total: usize,
+    /// Total pending bytes across all shards.
+    pub pending_bytes_total: usize,
+    /// Maximum durability lag across all shards (milliseconds).
+    pub max_durability_lag_ms: u64,
+    /// Average durability lag across all shards (milliseconds).
+    pub avg_durability_lag_ms: f64,
+    /// Maximum sync lag across all shards (milliseconds, if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_sync_lag_ms: Option<u64>,
+    /// Per-shard lag details.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shards: Vec<ShardLagStatus>,
+}
+
+/// Per-shard lag status.
+#[derive(Debug, Clone, Serialize)]
+pub struct ShardLagStatus {
+    /// Shard ID.
+    pub shard_id: usize,
+    /// Pending operations for this shard.
+    pub pending_ops: usize,
+    /// Pending bytes for this shard.
+    pub pending_bytes: usize,
+    /// Durability lag in milliseconds.
+    pub durability_lag_ms: u64,
+    /// Sync lag in milliseconds (if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_lag_ms: Option<u64>,
 }
 
 /// Per-shard statistics.
@@ -247,6 +291,13 @@ impl StatusCollector {
         // Gather shard memory stats
         let shard_stats = self.gather_shard_stats().await;
 
+        // Gather WAL lag stats if persistence is enabled
+        let wal_lag_stats = if self.persistence_enabled {
+            Some(self.gather_wal_lag_stats().await)
+        } else {
+            None
+        };
+
         // Build client status
         let clients_status = self.build_clients_status();
 
@@ -254,7 +305,7 @@ impl StatusCollector {
         let memory_status = self.build_memory_status(&shard_stats);
 
         // Build health status with issue detection
-        let health_status = self.build_health_status(&clients_status, &memory_status);
+        let health_status = self.build_health_status(&clients_status, &memory_status, &wal_lag_stats);
 
         // Build shard status
         let shards: Vec<ShardStatus> = shard_stats
@@ -311,6 +362,7 @@ impl StatusCollector {
                     Some(WalStatus {
                         total_writes: 0, // Would need WAL integration
                         total_bytes: 0,  // Would need WAL integration
+                        lag: wal_lag_stats,
                     })
                 } else {
                     None
@@ -351,6 +403,77 @@ impl StatusCollector {
         }
 
         stats
+    }
+
+    /// Gather WAL lag stats from all shards.
+    async fn gather_wal_lag_stats(&self) -> WalLagStatus {
+        let mut responses: Vec<WalLagStatsResponse> = Vec::with_capacity(self.shard_senders.len());
+
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::WalLagStats { response_tx })
+                .await
+                .is_ok()
+            {
+                if let Ok(lag_response) = response_rx.await {
+                    responses.push(lag_response);
+                } else {
+                    responses.push(WalLagStatsResponse::default());
+                }
+            } else {
+                responses.push(WalLagStatsResponse::default());
+            }
+        }
+
+        // Aggregate stats
+        let mut pending_ops_total = 0usize;
+        let mut pending_bytes_total = 0usize;
+        let mut max_durability_lag_ms = 0u64;
+        let mut total_durability_lag_ms = 0u64;
+        let mut max_sync_lag_ms: Option<u64> = None;
+        let mut enabled_shards = 0usize;
+        let mut shards = Vec::new();
+
+        for response in &responses {
+            if let Some(ref lag_stats) = response.lag_stats {
+                enabled_shards += 1;
+                pending_ops_total += lag_stats.pending_ops;
+                pending_bytes_total += lag_stats.pending_bytes;
+                total_durability_lag_ms += lag_stats.durability_lag_ms;
+
+                if lag_stats.durability_lag_ms > max_durability_lag_ms {
+                    max_durability_lag_ms = lag_stats.durability_lag_ms;
+                }
+
+                if let Some(sync_lag) = lag_stats.sync_lag_ms {
+                    max_sync_lag_ms = Some(max_sync_lag_ms.unwrap_or(0).max(sync_lag));
+                }
+
+                shards.push(ShardLagStatus {
+                    shard_id: lag_stats.shard_id,
+                    pending_ops: lag_stats.pending_ops,
+                    pending_bytes: lag_stats.pending_bytes,
+                    durability_lag_ms: lag_stats.durability_lag_ms,
+                    sync_lag_ms: lag_stats.sync_lag_ms,
+                });
+            }
+        }
+
+        let avg_durability_lag_ms = if enabled_shards > 0 {
+            total_durability_lag_ms as f64 / enabled_shards as f64
+        } else {
+            0.0
+        };
+
+        WalLagStatus {
+            pending_ops_total,
+            pending_bytes_total,
+            max_durability_lag_ms,
+            avg_durability_lag_ms,
+            max_sync_lag_ms,
+            shards,
+        }
     }
 
     /// Build client status from registry.
@@ -401,6 +524,7 @@ impl StatusCollector {
         &self,
         clients: &ClientsStatus,
         memory: &MemoryStatus,
+        wal_lag: &Option<WalLagStatus>,
     ) -> HealthStatusInfo {
         let mut issues = Vec::new();
 
@@ -432,6 +556,29 @@ impl StatusCollector {
                     message: format!(
                         "Client connections at {}% ({}/{})",
                         usage_percent, clients.connected, clients.max_clients
+                    ),
+                });
+            }
+        }
+
+        // Check durability lag (persistence health)
+        if let Some(ref lag) = wal_lag {
+            if lag.max_durability_lag_ms >= self.config.durability_lag_critical_ms {
+                issues.push(HealthIssue {
+                    severity: "critical".to_string(),
+                    code: "HIGH_DURABILITY_LAG".to_string(),
+                    message: format!(
+                        "Durability lag at {}ms exceeds critical threshold ({}ms)",
+                        lag.max_durability_lag_ms, self.config.durability_lag_critical_ms
+                    ),
+                });
+            } else if lag.max_durability_lag_ms >= self.config.durability_lag_warning_ms {
+                issues.push(HealthIssue {
+                    severity: "warning".to_string(),
+                    code: "ELEVATED_DURABILITY_LAG".to_string(),
+                    message: format!(
+                        "Durability lag at {}ms exceeds warning threshold ({}ms)",
+                        lag.max_durability_lag_ms, self.config.durability_lag_warning_ms
                     ),
                 });
             }
@@ -659,11 +806,20 @@ mod tests {
             wal: Some(WalStatus {
                 total_writes: 10000,
                 total_bytes: 1048576,
+                lag: Some(WalLagStatus {
+                    pending_ops_total: 5,
+                    pending_bytes_total: 1024,
+                    max_durability_lag_ms: 10,
+                    avg_durability_lag_ms: 8.0,
+                    max_sync_lag_ms: Some(100),
+                    shards: vec![],
+                }),
             }),
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("periodic"));
         assert!(json.contains("10000"));
+        assert!(json.contains("pending_ops_total"));
     }
 
     #[test]

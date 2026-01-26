@@ -204,9 +204,22 @@ fn build_memory_info(ctx: &mut CommandContext) -> String {
 }
 
 fn build_persistence_info() -> String {
+    // Note: Real-time WAL lag metrics are available via STATUS JSON command
+    // which aggregates data from all shards. The values here are placeholders
+    // since INFO runs per-shard without server-level aggregation context.
     "# Persistence\r\n\
      loading:0\r\n\
      async_loading:0\r\n\
+     persistence_enabled:1\r\n\
+     durability_mode:periodic\r\n\
+     wal_pending_ops:0\r\n\
+     wal_pending_bytes:0\r\n\
+     wal_durability_lag_ms:0\r\n\
+     wal_sync_lag_ms:0\r\n\
+     wal_last_flush_time:0\r\n\
+     wal_last_sync_time:0\r\n\
+     wal_writes_total:0\r\n\
+     wal_bytes_total:0\r\n\
      current_cow_peak:0\r\n\
      current_cow_size:0\r\n\
      current_cow_size_age:0\r\n\

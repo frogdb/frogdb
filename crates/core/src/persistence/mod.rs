@@ -19,7 +19,7 @@ pub use snapshot::{
     NoopSnapshotCoordinator, OnWriteHook, RocksSnapshotCoordinator, SnapshotConfig,
     SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata, SnapshotMetadataFile,
 };
-pub use wal::{spawn_periodic_sync, DurabilityMode, RocksWalWriter, WalConfig};
+pub use wal::{spawn_periodic_sync, DurabilityMode, RocksWalWriter, WalConfig, WalLagStats};
 
 #[cfg(test)]
 mod tests;

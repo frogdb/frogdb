@@ -139,6 +139,14 @@ pub struct StatusConfig {
     /// Threshold percentage for connection warning (0-100).
     #[serde(default = "default_connection_warning_percent")]
     pub connection_warning_percent: u8,
+
+    /// Durability lag warning threshold in milliseconds (default: 5000 = 5 seconds).
+    #[serde(default = "default_durability_lag_warning_ms")]
+    pub durability_lag_warning_ms: u64,
+
+    /// Durability lag critical threshold in milliseconds (default: 30000 = 30 seconds).
+    #[serde(default = "default_durability_lag_critical_ms")]
+    pub durability_lag_critical_ms: u64,
 }
 
 fn default_memory_warning_percent() -> u8 {
@@ -149,11 +157,21 @@ fn default_connection_warning_percent() -> u8 {
     90
 }
 
+fn default_durability_lag_warning_ms() -> u64 {
+    5000 // 5 seconds
+}
+
+fn default_durability_lag_critical_ms() -> u64 {
+    30000 // 30 seconds
+}
+
 impl Default for StatusConfig {
     fn default() -> Self {
         Self {
             memory_warning_percent: default_memory_warning_percent(),
             connection_warning_percent: default_connection_warning_percent(),
+            durability_lag_warning_ms: default_durability_lag_warning_ms(),
+            durability_lag_critical_ms: default_durability_lag_critical_ms(),
         }
     }
 }
@@ -164,6 +182,8 @@ impl StatusConfig {
         frogdb_metrics::StatusCollectorConfig {
             memory_warning_percent: self.memory_warning_percent,
             connection_warning_percent: self.connection_warning_percent,
+            durability_lag_warning_ms: self.durability_lag_warning_ms,
+            durability_lag_critical_ms: self.durability_lag_critical_ms,
         }
     }
 }
