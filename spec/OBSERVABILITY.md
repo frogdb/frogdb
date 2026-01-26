@@ -225,6 +225,11 @@ prometheus_port = 9090
 otlp_enabled = false
 # otlp_endpoint = "http://localhost:4317"
 # export_interval_secs = 15
+
+[hotshards]
+hot_threshold_percent = 20.0    # Traffic % to classify as HOT
+warm_threshold_percent = 15.0   # Traffic % to classify as WARM
+default_period_secs = 10        # Default stats collection period
 ```
 
 ### System Metrics
@@ -281,6 +286,9 @@ Eviction policies: `noeviction`, `allkeys-lru`, `volatile-lru`, `allkeys-lfu`, `
 | `frogdb_shard_keys` | Gauge | `shard` | Per-shard key count |
 | `frogdb_shard_queue_depth` | Gauge | `shard` | Message queue depth |
 | `frogdb_shard_queue_latency_ms` | Histogram | `shard` | Queue wait time |
+| `frogdb_shard_ops_total` | Counter | `shard` | Per-shard total operations |
+| `frogdb_shard_reads_total` | Counter | `shard` | Per-shard read operations |
+| `frogdb_shard_writes_total` | Counter | `shard` | Per-shard write operations |
 
 ### Persistence Metrics
 
@@ -346,7 +354,7 @@ Redis-compatible INFO command with FrogDB extensions.
 INFO [section]
 ```
 
-Sections: `server`, `clients`, `memory`, `persistence`, `stats`, `replication`, `cpu`, `keyspace`, `frogdb`
+Sections: `server`, `clients`, `memory`, `persistence`, `stats`, `replication`, `cpu`, `keyspace`, `hotshards`, `frogdb`
 
 **Example output:**
 
@@ -411,6 +419,20 @@ frogdb_shard_0_memory:131072
 frogdb_shard_1_keys:130
 frogdb_shard_1_memory:138240
 ...
+```
+
+**INFO hotshards output:**
+
+```
+# Hotshards
+num_shards:8
+hot_shards:1
+warm_shards:1
+total_ops_sec:50000
+max_ops_sec:15000
+avg_ops_sec:6250
+imbalance_ratio:2.40
+hottest_shard:3
 ```
 
 ### SLOWLOG
@@ -531,12 +553,37 @@ Limited DEBUG commands for diagnostics. **Dangerous commands are intentionally n
 DEBUG OBJECT <key>          # Key internal representation
 DEBUG STRUCTSIZE            # Size of internal data structures
 DEBUG SLEEP <seconds>       # Sleep (testing only, disable in production)
+DEBUG HOTSHARDS [PERIOD <seconds>]   # Per-shard traffic analysis for hot shard detection
 ```
 
 **DEBUG OBJECT output:**
 
 ```
 Value at:0x7f1234567890 refcount:1 encoding:embstr serializedlength:12 lru:1234567 lru_seconds_idle:10
+```
+
+**DEBUG HOTSHARDS output:**
+
+```
+# Hot Shard Report (period: 10s)
+# Total: 50000 ops/sec across 8 shards
+# Imbalance ratio: 2.4x (max/avg)
+
+shard  ops/sec  reads/sec  writes/sec  pct    queue  status
+-----  -------  ---------  ----------  -----  -----  ------
+3      15000    12000      3000        30.0%  12     HOT
+7      10000    8000       2000        20.0%  5      WARM
+0      6500     5000       1500        13.0%  2      OK
+1      6000     4800       1200        12.0%  1      OK
+2      5500     4400       1100        11.0%  2      OK
+4      3000     2400       600         6.0%   0      OK
+5      2500     2000       500         5.0%   1      OK
+6      1500     1200       300         3.0%   0      OK
+
+# Recommendations:
+# - Shard 3 receives 30% of traffic (expected: 12.5%)
+# - Consider reviewing key distribution patterns
+# - Use DEBUG HASHING <key> to check shard assignment
 ```
 
 **Not implemented (dangerous):**
@@ -625,6 +672,7 @@ Recommended alerts for production deployments:
 | PersistenceFailure | `persistence_errors > 0` | Critical | Check disk space, permissions |
 | ReplicationLag | `replication_lag > 10s` | Warning | Check network, replica health |
 | ShardImbalance | `max_shard_keys / min_shard_keys > 2` | Warning | Review key distribution |
+| HotShard | `imbalance_ratio > 2.0` | Warning | Review key distribution patterns |
 
 For detailed failure handling, recovery procedures, and client recommendations, see [FAILURE_MODES.md](FAILURE_MODES.md).
 
@@ -659,6 +707,17 @@ groups:
         annotations:
           summary: "FrogDB persistence errors"
           description: "Persistence errors detected"
+
+      - alert: FrogDBHotShard
+        expr: |
+          max(rate(frogdb_shard_ops_total[5m])) /
+          avg(rate(frogdb_shard_ops_total[5m])) > 2.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FrogDB hot shard detected"
+          description: "Shard traffic imbalance ratio is {{ $value | printf \"%.2f\" }}x"
 ```
 
 ---
@@ -699,6 +758,9 @@ Key panels for a FrogDB dashboard:
    - Keys per shard
    - Memory per shard
    - Queue depth per shard
+   - Ops per shard (from `frogdb_shard_ops_total`)
+   - Hot/Warm shard indicators
+   - Imbalance ratio
 
 ---
 
