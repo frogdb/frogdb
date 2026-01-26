@@ -1,0 +1,30 @@
+# Jepsen single-node Docker environment for FrogDB
+# Used for basic single-node testing without replication
+
+services:
+  n1:
+    image: frogdb:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: frogdb-n1
+    ports:
+      - "6379:6379"
+    volumes:
+      - frogdb-n1-data:/data
+    environment:
+      FROGDB_PORT: 6379
+      FROGDB_DATA_DIR: /data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  frogdb-n1-data:
+
+networks:
+  default:
+    name: jepsen-frogdb

@@ -286,3 +286,43 @@ jepsen-clean:
 # Open Jepsen results in browser (macOS)
 jepsen-results:
     open jepsen/frogdb/store/latest/
+
+# ==============================================================================
+# Jepsen Replication Tests (3-node cluster)
+# ==============================================================================
+
+# Start Jepsen replication test environment (3-node cluster)
+jepsen-replication-up:
+    docker compose -f jepsen/frogdb/docker-compose.replication.yml up -d
+
+# Stop Jepsen replication test environment
+jepsen-replication-down:
+    docker compose -f jepsen/frogdb/docker-compose.replication.yml down -v
+
+# Run Jepsen replication consistency workload
+jepsen-replication *args:
+    cd jepsen/frogdb && lein run test --workload replication --nemesis none {{args}}
+
+# Run Jepsen split-brain detection workload
+jepsen-split-brain *args:
+    cd jepsen/frogdb && lein run test --workload split-brain --nemesis partition {{args}}
+
+# Run Jepsen zombie primary workload
+jepsen-zombie *args:
+    cd jepsen/frogdb && lein run test --workload zombie --nemesis partition {{args}}
+
+# Run Jepsen replication lag measurement
+jepsen-lag *args:
+    cd jepsen/frogdb && lein run test --workload lag --nemesis none {{args}}
+
+# Run Jepsen replication with combined faults (kill + pause + partition)
+jepsen-replication-chaos *args:
+    cd jepsen/frogdb && lein run test --workload replication --nemesis all-replication {{args}}
+
+# Full replication test suite
+jepsen-replication-all: jepsen-build jepsen-replication-up
+    just jepsen-replication --time-limit 30
+    just jepsen-lag --time-limit 30
+    just jepsen-split-brain --time-limit 60
+    just jepsen-zombie --time-limit 60
+    just jepsen-replication-chaos --time-limit 120
