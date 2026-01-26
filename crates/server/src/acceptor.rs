@@ -105,6 +105,12 @@ pub struct Acceptor {
 
     /// Whether admin port separation is enabled (admin commands blocked on regular port).
     admin_enabled: bool,
+
+    /// Hot shard detection configuration.
+    hotshards_config: frogdb_metrics::HotShardConfig,
+
+    /// Memory diagnostics configuration.
+    memory_diag_config: frogdb_metrics::MemoryDiagConfig,
 }
 
 impl Acceptor {
@@ -130,6 +136,8 @@ impl Acceptor {
         node_id: Option<u64>,
         is_admin: bool,
         admin_enabled: bool,
+        hotshards_config: frogdb_metrics::HotShardConfig,
+        memory_diag_config: frogdb_metrics::MemoryDiagConfig,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -154,6 +162,8 @@ impl Acceptor {
             node_id,
             is_admin,
             admin_enabled,
+            hotshards_config,
+            memory_diag_config,
         }
     }
 
@@ -208,6 +218,8 @@ impl Acceptor {
                     let node_id = self.node_id;
                     let is_admin = self.is_admin;
                     let admin_enabled = self.admin_enabled;
+                    let hotshards_config = self.hotshards_config.clone();
+                    let memory_diag_config = self.memory_diag_config.clone();
 
                     spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -234,6 +246,8 @@ impl Acceptor {
                             node_id,
                             is_admin,
                             admin_enabled,
+                            hotshards_config,
+                            memory_diag_config,
                         );
 
                         if let Err(e) = handler.run().await {

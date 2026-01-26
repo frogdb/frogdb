@@ -583,6 +583,114 @@ async fn test_memory_doctor() {
 }
 
 #[tokio::test]
+async fn test_memory_doctor_enhanced_format() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Add some data first
+    client.command(&["SET", "key1", "value1"]).await;
+    client.command(&["SET", "key2", "value2"]).await;
+
+    // MEMORY DOCTOR should return enhanced report with summary section
+    let response = client.command(&["MEMORY", "DOCTOR"]).await;
+    match response {
+        Response::Bulk(Some(report)) => {
+            let text = String::from_utf8_lossy(&report);
+
+            // Check for required sections in enhanced format
+            assert!(
+                text.contains("=== Summary ==="),
+                "Report should contain Summary section"
+            );
+            assert!(
+                text.contains("Total keys:"),
+                "Report should show total keys"
+            );
+            assert!(
+                text.contains("Total data memory:"),
+                "Report should show total data memory"
+            );
+            assert!(
+                text.contains("Number of shards:"),
+                "Report should show number of shards"
+            );
+            assert!(
+                text.contains("=== Issues Detected ==="),
+                "Report should contain Issues Detected section"
+            );
+        }
+        _ => panic!("Expected bulk response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_memory_doctor_big_keys() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Create a big key (>1MB) - using a 2MB value
+    let big_value = "x".repeat(2_000_000);
+    client.command(&["SET", "bigkey1", &big_value]).await;
+
+    // MEMORY DOCTOR should detect the big key
+    let response = client.command(&["MEMORY", "DOCTOR"]).await;
+    match response {
+        Response::Bulk(Some(report)) => {
+            let text = String::from_utf8_lossy(&report);
+
+            // Should detect big keys
+            assert!(
+                text.contains("=== Big Keys"),
+                "Report should contain Big Keys section when big keys exist"
+            );
+            assert!(
+                text.contains("bigkey1"),
+                "Report should list the big key"
+            );
+            assert!(
+                text.contains("big key(s) found"),
+                "Report should indicate big keys were found in issues section"
+            );
+        }
+        _ => panic!("Expected bulk response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_memory_doctor_no_big_keys() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // With just a small amount of data, there should be no big keys
+    client.command(&["SET", "small_key", "small_value"]).await;
+
+    let response = client.command(&["MEMORY", "DOCTOR"]).await;
+    match response {
+        Response::Bulk(Some(report)) => {
+            let text = String::from_utf8_lossy(&report);
+
+            // Should not contain Big Keys section when there are no big keys
+            assert!(
+                !text.contains("=== Big Keys"),
+                "Report should not contain Big Keys section when there are no big keys"
+            );
+            // The report should still contain the Issues Detected section
+            assert!(
+                text.contains("=== Issues Detected ==="),
+                "Report should contain Issues Detected section"
+            );
+        }
+        _ => panic!("Expected bulk response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn test_memory_malloc_size() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

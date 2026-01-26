@@ -9,6 +9,8 @@
 pub mod config;
 pub mod debug;
 pub mod health;
+pub mod hotshards;
+pub mod memorydiag;
 pub mod otlp;
 pub mod prometheus_recorder;
 pub mod server;
@@ -30,6 +32,14 @@ pub use prometheus_recorder::PrometheusRecorder;
 pub use server::MetricsServer;
 pub use status::{ServerStatus, StatusCollector, StatusCollectorConfig};
 pub use system::SystemMetricsCollector;
+pub use hotshards::{
+    format_hotshards_info, format_hotshards_report, HotShardCollector, HotShardConfig,
+    HotShardReport, ShardStats, ShardStatus,
+};
+pub use memorydiag::{
+    calculate_variance, format_report as format_memory_report, MemoryDiagCollector,
+    MemoryDiagConfig, MemoryDiagReport, MemorySummary, ShardMemoryVariance,
+};
 pub use tracing::{create_tracer, OtelTracer, RequestSpan, ScatterGatherSpan, SharedTracer};
 
 #[cfg(feature = "testing")]

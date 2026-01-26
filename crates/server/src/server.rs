@@ -872,6 +872,8 @@ impl Server {
             self.node_id,
             false,  // is_admin = false for regular port
             admin_enabled,
+            self.config.hotshards.to_collector_config(),
+            self.config.memory.to_diag_config(),
         );
 
         // Spawn main acceptor task
@@ -903,6 +905,8 @@ impl Server {
                 self.node_id,
                 true,   // is_admin = true for admin port
                 admin_enabled,
+                self.config.hotshards.to_collector_config(),
+                self.config.memory.to_diag_config(),
             );
 
             Some(spawn(async move {
