@@ -41,6 +41,8 @@ pub struct TestServerConfig {
     pub log_level: Option<String>,
     /// Password required for authentication (default: None)
     pub requirepass: Option<String>,
+    /// Enable admin port (default: false)
+    pub admin_enabled: bool,
 }
 
 /// A test server instance that can be used in integration tests.
@@ -49,6 +51,8 @@ pub struct TestServer {
     port: u16,
     /// Metrics server port
     metrics_port: u16,
+    /// Admin port (None if admin disabled)
+    admin_port: Option<u16>,
     /// Server role for reference
     role: ServerRole,
     /// Shutdown signal sender
@@ -113,6 +117,13 @@ impl TestServer {
             }
         };
 
+        // Allocate admin port if admin is enabled
+        let admin_port = if test_config.admin_enabled {
+            Some(Self::allocate_port())
+        } else {
+            None
+        };
+
         let mut config = Config::default();
         config.server.bind = "127.0.0.1".to_string();
         config.server.port = port;
@@ -125,6 +136,13 @@ impl TestServer {
         config.replication.role = "standalone".to_string();
         if let Some(ref pass) = test_config.requirepass {
             config.security.requirepass = pass.clone();
+        }
+
+        // Configure admin port if enabled
+        if let Some(admin_p) = admin_port {
+            config.admin.enabled = true;
+            config.admin.bind = "127.0.0.1".to_string();
+            config.admin.port = admin_p;
         }
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -142,6 +160,7 @@ impl TestServer {
         Self {
             port,
             metrics_port,
+            admin_port,
             role: ServerRole::Standalone,
             shutdown_tx: Some(shutdown_tx),
             handle,
@@ -192,6 +211,7 @@ impl TestServer {
         Self {
             port,
             metrics_port,
+            admin_port: None,
             role: ServerRole::Primary,
             shutdown_tx: Some(shutdown_tx),
             handle,
@@ -244,6 +264,7 @@ impl TestServer {
         Self {
             port,
             metrics_port,
+            admin_port: None,
             role: ServerRole::Replica,
             shutdown_tx: Some(shutdown_tx),
             handle,
@@ -264,6 +285,35 @@ impl TestServer {
     /// Get the metrics server port.
     pub fn metrics_port(&self) -> u16 {
         self.metrics_port
+    }
+
+    /// Get the admin port (panics if admin not enabled).
+    pub fn admin_port(&self) -> u16 {
+        self.admin_port.expect("Admin port not enabled")
+    }
+
+    /// Check if admin port is enabled.
+    pub fn has_admin_port(&self) -> bool {
+        self.admin_port.is_some()
+    }
+
+    /// Get admin socket address.
+    pub fn admin_socket_addr(&self) -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], self.admin_port()))
+    }
+
+    /// Connect to the admin port.
+    pub async fn connect_admin(&self) -> TestClient {
+        let stream = TcpStream::connect(self.admin_socket_addr()).await.unwrap();
+        let framed = Framed::new(stream, Resp2);
+        TestClient { framed }
+    }
+
+    /// Start standalone server with admin port enabled.
+    pub async fn start_with_admin_port() -> Self {
+        let mut config = TestServerConfig::default();
+        config.admin_enabled = true;
+        Self::start_standalone_with_config(config).await
     }
 
     /// Get the RESP address as "host:port".

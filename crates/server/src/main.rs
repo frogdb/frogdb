@@ -35,6 +35,14 @@ struct Cli {
     #[arg(long, value_name = "FORMAT")]
     log_format: Option<String>,
 
+    /// Admin bind address (overrides config)
+    #[arg(long, value_name = "ADDR")]
+    admin_bind: Option<String>,
+
+    /// Admin port (overrides config, implies admin.enabled=true)
+    #[arg(long, value_name = "PORT")]
+    admin_port: Option<u16>,
+
     /// Generate default configuration file
     #[arg(long)]
     generate_config: bool,
@@ -59,6 +67,8 @@ async fn main() -> Result<()> {
         cli.shards,
         cli.log_level,
         cli.log_format,
+        cli.admin_bind,
+        cli.admin_port,
     )?;
 
     // Initialize logging

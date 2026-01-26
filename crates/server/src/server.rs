@@ -67,8 +67,11 @@ pub struct Server {
     /// Server configuration.
     config: Config,
 
-    /// TCP listener.
+    /// TCP listener for client connections.
     listener: TcpListener,
+
+    /// Optional TCP listener for admin connections.
+    admin_listener: Option<TcpListener>,
 
     /// Command registry.
     registry: Arc<CommandRegistry>,
@@ -170,6 +173,18 @@ impl Server {
             addr = %config.bind_addr(),
             "TCP listener bound"
         );
+
+        // Bind admin TCP listener if enabled
+        let admin_listener = if config.admin.enabled {
+            let admin_listener = TcpListener::bind(config.admin.bind_addr()).await?;
+            info!(
+                addr = %config.admin.bind_addr(),
+                "Admin TCP listener bound"
+            );
+            Some(admin_listener)
+        } else {
+            None
+        };
 
         // Create command registry
         let mut registry = CommandRegistry::new();
@@ -570,6 +585,7 @@ impl Server {
         Ok(Self {
             config,
             listener,
+            admin_listener,
             registry,
             client_registry,
             config_manager,
@@ -708,7 +724,7 @@ impl Server {
     /// Run the server until the provided future completes.
     ///
     /// Use this for testing where OS signals aren't available (e.g., Turmoil simulation).
-    pub async fn run_until<F>(self, shutdown: F) -> Result<()>
+    pub async fn run_until<F>(mut self, shutdown: F) -> Result<()>
     where
         F: std::future::Future<Output = ()>,
     {
@@ -790,6 +806,9 @@ impl Server {
             None
         };
 
+        // Determine if admin port is enabled (used for both acceptors)
+        let admin_enabled = self.config.admin.enabled;
+
         // Start admin server if enabled
         let admin_server_handle = if self.config.admin.enabled {
             use crate::admin::{server::AdminState, AdminServer};
@@ -831,9 +850,11 @@ impl Server {
             None
         };
 
+        // Create main acceptor (regular client connections)
+        // When admin port is enabled, this acceptor blocks admin commands
         let acceptor = Acceptor::new(
             self.listener,
-            self.new_conn_senders,
+            self.new_conn_senders.clone(),
             self.shard_senders.clone(),
             self.registry.clone(),
             self.client_registry.clone(),
@@ -849,14 +870,49 @@ impl Server {
             self.replication_tracker.clone(),
             self.cluster_state.clone(),
             self.node_id,
+            false,  // is_admin = false for regular port
+            admin_enabled,
         );
 
-        // Spawn acceptor task
+        // Spawn main acceptor task
         let acceptor_handle = spawn(async move {
             if let Err(e) = acceptor.run().await {
                 error!(error = %e, "Acceptor error");
             }
         });
+
+        // Spawn admin acceptor if admin port is enabled
+        let admin_acceptor_handle = if let Some(admin_listener) = self.admin_listener.take() {
+            let admin_acceptor = Acceptor::new(
+                admin_listener,
+                self.new_conn_senders,
+                self.shard_senders.clone(),
+                self.registry.clone(),
+                self.client_registry.clone(),
+                self.config_manager.clone(),
+                self.config.server.allow_cross_slot_standalone,
+                self.config.server.scatter_gather_timeout_ms,
+                self.metrics_recorder.clone(),
+                self.acl_manager.clone(),
+                self.snapshot_coordinator.clone(),
+                self.function_registry.clone(),
+                self.shared_tracer.clone(),
+                self.config.tracing.clone(),
+                self.replication_tracker.clone(),
+                self.cluster_state.clone(),
+                self.node_id,
+                true,   // is_admin = true for admin port
+                admin_enabled,
+            );
+
+            Some(spawn(async move {
+                if let Err(e) = admin_acceptor.run().await {
+                    error!(error = %e, "Admin acceptor error");
+                }
+            }))
+        } else {
+            None
+        };
 
         // Mark server as ready
         self.health_checker.set_ready();
@@ -932,8 +988,11 @@ impl Server {
             }
         }
 
-        // Abort acceptor
+        // Abort acceptors
         acceptor_handle.abort();
+        if let Some(handle) = admin_acceptor_handle {
+            handle.abort();
+        }
 
         info!("Server shutdown complete");
 
