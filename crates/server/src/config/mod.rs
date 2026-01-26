@@ -35,6 +35,10 @@ pub struct Config {
     #[serde(default)]
     pub metrics: MetricsConfig,
 
+    /// Admin port configuration.
+    #[serde(default)]
+    pub admin: AdminConfig,
+
     /// Distributed tracing configuration.
     #[serde(default)]
     pub tracing: TracingConfig,
@@ -74,10 +78,6 @@ pub struct Config {
     /// Cluster configuration.
     #[serde(default)]
     pub cluster: ClusterConfigSection,
-
-    /// Admin API configuration.
-    #[serde(default)]
-    pub admin: AdminConfig,
 
     /// Status endpoint configuration.
     #[serde(default)]
@@ -1485,6 +1485,8 @@ impl Config {
         shards: Option<String>,
         log_level: Option<String>,
         log_format: Option<String>,
+        admin_bind: Option<String>,
+        admin_port: Option<u16>,
     ) -> Result<Self> {
         let mut figment = Figment::new()
             .merge(Serialized::defaults(Config::default()));
@@ -1556,6 +1558,16 @@ impl Config {
         }
         if log_format.is_some() {
             config.logging.format = cli_overrides.logging.format;
+        }
+
+        // Apply admin CLI overrides
+        // --admin-port implies admin.enabled=true
+        if admin_port.is_some() {
+            config.admin.enabled = true;
+            config.admin.port = admin_port.unwrap();
+        }
+        if let Some(ref bind) = admin_bind {
+            config.admin.bind = bind.clone();
         }
 
         // Validate
@@ -2430,6 +2442,8 @@ mod tests {
         let nonexistent_path = Path::new("/nonexistent/config.toml");
         let result = Config::load(
             Some(nonexistent_path),
+            None,
+            None,
             None,
             None,
             None,

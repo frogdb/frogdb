@@ -293,6 +293,12 @@ pub struct ConnectionHandler {
 
     /// This node's ID (for cluster mode).
     node_id: Option<u64>,
+
+    /// Whether this is an admin connection (from admin port).
+    is_admin: bool,
+
+    /// Whether admin port separation is enabled.
+    admin_enabled: bool,
 }
 
 /// Determine key access type from command flags.
@@ -448,6 +454,8 @@ impl ConnectionHandler {
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
         cluster_state: Option<Arc<ClusterState>>,
         node_id: Option<u64>,
+        is_admin: bool,
+        admin_enabled: bool,
     ) -> Self {
         let framed = Framed::new(socket, Resp2);
         let requires_auth = acl_manager.requires_auth();
@@ -481,6 +489,8 @@ impl ConnectionHandler {
             replication_tracker,
             cluster_state,
             node_id,
+            is_admin,
+            admin_enabled,
         }
     }
 
@@ -839,6 +849,17 @@ impl ConnectionHandler {
         // AUTH, QUIT, HELLO, and PING are allowed without authentication
         if !self.state.auth.is_authenticated() && !Self::is_auth_exempt(&cmd_name_str) {
             return vec![Response::error("NOAUTH Authentication required.")];
+        }
+
+        // Block admin commands on regular port when admin port is enabled
+        if self.admin_enabled && !self.is_admin {
+            if let Some(cmd_info) = self.registry.get(&cmd_name_str) {
+                if cmd_info.flags().contains(CommandFlags::ADMIN) {
+                    return vec![Response::error(
+                        "NOADMIN Admin commands are disabled on this port. Use the admin port."
+                    )];
+                }
+            }
         }
 
         // Check command ACL permission (for commands not routed to route_and_execute)

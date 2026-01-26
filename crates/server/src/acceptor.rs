@@ -99,6 +99,12 @@ pub struct Acceptor {
 
     /// This node's ID (for cluster mode).
     node_id: Option<u64>,
+
+    /// Whether this acceptor handles admin connections.
+    is_admin: bool,
+
+    /// Whether admin port separation is enabled (admin commands blocked on regular port).
+    admin_enabled: bool,
 }
 
 impl Acceptor {
@@ -122,6 +128,8 @@ impl Acceptor {
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
         cluster_state: Option<Arc<ClusterState>>,
         node_id: Option<u64>,
+        is_admin: bool,
+        admin_enabled: bool,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -144,6 +152,8 @@ impl Acceptor {
             replication_tracker,
             cluster_state,
             node_id,
+            is_admin,
+            admin_enabled,
         }
     }
 
@@ -196,6 +206,8 @@ impl Acceptor {
                     let replication_tracker = self.replication_tracker.clone();
                     let cluster_state = self.cluster_state.clone();
                     let node_id = self.node_id;
+                    let is_admin = self.is_admin;
+                    let admin_enabled = self.admin_enabled;
 
                     spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -220,6 +232,8 @@ impl Acceptor {
                             replication_tracker,
                             cluster_state,
                             node_id,
+                            is_admin,
+                            admin_enabled,
                         );
 
                         if let Err(e) = handler.run().await {
