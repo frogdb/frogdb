@@ -12,7 +12,7 @@ use frogdb_core::{
     MetricsRecorder, NoopBroadcaster, ReplicationTrackerImpl, SharedBroadcaster, ShardMessage,
     ShardWorker,
 };
-use frogdb_metrics::{DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo, SharedTracer, SystemMetricsCollector};
+use frogdb_metrics::{DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo, SharedTracer, StatusCollector, SystemMetricsCollector};
 use std::time::Duration;
 use tokio::signal;
 use tokio::sync::mpsc;
@@ -610,6 +610,9 @@ impl Server {
     where
         F: std::future::Future<Output = ()>,
     {
+        // Capture server start time
+        let start_time = std::time::Instant::now();
+
         // Start metrics server if enabled
         let metrics_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
             let metrics_config = frogdb_metrics::MetricsConfig {
@@ -624,22 +627,49 @@ impl Server {
             // Create debug state for the debug web UI
             let debug_state = DebugState::new(ServerInfo {
                 version: env!("CARGO_PKG_VERSION").to_string(),
-                start_time: std::time::Instant::now(),
+                start_time,
                 num_shards: self.shard_senders.len(),
                 bind_addr: self.config.server.bind.clone(),
                 port: self.config.server.port,
             });
+
+            // Create status collector for /status/json endpoint
+            let status_collector_config = self.config.status.to_collector_config();
+            let mode = if self.config.cluster.enabled {
+                "cluster".to_string()
+            } else if self.config.replication.is_primary() {
+                "primary".to_string()
+            } else if self.config.replication.is_replica() {
+                "replica".to_string()
+            } else {
+                "standalone".to_string()
+            };
+            let status_collector = Arc::new(StatusCollector::new(
+                status_collector_config,
+                self.health_checker.clone(),
+                self.shard_senders.clone(),
+                self.client_registry.clone(),
+                prometheus.clone(),
+                start_time,
+                0, // max_clients (0 = unlimited for now)
+                self.config.memory.maxmemory,
+                self.config.persistence.enabled,
+                self.config.persistence.durability_mode.clone(),
+                mode,
+            ));
 
             let server = MetricsServer::new(
                 metrics_config,
                 prometheus.clone(),
                 self.health_checker.clone(),
             )
-            .with_debug_state(debug_state);
+            .with_debug_state(debug_state)
+            .with_status_collector(status_collector);
 
             info!(
                 addr = %self.config.metrics.bind_addr(),
                 debug_ui = %format!("http://{}:{}/debug", self.config.metrics.bind, self.config.metrics.port),
+                status_json = %format!("http://{}:{}/status/json", self.config.metrics.bind, self.config.metrics.port),
                 "Metrics server starting"
             );
 
@@ -1206,6 +1236,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // Latency (handled specially in connection.rs for scatter-gather)
     registry.register(crate::commands::latency::LatencyCommand);
+
+    // Status (handled specially in connection.rs)
+    registry.register(crate::commands::status::StatusCommand);
 
     // Module
     registry.register(crate::commands::stub::ModuleCommand);

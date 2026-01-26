@@ -25,6 +25,7 @@ use redis_protocol::codec::Resp2;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Framed;
+use serde_json;
 use tracing::{debug, info, trace, warn};
 
 use crate::config::TracingConfig;
@@ -360,11 +361,56 @@ fn convert_direction(dir: frogdb_protocol::Direction) -> frogdb_core::Direction 
     }
 }
 
+/// Format a Unix timestamp as ISO 8601 string.
+fn format_timestamp_iso(secs: u64) -> String {
+    let days_since_epoch = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+
+    // Calculate date from days since epoch (1970-01-01)
+    let mut year = 1970i32;
+    let mut remaining_days = days_since_epoch as i32;
+
+    loop {
+        let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let days_in_year = if is_leap { 366 } else { 365 };
+        if remaining_days < days_in_year {
+            break;
+        }
+        remaining_days -= days_in_year;
+        year += 1;
+    }
+
+    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let days_in_months: [i32; 12] = if is_leap {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1;
+    for &days_in_month in &days_in_months {
+        if remaining_days < days_in_month {
+            break;
+        }
+        remaining_days -= days_in_month;
+        month += 1;
+    }
+    let day = remaining_days + 1;
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, seconds
+    )
+}
+
 /// Commands that have subcommands (container commands in Redis terminology).
 const CONTAINER_COMMANDS: &[&str] = &[
     "ACL", "CLIENT", "CONFIG", "CLUSTER", "DEBUG", "MEMORY", "MODULE",
     "OBJECT", "SCRIPT", "SLOWLOG", "XGROUP", "XINFO", "COMMAND", "PUBSUB",
-    "FUNCTION", "LATENCY",
+    "FUNCTION", "LATENCY", "STATUS",
 ];
 
 /// Extract subcommand from args for container commands.
@@ -996,6 +1042,11 @@ impl ConnectionHandler {
         // Handle LATENCY commands specially (need scatter-gather across shards)
         if cmd_name_str == "LATENCY" {
             return vec![self.handle_latency_command(&cmd.args).await];
+        }
+
+        // Handle STATUS commands specially (need to collect data from various components)
+        if cmd_name_str == "STATUS" {
+            return vec![self.handle_status_command(&cmd.args).await];
         }
 
         // Handle BGSAVE/LASTSAVE commands specially (need snapshot coordinator)
@@ -6031,6 +6082,135 @@ impl ConnectionHandler {
         // Sort by timestamp (newest first)
         all_samples.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
         all_samples
+    }
+
+    // =========================================================================
+    // STATUS command handlers
+    // =========================================================================
+
+    /// Handle STATUS command and dispatch to subcommands.
+    async fn handle_status_command(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            // STATUS without subcommand shows help (like FrogDB-specific behavior)
+            return self.handle_status_help();
+        }
+
+        let subcommand = args[0].to_ascii_uppercase();
+        let subcommand_str = String::from_utf8_lossy(&subcommand);
+
+        match subcommand_str.as_ref() {
+            "JSON" => self.handle_status_json().await,
+            "HELP" => self.handle_status_help(),
+            _ => Response::error(format!(
+                "ERR unknown subcommand '{}'. Try STATUS HELP.",
+                subcommand_str
+            )),
+        }
+    }
+
+    /// Handle STATUS JSON - return machine-readable server status.
+    async fn handle_status_json(&self) -> Response {
+        // Gather shard stats
+        let shard_stats = self.gather_memory_stats().await;
+
+        // Build status response
+        let now = std::time::SystemTime::now();
+        let timestamp = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Calculate ISO 8601 timestamp
+        let timestamp_iso = format_timestamp_iso(timestamp);
+
+        // Get client info
+        let clients = self.client_registry.list();
+        let blocked_clients = clients
+            .iter()
+            .filter(|c| c.flags.contains(frogdb_core::ClientFlags::BLOCKED))
+            .count();
+
+        // Calculate totals from shard stats
+        let total_keys: usize = shard_stats.iter().map(|s| s.keys).sum();
+        let used_bytes: u64 = shard_stats.iter().map(|s| s.data_memory as u64).sum();
+        let peak_bytes: u64 = shard_stats.iter().map(|s| s.peak_memory as u64).sum();
+
+        // Build shards array
+        let shards: Vec<serde_json::Value> = shard_stats
+            .iter()
+            .enumerate()
+            .map(|(id, stats)| {
+                serde_json::json!({
+                    "id": id,
+                    "keys": stats.keys,
+                    "memory_bytes": stats.data_memory,
+                    "peak_memory_bytes": stats.peak_memory
+                })
+            })
+            .collect();
+
+        // Build the status JSON
+        let status = serde_json::json!({
+            "frogdb": {
+                "version": env!("CARGO_PKG_VERSION"),
+                "uptime_secs": 0, // Would need start_time tracking
+                "process_id": std::process::id(),
+                "timestamp": timestamp,
+                "timestamp_iso": timestamp_iso
+            },
+            "cluster": {
+                "database_available": true,
+                "mode": "standalone",
+                "num_shards": self.num_shards
+            },
+            "health": {
+                "status": "healthy",
+                "issues": []
+            },
+            "clients": {
+                "connected": clients.len(),
+                "max_clients": 0, // Would need config access
+                "blocked": blocked_clients
+            },
+            "memory": {
+                "used_bytes": used_bytes,
+                "peak_bytes": peak_bytes,
+                "limit_bytes": 0, // Would need config access
+                "fragmentation_ratio": 1.0
+            },
+            "persistence": {
+                "enabled": false
+            },
+            "shards": shards,
+            "keyspace": {
+                "total_keys": total_keys,
+                "expired_keys_total": 0
+            },
+            "commands": {
+                "total_processed": 0,
+                "ops_per_sec": 0.0
+            }
+        });
+
+        // Pretty-print the JSON
+        let json_str = serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string());
+        Response::bulk(Bytes::from(json_str))
+    }
+
+    /// Handle STATUS HELP - show subcommand help.
+    fn handle_status_help(&self) -> Response {
+        let help = vec![
+            Response::bulk(Bytes::from_static(
+                b"STATUS <subcommand> [<arg> ...]. Subcommands are:",
+            )),
+            Response::bulk(Bytes::from_static(b"JSON")),
+            Response::bulk(Bytes::from_static(
+                b"    Return machine-readable server status as JSON.",
+            )),
+            Response::bulk(Bytes::from_static(b"HELP")),
+            Response::bulk(Bytes::from_static(b"    Show this help.")),
+        ];
+        Response::Array(help)
     }
 
     // =========================================================================

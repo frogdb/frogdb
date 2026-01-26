@@ -12,6 +12,7 @@ pub mod health;
 pub mod otlp;
 pub mod prometheus_recorder;
 pub mod server;
+pub mod status;
 pub mod system;
 pub mod tracing;
 
@@ -27,6 +28,7 @@ pub use debug::{DebugState, ServerInfo};
 pub use health::HealthChecker;
 pub use prometheus_recorder::PrometheusRecorder;
 pub use server::MetricsServer;
+pub use status::{ServerStatus, StatusCollector, StatusCollectorConfig};
 pub use system::SystemMetricsCollector;
 pub use tracing::{create_tracer, OtelTracer, RequestSpan, ScatterGatherSpan, SharedTracer};
 
