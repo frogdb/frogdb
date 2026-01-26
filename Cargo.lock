@@ -1139,6 +1139,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "parking_lot",
  "prometheus",
  "redis-protocol",
  "reqwest",

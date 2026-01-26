@@ -1300,3 +1300,139 @@ async fn test_debug_hashing_no_args_error() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// DEBUG TRACING tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_debug_tracing_status() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // DEBUG TRACING STATUS should return a bulk string with configuration
+    let response = client.command(&["DEBUG", "TRACING", "STATUS"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let text = String::from_utf8_lossy(&data);
+            // Should contain expected fields
+            assert!(text.contains("enabled:"), "Should contain enabled field");
+            assert!(
+                text.contains("sampling_rate:") || text.contains("reason:"),
+                "Should contain sampling_rate or reason field"
+            );
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_tracing_status_disabled_tracer() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // By default, tracing is disabled. Status should indicate this.
+    let response = client.command(&["DEBUG", "TRACING", "STATUS"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let text = String::from_utf8_lossy(&data);
+            // Should indicate tracing is not enabled or tracer not configured
+            assert!(
+                text.contains("enabled:no") || text.contains("reason:tracer not configured"),
+                "Should indicate tracing is disabled, got: {}",
+                text
+            );
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_tracing_recent_empty() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // DEBUG TRACING RECENT should return an array (may be empty when tracing is disabled)
+    let response = client.command(&["DEBUG", "TRACING", "RECENT"]).await;
+    match response {
+        Response::Array(entries) => {
+            // With tracing disabled, should be empty
+            assert!(
+                entries.is_empty(),
+                "With tracing disabled, RECENT should return empty array"
+            );
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_tracing_recent_with_count() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // DEBUG TRACING RECENT with count argument
+    let response = client.command(&["DEBUG", "TRACING", "RECENT", "5"]).await;
+    match response {
+        Response::Array(entries) => {
+            // Should return at most 5 entries (0 when tracing is disabled)
+            assert!(
+                entries.len() <= 5,
+                "Should return at most 5 entries, got {}",
+                entries.len()
+            );
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_tracing_unknown_subcommand() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["DEBUG", "TRACING", "INVALID"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("Unknown DEBUG TRACING subcommand"),
+                "Error should mention unknown subcommand, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_tracing_no_subcommand() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // DEBUG TRACING without a subcommand should return an error
+    let response = client.command(&["DEBUG", "TRACING"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("Unknown DEBUG TRACING subcommand"),
+                "Error should mention unknown subcommand, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}

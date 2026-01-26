@@ -35,6 +35,7 @@ tracing = { workspace = true }
 
 # Concurrent data structures
 dashmap = "6"
+parking_lot = "0.12"
 
 # System info
 sysinfo = "0.33"

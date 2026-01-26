@@ -17,7 +17,40 @@ use opentelemetry_sdk::{
     trace::{RandomIdGenerator, Sampler, TracerProvider},
     Resource,
 };
+use parking_lot::RwLock;
+use std::collections::VecDeque;
 use std::sync::Arc;
+
+/// Default maximum recent traces to retain.
+pub const DEFAULT_RECENT_TRACES_MAX: usize = 100;
+
+/// Entry for recent trace tracking.
+#[derive(Debug, Clone)]
+pub struct RecentTraceEntry {
+    pub trace_id: String,
+    pub timestamp_ms: u64,
+    pub command: String,
+    pub sampled: bool,
+}
+
+/// Status returned by DEBUG TRACING STATUS.
+#[derive(Debug)]
+pub struct TracingStatus {
+    pub enabled: bool,
+    pub sampling_rate: f64,
+    pub otlp_endpoint: String,
+    pub service_name: String,
+    pub recent_traces_count: usize,
+    pub scatter_gather_spans: bool,
+    pub shard_spans: bool,
+    pub persistence_spans: bool,
+}
+
+/// Diagnostics data stored in OtelTracer.
+struct TraceDiagnostics {
+    recent_traces: RwLock<VecDeque<RecentTraceEntry>>,
+    max_recent: usize,
+}
 
 /// Semantic conventions for database operations.
 pub mod semantic {
@@ -38,11 +71,15 @@ pub mod semantic {
 pub struct OtelTracer {
     tracer: opentelemetry_sdk::trace::Tracer,
     enabled: bool,
+    config: TracingConfig,
+    diagnostics: TraceDiagnostics,
 }
 
 impl OtelTracer {
     /// Create a new OpenTelemetry tracer with the given configuration.
     pub fn new(config: &TracingConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let max_recent = config.recent_traces_max;
+
         if !config.enabled {
             // Return a disabled tracer
             let provider = TracerProvider::builder().build();
@@ -50,6 +87,11 @@ impl OtelTracer {
             return Ok(Self {
                 tracer,
                 enabled: false,
+                config: config.clone(),
+                diagnostics: TraceDiagnostics {
+                    recent_traces: RwLock::new(VecDeque::with_capacity(max_recent)),
+                    max_recent,
+                },
             });
         }
 
@@ -87,6 +129,11 @@ impl OtelTracer {
         Ok(Self {
             tracer,
             enabled: true,
+            config: config.clone(),
+            diagnostics: TraceDiagnostics {
+                recent_traces: RwLock::new(VecDeque::with_capacity(max_recent)),
+                max_recent,
+            },
         })
     }
 
@@ -96,6 +143,8 @@ impl OtelTracer {
     /// a simple in-memory provider that discards spans. Use this for unit tests.
     #[cfg(test)]
     pub fn new_for_test(config: &TracingConfig) -> Self {
+        let max_recent = config.recent_traces_max;
+
         // Configure the sampler based on sampling rate
         let sampler = if config.sampling_rate >= 1.0 {
             Sampler::AlwaysOn
@@ -121,6 +170,11 @@ impl OtelTracer {
         Self {
             tracer,
             enabled: config.enabled,
+            config: config.clone(),
+            diagnostics: TraceDiagnostics {
+                recent_traces: RwLock::new(VecDeque::with_capacity(max_recent)),
+                max_recent,
+            },
         }
     }
 
@@ -148,10 +202,61 @@ impl OtelTracer {
 
         let context = Context::current_with_span(span);
 
+        // Extract trace_id from span context and record for diagnostics
+        let span_ref = context.span();
+        let span_context = span_ref.span_context();
+        let trace_id = format!("{:032x}", span_context.trace_id());
+        let sampled = span_context.is_sampled();
+        self.record_trace(&trace_id, command, sampled);
+
         RequestSpan {
             context: Some(context),
             tracer: Some(self.tracer.clone()),
         }
+    }
+
+    /// Record a trace entry in the diagnostics buffer.
+    fn record_trace(&self, trace_id: &str, command: &str, sampled: bool) {
+        let entry = RecentTraceEntry {
+            trace_id: trace_id.to_string(),
+            timestamp_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            command: command.to_string(),
+            sampled,
+        };
+
+        let mut traces = self.diagnostics.recent_traces.write();
+        traces.push_front(entry);
+        while traces.len() > self.diagnostics.max_recent {
+            traces.pop_back();
+        }
+    }
+
+    /// Get tracing status for DEBUG TRACING STATUS.
+    pub fn get_status(&self) -> TracingStatus {
+        TracingStatus {
+            enabled: self.enabled,
+            sampling_rate: self.config.sampling_rate,
+            otlp_endpoint: self.config.otlp_endpoint.clone(),
+            service_name: self.config.service_name.clone(),
+            recent_traces_count: self.diagnostics.recent_traces.read().len(),
+            scatter_gather_spans: self.config.scatter_gather_spans,
+            shard_spans: self.config.shard_spans,
+            persistence_spans: self.config.persistence_spans,
+        }
+    }
+
+    /// Get recent traces for DEBUG TRACING RECENT.
+    pub fn get_recent_traces(&self, count: usize) -> Vec<RecentTraceEntry> {
+        self.diagnostics
+            .recent_traces
+            .read()
+            .iter()
+            .take(count)
+            .cloned()
+            .collect()
     }
 
     /// Shutdown the tracer and flush pending spans.
@@ -462,6 +567,7 @@ mod test_tracer {
         /// Create a test tracer with custom config for testing config-controlled behavior.
         pub fn new(config: &TracingConfig) -> Self {
             let exporter = InMemorySpanExporter::default();
+            let max_recent = config.recent_traces_max;
 
             let sampler = if config.sampling_rate >= 1.0 {
                 Sampler::AlwaysOn
@@ -488,6 +594,11 @@ mod test_tracer {
                 tracer: OtelTracer {
                     tracer,
                     enabled: config.enabled,
+                    config: config.clone(),
+                    diagnostics: TraceDiagnostics {
+                        recent_traces: RwLock::new(VecDeque::with_capacity(max_recent)),
+                        max_recent,
+                    },
                 },
                 exporter,
             }
@@ -737,5 +848,148 @@ mod tests {
         let store = span.start_store_span("get");
         store.end();
         span.end();
+    }
+
+    // ===== Trace Diagnostics Tests =====
+
+    #[test]
+    fn test_recent_traces_buffer() {
+        let config = TracingConfig {
+            enabled: true,
+            sampling_rate: 1.0,
+            recent_traces_max: 100,
+            ..Default::default()
+        };
+        let tracer = OtelTracer::new_for_test(&config);
+
+        // Create spans and verify traces are recorded
+        for i in 0..5 {
+            let span = tracer.start_request_span(&format!("CMD{}", i), 1);
+            span.end();
+        }
+
+        let traces = tracer.get_recent_traces(10);
+        assert_eq!(traces.len(), 5);
+        // Most recent first
+        assert_eq!(traces[0].command, "CMD4");
+        assert_eq!(traces[4].command, "CMD0");
+    }
+
+    #[test]
+    fn test_recent_traces_eviction() {
+        let config = TracingConfig {
+            enabled: true,
+            sampling_rate: 1.0,
+            recent_traces_max: 5,
+            ..Default::default()
+        };
+        let tracer = OtelTracer::new_for_test(&config);
+
+        // Create more spans than the max
+        for i in 0..10 {
+            let span = tracer.start_request_span(&format!("CMD{}", i), 1);
+            span.end();
+        }
+
+        let traces = tracer.get_recent_traces(10);
+        // Should only have 5 (max)
+        assert_eq!(traces.len(), 5);
+        // Most recent should be CMD9, oldest should be CMD5
+        assert_eq!(traces[0].command, "CMD9");
+        assert_eq!(traces[4].command, "CMD5");
+    }
+
+    #[test]
+    fn test_tracing_status() {
+        let config = TracingConfig {
+            enabled: true,
+            sampling_rate: 0.5,
+            service_name: "test-service".to_string(),
+            otlp_endpoint: "http://localhost:4317".to_string(),
+            scatter_gather_spans: true,
+            shard_spans: false,
+            persistence_spans: true,
+            recent_traces_max: 50,
+        };
+        let tracer = OtelTracer::new_for_test(&config);
+
+        let status = tracer.get_status();
+        assert!(status.enabled);
+        assert_eq!(status.sampling_rate, 0.5);
+        assert_eq!(status.service_name, "test-service");
+        assert_eq!(status.otlp_endpoint, "http://localhost:4317");
+        assert!(status.scatter_gather_spans);
+        assert!(!status.shard_spans);
+        assert!(status.persistence_spans);
+        assert_eq!(status.recent_traces_count, 0);
+    }
+
+    #[test]
+    fn test_tracing_status_counts_traces() {
+        let config = TracingConfig {
+            enabled: true,
+            sampling_rate: 1.0,
+            ..Default::default()
+        };
+        let tracer = OtelTracer::new_for_test(&config);
+
+        // Create some traces
+        for _ in 0..3 {
+            let span = tracer.start_request_span("GET", 1);
+            span.end();
+        }
+
+        let status = tracer.get_status();
+        assert_eq!(status.recent_traces_count, 3);
+    }
+
+    #[test]
+    fn test_trace_entry_has_trace_id() {
+        let config = TracingConfig {
+            enabled: true,
+            sampling_rate: 1.0,
+            ..Default::default()
+        };
+        let tracer = OtelTracer::new_for_test(&config);
+
+        let span = tracer.start_request_span("SET", 42);
+        span.end();
+
+        let traces = tracer.get_recent_traces(1);
+        assert_eq!(traces.len(), 1);
+        // Trace ID should be 32 hex characters
+        assert_eq!(traces[0].trace_id.len(), 32);
+        assert!(traces[0].trace_id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(traces[0].command, "SET");
+        assert!(traces[0].timestamp_ms > 0);
+    }
+
+    #[test]
+    fn test_disabled_tracer_no_traces() {
+        let config = TracingConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let tracer = OtelTracer::new_for_test(&config);
+
+        // Even if we try to create spans, no traces should be recorded
+        let span = tracer.start_request_span("GET", 1);
+        span.end();
+
+        let traces = tracer.get_recent_traces(10);
+        assert!(traces.is_empty());
+    }
+
+    #[test]
+    fn test_disabled_tracer_status() {
+        let config = TracingConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let tracer = OtelTracer::new_for_test(&config);
+
+        let status = tracer.get_status();
+        assert!(!status.enabled);
+        assert_eq!(status.recent_traces_count, 0);
     }
 }

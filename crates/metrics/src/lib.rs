@@ -40,7 +40,10 @@ pub use memorydiag::{
     calculate_variance, format_report as format_memory_report, MemoryDiagCollector,
     MemoryDiagConfig, MemoryDiagReport, MemorySummary, ShardMemoryVariance,
 };
-pub use tracing::{create_tracer, OtelTracer, RequestSpan, ScatterGatherSpan, SharedTracer};
+pub use tracing::{
+    create_tracer, OtelTracer, RecentTraceEntry, RequestSpan, ScatterGatherSpan, SharedTracer,
+    TracingStatus,
+};
 
 #[cfg(feature = "testing")]
 pub use tracing::TestTracer;
