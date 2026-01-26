@@ -654,3 +654,331 @@ async fn test_client_unblock_not_blocked() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// CLIENT STATS Command Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_client_stats_basic() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Set a name for identification
+    client.command(&["CLIENT", "SETNAME", "stats-test"]).await;
+
+    // Run some commands to generate stats
+    for _ in 0..10 {
+        client.command(&["PING"]).await;
+    }
+    client.command(&["SET", "foo", "bar"]).await;
+    client.command(&["GET", "foo"]).await;
+
+    // CLIENT STATS should return stats for all clients
+    let response = client.command(&["CLIENT", "STATS"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let stats_str = String::from_utf8_lossy(&data);
+            // Should contain our client name
+            assert!(stats_str.contains("stats-test"), "Should contain client name");
+            // Should contain cmd_total (at least 13 commands: SETNAME + 10 PINGs + SET + GET)
+            assert!(stats_str.contains("cmd_total="), "Should contain cmd_total");
+            // Should contain bytes_recv
+            assert!(stats_str.contains("bytes_recv="), "Should contain bytes_recv");
+            // Should contain bytes_sent
+            assert!(stats_str.contains("bytes_sent="), "Should contain bytes_sent");
+            // Should contain latency metrics
+            assert!(stats_str.contains("latency_avg_us="), "Should contain latency_avg_us");
+            assert!(stats_str.contains("latency_p99_us="), "Should contain latency_p99_us");
+            assert!(stats_str.contains("latency_max_us="), "Should contain latency_max_us");
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_stats_by_id() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Get our client ID
+    let client_id = match client.command(&["CLIENT", "ID"]).await {
+        Response::Integer(id) => id,
+        other => panic!("Expected integer, got {:?}", other),
+    };
+
+    // Set name for identification
+    client.command(&["CLIENT", "SETNAME", "id-test"]).await;
+
+    // Run some commands
+    for _ in 0..5 {
+        client.command(&["PING"]).await;
+    }
+
+    // CLIENT STATS ID <id> should return stats for specific client
+    let response = client
+        .command(&["CLIENT", "STATS", "ID", &client_id.to_string()])
+        .await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let stats_str = String::from_utf8_lossy(&data);
+            // Should contain our client info
+            assert!(stats_str.contains(&format!("id={}", client_id)), "Should contain our ID");
+            assert!(stats_str.contains("id-test"), "Should contain our name");
+            assert!(stats_str.contains("cmd_total="), "Should contain cmd_total");
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_stats_nonexistent_id() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // CLIENT STATS ID with non-existent ID should return error
+    let response = client.command(&["CLIENT", "STATS", "ID", "999999"]).await;
+    assert!(
+        matches!(response, Response::Error(_)),
+        "Should return error for non-existent client ID"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_stats_command_breakdown() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Run different commands to generate command breakdown
+    for _ in 0..5 {
+        client.command(&["PING"]).await;
+    }
+    for _ in 0..3 {
+        client.command(&["SET", "key", "value"]).await;
+    }
+    for _ in 0..2 {
+        client.command(&["GET", "key"]).await;
+    }
+
+    // Get our client ID
+    let client_id = match client.command(&["CLIENT", "ID"]).await {
+        Response::Integer(id) => id,
+        other => panic!("Expected integer, got {:?}", other),
+    };
+
+    let response = client
+        .command(&["CLIENT", "STATS", "ID", &client_id.to_string()])
+        .await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let stats_str = String::from_utf8_lossy(&data);
+            // Should contain command breakdown section
+            assert!(
+                stats_str.contains("# command breakdown"),
+                "Should contain command breakdown header"
+            );
+            // Should contain PING, SET, GET commands
+            assert!(stats_str.contains("PING:"), "Should contain PING breakdown");
+            assert!(stats_str.contains("SET:"), "Should contain SET breakdown");
+            assert!(stats_str.contains("GET:"), "Should contain GET breakdown");
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_stats_bytes_tracking() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Get client ID first
+    let client_id = match client.command(&["CLIENT", "ID"]).await {
+        Response::Integer(id) => id,
+        other => panic!("Expected integer, got {:?}", other),
+    };
+
+    // Set a large value to ensure bytes are being tracked
+    let large_value = "x".repeat(1000);
+    client.command(&["SET", "largekey", &large_value]).await;
+    client.command(&["GET", "largekey"]).await;
+
+    let response = client
+        .command(&["CLIENT", "STATS", "ID", &client_id.to_string()])
+        .await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let stats_str = String::from_utf8_lossy(&data);
+
+            // Parse bytes_recv value
+            let bytes_recv: u64 = stats_str
+                .lines()
+                .find(|l| l.contains("bytes_recv="))
+                .and_then(|l| {
+                    l.split_whitespace()
+                        .find(|s| s.starts_with("bytes_recv="))
+                        .and_then(|s| s.strip_prefix("bytes_recv="))
+                        .and_then(|s| s.parse().ok())
+                })
+                .unwrap_or(0);
+
+            // Parse bytes_sent value
+            let bytes_sent: u64 = stats_str
+                .lines()
+                .find(|l| l.contains("bytes_sent="))
+                .and_then(|l| {
+                    l.split_whitespace()
+                        .find(|s| s.starts_with("bytes_sent="))
+                        .and_then(|s| s.strip_prefix("bytes_sent="))
+                        .and_then(|s| s.parse().ok())
+                })
+                .unwrap_or(0);
+
+            // Bytes should be non-zero and reflect the large value we sent/received
+            assert!(bytes_recv > 1000, "bytes_recv should be > 1000 (large value sent), got {}", bytes_recv);
+            assert!(bytes_sent > 1000, "bytes_sent should be > 1000 (large value received), got {}", bytes_sent);
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_stats_latency_tracking() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Get client ID
+    let client_id = match client.command(&["CLIENT", "ID"]).await {
+        Response::Integer(id) => id,
+        other => panic!("Expected integer, got {:?}", other),
+    };
+
+    // Run many commands to build up latency samples
+    for _ in 0..50 {
+        client.command(&["PING"]).await;
+    }
+
+    let response = client
+        .command(&["CLIENT", "STATS", "ID", &client_id.to_string()])
+        .await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let stats_str = String::from_utf8_lossy(&data);
+
+            // Parse latency values
+            let avg: u64 = stats_str
+                .lines()
+                .find(|l| l.contains("latency_avg_us="))
+                .and_then(|l| {
+                    l.split_whitespace()
+                        .find(|s| s.starts_with("latency_avg_us="))
+                        .and_then(|s| s.strip_prefix("latency_avg_us="))
+                        .and_then(|s| s.parse().ok())
+                })
+                .unwrap_or(0);
+
+            let p99: u64 = stats_str
+                .lines()
+                .find(|l| l.contains("latency_p99_us="))
+                .and_then(|l| {
+                    l.split_whitespace()
+                        .find(|s| s.starts_with("latency_p99_us="))
+                        .and_then(|s| s.strip_prefix("latency_p99_us="))
+                        .and_then(|s| s.parse().ok())
+                })
+                .unwrap_or(0);
+
+            let max: u64 = stats_str
+                .lines()
+                .find(|l| l.contains("latency_max_us="))
+                .and_then(|l| {
+                    l.split_whitespace()
+                        .find(|s| s.starts_with("latency_max_us="))
+                        .and_then(|s| s.strip_prefix("latency_max_us="))
+                        .and_then(|s| s.parse().ok())
+                })
+                .unwrap_or(0);
+
+            // Latency values should be non-zero
+            assert!(avg > 0, "avg latency should be > 0, got {}", avg);
+            // p99 should be >= avg
+            assert!(p99 >= avg, "p99 ({}) should be >= avg ({})", p99, avg);
+            // max should be >= p99
+            assert!(max >= p99, "max ({}) should be >= p99 ({})", max, p99);
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_stats_invalid_syntax() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Invalid syntax - missing client ID after ID keyword
+    let response = client.command(&["CLIENT", "STATS", "ID"]).await;
+    assert!(
+        matches!(response, Response::Error(_)),
+        "Should return error for missing client ID"
+    );
+
+    // Invalid syntax - unknown keyword
+    let response = client.command(&["CLIENT", "STATS", "UNKNOWN"]).await;
+    assert!(
+        matches!(response, Response::Error(_)),
+        "Should return error for unknown keyword"
+    );
+
+    // Invalid client ID format
+    let response = client.command(&["CLIENT", "STATS", "ID", "notanumber"]).await;
+    assert!(
+        matches!(response, Response::Error(_)),
+        "Should return error for invalid client ID format"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_client_stats_multiple_clients() {
+    let server = TestServer::start_standalone().await;
+    let mut client1 = server.connect().await;
+    let mut client2 = server.connect().await;
+
+    // Set names for identification
+    client1.command(&["CLIENT", "SETNAME", "multi-test-1"]).await;
+    client2.command(&["CLIENT", "SETNAME", "multi-test-2"]).await;
+
+    // Run different numbers of commands on each client
+    for _ in 0..10 {
+        client1.command(&["PING"]).await;
+    }
+    for _ in 0..5 {
+        client2.command(&["PING"]).await;
+    }
+
+    // CLIENT STATS should show both clients
+    let response = client1.command(&["CLIENT", "STATS"]).await;
+    match response {
+        Response::Bulk(Some(data)) => {
+            let stats_str = String::from_utf8_lossy(&data);
+            // Should contain both client names
+            assert!(stats_str.contains("multi-test-1"), "Should contain client1 name");
+            assert!(stats_str.contains("multi-test-2"), "Should contain client2 name");
+        }
+        _ => panic!("Expected bulk string response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}

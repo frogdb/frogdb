@@ -5,6 +5,7 @@
 //! - CLIENT KILL: Terminate connections
 //! - CLIENT PAUSE: Pause client command execution
 //! - CLIENT ID/SETNAME/GETNAME/INFO: Per-client introspection
+//! - CLIENT STATS: Per-client command statistics
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -134,6 +135,205 @@ struct ClientEntry {
     lib_name: Option<Bytes>,
     /// Library version (from CLIENT SETINFO).
     lib_ver: Option<Bytes>,
+    /// Per-client statistics.
+    stats: ClientStats,
+}
+
+/// Per-client connection statistics.
+#[derive(Debug, Clone, Default)]
+pub struct ClientStats {
+    /// Total commands processed by this client.
+    pub commands_total: u64,
+    /// Total latency accumulated in microseconds.
+    pub latency_total_us: u64,
+    /// Maximum single command latency in microseconds.
+    pub latency_max_us: u64,
+    /// Circular buffer of recent latencies for p99 calculation (~100 samples).
+    pub latency_samples: Vec<u64>,
+    /// Index into latency_samples for circular buffer.
+    pub latency_sample_idx: usize,
+    /// Total bytes received from this client.
+    pub bytes_recv: u64,
+    /// Total bytes sent to this client.
+    pub bytes_sent: u64,
+    /// Per-command type breakdown (limited to 50 entries).
+    pub command_counts: HashMap<String, CommandTypeStats>,
+}
+
+/// Maximum number of latency samples to keep for p99 calculation.
+const LATENCY_SAMPLE_SIZE: usize = 100;
+
+/// Maximum number of distinct command types to track per client.
+const MAX_COMMAND_TYPES: usize = 50;
+
+impl ClientStats {
+    /// Calculate approximate p99 latency from samples.
+    pub fn p99_latency_us(&self) -> u64 {
+        if self.latency_samples.is_empty() {
+            return 0;
+        }
+
+        let mut sorted = self.latency_samples.clone();
+        sorted.sort_unstable();
+
+        // p99 index
+        let idx = ((sorted.len() as f64 * 0.99).ceil() as usize).saturating_sub(1);
+        sorted.get(idx).copied().unwrap_or(0)
+    }
+
+    /// Calculate average latency in microseconds.
+    pub fn avg_latency_us(&self) -> u64 {
+        if self.commands_total == 0 {
+            0
+        } else {
+            self.latency_total_us / self.commands_total
+        }
+    }
+
+    /// Record a latency sample (circular buffer).
+    pub fn record_latency_sample(&mut self, latency_us: u64) {
+        if self.latency_samples.len() < LATENCY_SAMPLE_SIZE {
+            self.latency_samples.push(latency_us);
+        } else {
+            self.latency_samples[self.latency_sample_idx] = latency_us;
+            self.latency_sample_idx = (self.latency_sample_idx + 1) % LATENCY_SAMPLE_SIZE;
+        }
+    }
+
+    /// Record a command execution with latency.
+    pub fn record_command(&mut self, cmd_name: &str, latency_us: u64) {
+        self.commands_total += 1;
+        self.latency_total_us += latency_us;
+        if latency_us > self.latency_max_us {
+            self.latency_max_us = latency_us;
+        }
+        self.record_latency_sample(latency_us);
+
+        // Update per-command stats (with LRU eviction if at limit)
+        if let Some(cmd_stats) = self.command_counts.get_mut(cmd_name) {
+            cmd_stats.count += 1;
+            cmd_stats.latency_total_us += latency_us;
+            if latency_us > cmd_stats.latency_max_us {
+                cmd_stats.latency_max_us = latency_us;
+            }
+        } else {
+            // Need to insert new command type
+            if self.command_counts.len() >= MAX_COMMAND_TYPES {
+                // Evict the entry with the lowest count
+                if let Some(min_key) = self
+                    .command_counts
+                    .iter()
+                    .min_by_key(|(_, stats)| stats.count)
+                    .map(|(k, _)| k.clone())
+                {
+                    self.command_counts.remove(&min_key);
+                }
+            }
+            self.command_counts.insert(
+                cmd_name.to_string(),
+                CommandTypeStats {
+                    count: 1,
+                    latency_total_us: latency_us,
+                    latency_max_us: latency_us,
+                },
+            );
+        }
+    }
+
+    /// Merge delta stats into this ClientStats.
+    pub fn merge_delta(&mut self, delta: &ClientStatsDelta) {
+        self.commands_total += delta.commands_processed;
+        self.latency_total_us += delta.total_latency_us;
+        self.bytes_recv += delta.bytes_recv;
+        self.bytes_sent += delta.bytes_sent;
+
+        // Merge per-command latencies and update max
+        for (cmd_name, latency_us) in &delta.command_latencies {
+            if *latency_us > self.latency_max_us {
+                self.latency_max_us = *latency_us;
+            }
+            self.record_latency_sample(*latency_us);
+
+            // Update per-command stats
+            if let Some(cmd_stats) = self.command_counts.get_mut(cmd_name) {
+                cmd_stats.count += 1;
+                cmd_stats.latency_total_us += latency_us;
+                if *latency_us > cmd_stats.latency_max_us {
+                    cmd_stats.latency_max_us = *latency_us;
+                }
+            } else {
+                // Insert new command type with LRU eviction
+                if self.command_counts.len() >= MAX_COMMAND_TYPES {
+                    if let Some(min_key) = self
+                        .command_counts
+                        .iter()
+                        .min_by_key(|(_, stats)| stats.count)
+                        .map(|(k, _)| k.clone())
+                    {
+                        self.command_counts.remove(&min_key);
+                    }
+                }
+                self.command_counts.insert(
+                    cmd_name.clone(),
+                    CommandTypeStats {
+                        count: 1,
+                        latency_total_us: *latency_us,
+                        latency_max_us: *latency_us,
+                    },
+                );
+            }
+        }
+    }
+}
+
+/// Statistics for a specific command type.
+#[derive(Debug, Clone, Default)]
+pub struct CommandTypeStats {
+    pub count: u64,
+    pub latency_total_us: u64,
+    pub latency_max_us: u64,
+}
+
+impl CommandTypeStats {
+    /// Calculate average latency in microseconds.
+    pub fn avg_latency_us(&self) -> u64 {
+        if self.count == 0 {
+            0
+        } else {
+            self.latency_total_us / self.count
+        }
+    }
+}
+
+/// Delta for batched stats updates from connection handlers.
+#[derive(Debug, Clone, Default)]
+pub struct ClientStatsDelta {
+    /// Number of commands processed since last sync.
+    pub commands_processed: u64,
+    /// Total latency accumulated since last sync (microseconds).
+    pub total_latency_us: u64,
+    /// Bytes received since last sync.
+    pub bytes_recv: u64,
+    /// Bytes sent since last sync.
+    pub bytes_sent: u64,
+    /// Per-command latencies: (command_name, latency_us).
+    pub command_latencies: Vec<(String, u64)>,
+}
+
+impl ClientStatsDelta {
+    /// Check if this delta has any data to sync.
+    pub fn has_data(&self) -> bool {
+        self.commands_processed > 0 || self.bytes_recv > 0 || self.bytes_sent > 0
+    }
+
+    /// Clear the delta after syncing.
+    pub fn clear(&mut self) {
+        self.commands_processed = 0;
+        self.total_latency_us = 0;
+        self.bytes_recv = 0;
+        self.bytes_sent = 0;
+        self.command_latencies.clear();
+    }
 }
 
 /// Client connection information snapshot.
@@ -167,6 +367,8 @@ pub struct ClientInfo {
     pub lib_name: Option<Bytes>,
     /// Library version (from CLIENT SETINFO).
     pub lib_ver: Option<Bytes>,
+    /// Per-client statistics (optional, only populated for stats queries).
+    pub stats: Option<ClientStats>,
 }
 
 impl ClientInfo {
@@ -413,6 +615,7 @@ impl ClientRegistry {
             unblock_tx,
             lib_name: None,
             lib_ver: None,
+            stats: ClientStats::default(),
         };
 
         {
@@ -454,6 +657,7 @@ impl ClientRegistry {
                 multi_queue_len: entry.multi_queue_len,
                 lib_name: entry.lib_name.clone(),
                 lib_ver: entry.lib_ver.clone(),
+                stats: None,
             })
             .collect()
     }
@@ -476,6 +680,7 @@ impl ClientRegistry {
             multi_queue_len: entry.multi_queue_len,
             lib_name: entry.lib_name.clone(),
             lib_ver: entry.lib_ver.clone(),
+            stats: None,
         })
     }
 
@@ -537,6 +742,7 @@ impl ClientRegistry {
                 multi_queue_len: entry.multi_queue_len,
                 lib_name: entry.lib_name.clone(),
                 lib_ver: entry.lib_ver.clone(),
+                stats: None,
             };
 
             if filter.matches(id, &info) {
@@ -660,6 +866,73 @@ impl ClientRegistry {
     pub fn client_count(&self) -> usize {
         let clients = self.clients.read().unwrap();
         clients.len()
+    }
+
+    /// Update client statistics with a delta.
+    pub fn update_stats(&self, id: u64, delta: &ClientStatsDelta) {
+        let mut clients = self.clients.write().unwrap();
+        if let Some(entry) = clients.get_mut(&id) {
+            entry.stats.merge_delta(delta);
+        }
+    }
+
+    /// Get statistics for a specific client.
+    pub fn get_stats(&self, id: u64) -> Option<ClientStats> {
+        let clients = self.clients.read().unwrap();
+        clients.get(&id).map(|entry| entry.stats.clone())
+    }
+
+    /// Get statistics for all clients.
+    pub fn get_all_stats(&self) -> Vec<(u64, ClientInfo, ClientStats)> {
+        let clients = self.clients.read().unwrap();
+        clients
+            .iter()
+            .map(|(&id, entry)| {
+                let info = ClientInfo {
+                    id,
+                    addr: entry.addr,
+                    local_addr: entry.local_addr,
+                    name: entry.name.clone(),
+                    created_at: entry.created_at,
+                    last_command_at: entry.last_command_at,
+                    flags: entry.flags,
+                    sub_count: entry.sub_count,
+                    psub_count: entry.psub_count,
+                    ssub_count: entry.ssub_count,
+                    in_multi: entry.in_multi,
+                    multi_queue_len: entry.multi_queue_len,
+                    lib_name: entry.lib_name.clone(),
+                    lib_ver: entry.lib_ver.clone(),
+                    stats: Some(entry.stats.clone()),
+                };
+                (id, info, entry.stats.clone())
+            })
+            .collect()
+    }
+
+    /// Get information and statistics for a specific client.
+    pub fn get_with_stats(&self, id: u64) -> Option<(ClientInfo, ClientStats)> {
+        let clients = self.clients.read().unwrap();
+        clients.get(&id).map(|entry| {
+            let info = ClientInfo {
+                id,
+                addr: entry.addr,
+                local_addr: entry.local_addr,
+                name: entry.name.clone(),
+                created_at: entry.created_at,
+                last_command_at: entry.last_command_at,
+                flags: entry.flags,
+                sub_count: entry.sub_count,
+                psub_count: entry.psub_count,
+                ssub_count: entry.ssub_count,
+                in_multi: entry.in_multi,
+                multi_queue_len: entry.multi_queue_len,
+                lib_name: entry.lib_name.clone(),
+                lib_ver: entry.lib_ver.clone(),
+                stats: Some(entry.stats.clone()),
+            };
+            (info, entry.stats.clone())
+        })
     }
 }
 
@@ -849,6 +1122,7 @@ mod tests {
             multi_queue_len: 0,
             lib_name: Some(Bytes::from_static(b"testlib")),
             lib_ver: Some(Bytes::from_static(b"1.0.0")),
+            stats: None,
         };
 
         let entry = info.to_client_list_entry();
@@ -884,5 +1158,139 @@ mod tests {
 
         // All clients should be unregistered now
         assert_eq!(registry.client_count(), 0);
+    }
+
+    #[test]
+    fn test_client_stats_p99() {
+        let mut stats = ClientStats::default();
+
+        // Add 100 samples: 1, 2, 3, ..., 100
+        for i in 1..=100 {
+            stats.record_latency_sample(i);
+        }
+
+        // p99 of 1-100 should be 99 (99th percentile)
+        let p99 = stats.p99_latency_us();
+        assert!(p99 >= 99 && p99 <= 100, "p99 was {}", p99);
+    }
+
+    #[test]
+    fn test_client_stats_circular_buffer() {
+        let mut stats = ClientStats::default();
+
+        // Fill buffer
+        for i in 0..100 {
+            stats.record_latency_sample(i);
+        }
+        assert_eq!(stats.latency_samples.len(), 100);
+
+        // Add more samples - should wrap around
+        for i in 100..150 {
+            stats.record_latency_sample(i);
+        }
+        assert_eq!(stats.latency_samples.len(), 100);
+
+        // p99 should be from the newer values
+        let p99 = stats.p99_latency_us();
+        assert!(p99 >= 140, "p99 should be high, was {}", p99);
+    }
+
+    #[test]
+    fn test_client_stats_record_command() {
+        let mut stats = ClientStats::default();
+
+        stats.record_command("GET", 100);
+        stats.record_command("GET", 200);
+        stats.record_command("SET", 150);
+
+        assert_eq!(stats.commands_total, 3);
+        assert_eq!(stats.latency_total_us, 450);
+        assert_eq!(stats.latency_max_us, 200);
+        assert_eq!(stats.command_counts.len(), 2);
+        assert_eq!(stats.command_counts.get("GET").unwrap().count, 2);
+        assert_eq!(stats.command_counts.get("SET").unwrap().count, 1);
+    }
+
+    #[test]
+    fn test_client_stats_command_limit() {
+        let mut stats = ClientStats::default();
+
+        // Add more than 50 command types
+        for i in 0..60 {
+            stats.record_command(&format!("CMD{}", i), 100);
+        }
+
+        // Should be limited to 50
+        assert!(stats.command_counts.len() <= 50);
+    }
+
+    #[test]
+    fn test_client_stats_delta_merge() {
+        let mut stats = ClientStats::default();
+        stats.record_command("GET", 100);
+
+        let delta = ClientStatsDelta {
+            commands_processed: 5,
+            total_latency_us: 500,
+            bytes_recv: 1000,
+            bytes_sent: 2000,
+            command_latencies: vec![
+                ("GET".to_string(), 50),
+                ("SET".to_string(), 150),
+            ],
+        };
+
+        stats.merge_delta(&delta);
+
+        assert_eq!(stats.commands_total, 6); // 1 + 5
+        assert_eq!(stats.bytes_recv, 1000);
+        assert_eq!(stats.bytes_sent, 2000);
+        assert_eq!(stats.command_counts.get("GET").unwrap().count, 2);
+        assert_eq!(stats.command_counts.get("SET").unwrap().count, 1);
+    }
+
+    #[test]
+    fn test_update_stats() {
+        let registry = Arc::new(ClientRegistry::new());
+        let _handle = registry.register(1, test_addr(1001), None);
+
+        let delta = ClientStatsDelta {
+            commands_processed: 10,
+            total_latency_us: 1000,
+            bytes_recv: 500,
+            bytes_sent: 1500,
+            command_latencies: vec![("GET".to_string(), 100)],
+        };
+
+        registry.update_stats(1, &delta);
+
+        let stats = registry.get_stats(1).unwrap();
+        assert_eq!(stats.commands_total, 10);
+        assert_eq!(stats.bytes_recv, 500);
+        assert_eq!(stats.bytes_sent, 1500);
+    }
+
+    #[test]
+    fn test_get_all_stats() {
+        let registry = Arc::new(ClientRegistry::new());
+        let _h1 = registry.register(1, test_addr(1001), None);
+        let _h2 = registry.register(2, test_addr(1002), None);
+
+        let delta = ClientStatsDelta {
+            commands_processed: 5,
+            total_latency_us: 500,
+            bytes_recv: 100,
+            bytes_sent: 200,
+            command_latencies: vec![],
+        };
+
+        registry.update_stats(1, &delta);
+
+        let all_stats = registry.get_all_stats();
+        assert_eq!(all_stats.len(), 2);
+
+        // Find client 1 stats
+        let (_, _, stats1) = all_stats.iter().find(|(id, _, _)| *id == 1).unwrap();
+        assert_eq!(stats1.commands_total, 5);
     }
 }
