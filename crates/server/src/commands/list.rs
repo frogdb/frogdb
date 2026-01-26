@@ -13,46 +13,10 @@
 //! Note: Blocking commands (BLPOP, BRPOP, BLMOVE) deferred to Phase 11.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, ListValue, Value};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
 use frogdb_protocol::Response;
 
-/// Parse a string as i64.
-fn parse_i64(arg: &[u8]) -> Result<i64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse a string as usize.
-fn parse_usize(arg: &[u8]) -> Result<usize, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Get or create a list, returning an error if the key exists but is wrong type.
-fn get_or_create_list<'a>(
-    ctx: &'a mut CommandContext,
-    key: &Bytes,
-) -> Result<&'a mut ListValue, CommandError> {
-    // Check if key exists and is wrong type
-    if let Some(value) = ctx.store.get(key) {
-        if value.as_list().is_none() {
-            return Err(CommandError::WrongType);
-        }
-    } else {
-        // Create new list
-        ctx.store.set(key.clone(), Value::list());
-    }
-
-    // Now get mutable reference
-    ctx.store
-        .get_mut(key)
-        .and_then(|v| v.as_list_mut())
-        .ok_or(CommandError::WrongType)
-}
+use super::utils::{get_or_create_list, parse_i64, parse_usize};
 
 
 // ============================================================================

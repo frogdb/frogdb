@@ -17,50 +17,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-/// Parse a string as f64.
-fn parse_f64(arg: &[u8]) -> Result<f64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotFloat)
-}
-
-/// Parse a string as usize.
-fn parse_usize(arg: &[u8]) -> Result<usize, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Format a float for output.
-fn format_float(f: f64) -> String {
-    if f.fract() == 0.0 {
-        format!("{:.0}", f)
-    } else {
-        let s = format!("{:.17}", f);
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
-    }
-}
-
-/// Get or create a sorted set for geo operations.
-fn get_or_create_geo<'a>(
-    ctx: &'a mut CommandContext,
-    key: &Bytes,
-) -> Result<&'a mut SortedSetValue, CommandError> {
-    if let Some(value) = ctx.store.get(key) {
-        if value.as_sorted_set().is_none() {
-            return Err(CommandError::WrongType);
-        }
-    } else {
-        ctx.store.set(key.clone(), Value::sorted_set());
-    }
-
-    ctx.store
-        .get_mut(key)
-        .and_then(|v| v.as_sorted_set_mut())
-        .ok_or(CommandError::WrongType)
-}
+use super::utils::{format_float, get_or_create_zset as get_or_create_geo, parse_f64, parse_usize};
 
 /// Search result with member and optional distance/hash/coordinates.
 #[derive(Debug)]

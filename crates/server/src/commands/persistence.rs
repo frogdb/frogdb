@@ -8,6 +8,8 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use super::utils::parse_i64;
+
 /// BGSAVE command - trigger a background save (noop in this implementation).
 pub struct BgsaveCommand;
 
@@ -213,14 +215,6 @@ impl Command for RestoreCommand {
             vec![&args[0]]
         }
     }
-}
-
-/// Parse a string as i64.
-fn parse_i64(arg: &[u8]) -> Result<i64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
 }
 
 /// Convert a Unix timestamp in milliseconds to an Instant.

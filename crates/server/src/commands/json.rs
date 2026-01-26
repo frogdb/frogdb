@@ -17,6 +17,8 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
 
+use super::utils::{format_float, parse_f64, parse_i64};
+
 /// Parse a JSON path argument, defaulting to root if not provided.
 fn parse_path(arg: Option<&Bytes>) -> String {
     arg.map(|b| String::from_utf8_lossy(b).to_string())
@@ -30,56 +32,11 @@ fn parse_json_value(bytes: &[u8]) -> Result<JsonData, CommandError> {
     })
 }
 
-/// Parse an i64 argument.
-fn parse_i64(arg: &[u8]) -> Result<i64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse an f64 argument.
-fn parse_f64(arg: &[u8]) -> Result<f64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| {
-            if s.eq_ignore_ascii_case("inf") || s.eq_ignore_ascii_case("+inf") {
-                Some(f64::INFINITY)
-            } else if s.eq_ignore_ascii_case("-inf") {
-                Some(f64::NEG_INFINITY)
-            } else {
-                s.parse().ok()
-            }
-        })
-        .ok_or(CommandError::NotFloat)
-}
-
 /// Convert a JsonError to a CommandError.
 fn json_error_to_command_error(err: JsonError) -> CommandError {
     CommandError::InvalidArgument {
         message: err.to_string(),
     }
-}
-
-/// Format a float for JSON output.
-fn format_float(f: f64) -> String {
-    if f == f64::INFINITY {
-        return "inf".to_string();
-    }
-    if f == f64::NEG_INFINITY {
-        return "-inf".to_string();
-    }
-    if f.is_nan() {
-        return "nan".to_string();
-    }
-
-    // Check if it's an integer
-    if f.fract() == 0.0 && f.abs() < 1e15 {
-        return format!("{:.0}", f);
-    }
-
-    let s = format!("{}", f);
-    s
 }
 
 /// Default JSON limits (will be replaced with config-based limits).

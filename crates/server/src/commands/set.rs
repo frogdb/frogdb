@@ -13,43 +13,7 @@ use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, SetValue, Value};
 use frogdb_protocol::Response;
 
-/// Parse a string as i64.
-fn parse_i64(arg: &[u8]) -> Result<i64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse a string as usize.
-fn parse_usize(arg: &[u8]) -> Result<usize, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Get or create a set, returning an error if the key exists but is wrong type.
-fn get_or_create_set<'a>(
-    ctx: &'a mut CommandContext,
-    key: &Bytes,
-) -> Result<&'a mut SetValue, CommandError> {
-    // Check if key exists and is wrong type
-    if let Some(value) = ctx.store.get(key) {
-        if value.as_set().is_none() {
-            return Err(CommandError::WrongType);
-        }
-    } else {
-        // Create new set
-        ctx.store.set(key.clone(), Value::set());
-    }
-
-    // Now get mutable reference
-    ctx.store
-        .get_mut(key)
-        .and_then(|v| v.as_set_mut())
-        .ok_or(CommandError::WrongType)
-}
+use super::utils::{get_or_create_set, parse_i64, parse_usize};
 
 /// Get an existing set (cloned), returning None if key doesn't exist, Error if wrong type.
 fn get_set_inline(

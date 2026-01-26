@@ -14,21 +14,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-/// Parse a string as i64.
-fn parse_i64(arg: &[u8]) -> Result<i64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse a string as u64.
-fn parse_u64(arg: &[u8]) -> Result<u64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
+use super::utils::{parse_i64, parse_u64};
 
 // ============================================================================
 // SETBIT - Set or clear a bit
