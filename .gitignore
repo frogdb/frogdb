@@ -68,3 +68,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Proptest regression files
+*.proptest-regressions
