@@ -1,9 +1,10 @@
 //! Latency testing and SLO monitoring configuration.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Latency testing configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LatencyConfig {
     /// Run intrinsic latency test at startup before accepting connections.
@@ -42,7 +43,7 @@ impl Default for LatencyConfig {
 ///
 /// Tracks cumulative request counts in configurable latency buckets,
 /// enabling direct SLO monitoring without external aggregation.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LatencyBandsConfig {
     /// Whether latency band tracking is enabled.

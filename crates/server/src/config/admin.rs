@@ -1,10 +1,11 @@
 //! Admin API configuration.
 
 use anyhow::Result;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Admin API configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AdminConfig {
     /// Whether the admin API is enabled.
     #[serde(default)]

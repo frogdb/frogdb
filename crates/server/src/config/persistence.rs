@@ -1,11 +1,12 @@
 //! Persistence and snapshot configuration.
 
 use anyhow::Result;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Persistence configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PersistenceConfig {
     /// Whether persistence is enabled.
@@ -118,7 +119,7 @@ impl PersistenceConfig {
 }
 
 /// Snapshot configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SnapshotConfig {
     /// Directory for storing snapshots.

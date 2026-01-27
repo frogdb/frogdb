@@ -1,9 +1,10 @@
 //! Logging configuration.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Logging configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
     /// Log level (trace, debug, info, warn, error).

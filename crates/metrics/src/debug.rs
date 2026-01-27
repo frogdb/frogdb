@@ -5,8 +5,8 @@
 
 use bytes::Bytes;
 use http_body_util::Full;
-use hyper::http::{Uri, StatusCode};
-use hyper::Response;
+use hyper::{Response, StatusCode, Uri};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -27,6 +27,18 @@ pub struct ServerInfo {
     pub port: u16,
 }
 
+impl Default for ServerInfo {
+    fn default() -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            start_time: Instant::now(),
+            num_shards: 1,
+            bind_addr: "127.0.0.1".to_string(),
+            port: 6379,
+        }
+    }
+}
+
 /// Debug state for the web UI.
 #[derive(Debug)]
 pub struct DebugState {
@@ -39,6 +51,33 @@ impl DebugState {
     pub fn new(info: ServerInfo) -> Self {
         Self { info }
     }
+
+    /// Get uptime in seconds.
+    pub fn uptime_secs(&self) -> u64 {
+        self.info.start_time.elapsed().as_secs()
+    }
+}
+
+/// Serializable version of ServerInfo for JSON endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ServerInfoJson {
+    version: String,
+    uptime_secs: u64,
+    num_shards: usize,
+    bind_addr: String,
+    port: u16,
+}
+
+impl From<&ServerInfo> for ServerInfoJson {
+    fn from(info: &ServerInfo) -> Self {
+        Self {
+            version: info.version.clone(),
+            uptime_secs: info.start_time.elapsed().as_secs(),
+            num_shards: info.num_shards,
+            bind_addr: info.bind_addr.clone(),
+            port: info.port,
+        }
+    }
 }
 
 /// Handle a debug request.
@@ -47,7 +86,7 @@ impl DebugState {
 pub async fn handle_debug_request(
     uri: &Uri,
     state: &Arc<DebugState>,
-    recorder: &Arc<PrometheusRecorder>,
+    _recorder: &Arc<PrometheusRecorder>,
 ) -> Response<Full<Bytes>> {
     let path = uri.path();
 
@@ -107,18 +146,12 @@ fn handle_debug_index(state: &Arc<DebugState>) -> Response<Full<Bytes>> {
 
 /// Handle the debug info endpoint.
 fn handle_debug_info(state: &Arc<DebugState>) -> Response<Full<Bytes>> {
-    let uptime = state.info.start_time.elapsed();
-    let json = serde_json::json!({
-        "version": state.info.version,
-        "uptime_seconds": uptime.as_secs_f64(),
-        "num_shards": state.info.num_shards,
-        "bind_addr": state.info.bind_addr,
-        "port": state.info.port,
-    });
+    let info_json = ServerInfoJson::from(&state.info);
+    let body = serde_json::to_string(&info_json).unwrap_or_default();
 
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
-        .body(Full::new(Bytes::from(json.to_string())))
+        .body(Full::new(Bytes::from(body)))
         .unwrap()
 }

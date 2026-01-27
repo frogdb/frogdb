@@ -40,6 +40,7 @@ turmoil = { workspace = true, optional = true }
 openraft.workspace = true
 axum.workspace = true
 tower.workspace = true
+schemars.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

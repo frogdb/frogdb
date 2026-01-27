@@ -1,9 +1,10 @@
 //! Security and ACL configuration.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Security configuration.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
     /// Legacy password for the default user (like Redis requirepass).
@@ -13,7 +14,7 @@ pub struct SecurityConfig {
 }
 
 /// ACL configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AclFileConfig {
     /// Path to the ACL file for SAVE/LOAD operations.

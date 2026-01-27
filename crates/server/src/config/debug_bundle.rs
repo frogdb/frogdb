@@ -1,11 +1,12 @@
 //! Debug bundle configuration.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Debug bundle configuration.
 ///
 /// Controls the generation and storage of diagnostic bundles for troubleshooting.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DebugBundleConfig {
     /// Directory for storing bundles.

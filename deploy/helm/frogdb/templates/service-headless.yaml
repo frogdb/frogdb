@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "frogdb.headlessServiceName" . }}
+  labels:
+    {{- include "frogdb.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - port: {{ .Values.frogdb.port }}
+      targetPort: redis
+      protocol: TCP
+      name: redis
+    {{- if .Values.cluster.enabled }}
+    - port: {{ .Values.cluster.busPort }}
+      targetPort: cluster-bus
+      protocol: TCP
+      name: cluster-bus
+    {{- end }}
+    {{- if .Values.frogdb.metrics.enabled }}
+    - port: {{ .Values.frogdb.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+    {{- end }}
+  selector:
+    {{- include "frogdb.selectorLabels" . | nindent 4 }}
