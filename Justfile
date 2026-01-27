@@ -452,14 +452,26 @@ dashboard-gen-check:
     cargo run -p dashboard-gen -- --check
 
 # =============================================================================
+# Workflow Generation
+# =============================================================================
+
+# Generate GitHub Actions workflow files
+workflow-gen:
+    cargo run -p workflow-gen
+
+# Check that workflow files are up to date (for CI)
+workflow-gen-check:
+    cargo run -p workflow-gen -- --check
+
+# =============================================================================
 # Generate All
 # =============================================================================
 
-# Generate all derived files (Helm chart + dashboard)
-generate: helm-gen dashboard-gen
+# Generate all derived files (Helm chart + dashboard + workflows)
+generate: helm-gen dashboard-gen workflow-gen
 
 # Check all derived files are up to date (for CI)
-generate-check: helm-gen-check dashboard-gen-check
+generate-check: helm-gen-check dashboard-gen-check workflow-gen-check
 
 # =============================================================================
 # Documentation Site

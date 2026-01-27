@@ -1,146 +1,148 @@
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: tools/workflow-gen/src/workflows/
+# Regenerate with: just workflow-gen
+# =============================================================================
+
 name: Test
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-
 env:
   CARGO_TERM_COLOR: always
-
+'on':
+  pull_request:
+    branches:
+    - main
+  push:
+    branches:
+    - main
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-action@stable
+      with:
+        components: rustfmt, clippy
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+    - name: Run clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-
-
-      - name: Run unit tests
-        run: cargo test --all
-
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-action@stable
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-test-
+    - name: Run unit tests
+      run: cargo test --all
   shuttle-tests:
     name: Shuttle Concurrency Tests
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-shuttle-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-shuttle-
-
-      - name: Run Shuttle concurrency tests
-        run: cargo test -p frogdb-core --features shuttle --test concurrency
-
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-action@stable
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-shuttle-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-shuttle-
+    - name: Run Shuttle concurrency tests
+      run: cargo test -p frogdb-core --features shuttle --test concurrency
   turmoil-tests:
     name: Turmoil Simulation Tests
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-turmoil-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-turmoil-
-
-      - name: Run Turmoil simulation tests
-        run: cargo test -p frogdb-server --features turmoil --test simulation
-
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-action@stable
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-turmoil-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-turmoil-
+    - name: Run Turmoil simulation tests
+      run: cargo test -p frogdb-server --features turmoil --test simulation
   helm-gen-check:
     name: Helm Generation Check
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-helm-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-helm-
-
-      - name: Check Helm files are up to date
-        run: cargo run -p helm-gen -- --check
-
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-action@stable
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-helm-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-helm-
+    - name: Check Helm files are up to date
+      run: cargo run -p helm-gen -- --check
+  workflow-gen-check:
+    name: Workflow Generation Check
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-action@stable
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-workflow-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-workflow-
+    - name: Check workflow files are up to date
+      run: cargo run -p workflow-gen -- --check
   helm-lint:
     name: Helm Lint
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: v3.13.0
-
-      - name: Lint Helm chart
-        run: helm lint deploy/helm/frogdb
-
-      - name: Template Helm chart
-        run: helm template frogdb deploy/helm/frogdb --debug
-
-      - name: Template cluster preset
-        run: helm template frogdb deploy/helm/frogdb -f deploy/helm/frogdb/values-cluster.yaml --debug
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: v3.13.0
+    - name: Lint Helm chart
+      run: helm lint deploy/helm/frogdb
+    - name: Template Helm chart
+      run: helm template frogdb deploy/helm/frogdb --debug
+    - name: Template cluster preset
+      run: helm template frogdb deploy/helm/frogdb -f deploy/helm/frogdb/values-cluster.yaml --debug
