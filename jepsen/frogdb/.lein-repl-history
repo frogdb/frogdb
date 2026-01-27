@@ -1,0 +1,3 @@
+(require '[taoensso.carmine :as car])
+(def conn {:pool {} :spec {:host "localhost" :port 6379 :timeout-ms 5000}})
+(car/wcar conn (car/ping))

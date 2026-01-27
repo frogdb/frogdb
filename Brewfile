@@ -20,3 +20,6 @@ brew "samply"            # CPU profiler with UI
 
 # Browser testing
 cask "chromedriver"      # WebDriver for browser integration tests
+
+# Cross-compilation
+brew "zig"               # Cross-compiler toolchain (used by cargo-zigbuild)

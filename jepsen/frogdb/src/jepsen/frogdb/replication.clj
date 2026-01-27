@@ -113,11 +113,11 @@
   [opts]
   (let [rate (get opts :rate 10)
         counter (atom 0)]
-    (->> (gen/mix [(fn [_] (write-op (swap! counter inc)))
-                   (fn [_] (write-sync-op (swap! counter inc)))
-                   (fn [_] (read-primary-op))
-                   (fn [_] (read-replica-op))
-                   (fn [_] (read-all-op))])
+    (->> (gen/mix [(fn [] (write-op (swap! counter inc)))
+                   (fn [] (write-sync-op (swap! counter inc)))
+                   (fn [] (read-primary-op))
+                   (fn [] (read-replica-op))
+                   (fn [] (read-all-op))])
          (gen/stagger (/ 1 rate)))))
 
 ;; ===========================================================================

@@ -133,9 +133,9 @@
    Mixes reads and writes with occasional CAS operations."
   [opts]
   (let [rate (get opts :rate 10)]
-    (->> (gen/mix [(fn [_] (r))
-                   (fn [_] (w (rand-int 100)))
-                   (fn [_] (cas (rand-int 100) (rand-int 100)))])
+    (->> (gen/mix [(fn [] (r))
+                   (fn [] (w (rand-int 100)))
+                   (fn [] (cas (rand-int 100) (rand-int 100)))])
          (gen/stagger (/ 1 rate)))))
 
 (defn independent-generator
@@ -147,9 +147,9 @@
            key-count
            (range)
            (fn [k]
-             (gen/mix [(fn [_] (r))
-                       (fn [_] (w (rand-int 100)))
-                       (fn [_] (cas (rand-int 100) (rand-int 100)))])))
+             (gen/mix [(fn [] (r))
+                       (fn [] (w (rand-int 100)))
+                       (fn [] (cas (rand-int 100) (rand-int 100)))])))
          (gen/stagger (/ 1 rate)))))
 
 ;; ===========================================================================

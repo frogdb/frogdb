@@ -246,12 +246,12 @@
    Mix of reads and writes across different slots."
   [opts]
   (let [rate (get opts :rate 20)]
-    (->> (gen/mix [(fn [_] (write-op))
-                   (fn [_] (write-op))
-                   (fn [_] (read-op))
-                   (fn [_] (read-op))
-                   (fn [_] (targeted-write (rand-int 16384) (rand-int 10000)))
-                   (fn [_] (targeted-read (rand-int 16384)))])
+    (->> (gen/mix [(fn [] (write-op))
+                   (fn [] (write-op))
+                   (fn [] (read-op))
+                   (fn [] (read-op))
+                   (fn [] (targeted-write (rand-int 16384) (rand-int 10000)))
+                   (fn [] (targeted-read (rand-int 16384)))])
          (gen/stagger (/ 1 rate)))))
 
 (defn redirect-stress-generator
@@ -271,15 +271,18 @@
 
       ;; Phase 3: Force wrong node and verify redirect
       (gen/log "Testing MOVED redirect recovery")
-      (->> (gen/seq [(force-wrong-node test-key "n1")
-                     (force-wrong-node test-key "n2")
-                     (force-wrong-node test-key "n3")])
-           (gen/stagger 1))
+      (gen/each-thread
+        (gen/phases
+          (gen/once (force-wrong-node test-key "n1"))
+          (gen/sleep 1)
+          (gen/once (force-wrong-node test-key "n2"))
+          (gen/sleep 1)
+          (gen/once (force-wrong-node test-key "n3"))))
 
       ;; Phase 4: Normal operations
       (gen/log "Normal operations after redirects")
-      (->> (gen/mix [(fn [_] (write-op))
-                     (fn [_] (read-op))])
+      (->> (gen/mix [(fn [] (write-op))
+                     (fn [] (read-op))])
            (gen/limit 50)
            (gen/stagger (/ 1 rate)))
 

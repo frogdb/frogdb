@@ -306,9 +306,9 @@
 
       ;; Phase 3: Perform atomic transfers
       (gen/log "Performing atomic transfers")
-      (->> (gen/mix [(fn [_] (atomic-transfer account-tag "balance-a" "balance-b" (rand-int 100)))
-                     (fn [_] (atomic-transfer account-tag "balance-b" "balance-a" (rand-int 100)))
-                     (fn [_] (hash-tag-read account-tag account-suffixes))])
+      (->> (gen/mix [(fn [] (atomic-transfer account-tag "balance-a" "balance-b" (rand-int 100)))
+                     (fn [] (atomic-transfer account-tag "balance-b" "balance-a" (rand-int 100)))
+                     (fn [] (hash-tag-read account-tag account-suffixes))])
            (gen/limit 100)
            (gen/stagger (/ 1 rate)))
 

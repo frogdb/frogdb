@@ -276,8 +276,8 @@
     (gen/phases
       ;; Phase 1: Initial reads/writes
       (gen/log "Initial data operations")
-      (->> (gen/mix [(fn [_] (write-key test-key (rand-int 1000)))
-                     (fn [_] (read-key test-key))])
+      (->> (gen/mix [(fn [] (write-key test-key (rand-int 1000)))
+                     (fn [] (read-key test-key))])
            (gen/limit 20)
            (gen/stagger 0.1))
 
@@ -292,8 +292,8 @@
 
       ;; Phase 4: Operations during migration
       (gen/log "Operations during migration")
-      (->> (gen/mix [(fn [_] (write-key test-key (rand-int 1000)))
-                     (fn [_] (read-key test-key))])
+      (->> (gen/mix [(fn [] (write-key test-key (rand-int 1000)))
+                     (fn [] (read-key test-key))])
            (gen/limit 50)
            (gen/stagger 0.05))
 
@@ -302,8 +302,8 @@
       (gen/once (migrate-keys))
 
       ;; Phase 6: More operations during key migration
-      (->> (gen/mix [(fn [_] (write-key test-key (rand-int 1000)))
-                     (fn [_] (read-key test-key))])
+      (->> (gen/mix [(fn [] (write-key test-key (rand-int 1000)))
+                     (fn [] (read-key test-key))])
            (gen/limit 20)
            (gen/stagger 0.1))
 
@@ -318,8 +318,8 @@
 
       ;; Phase 9: Final operations
       (gen/log "Final operations")
-      (->> (gen/mix [(fn [_] (write-key test-key (rand-int 1000)))
-                     (fn [_] (read-key test-key))])
+      (->> (gen/mix [(fn [] (write-key test-key (rand-int 1000)))
+                     (fn [] (read-key test-key))])
            (gen/limit 20)
            (gen/stagger 0.1)))))
 

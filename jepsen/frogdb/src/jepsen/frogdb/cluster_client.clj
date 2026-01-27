@@ -229,43 +229,51 @@
 
       (let [[host port-str] (str/split addr #":")
             port (Integer/parseInt port-str)
-            conn (make-conn host port)]
-        (try+
-          (let [result (if asking?
-                         (execute-asking conn cmd-vec)
-                         (wcar conn (apply car/redis-call cmd-vec)))]
-            {:value result
-             :redirects redirects})
-          (catch clojure.lang.ExceptionInfo e
-            (if-let [redirect (is-redirect-error? e)]
-              (case (:type redirect)
-                :moved
-                (do
-                  (debug "MOVED redirect:" (:slot redirect) "->" (:host redirect) ":" (:port redirect))
-                  ;; Update slot mapping
-                  (swap! slot-mapping-atom
-                         (fn [m] (assoc-in m [:slots-to-nodes (:slot redirect)]
-                                           (str (:host redirect) ":" (:port redirect)))))
-                  (recur (str (:host redirect) ":" (:port redirect))
-                         (inc redirects)
-                         false))
+            conn (make-conn host port)
+            ;; Execute and capture result or redirect info
+            result-or-redirect
+            (try+
+              {:type :success
+               :value (if asking?
+                        (execute-asking conn cmd-vec)
+                        (wcar conn (apply car/redis-call cmd-vec)))}
+              (catch clojure.lang.ExceptionInfo e
+                (if-let [redirect (is-redirect-error? e)]
+                  (case (:type redirect)
+                    :moved
+                    (do
+                      (debug "MOVED redirect:" (:slot redirect) "->" (:host redirect) ":" (:port redirect))
+                      ;; Update slot mapping
+                      (swap! slot-mapping-atom
+                             (fn [m] (assoc-in m [:slots-to-nodes (:slot redirect)]
+                                               (str (:host redirect) ":" (:port redirect)))))
+                      {:type :redirect
+                       :addr (str (:host redirect) ":" (:port redirect))
+                       :asking? false})
 
-                :ask
-                (do
-                  (debug "ASK redirect:" (:slot redirect) "->" (:host redirect) ":" (:port redirect))
-                  (recur (str (:host redirect) ":" (:port redirect))
-                         (inc redirects)
-                         true))
+                    :ask
+                    (do
+                      (debug "ASK redirect:" (:slot redirect) "->" (:host redirect) ":" (:port redirect))
+                      {:type :redirect
+                       :addr (str (:host redirect) ":" (:port redirect))
+                       :asking? true})
 
-                :crossslot
-                (throw+ {:type :crossslot
-                         :message "Keys in request don't hash to the same slot"})
+                    :crossslot
+                    (throw+ {:type :crossslot
+                             :message "Keys in request don't hash to the same slot"})
 
-                :clusterdown
-                (throw+ {:type :clusterdown
-                         :message "Cluster is down or unavailable"}))
-              ;; Not a redirect error, rethrow
-              (throw e))))))))
+                    :clusterdown
+                    (throw+ {:type :clusterdown
+                             :message "Cluster is down or unavailable"}))
+                  ;; Not a redirect error, rethrow
+                  (throw e))))]
+        ;; Handle result outside try block to allow recur
+        (case (:type result-or-redirect)
+          :success {:value (:value result-or-redirect)
+                    :redirects redirects}
+          :redirect (recur (:addr result-or-redirect)
+                           (inc redirects)
+                           (:asking? result-or-redirect)))))))
 
 ;; ===========================================================================
 ;; High-Level Cluster Operations

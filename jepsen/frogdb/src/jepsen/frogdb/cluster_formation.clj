@@ -156,9 +156,9 @@
    Focuses on cluster state reads with occasional membership changes."
   [opts]
   (let [rate (get opts :rate 5)]
-    (->> (gen/mix [(fn [_] (cluster-state-reads))
-                   (fn [_] (node-count-reads))
-                   (fn [_] (quorum-verification))])
+    (->> (gen/mix [(fn [] (cluster-state-reads))
+                   (fn [] (node-count-reads))
+                   (fn [] (quorum-verification))])
          (gen/stagger (/ 1 rate)))))
 
 (defn membership-change-generator
@@ -176,7 +176,7 @@
 
       ;; Phase 2: Add extra nodes
       (gen/log "Adding nodes to cluster")
-      (gen/seq (map #(gen/once (meet-node %)) extra-nodes))
+      (apply gen/phases (map #(gen/once (meet-node %)) extra-nodes))
       (gen/sleep 3)
 
       ;; Phase 3: Verify nodes joined
@@ -186,7 +186,7 @@
 
       ;; Phase 4: Remove extra nodes
       (gen/log "Removing nodes from cluster")
-      (gen/seq (map #(gen/once (forget-node %)) extra-nodes))
+      (apply gen/phases (map #(gen/once (forget-node %)) extra-nodes))
       (gen/sleep 3)
 
       ;; Phase 5: Verify nodes removed
