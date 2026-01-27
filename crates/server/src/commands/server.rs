@@ -8,7 +8,9 @@
 //! - SHUTDOWN: Gracefully shut down the server
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, MergeStrategy,
+};
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,6 +31,12 @@ impl Command for DbsizeCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::READONLY | CommandFlags::FAST
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ScatterGather {
+            merge: MergeStrategy::SumIntegers,
+        }
     }
 
     fn execute(
@@ -64,6 +72,12 @@ impl Command for FlushdbCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ScatterGather {
+            merge: MergeStrategy::AllOk,
+        }
     }
 
     fn execute(
@@ -113,6 +127,12 @@ impl Command for FlushallCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ScatterGather {
+            merge: MergeStrategy::AllOk,
+        }
     }
 
     fn execute(

@@ -1,6 +1,7 @@
 //! Command trait and related types.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use bitflags::bitflags;
 use bytes::Bytes;
@@ -13,6 +14,89 @@ use crate::error::CommandError;
 use crate::replication::{ReplicationState, ReplicationTrackerImpl};
 use crate::shard::ShardMessage;
 use crate::store::Store;
+
+/// Defines HOW a command should be executed by the connection handler.
+///
+/// This replaces string-based routing decisions with explicit, type-safe
+/// declarations of execution patterns.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExecutionStrategy {
+    /// Standard: route to shard based on key, execute, return response.
+    /// This is the default for most commands.
+    Standard,
+
+    /// Connection-level: handled directly by ConnectionHandler.
+    /// The command's `execute()` method is NOT called through normal routing.
+    ConnectionLevel(ConnectionLevelOp),
+
+    /// Blocking: command may block waiting for data.
+    /// Handler must be prepared to wait and manage blocked state.
+    Blocking {
+        /// Default timeout if not specified in command args.
+        default_timeout: Option<Duration>,
+    },
+
+    /// Scatter-gather: distribute across multiple shards, merge results.
+    /// Used for multi-key commands that span shards.
+    ScatterGather {
+        /// How to merge results from multiple shards.
+        merge: MergeStrategy,
+    },
+
+    /// Raft consensus: requires cluster consensus before execution.
+    /// Used for cluster topology changes.
+    RaftConsensus,
+
+    /// Async external: performs async I/O outside the normal shard path.
+    /// Used for MIGRATE, DEBUG SLEEP, and similar commands.
+    AsyncExternal,
+}
+
+impl Default for ExecutionStrategy {
+    fn default() -> Self {
+        ExecutionStrategy::Standard
+    }
+}
+
+/// Operations handled at the connection level (not routed to shards).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionLevelOp {
+    /// Pub/Sub commands: SUBSCRIBE, PUBLISH, etc.
+    PubSub,
+    /// Transaction commands: MULTI, EXEC, DISCARD, WATCH.
+    Transaction,
+    /// Scripting commands: EVAL, EVALSHA, SCRIPT.
+    Scripting,
+    /// Admin commands: CLIENT, CONFIG, ACL, DEBUG.
+    Admin,
+    /// Authentication: AUTH, HELLO.
+    Auth,
+    /// Connection state: ASKING, READONLY, READWRITE, QUIT, RESET.
+    ConnectionState,
+}
+
+/// Strategy for merging results from scatter-gather operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeStrategy {
+    /// Preserve key order in response (MGET).
+    /// Results are assembled to match original key positions.
+    OrderedArray,
+
+    /// Sum integer results (DEL, EXISTS, TOUCH, UNLINK, DBSIZE).
+    SumIntegers,
+
+    /// Collect all keys into single array (KEYS).
+    CollectKeys,
+
+    /// Merge cursored scan results (SCAN).
+    CursoredScan,
+
+    /// All shards must return OK (MSET, FLUSHDB).
+    AllOk,
+
+    /// Command implements custom merge logic.
+    Custom,
+}
 
 /// Trait for checking if the local node can form a quorum.
 /// This is implemented by the failure detector to provide local quorum status.
@@ -35,6 +119,15 @@ pub trait Command: Send + Sync {
     /// Command behavior flags.
     fn flags(&self) -> CommandFlags;
 
+    /// How this command should be executed.
+    ///
+    /// Defaults to `ExecutionStrategy::Standard` for backward compatibility.
+    /// Override this to declare special execution patterns like blocking,
+    /// scatter-gather, or connection-level handling.
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::Standard
+    }
+
     /// Execute the command.
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError>;
 
@@ -51,6 +144,28 @@ pub trait Command: Send + Sync {
     fn requires_same_slot(&self) -> bool {
         false
     }
+}
+
+/// Metadata trait for commands that don't execute through the normal path.
+///
+/// This is used for commands like pub/sub and transaction commands where the
+/// connection handler intercepts them before normal routing. These commands
+/// need metadata for introspection (COMMAND INFO) but don't implement full execution.
+pub trait CommandMetadata: Send + Sync {
+    /// Command name (e.g., "SUBSCRIBE", "MULTI").
+    fn name(&self) -> &'static str;
+
+    /// Expected argument count.
+    fn arity(&self) -> Arity;
+
+    /// Command behavior flags.
+    fn flags(&self) -> CommandFlags;
+
+    /// How this command should be executed.
+    fn execution_strategy(&self) -> ExecutionStrategy;
+
+    /// Extract key(s) from arguments for routing.
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]>;
 }
 
 /// Specifies the expected number of arguments for a command.

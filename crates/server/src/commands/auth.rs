@@ -5,7 +5,10 @@
 //! the command registration for help/documentation purposes.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 /// AUTH command - authenticate to the server.
@@ -28,6 +31,10 @@ impl Command for Auth {
     fn flags(&self) -> CommandFlags {
         // AUTH is a fast connection command that doesn't require authentication
         CommandFlags::FAST
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth)
     }
 
     fn execute(

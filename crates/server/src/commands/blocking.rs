@@ -4,7 +4,7 @@
 //! They are implemented using the wait queue infrastructure in ShardWorker.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy};
 use frogdb_protocol::{BlockingOp, Direction, Response};
 
 // ============================================================================
@@ -28,6 +28,12 @@ impl Command for BlpopCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::Blocking {
+            default_timeout: None,
+        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -111,6 +117,12 @@ impl Command for BrpopCommand {
         CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
     }
 
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::Blocking {
+            default_timeout: None,
+        }
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 2 {
             return Err(CommandError::WrongArity { command: "BRPOP" });
@@ -189,6 +201,12 @@ impl Command for BlmoveCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::BLOCKING
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::Blocking {
+            default_timeout: None,
+        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -295,6 +313,12 @@ impl Command for BlmpopCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::BLOCKING
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::Blocking {
+            default_timeout: None,
+        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -427,6 +451,12 @@ impl Command for BzpopminCommand {
         CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
     }
 
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::Blocking {
+            default_timeout: None,
+        }
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 2 {
             return Err(CommandError::WrongArity { command: "BZPOPMIN" });
@@ -508,6 +538,12 @@ impl Command for BzpopmaxCommand {
         CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
     }
 
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::Blocking {
+            default_timeout: None,
+        }
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 2 {
             return Err(CommandError::WrongArity { command: "BZPOPMAX" });
@@ -586,6 +622,12 @@ impl Command for BzmpopCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::BLOCKING
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::Blocking {
+            default_timeout: None,
+        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -723,6 +765,12 @@ impl Command for BrpoplpushCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::BLOCKING
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::Blocking {
+            default_timeout: None,
+        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

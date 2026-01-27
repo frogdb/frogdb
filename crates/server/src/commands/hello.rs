@@ -4,7 +4,10 @@
 //! It is handled specially by the connection handler, not executed by shards.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 /// HELLO command for protocol negotiation.
@@ -26,6 +29,10 @@ impl Command for HelloCommand {
     fn flags(&self) -> CommandFlags {
         // Fast, no-script, connection-specific command
         CommandFlags::FAST | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth)
     }
 
     fn execute(

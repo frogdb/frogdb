@@ -10,7 +10,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     extract_hash_tag, shard_for_key, slot_for_key, Arity, Command, CommandContext, CommandError,
-    CommandFlags, Value,
+    CommandFlags, ExecutionStrategy, MergeStrategy, Value,
 };
 use frogdb_protocol::Response;
 
@@ -208,6 +208,12 @@ impl Command for TouchCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ScatterGather {
+            merge: MergeStrategy::SumIntegers,
+        }
+    }
+
     fn execute(
         &self,
         ctx: &mut CommandContext,
@@ -245,6 +251,12 @@ impl Command for UnlinkCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ScatterGather {
+            merge: MergeStrategy::SumIntegers,
+        }
     }
 
     fn execute(

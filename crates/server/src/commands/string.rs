@@ -9,8 +9,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, Expiry, IncrementError,
-    SetCondition, SetOptions, SetResult, StringValue, Value,
+    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, Expiry,
+    IncrementError, MergeStrategy, SetCondition, SetOptions, SetResult, StringValue, Value,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -835,6 +835,12 @@ impl Command for MgetCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ScatterGather {
+            merge: MergeStrategy::OrderedArray,
+        }
+    }
+
     fn execute(
         &self,
         ctx: &mut CommandContext,
@@ -876,6 +882,12 @@ impl Command for MsetCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ScatterGather {
+            merge: MergeStrategy::AllOk,
+        }
     }
 
     fn execute(

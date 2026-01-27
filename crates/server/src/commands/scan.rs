@@ -5,7 +5,10 @@
 //! - KEYS: Return all keys matching a pattern (scatter-gather)
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, KeyType};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, KeyType,
+    MergeStrategy,
+};
 use frogdb_protocol::Response;
 
 /// Cursor encoding for cross-shard SCAN.
@@ -51,6 +54,12 @@ impl Command for ScanCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ScatterGather {
+            merge: MergeStrategy::CursoredScan,
+        }
     }
 
     fn execute(
@@ -145,6 +154,12 @@ impl Command for KeysCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ScatterGather {
+            merge: MergeStrategy::CollectKeys,
+        }
     }
 
     fn execute(

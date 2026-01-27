@@ -1530,17 +1530,16 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::hyperloglog::PfdebugCommand);
     registry.register(crate::commands::hyperloglog::PfselftestCommand);
 
-    // Stub commands (not yet implemented)
-    // Pub/Sub
-    registry.register(crate::commands::stub::SubscribeCommand);
-    registry.register(crate::commands::stub::PsubscribeCommand);
-    registry.register(crate::commands::stub::SsubscribeCommand);
-    registry.register(crate::commands::stub::UnsubscribeCommand);
-    registry.register(crate::commands::stub::PunsubscribeCommand);
-    registry.register(crate::commands::stub::SunsubscribeCommand);
-    registry.register(crate::commands::stub::PublishCommand);
-    registry.register(crate::commands::stub::SpublishCommand);
-    registry.register(crate::commands::stub::PubsubCommand);
+    // Pub/Sub commands (metadata-only, handled at connection level)
+    registry.register_metadata(crate::commands::metadata::SubscribeMetadata);
+    registry.register_metadata(crate::commands::metadata::PsubscribeMetadata);
+    registry.register_metadata(crate::commands::metadata::SsubscribeMetadata);
+    registry.register_metadata(crate::commands::metadata::UnsubscribeMetadata);
+    registry.register_metadata(crate::commands::metadata::PunsubscribeMetadata);
+    registry.register_metadata(crate::commands::metadata::SunsubscribeMetadata);
+    registry.register_metadata(crate::commands::metadata::PublishMetadata);
+    registry.register_metadata(crate::commands::metadata::SpublishMetadata);
+    registry.register_metadata(crate::commands::metadata::PubsubMetadata);
 
     // Cluster
     registry.register(crate::commands::cluster::ClusterCommand);
@@ -1643,8 +1642,8 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 pub mod commands {
     use bytes::Bytes;
     use frogdb_core::{
-        Arity, Command, CommandContext, CommandError, CommandFlags, Expiry, SetCondition,
-        SetOptions, SetResult, Value,
+        Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, Expiry,
+        MergeStrategy, SetCondition, SetOptions, SetResult, Value,
     };
     use frogdb_protocol::Response;
 
@@ -2057,6 +2056,12 @@ pub mod commands {
             CommandFlags::WRITE
         }
 
+        fn execution_strategy(&self) -> ExecutionStrategy {
+            ExecutionStrategy::ScatterGather {
+                merge: MergeStrategy::SumIntegers,
+            }
+        }
+
         fn execute(
             &self,
             ctx: &mut CommandContext,
@@ -2092,6 +2097,12 @@ pub mod commands {
 
         fn flags(&self) -> CommandFlags {
             CommandFlags::READONLY | CommandFlags::FAST
+        }
+
+        fn execution_strategy(&self) -> ExecutionStrategy {
+            ExecutionStrategy::ScatterGather {
+                merge: MergeStrategy::SumIntegers,
+            }
         }
 
         fn execute(
