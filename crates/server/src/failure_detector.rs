@@ -16,6 +16,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use frogdb_core::cluster::{ClusterCommand, ClusterRaft, ClusterState, NodeId, NodeRole};
+use frogdb_core::command::QuorumChecker;
 use openraft::ServerState;
 
 /// Configuration for failure detection.
@@ -45,8 +46,8 @@ impl Default for FailureDetectorConfig {
 /// Per-node health tracking.
 #[derive(Debug, Clone)]
 struct NodeHealth {
-    /// Last time the node was seen as healthy.
-    last_seen: Instant,
+    /// Last time the node was successfully reached. None if never reached.
+    last_seen: Option<Instant>,
     /// Number of consecutive failures.
     failure_count: u32,
     /// Whether we've already marked this node as FAIL via Raft.
@@ -56,7 +57,7 @@ struct NodeHealth {
 impl Default for NodeHealth {
     fn default() -> Self {
         Self {
-            last_seen: Instant::now(),
+            last_seen: None, // None = never successfully reached
             failure_count: 0,
             is_marked_fail: false,
         }
@@ -103,26 +104,28 @@ impl FailureDetector {
         metrics.state == ServerState::Leader
     }
 
-    /// Record a successful connection to a node.
-    pub async fn record_success(&self, node_id: NodeId) {
+    /// Record a successful connection to a node (local tracking).
+    /// Only writes to Raft if this node is the leader.
+    pub async fn record_success_local(&self, node_id: NodeId, is_leader: bool) {
         let was_failed = {
             let mut health = self.health.write().unwrap();
             let entry = health.entry(node_id).or_default();
             let was_failed = entry.is_marked_fail;
-            entry.last_seen = Instant::now();
+            entry.last_seen = Some(Instant::now());
             entry.failure_count = 0;
             entry.is_marked_fail = false;
             was_failed
         };
 
-        // If node recovered, mark via Raft
-        if was_failed {
+        // If node recovered and we're the leader, mark via Raft
+        if was_failed && is_leader {
             self.mark_node_recovered(node_id).await;
         }
     }
 
-    /// Record a failed connection attempt to a node.
-    pub async fn record_failure(&self, node_id: NodeId) {
+    /// Record a failed connection attempt to a node (local tracking).
+    /// Only writes to Raft if this node is the leader.
+    pub async fn record_failure_local(&self, node_id: NodeId, is_leader: bool) {
         let should_mark_fail = {
             let mut health = self.health.write().unwrap();
             let entry = health.entry(node_id).or_default();
@@ -136,9 +139,60 @@ impl FailureDetector {
             }
         };
 
-        if should_mark_fail {
+        if should_mark_fail && is_leader {
             self.mark_node_failed(node_id).await;
         }
+    }
+
+    /// Count the number of nodes that are currently reachable from this node's perspective.
+    /// A node is reachable if:
+    /// - It's this node (self), OR
+    /// - It has been checked recently AND is not marked as failed
+    pub fn count_reachable_nodes(&self) -> usize {
+        let health = self.health.read().unwrap();
+        let check_interval = Duration::from_millis(self.config.check_interval_ms);
+        // Consider a node unreachable if not seen in N check intervals
+        let stale_threshold = check_interval * (self.config.fail_threshold as u32 + 2);
+
+        let all_nodes = self.cluster_state.get_all_nodes();
+
+        // Count reachable nodes: self + nodes with recent successful checks
+        let reachable_count = all_nodes
+            .iter()
+            .filter(|node| {
+                if node.id == self.self_node_id {
+                    return true; // Self is always reachable
+                }
+
+                // Check health entry
+                if let Some(entry) = health.get(&node.id) {
+                    // Node is reachable if:
+                    // 1. Not marked as failed, AND
+                    // 2. Has been seen recently (last_seen is Some and not stale)
+                    if entry.is_marked_fail {
+                        return false;
+                    }
+                    match entry.last_seen {
+                        Some(seen) => seen.elapsed() < stale_threshold,
+                        None => false, // Never successfully reached
+                    }
+                } else {
+                    // No entry = never checked = might be unreachable
+                    // Be conservative: don't count as reachable until we've verified
+                    false
+                }
+            })
+            .count();
+
+        reachable_count
+    }
+
+    /// Check if this node can form a quorum with reachable nodes.
+    pub fn has_quorum(&self) -> bool {
+        let total_nodes = self.cluster_state.get_all_nodes().len();
+        let reachable = self.count_reachable_nodes();
+        let quorum = (total_nodes / 2) + 1;
+        reachable >= quorum
     }
 
     /// Mark a node as failed via Raft consensus.
@@ -236,6 +290,16 @@ impl FailureDetector {
     }
 }
 
+impl QuorumChecker for FailureDetector {
+    fn has_quorum(&self) -> bool {
+        FailureDetector::has_quorum(self)
+    }
+
+    fn count_reachable_nodes(&self) -> usize {
+        FailureDetector::count_reachable_nodes(self)
+    }
+}
+
 /// Check if a node is reachable via TCP connect to its cluster_addr.
 async fn check_node_reachable(addr: SocketAddr, timeout: Duration) -> bool {
     use tokio::time::timeout as tokio_timeout;
@@ -247,7 +311,8 @@ async fn check_node_reachable(addr: SocketAddr, timeout: Duration) -> bool {
 
 /// Spawn the failure detection background task.
 ///
-/// Only performs checks when this node is the Raft leader.
+/// All nodes track node reachability locally, but only the leader writes
+/// MarkNodeFailed/MarkNodeRecovered commands via Raft consensus.
 /// Returns a JoinHandle that can be used to abort the task on shutdown.
 pub fn spawn_failure_detector_task(detector: Arc<FailureDetector>) -> tokio::task::JoinHandle<()> {
     let interval = Duration::from_millis(detector.config.check_interval_ms);
@@ -260,10 +325,9 @@ pub fn spawn_failure_detector_task(detector: Arc<FailureDetector>) -> tokio::tas
         loop {
             interval_timer.tick().await;
 
-            // Only leader performs failure detection
-            if !detector.is_leader() {
-                continue;
-            }
+            // All nodes track reachability for local quorum detection,
+            // but only the leader writes to Raft.
+            let is_leader = detector.is_leader();
 
             // Get all nodes from cluster state
             let nodes = detector.cluster_state.get_all_nodes();
@@ -273,10 +337,8 @@ pub fn spawn_failure_detector_task(detector: Arc<FailureDetector>) -> tokio::tas
                     continue; // Don't check ourselves
                 }
 
-                // Skip nodes already marked as failed in cluster state
-                if node.flags.fail {
-                    continue;
-                }
+                // Continue checking nodes marked as failed - they may recover.
+                // The record_success() method will mark them recovered via Raft.
 
                 let detector = detector.clone();
                 let addr = node.cluster_addr;
@@ -285,10 +347,10 @@ pub fn spawn_failure_detector_task(detector: Arc<FailureDetector>) -> tokio::tas
                 // Check each node concurrently
                 tokio::spawn(async move {
                     if check_node_reachable(addr, timeout).await {
-                        detector.record_success(node_id).await;
+                        detector.record_success_local(node_id, is_leader).await;
                     } else {
                         tracing::debug!(node_id, %addr, "Node unreachable");
-                        detector.record_failure(node_id).await;
+                        detector.record_failure_local(node_id, is_leader).await;
                     }
                 });
             }

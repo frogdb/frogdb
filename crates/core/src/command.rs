@@ -14,6 +14,16 @@ use crate::replication::{ReplicationState, ReplicationTrackerImpl};
 use crate::shard::ShardMessage;
 use crate::store::Store;
 
+/// Trait for checking if the local node can form a quorum.
+/// This is implemented by the failure detector to provide local quorum status.
+pub trait QuorumChecker: Send + Sync {
+    /// Check if this node can form a quorum with reachable nodes.
+    fn has_quorum(&self) -> bool;
+
+    /// Count the number of nodes reachable from this node's perspective.
+    fn count_reachable_nodes(&self) -> usize;
+}
+
 /// Command trait that all Redis commands implement.
 pub trait Command: Send + Sync {
     /// Command name (e.g., "GET", "SET", "ZADD").
@@ -155,6 +165,9 @@ pub struct CommandContext<'a> {
 
     /// Optional network factory for cluster node management.
     pub network_factory: Option<&'a Arc<ClusterNetworkFactory>>,
+
+    /// Optional quorum checker for local cluster health detection.
+    pub quorum_checker: Option<&'a dyn QuorumChecker>,
 }
 
 impl<'a> CommandContext<'a> {
@@ -180,6 +193,7 @@ impl<'a> CommandContext<'a> {
             node_id: None,
             raft: None,
             network_factory: None,
+            quorum_checker: None,
         }
     }
 
@@ -198,6 +212,7 @@ impl<'a> CommandContext<'a> {
         node_id: Option<u64>,
         raft: Option<&'a Arc<ClusterRaft>>,
         network_factory: Option<&'a Arc<ClusterNetworkFactory>>,
+        quorum_checker: Option<&'a dyn QuorumChecker>,
     ) -> Self {
         Self {
             store,
@@ -212,6 +227,7 @@ impl<'a> CommandContext<'a> {
             node_id,
             raft,
             network_factory,
+            quorum_checker,
         }
     }
 }

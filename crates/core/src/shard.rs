@@ -9,7 +9,7 @@ use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
-use crate::command::CommandContext;
+use crate::command::{CommandContext, QuorumChecker};
 use crate::error::CommandError;
 use crate::eviction::{EvictionCandidate, EvictionConfig, EvictionPolicy, EvictionPool};
 use crate::functions::SharedFunctionRegistry;
@@ -1236,6 +1236,9 @@ pub struct ShardWorker {
 
     /// Optional network factory for cluster node management.
     network_factory: Option<Arc<ClusterNetworkFactory>>,
+
+    /// Optional quorum checker for local cluster health detection.
+    quorum_checker: Option<Arc<dyn QuorumChecker>>,
 }
 
 impl ShardWorker {
@@ -1328,6 +1331,7 @@ impl ShardWorker {
             operation_counters: OperationCounters::new(),
             queue_depth: Arc::new(AtomicUsize::new(0)),
             network_factory: None,
+            quorum_checker: None,
         }
     }
 
@@ -1408,6 +1412,7 @@ impl ShardWorker {
             operation_counters: OperationCounters::new(),
             queue_depth: Arc::new(AtomicUsize::new(0)),
             network_factory: None,
+            quorum_checker: None,
         }
     }
 
@@ -1445,6 +1450,11 @@ impl ShardWorker {
     /// Set the network factory for cluster node management.
     pub fn set_network_factory(&mut self, network_factory: Arc<ClusterNetworkFactory>) {
         self.network_factory = Some(network_factory);
+    }
+
+    /// Set the quorum checker for local cluster health detection.
+    pub fn set_quorum_checker(&mut self, quorum_checker: Arc<dyn QuorumChecker>) {
+        self.quorum_checker = Some(quorum_checker);
     }
 
     /// Get the snapshot coordinator.
@@ -2377,6 +2387,7 @@ impl ShardWorker {
             self.node_id,
             self.raft.as_ref(),
             self.network_factory.as_ref(),
+            self.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
         // Execute
@@ -3104,6 +3115,7 @@ impl ShardWorker {
             self.node_id,
             self.raft.as_ref(),
             self.network_factory.as_ref(),
+            self.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
         let result = executor.eval(script_source, keys, argv, &mut ctx, &self.registry);
@@ -3172,6 +3184,7 @@ impl ShardWorker {
             self.node_id,
             self.raft.as_ref(),
             self.network_factory.as_ref(),
+            self.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
         let result = executor.evalsha(script_sha, keys, argv, &mut ctx, &self.registry);
@@ -3353,6 +3366,7 @@ impl ShardWorker {
             self.node_id,
             self.raft.as_ref(),
             self.network_factory.as_ref(),
+            self.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
         match executor.execute_function(

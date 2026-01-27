@@ -531,6 +531,38 @@ impl Server {
             (None, None, None, None)
         };
 
+        // Create failure detector early so we can pass it to shards
+        let (failure_detector, failure_detector_handle) =
+            if let (Some(ref raft_arc), Some(ref state_arc), Some(nid)) =
+                (&raft, &cluster_state, node_id)
+            {
+                let detector_config = FailureDetectorConfig {
+                    check_interval_ms: config.cluster.heartbeat_interval_ms,
+                    connect_timeout_ms: config.cluster.heartbeat_interval_ms / 2,
+                    fail_threshold: config.cluster.fail_threshold,
+                    auto_failover: config.cluster.auto_failover,
+                };
+
+                let detector = Arc::new(FailureDetector::new(
+                    nid,
+                    detector_config,
+                    state_arc.clone(),
+                    raft_arc.clone(),
+                ));
+
+                info!(
+                    node_id = nid,
+                    auto_failover = config.cluster.auto_failover,
+                    fail_threshold = config.cluster.fail_threshold,
+                    "Failure detector initialized"
+                );
+
+                let handle = spawn_failure_detector_task(detector.clone());
+                (Some(detector), Some(handle))
+            } else {
+                (None, None)
+            };
+
         for (shard_id, (msg_rx, conn_rx)) in shard_receivers
             .into_iter()
             .zip(new_conn_receivers.into_iter())
@@ -590,6 +622,9 @@ impl Server {
             if let Some(ref factory) = network_factory {
                 worker.set_network_factory(factory.clone());
             }
+            if let Some(ref detector) = failure_detector {
+                worker.set_quorum_checker(detector.clone());
+            }
 
             let handle = spawn(async move {
                 worker.run().await;
@@ -638,36 +673,6 @@ impl Server {
                 "Latency band tracking enabled"
             );
             Some(Arc::new(tracker))
-        } else {
-            None
-        };
-
-        // Initialize failure detector if cluster mode is enabled
-        let failure_detector_handle = if let (Some(ref raft), Some(ref state), Some(nid)) =
-            (&raft, &cluster_state, node_id)
-        {
-            let detector_config = FailureDetectorConfig {
-                check_interval_ms: config.cluster.heartbeat_interval_ms,
-                connect_timeout_ms: config.cluster.heartbeat_interval_ms / 2,
-                fail_threshold: config.cluster.fail_threshold,
-                auto_failover: config.cluster.auto_failover,
-            };
-
-            let detector = Arc::new(FailureDetector::new(
-                nid,
-                detector_config,
-                state.clone(),
-                raft.clone(),
-            ));
-
-            info!(
-                node_id = nid,
-                auto_failover = config.cluster.auto_failover,
-                fail_threshold = config.cluster.fail_threshold,
-                "Failure detector initialized"
-            );
-
-            Some(spawn_failure_detector_task(detector))
         } else {
             None
         };

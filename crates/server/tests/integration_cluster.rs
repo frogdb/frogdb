@@ -416,15 +416,16 @@ async fn test_minority_partition_cannot_elect_leader() {
         .await
         .unwrap();
 
-    // Kill 3 nodes (majority)
+    // Kill 3 nodes (majority) using graceful shutdown to ensure sockets close
     let nodes: Vec<_> = harness.node_ids();
-    harness.kill_node(nodes[0]);
-    harness.kill_node(nodes[1]);
-    harness.kill_node(nodes[2]);
+    harness.shutdown_node(nodes[0]).await;
+    harness.shutdown_node(nodes[1]).await;
+    harness.shutdown_node(nodes[2]).await;
 
-    // Remaining 2 nodes should not be able to elect leader
-    // Note: After Phase 4, surviving nodes should detect quorum loss via heartbeat failures
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    // Wait for sockets to fully close and failure detector to detect the failures
+    // Failure detection takes: fail_threshold * check_interval_ms = 5 * 100ms = 500ms
+    // Plus some buffer time for the checks to complete
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Cluster should be down - requires Phase 4's failure detection to work
     let surviving_node = harness.node(nodes[3]).unwrap();
