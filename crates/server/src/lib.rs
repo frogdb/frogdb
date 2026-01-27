@@ -16,6 +16,7 @@ pub mod net;
 pub mod replication;
 pub mod routing;
 pub mod runtime_config;
+pub mod scatter;
 pub mod server;
 
 pub use admin::AdminServer;

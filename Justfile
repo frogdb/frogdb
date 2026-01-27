@@ -1,6 +1,5 @@
 # Default recipe - show available commands
 default:
-@just --list
 
 # Build debug
 build:
@@ -43,7 +42,7 @@ test-dst: test-shuttle test-turmoil
 
 # Run browser integration tests (requires chromedriver running on port 9515)
 test-browser:
-    cargo test -p frogdb-browser-tests --features browser-tests
+cargo test -p frogdb-browser-tests --features browser-tests
 
 # Run linearizability checker tests
 test-linearizability:
