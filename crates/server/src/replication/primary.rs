@@ -449,8 +449,12 @@ impl PrimaryReplicationHandler {
                                 break;
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!(lagged = n, "Replica lagged in WAL stream");
-                                // TODO: Consider triggering full resync
+                                tracing::warn!(
+                                    replica_id = replica_id,
+                                    lagged = n,
+                                    "Replica lagged in WAL stream, disconnecting for resync"
+                                );
+                                break; // Exit write loop → triggers cleanup → replica reconnects → full resync
                             }
                         }
                     }

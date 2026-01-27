@@ -538,16 +538,25 @@ impl ReplicaConnection {
             state.replication_offset = metadata.replication_offset;
         }
 
-        // TODO: Implement hot-reload of checkpoint without server restart
-        // This would require:
-        // 1. A channel/signal to pause all shard workers
-        // 2. Dropping/replacing the RocksStore
-        // 3. Reloading all shard data from the new RocksDB
-        // 4. Resuming shard workers
-        // For now, a server restart is required to load the checkpoint.
+        // Signal that a restart is required to load the checkpoint.
+        //
+        // Hot-reload would require pausing all shard workers, replacing the
+        // RocksStore, reloading all data, and resuming - which is complex.
+        // Instead, we return an error to trigger a graceful disconnect.
+        // The server should be configured with a process manager (systemd,
+        // Docker, k8s) that will restart it automatically. On restart,
+        // RocksStore::load_staged_checkpoint() will load the checkpoint data.
+        tracing::warn!(
+            "Checkpoint received and staged. Server restart required to apply. \
+             If running under a process manager, the server will restart automatically."
+        );
 
-        self.connection_state = ConnectionState::Streaming;
-        Ok(())
+        // Return error to break replication loop and trigger reconnection
+        // On restart, the checkpoint will be loaded via RocksStore::load_staged_checkpoint()
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "checkpoint_received_restart_required"
+        ));
     }
 
     /// Stream replication data from primary.

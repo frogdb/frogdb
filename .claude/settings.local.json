@@ -58,7 +58,9 @@
       "Bash(time cross build:*)",
       "Bash(cargo install:*)",
       "Bash(time just jepsen-build:*)",
-      "Bash(time just jepsen-register:*)"
+      "Bash(time just jepsen-register:*)",
+      "Bash(RUST_LOG=frogdb_server::replication=debug cargo test:*)",
+      "Bash(RUST_LOG=frogdb_server=debug cargo test:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
