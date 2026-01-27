@@ -7,6 +7,10 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'FrogDB',
+			logo: {
+				src: './src/assets/frogdb-logo.png',
+				alt: 'FrogDB Logo',
+			},
 			description: 'A Redis-compatible in-memory database with persistence',
 			defaultLocale: 'root',
 			locales: {
