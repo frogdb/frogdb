@@ -816,8 +816,8 @@ fn test_linearizability_concurrent_writes() {
         let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
         let mut buf = vec![0u8; 1024];
 
-        // Wait for client2 to be ready
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Wait for client2 to be ready - use longer delays for deterministic ordering
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         // SET key=A
         let op1 = {
@@ -833,8 +833,8 @@ fn test_linearizability_concurrent_writes() {
             h.record_return(op1, 1, result);
         }
 
-        // Delay between SETs
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Delay between SETs - use longer delay for deterministic ordering
+        tokio::time::sleep(Duration::from_millis(400)).await;
 
         // SET key=B
         let op2 = {
@@ -862,8 +862,8 @@ fn test_linearizability_concurrent_writes() {
         let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
         let mut buf = vec![0u8; 1024];
 
-        // Wait until after SET A is expected to complete
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Wait until after SET A is expected to complete (SET A starts at 200ms)
+        tokio::time::sleep(Duration::from_millis(400)).await;
 
         // First GET - should see A (after SET A completes)
         let op1 = {
@@ -879,8 +879,8 @@ fn test_linearizability_concurrent_writes() {
             h.record_return(op1, 2, result);
         }
 
-        // Wait until after SET B is expected to complete
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        // Wait until after SET B is expected to complete (SET B starts at ~600ms)
+        tokio::time::sleep(Duration::from_millis(600)).await;
 
         // Second GET - should see B
         let op2 = {

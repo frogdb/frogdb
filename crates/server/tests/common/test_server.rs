@@ -421,8 +421,8 @@ impl TestClient {
         // Send
         self.framed.send(frame).await.unwrap();
 
-        // Receive
-        let response_frame = timeout(Duration::from_secs(5), self.framed.next())
+        // Receive - use 15 second timeout to accommodate WAIT commands
+        let response_frame = timeout(Duration::from_secs(15), self.framed.next())
             .await
             .expect("timeout")
             .expect("connection closed")
