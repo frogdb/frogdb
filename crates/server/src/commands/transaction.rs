@@ -9,7 +9,10 @@
 //! command registration and metadata (arity, flags, key extraction).
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 // ============================================================================
@@ -29,6 +32,10 @@ impl Command for MultiCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction)
     }
 
     fn execute(
@@ -66,6 +73,10 @@ impl Command for ExecCommand {
         CommandFlags::LOADING | CommandFlags::STALE
     }
 
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction)
+    }
+
     fn execute(
         &self,
         _ctx: &mut CommandContext,
@@ -98,6 +109,10 @@ impl Command for DiscardCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction)
     }
 
     fn execute(
@@ -134,6 +149,10 @@ impl Command for WatchCommand {
         CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
     }
 
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction)
+    }
+
     fn execute(
         &self,
         _ctx: &mut CommandContext,
@@ -167,6 +186,10 @@ impl Command for UnwatchCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction)
     }
 
     fn execute(

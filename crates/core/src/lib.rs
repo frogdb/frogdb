@@ -31,7 +31,10 @@ pub mod timeseries;
 pub mod types;
 pub mod vll;
 
-pub use command::{Arity, Command, CommandContext, CommandFlags, QuorumChecker};
+pub use command::{
+    Arity, Command, CommandContext, CommandFlags, CommandMetadata, ConnectionLevelOp,
+    ExecutionStrategy, MergeStrategy, QuorumChecker,
+};
 pub use error::CommandError;
 pub use acl::{
     AclChecker, AclConfig, AclError, AclLog, AclManager, AllowAllChecker, AuthenticatedUser,
@@ -50,7 +53,7 @@ pub use persistence::{
     SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata, SnapshotMetadataFile,
     WalConfig, WalLagStats, HEADER_SIZE,
 };
-pub use registry::CommandRegistry;
+pub use registry::{CommandEntry, CommandRegistry};
 pub use pubsub::{
     ConnId, GlobPattern, IntrospectionRequest, IntrospectionResponse, PubSubMessage, PubSubSender,
     ShardSubscriptions, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,

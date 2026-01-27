@@ -17,8 +17,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, StreamAddError, StreamEntry,
-    StreamGroupError, StreamId, StreamIdParseError, StreamTrimMode, StreamTrimOptions,
+    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, StreamAddError,
+    StreamEntry, StreamGroupError, StreamId, StreamIdParseError, StreamTrimMode, StreamTrimOptions,
     StreamTrimStrategy, Value,
 };
 use frogdb_protocol::{BlockingOp, Response};
@@ -541,6 +541,13 @@ impl Command for XreadCommand {
         CommandFlags::READONLY
     }
 
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        // XREAD can block when BLOCK option is specified
+        ExecutionStrategy::Blocking {
+            default_timeout: None,
+        }
+    }
+
     fn execute(
         &self,
         ctx: &mut CommandContext,
@@ -944,6 +951,13 @@ impl Command for XreadgroupCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE // Modifies PEL
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        // XREADGROUP can block when BLOCK option is specified
+        ExecutionStrategy::Blocking {
+            default_timeout: None,
+        }
     }
 
     fn execute(
