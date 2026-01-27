@@ -62,6 +62,12 @@ impl ScriptError {
     }
 }
 
+impl From<crate::sync::LockError> for ScriptError {
+    fn from(err: crate::sync::LockError) -> Self {
+        ScriptError::Internal(format!("Lock error: {}", err))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

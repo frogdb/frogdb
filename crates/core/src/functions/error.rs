@@ -138,6 +138,14 @@ impl fmt::Display for FunctionError {
 
 impl std::error::Error for FunctionError {}
 
+impl From<crate::sync::LockError> for FunctionError {
+    fn from(err: crate::sync::LockError) -> Self {
+        FunctionError::Internal {
+            message: format!("Lock error: {}", err),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

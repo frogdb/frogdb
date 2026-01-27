@@ -66,7 +66,8 @@ impl VmContextAccessor {
     /// This method must only be called during script execution when the
     /// command context pointers are valid.
     pub fn execute_command(&self, parts: &[Bytes]) -> Result<Response, String> {
-        let ctx_guard = self.cmd_ctx.read_or_panic("VmContextAccessor::execute_command");
+        let ctx_guard = self.cmd_ctx.try_read_err()
+            .map_err(|e| format!("ERR lock error: {}", e))?;
         let exec_ctx = ctx_guard
             .as_ref()
             .ok_or_else(|| "ERR command execution context not available".to_string())?;
@@ -321,7 +322,7 @@ impl LuaVm {
 
         // Reset execution state
         {
-            let mut state = self.state.lock_or_panic("LuaVm::prepare_execution");
+            let mut state = self.state.try_lock_err()?;
             state.reset();
             state.start_time = Some(start_time);
             state.timeout_ms = self.config.lua_time_limit_ms;
@@ -450,7 +451,7 @@ impl LuaVm {
 
     /// Request the script to be killed.
     pub fn request_kill(&self) -> Result<(), ScriptError> {
-        let state = self.state.lock_or_panic("LuaVm::request_kill");
+        let state = self.state.try_lock_err()?;
         if state.has_writes {
             Err(ScriptError::Unkillable)
         } else {

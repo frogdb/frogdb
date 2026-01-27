@@ -109,7 +109,7 @@ impl AclManager {
         password: &str,
         client_info: &str,
     ) -> Result<AuthenticatedUser, AclError> {
-        let users = self.users.read_or_panic("AclManager::authenticate");
+        let users = self.users.try_read_err()?;
 
         let user = users.get(username).ok_or_else(|| {
             self.log.log_auth_failure(username, client_info);
@@ -144,7 +144,7 @@ impl AclManager {
 
     /// Set or create a user with the given rules.
     pub fn set_user(&self, username: &str, rules: &[&str]) -> Result<(), AclError> {
-        let mut users = self.users.write_or_panic("AclManager::set_user");
+        let mut users = self.users.try_write_err()?;
 
         let user = users
             .entry(username.to_string())
@@ -164,7 +164,7 @@ impl AclManager {
             return Err(AclError::CannotDeleteDefaultUser);
         }
 
-        let mut users = self.users.write_or_panic("AclManager::delete_user");
+        let mut users = self.users.try_write_err()?;
         users.remove(username).ok_or(AclError::UserNotFound {
             username: username.to_string(),
         })?;
@@ -182,7 +182,7 @@ impl AclManager {
             }
         }
 
-        let mut users = self.users.write_or_panic("AclManager::delete_users");
+        let mut users = self.users.try_write_err()?;
         for username in usernames {
             if users.remove(*username).is_some() {
                 count += 1;
@@ -220,7 +220,7 @@ impl AclManager {
     pub fn save(&self) -> Result<(), AclError> {
         let aclfile = self.aclfile.as_ref().ok_or(AclError::NoAclFile)?;
 
-        let users = self.users.read_or_panic("AclManager::save");
+        let users = self.users.try_read_err()?;
         let mut content = String::new();
 
         for user in users.values() {
@@ -277,7 +277,7 @@ impl AclManager {
         }
 
         // Replace users atomically
-        let mut users = self.users.write_or_panic("AclManager::load");
+        let mut users = self.users.try_write_err()?;
         *users = new_users;
 
         Ok(())

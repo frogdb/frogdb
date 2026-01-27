@@ -36,6 +36,49 @@ pub enum Value {
     Json(JsonValue),
 }
 
+/// Macro to generate accessor methods for Value enum variants.
+///
+/// This generates `as_<name>(&self) -> Option<&Type>` and
+/// `as_<name>_mut(&mut self) -> Option<&mut Type>` methods.
+macro_rules! impl_value_accessors {
+    ($(
+        $variant:ident => $type:ty, $method:ident, $method_mut:ident
+    );* $(;)?) => {
+        impl Value {
+            $(
+                #[doc = concat!("Try to get as a ", stringify!($method), " value.")]
+                pub fn $method(&self) -> Option<&$type> {
+                    match self {
+                        Value::$variant(v) => Some(v),
+                        _ => None,
+                    }
+                }
+
+                #[doc = concat!("Try to get as a mutable ", stringify!($method), " value.")]
+                pub fn $method_mut(&mut self) -> Option<&mut $type> {
+                    match self {
+                        Value::$variant(v) => Some(v),
+                        _ => None,
+                    }
+                }
+            )*
+        }
+    };
+}
+
+impl_value_accessors! {
+    String => StringValue, as_string, as_string_mut;
+    SortedSet => SortedSetValue, as_sorted_set, as_sorted_set_mut;
+    Hash => HashValue, as_hash, as_hash_mut;
+    List => ListValue, as_list, as_list_mut;
+    Set => SetValue, as_set, as_set_mut;
+    Stream => StreamValue, as_stream, as_stream_mut;
+    BloomFilter => BloomFilterValue, as_bloom_filter, as_bloom_filter_mut;
+    HyperLogLog => HyperLogLogValue, as_hyperloglog, as_hyperloglog_mut;
+    TimeSeries => TimeSeriesValue, as_timeseries, as_timeseries_mut;
+    Json => JsonValue, as_json, as_json_mut;
+}
+
 impl Value {
     /// Create a string value from bytes.
     pub fn string(data: impl Into<Bytes>) -> Self {
@@ -116,166 +159,6 @@ impl Value {
             Value::HyperLogLog(hll) => hll.memory_size(),
             Value::TimeSeries(ts) => ts.memory_size(),
             Value::Json(j) => j.memory_size(),
-        }
-    }
-
-    /// Try to get as a string value.
-    pub fn as_string(&self) -> Option<&StringValue> {
-        match self {
-            Value::String(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a mutable string value.
-    pub fn as_string_mut(&mut self) -> Option<&mut StringValue> {
-        match self {
-            Value::String(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a sorted set value.
-    pub fn as_sorted_set(&self) -> Option<&SortedSetValue> {
-        match self {
-            Value::SortedSet(z) => Some(z),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a mutable sorted set value.
-    pub fn as_sorted_set_mut(&mut self) -> Option<&mut SortedSetValue> {
-        match self {
-            Value::SortedSet(z) => Some(z),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a hash value.
-    pub fn as_hash(&self) -> Option<&HashValue> {
-        match self {
-            Value::Hash(h) => Some(h),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a mutable hash value.
-    pub fn as_hash_mut(&mut self) -> Option<&mut HashValue> {
-        match self {
-            Value::Hash(h) => Some(h),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a list value.
-    pub fn as_list(&self) -> Option<&ListValue> {
-        match self {
-            Value::List(l) => Some(l),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a mutable list value.
-    pub fn as_list_mut(&mut self) -> Option<&mut ListValue> {
-        match self {
-            Value::List(l) => Some(l),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a set value.
-    pub fn as_set(&self) -> Option<&SetValue> {
-        match self {
-            Value::Set(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a mutable set value.
-    pub fn as_set_mut(&mut self) -> Option<&mut SetValue> {
-        match self {
-            Value::Set(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a stream value.
-    pub fn as_stream(&self) -> Option<&StreamValue> {
-        match self {
-            Value::Stream(st) => Some(st),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a mutable stream value.
-    pub fn as_stream_mut(&mut self) -> Option<&mut StreamValue> {
-        match self {
-            Value::Stream(st) => Some(st),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a bloom filter value.
-    pub fn as_bloom_filter(&self) -> Option<&BloomFilterValue> {
-        match self {
-            Value::BloomFilter(bf) => Some(bf),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a mutable bloom filter value.
-    pub fn as_bloom_filter_mut(&mut self) -> Option<&mut BloomFilterValue> {
-        match self {
-            Value::BloomFilter(bf) => Some(bf),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a HyperLogLog value.
-    pub fn as_hyperloglog(&self) -> Option<&HyperLogLogValue> {
-        match self {
-            Value::HyperLogLog(hll) => Some(hll),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a mutable HyperLogLog value.
-    pub fn as_hyperloglog_mut(&mut self) -> Option<&mut HyperLogLogValue> {
-        match self {
-            Value::HyperLogLog(hll) => Some(hll),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a time series value.
-    pub fn as_timeseries(&self) -> Option<&TimeSeriesValue> {
-        match self {
-            Value::TimeSeries(ts) => Some(ts),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a mutable time series value.
-    pub fn as_timeseries_mut(&mut self) -> Option<&mut TimeSeriesValue> {
-        match self {
-            Value::TimeSeries(ts) => Some(ts),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a JSON value.
-    pub fn as_json(&self) -> Option<&JsonValue> {
-        match self {
-            Value::Json(j) => Some(j),
-            _ => None,
-        }
-    }
-
-    /// Try to get as a mutable JSON value.
-    pub fn as_json_mut(&mut self) -> Option<&mut JsonValue> {
-        match self {
-            Value::Json(j) => Some(j),
-            _ => None,
         }
     }
 

@@ -1440,166 +1440,46 @@ impl ConnectionHandler {
             return vec![self.handle_acl_command(&cmd.args).await];
         }
 
-        // Check authentication before processing other commands
-        // AUTH, QUIT, HELLO, and PING are allowed without authentication (using execution strategy)
-        if !self.state.auth.is_authenticated() && !self.is_auth_exempt(&cmd_name_str) {
-            return vec![Response::error("NOAUTH Authentication required.")];
-        }
-
-        // Block admin commands on regular port when admin port is enabled
-        if self.admin_enabled && !self.is_admin {
-            if let Some(cmd_info) = self.registry.get(&cmd_name_str) {
-                if cmd_info.flags().contains(CommandFlags::ADMIN) {
-                    return vec![Response::error(
-                        "NOADMIN Admin commands are disabled on this port. Use the admin port."
-                    )];
-                }
-            }
-        }
-
-        // Check command ACL permission (for commands not routed to route_and_execute)
-        // Note: ACL command is exempt (users need ACL WHOAMI to check their identity)
-        if let Some(user) = self.state.auth.user() {
-            let subcommand = extract_subcommand(&cmd_name_str, &cmd.args);
-            if cmd_name_str != "ACL" && !user.check_command(&cmd_name_str, subcommand.as_deref()) {
-                let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                // Log with subcommand if present
-                let log_cmd = if let Some(ref sub) = subcommand {
-                    format!("{}|{}", cmd_name_str.to_lowercase(), sub.to_lowercase())
-                } else {
-                    cmd_name_str.to_lowercase()
-                };
-                self.acl_manager.log().log_command_denied(&user.username, &client_info, &log_cmd);
-                warn!(
-                    conn_id = self.state.id,
-                    username = %user.username,
-                    command = %log_cmd,
-                    "ACL denied command"
-                );
-                // Return error with subcommand in message if present
-                let err_cmd = if let Some(ref sub) = subcommand {
-                    format!("{} {}", cmd_name_str.to_lowercase(), sub.to_lowercase())
-                } else {
-                    cmd_name_str.to_lowercase()
-                };
-                return vec![Response::error(format!(
-                    "NOPERM this user has no permissions to run the '{}' command",
-                    err_cmd
-                ))];
-            }
-        }
-
-        // Check pub/sub mode restrictions using execution strategy
-        if self.state.pubsub.in_pubsub_mode() && !self.is_allowed_in_pubsub_mode(&cmd_name_str) {
-            return vec![Response::error(format!(
-                "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
-                cmd_name_str
-            ))];
+        // Run pre-execution checks (auth, admin port, ACL, pub/sub mode)
+        if let Some(error_response) = self.run_pre_checks(&cmd_name_str, &cmd.args) {
+            return vec![error_response];
         }
 
         // Handle pub/sub commands specially (they return multiple responses)
         match cmd_name_str.as_ref() {
             "SUBSCRIBE" => {
-                // Check channel permissions
-                if let Some(user) = self.state.auth.user() {
-                    for channel in &cmd.args {
-                        if !user.check_channel_access(channel) {
-                            let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                            let channel_str = String::from_utf8_lossy(channel);
-                            self.acl_manager.log().log_channel_denied(
-                                &user.username,
-                                &client_info,
-                                &channel_str,
-                            );
-                            return vec![Response::error(
-                                "NOPERM this user has no permissions to access one of the channels used as arguments"
-                            )];
-                        }
-                    }
+                if let Err(err) = self.validate_channel_access(&cmd.args) {
+                    return vec![err];
                 }
                 return self.handle_subscribe(&cmd.args).await;
             }
             "UNSUBSCRIBE" => return self.handle_unsubscribe(&cmd.args).await,
             "PSUBSCRIBE" => {
-                // Check channel permissions for patterns
-                if let Some(user) = self.state.auth.user() {
-                    for pattern in &cmd.args {
-                        if !user.check_channel_access(pattern) {
-                            let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                            let pattern_str = String::from_utf8_lossy(pattern);
-                            self.acl_manager.log().log_channel_denied(
-                                &user.username,
-                                &client_info,
-                                &pattern_str,
-                            );
-                            return vec![Response::error(
-                                "NOPERM this user has no permissions to access one of the channels used as arguments"
-                            )];
-                        }
-                    }
+                if let Err(err) = self.validate_channel_access(&cmd.args) {
+                    return vec![err];
                 }
                 return self.handle_psubscribe(&cmd.args).await;
             }
             "PUNSUBSCRIBE" => return self.handle_punsubscribe(&cmd.args).await,
             "PUBLISH" => {
-                // Check channel permission for the target channel
-                if let Some(user) = self.state.auth.user() {
-                    if !cmd.args.is_empty() {
-                        let channel = &cmd.args[0];
-                        if !user.check_channel_access(channel) {
-                            let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                            let channel_str = String::from_utf8_lossy(channel);
-                            self.acl_manager.log().log_channel_denied(
-                                &user.username,
-                                &client_info,
-                                &channel_str,
-                            );
-                            return vec![Response::error(
-                                "NOPERM this user has no permissions to access one of the channels used as arguments"
-                            )];
-                        }
+                if !cmd.args.is_empty() {
+                    if let Err(err) = self.validate_channel_access(&cmd.args[..1]) {
+                        return vec![err];
                     }
                 }
                 return vec![self.handle_publish(&cmd.args).await];
             }
             "SSUBSCRIBE" => {
-                // Check channel permissions for sharded channels
-                if let Some(user) = self.state.auth.user() {
-                    for channel in &cmd.args {
-                        if !user.check_channel_access(channel) {
-                            let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                            let channel_str = String::from_utf8_lossy(channel);
-                            self.acl_manager.log().log_channel_denied(
-                                &user.username,
-                                &client_info,
-                                &channel_str,
-                            );
-                            return vec![Response::error(
-                                "NOPERM this user has no permissions to access one of the channels used as arguments"
-                            )];
-                        }
-                    }
+                if let Err(err) = self.validate_channel_access(&cmd.args) {
+                    return vec![err];
                 }
                 return self.handle_ssubscribe(&cmd.args).await;
             }
             "SUNSUBSCRIBE" => return self.handle_sunsubscribe(&cmd.args).await,
             "SPUBLISH" => {
-                // Check channel permission for the target sharded channel
-                if let Some(user) = self.state.auth.user() {
-                    if !cmd.args.is_empty() {
-                        let channel = &cmd.args[0];
-                        if !user.check_channel_access(channel) {
-                            let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                            let channel_str = String::from_utf8_lossy(channel);
-                            self.acl_manager.log().log_channel_denied(
-                                &user.username,
-                                &client_info,
-                                &channel_str,
-                            );
-                            return vec![Response::error(
-                                "NOPERM this user has no permissions to access one of the channels used as arguments"
-                            )];
-                        }
+                if !cmd.args.is_empty() {
+                    if let Err(err) = self.validate_channel_access(&cmd.args[..1]) {
+                        return vec![err];
                     }
                 }
                 return vec![self.handle_spublish(&cmd.args).await];
@@ -1833,6 +1713,102 @@ impl ConnectionHandler {
                 ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth)
             )
         })
+    }
+
+    /// Validate that the current user has permission to access all specified channels.
+    ///
+    /// Returns `Ok(())` if access is granted, or `Err(Response)` with NOPERM error
+    /// if any channel is denied.
+    fn validate_channel_access(&self, channels: &[Bytes]) -> Result<(), Response> {
+        let Some(user) = self.state.auth.user() else {
+            return Ok(());
+        };
+
+        for channel in channels {
+            if !user.check_channel_access(channel) {
+                let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                let channel_str = String::from_utf8_lossy(channel);
+                self.acl_manager.log().log_channel_denied(
+                    &user.username,
+                    &client_info,
+                    &channel_str,
+                );
+                return Err(Response::error(
+                    "NOPERM this user has no permissions to access one of the channels used as arguments"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Run pre-execution checks for a command.
+    ///
+    /// This validates:
+    /// - Authentication (if required)
+    /// - Admin port restrictions
+    /// - ACL command permissions
+    /// - Pub/sub mode restrictions
+    ///
+    /// Returns `Some(Response)` with an error if the command should be rejected,
+    /// or `None` if the command can proceed.
+    fn run_pre_checks(&self, cmd_name: &str, args: &[Bytes]) -> Option<Response> {
+        // Check authentication
+        if !self.state.auth.is_authenticated() && !self.is_auth_exempt(cmd_name) {
+            return Some(Response::error("NOAUTH Authentication required."));
+        }
+
+        // Block admin commands on regular port when admin port is enabled
+        if self.admin_enabled && !self.is_admin {
+            if let Some(cmd_info) = self.registry.get(cmd_name) {
+                if cmd_info.flags().contains(CommandFlags::ADMIN) {
+                    return Some(Response::error(
+                        "NOADMIN Admin commands are disabled on this port. Use the admin port."
+                    ));
+                }
+            }
+        }
+
+        // Check command ACL permission
+        // Note: ACL command is exempt (users need ACL WHOAMI to check their identity)
+        if let Some(user) = self.state.auth.user() {
+            let subcommand = extract_subcommand(cmd_name, args);
+            if cmd_name != "ACL" && !user.check_command(cmd_name, subcommand.as_deref()) {
+                let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                // Log with subcommand if present
+                let log_cmd = if let Some(ref sub) = subcommand {
+                    format!("{}|{}", cmd_name.to_lowercase(), sub.to_lowercase())
+                } else {
+                    cmd_name.to_lowercase()
+                };
+                self.acl_manager.log().log_command_denied(&user.username, &client_info, &log_cmd);
+                warn!(
+                    conn_id = self.state.id,
+                    username = %user.username,
+                    command = %log_cmd,
+                    "ACL denied command"
+                );
+                // Return error with subcommand in message if present
+                let err_cmd = if let Some(ref sub) = subcommand {
+                    format!("{} {}", cmd_name.to_lowercase(), sub.to_lowercase())
+                } else {
+                    cmd_name.to_lowercase()
+                };
+                return Some(Response::error(format!(
+                    "NOPERM this user has no permissions to run the '{}' command",
+                    err_cmd
+                )));
+            }
+        }
+
+        // Check pub/sub mode restrictions
+        if self.state.pubsub.in_pubsub_mode() && !self.is_allowed_in_pubsub_mode(cmd_name) {
+            return Some(Response::error(format!(
+                "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
+                cmd_name
+            )));
+        }
+
+        None
     }
 
     /// Check if a command is exempt from slot validation in cluster mode.
