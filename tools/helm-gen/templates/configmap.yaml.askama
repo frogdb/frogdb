@@ -1,0 +1,71 @@
+[% header %]
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "frogdb.fullname" . }}-config
+  labels:
+    {{- include "frogdb.labels" . | nindent 4 }}
+data:
+  frogdb.toml: |
+    # FrogDB Configuration
+    # Generated from Helm values
+
+    [server]
+    bind = "0.0.0.0"
+    port = {{ .Values.frogdb.port }}
+    num_shards = {{ .Values.frogdb.numShards }}
+    allow_cross_slot_standalone = {{ .Values.frogdb.allowCrossSlotStandalone }}
+    scatter_gather_timeout_ms = {{ .Values.frogdb.scatterGatherTimeoutMs }}
+
+    [logging]
+    level = "{{ .Values.frogdb.logging.level }}"
+    format = "{{ .Values.frogdb.logging.format }}"
+
+    [persistence]
+    enabled = {{ .Values.frogdb.persistence.enabled }}
+    data_dir = "{{ .Values.frogdb.persistence.dataDir }}"
+    durability_mode = "{{ .Values.frogdb.persistence.durabilityMode }}"
+    sync_interval_ms = {{ .Values.frogdb.persistence.syncIntervalMs }}
+    write_buffer_size_mb = {{ .Values.frogdb.persistence.writeBufferSizeMb }}
+    compression = "{{ .Values.frogdb.persistence.compression }}"
+
+    [snapshot]
+    snapshot_dir = "{{ .Values.frogdb.snapshot.dir }}"
+    snapshot_interval_secs = {{ .Values.frogdb.snapshot.intervalSecs }}
+    max_snapshots = {{ .Values.frogdb.snapshot.maxSnapshots }}
+
+    [metrics]
+    enabled = {{ .Values.frogdb.metrics.enabled }}
+    bind = "0.0.0.0"
+    port = {{ .Values.frogdb.metrics.port }}
+    {{- if .Values.frogdb.metrics.otlp.enabled }}
+    otlp_enabled = true
+    otlp_endpoint = "{{ .Values.frogdb.metrics.otlp.endpoint }}"
+    otlp_interval_secs = {{ .Values.frogdb.metrics.otlp.intervalSecs }}
+    {{- end }}
+
+    [admin]
+    enabled = {{ .Values.frogdb.admin.enabled }}
+    bind = "0.0.0.0"
+    port = {{ .Values.frogdb.admin.port }}
+
+    [memory]
+    maxmemory = {{ .Values.frogdb.memory.maxmemory }}
+    maxmemory_policy = "{{ .Values.frogdb.memory.policy }}"
+    maxmemory_samples = {{ .Values.frogdb.memory.samples }}
+
+    [security]
+    {{- if .Values.frogdb.security.requirepass }}
+    requirepass = "{{ .Values.frogdb.security.requirepass }}"
+    {{- end }}
+
+    [cluster]
+    enabled = {{ .Values.cluster.enabled }}
+    {{- if .Values.cluster.enabled }}
+    node_id = 0
+    cluster_bus_addr = "0.0.0.0:{{ .Values.cluster.busPort }}"
+    data_dir = "{{ .Values.cluster.dataDir }}"
+    election_timeout_ms = {{ .Values.cluster.electionTimeoutMs }}
+    heartbeat_interval_ms = {{ .Values.cluster.heartbeatIntervalMs }}
+    auto_failover = {{ .Values.cluster.autoFailover }}
+    {{- end }}

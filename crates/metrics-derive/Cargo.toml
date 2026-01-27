@@ -1,0 +1,15 @@
+[package]
+name = "frogdb-metrics-derive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Proc macros for FrogDB typed metrics system"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "parsing", "extra-traits"] }

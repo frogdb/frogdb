@@ -440,6 +440,28 @@ helm-gen-check:
     cargo run -p helm-gen -- --check
 
 # =============================================================================
+# Dashboard Generation
+# =============================================================================
+
+# Generate Grafana dashboard from FrogDB metrics
+dashboard-gen:
+    cargo run -p dashboard-gen
+
+# Check that Grafana dashboard is up to date (for CI)
+dashboard-gen-check:
+    cargo run -p dashboard-gen -- --check
+
+# =============================================================================
+# Generate All
+# =============================================================================
+
+# Generate all derived files (Helm chart + dashboard)
+generate: helm-gen dashboard-gen
+
+# Check all derived files are up to date (for CI)
+generate-check: helm-gen-check dashboard-gen-check
+
+# =============================================================================
 # Documentation Site
 # =============================================================================
 
