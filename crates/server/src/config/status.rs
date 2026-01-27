@@ -1,9 +1,10 @@
 //! Status endpoint and hot shards configuration.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Status endpoint configuration for health thresholds.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StatusConfig {
     /// Threshold percentage for memory warning (0-100).
@@ -63,7 +64,7 @@ impl StatusConfig {
 }
 
 /// Hot shard detection configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HotShardsConfig {
     /// Threshold percentage for "HOT" status (default: 20.0).

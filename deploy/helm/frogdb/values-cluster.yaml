@@ -1,0 +1,84 @@
+# =============================================================================
+# CLUSTER MODE PRESET - 5-node Raft Cluster
+# =============================================================================
+# Use this values file to deploy FrogDB in cluster mode with Raft consensus.
+#
+# Deploy with:
+#   helm install frogdb ./deploy/helm/frogdb -f ./deploy/helm/frogdb/values-cluster.yaml
+#
+# Or upgrade:
+#   helm upgrade frogdb ./deploy/helm/frogdb -f ./deploy/helm/frogdb/values-cluster.yaml
+# =============================================================================
+
+# 5-node cluster for Raft quorum (can tolerate 2 node failures)
+replicaCount: 5
+
+# Enable cluster mode
+cluster:
+  enabled: true
+  busPort: 16379
+  dataDir: /data/cluster
+  electionTimeoutMs: 1000
+  heartbeatIntervalMs: 250
+  autoFailover: true
+
+# FrogDB configuration
+frogdb:
+  port: 6379
+  numShards: 4
+  logging:
+    level: info
+    format: json
+  persistence:
+    enabled: true
+    dataDir: /data
+    durabilityMode: periodic
+    syncIntervalMs: 1000
+  metrics:
+    enabled: true
+    port: 9090
+  admin:
+    enabled: true
+    port: 6380
+
+# Production-ready resource limits
+resources:
+  limits:
+    cpu: "4"
+    memory: 8Gi
+  requests:
+    cpu: "1"
+    memory: 2Gi
+
+# Persistence for data
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 50Gi
+  accessModes:
+    - ReadWriteOnce
+
+# Pod disruption budget - ensure quorum is maintained
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 3
+
+# Enable ServiceMonitor for Prometheus Operator
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  scrapeTimeout: 10s
+
+# Anti-affinity to spread pods across nodes
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - frogdb
+          topologyKey: kubernetes.io/hostname

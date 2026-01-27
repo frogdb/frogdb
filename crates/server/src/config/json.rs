@@ -1,9 +1,10 @@
 //! JSON configuration.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// JSON configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct JsonConfig {
     /// Maximum nesting depth for JSON documents.

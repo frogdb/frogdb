@@ -1,10 +1,11 @@
 //! Distributed tracing configuration.
 
 use anyhow::Result;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Distributed tracing configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TracingConfig {
     /// Whether distributed tracing is enabled.

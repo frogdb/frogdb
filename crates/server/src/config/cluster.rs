@@ -1,12 +1,13 @@
 //! Cluster configuration.
 
 use anyhow::Result;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::ServerConfig;
 
 /// Cluster configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct ClusterConfigSection {
     /// Whether cluster mode is enabled.
     #[serde(default)]

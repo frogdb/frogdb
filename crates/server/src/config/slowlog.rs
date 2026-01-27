@@ -1,9 +1,10 @@
 //! Slow query log configuration.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Slow query log configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SlowlogConfig {
     /// Threshold in microseconds. Commands slower than this are logged.

@@ -1,9 +1,10 @@
 //! Blocking commands configuration.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Blocking commands configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlockingConfig {
     /// Maximum waiters per key (0 = unlimited).

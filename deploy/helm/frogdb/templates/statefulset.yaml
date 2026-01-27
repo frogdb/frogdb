@@ -1,0 +1,148 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "frogdb.fullname" . }}
+  labels:
+    {{- include "frogdb.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "frogdb.headlessServiceName" . }}
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "frogdb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "frogdb.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+        runAsNonRoot: true
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: frogdb
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: redis
+              containerPort: {{ .Values.frogdb.port }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.frogdb.metrics.port }}
+              protocol: TCP
+            {{- if .Values.frogdb.admin.enabled }}
+            - name: admin
+              containerPort: {{ .Values.frogdb.admin.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.cluster.enabled }}
+            - name: cluster-bus
+              containerPort: {{ .Values.cluster.busPort }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- if .Values.cluster.enabled }}
+            # Cluster configuration via environment variables
+            - name: FROGDB_CLUSTER__ENABLED
+              value: "true"
+            - name: FROGDB_CLUSTER__CLIENT_ADDR
+              value: "$(POD_IP):{{ .Values.frogdb.port }}"
+            - name: FROGDB_CLUSTER__CLUSTER_BUS_ADDR
+              value: "$(POD_IP):{{ .Values.cluster.busPort }}"
+            - name: FROGDB_CLUSTER__INITIAL_NODES
+              value: "{{ include "frogdb.clusterPeers" . }}"
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/frogdb
+            - name: data
+              mountPath: /data
+          args:
+            - --config
+            - /etc/frogdb/frogdb.toml
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - -p
+                - "{{ .Values.frogdb.port }}"
+                - ping
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - -p
+                - "{{ .Values.frogdb.port }}"
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "frogdb.fullname" . }}-config
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "frogdb.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | quote }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}

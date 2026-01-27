@@ -1,10 +1,11 @@
 //! Memory management configuration.
 
 use anyhow::Result;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Memory management configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MemoryConfig {
     /// Maximum memory limit in bytes. 0 means unlimited.

@@ -1,9 +1,10 @@
 //! VLL (Very Lightweight Locking) configuration.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// VLL (Very Lightweight Locking) configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VllConfig {
     /// Maximum queue depth per shard before rejecting new operations.

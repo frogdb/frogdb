@@ -428,6 +428,18 @@ jepsen-raft-all: jepsen-build jepsen-raft-cluster-up
     just jepsen-raft-chaos --time-limit 120
 
 # =============================================================================
+# Helm Chart Generation
+# =============================================================================
+
+# Generate Helm chart files from FrogDB config
+helm-gen:
+    cargo run -p helm-gen
+
+# Check that Helm chart files are up to date (for CI)
+helm-gen-check:
+    cargo run -p helm-gen -- --check
+
+# =============================================================================
 # Documentation Site
 # =============================================================================
 
