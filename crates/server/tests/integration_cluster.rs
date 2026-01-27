@@ -19,9 +19,7 @@ use std::time::Duration;
 // ============================================================================
 
 /// Tests that the harness can start a 3-node cluster.
-/// NOTE: Ignored until CLUSTER commands return actual cluster state.
 #[tokio::test]
-#[ignore = "Requires full cluster mode implementation"]
 async fn test_cluster_formation_3_nodes() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -52,9 +50,7 @@ async fn test_cluster_formation_3_nodes() {
 }
 
 /// Tests CLUSTER INFO command returns valid response format.
-/// NOTE: Ignored until CLUSTER commands return actual cluster state.
 #[tokio::test]
-#[ignore = "Requires full cluster mode implementation"]
 async fn test_cluster_info_command_multinode() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -74,9 +70,7 @@ async fn test_cluster_info_command_multinode() {
 }
 
 /// Tests CLUSTER NODES command returns valid response format.
-/// NOTE: Ignored until CLUSTER commands return actual cluster state.
 #[tokio::test]
-#[ignore = "Requires full cluster mode implementation"]
 async fn test_cluster_nodes_command_multinode() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -234,9 +228,7 @@ async fn test_cluster_keyslot_command() {
 // ============================================================================
 
 /// Tests adding a node to an existing cluster.
-/// NOTE: Ignored until CLUSTER commands return actual cluster state.
 #[tokio::test]
-#[ignore = "Requires full cluster mode implementation"]
 async fn test_add_node_to_cluster() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -264,9 +256,7 @@ async fn test_add_node_to_cluster() {
 }
 
 /// Tests removing a node from a cluster.
-/// NOTE: Ignored until CLUSTER commands return actual cluster state.
 #[tokio::test]
-#[ignore = "Requires full cluster mode implementation"]
 async fn test_remove_node_from_cluster() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -297,9 +287,7 @@ async fn test_remove_node_from_cluster() {
 }
 
 /// Tests starting a 5-node cluster.
-/// NOTE: Ignored until CLUSTER commands return actual cluster state.
 #[tokio::test]
-#[ignore = "Requires full cluster mode implementation"]
 async fn test_cluster_with_5_nodes() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(5).await.unwrap();
@@ -333,9 +321,7 @@ async fn test_cluster_with_5_nodes() {
 // ============================================================================
 
 /// Tests leader failover when the leader node is killed.
-/// NOTE: Ignored until CLUSTER commands return actual cluster state.
 #[tokio::test]
-#[ignore = "Requires full cluster mode implementation"]
 async fn test_leader_failover() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -365,9 +351,7 @@ async fn test_leader_failover() {
 }
 
 /// Tests that a restarted node can rejoin the cluster.
-/// NOTE: Ignored until CLUSTER commands return actual cluster state.
 #[tokio::test]
-#[ignore = "Requires full cluster mode implementation"]
 async fn test_node_restart_rejoins_cluster() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -440,9 +424,7 @@ async fn test_minority_partition_cannot_elect_leader() {
 }
 
 /// Tests graceful shutdown and restart of a node.
-/// NOTE: Ignored until CLUSTER commands return actual cluster state.
 #[tokio::test]
-#[ignore = "Requires full cluster mode implementation"]
 async fn test_graceful_shutdown_and_restart() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -480,9 +462,7 @@ async fn test_graceful_shutdown_and_restart() {
 // ============================================================================
 
 /// Tests custom cluster configuration.
-/// NOTE: Ignored until CLUSTER commands return actual cluster state.
 #[tokio::test]
-#[ignore = "Requires full cluster mode implementation"]
 async fn test_custom_cluster_config() {
     let config = ClusterNodeConfig {
         num_shards: Some(2),
