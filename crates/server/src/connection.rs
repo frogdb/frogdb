@@ -74,6 +74,8 @@ use crate::runtime_config::ConfigManager;
 use crate::scatter::{strategy_for_op, ScatterGatherExecutor};
 use crate::server::next_txid;
 
+use router::ConnectionLevelHandler;
+
 /// Connection handler that processes client commands.
 pub struct ConnectionHandler {
     /// Framed socket with RESP2 codec.
@@ -648,7 +650,26 @@ impl ConnectionHandler {
     ///
     /// For RESP2 connections, uses the standard Framed codec.
     /// For RESP3 connections, manually encodes and writes to the socket.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the response is an internal action type (BlockingNeeded, RaftNeeded,
+    /// MigrateNeeded). These should be intercepted by `route_and_execute_with_transaction`
+    /// before reaching this method.
     async fn send_response(&mut self, response: Response) -> std::io::Result<()> {
+        // Convert to WireResponse, panicking if it's an internal action
+        // (which would indicate a bug in the command routing logic)
+        let wire_response = response.into_wire().expect(
+            "Internal action reached send_response - should be intercepted by route_and_execute_with_transaction"
+        );
+        self.send_wire_response(wire_response).await
+    }
+
+    /// Send a wire response to the client.
+    ///
+    /// This is the type-safe version that only accepts wire-serializable responses.
+    /// Use this when you have already extracted a WireResponse from a Response.
+    async fn send_wire_response(&mut self, response: frogdb_protocol::WireResponse) -> std::io::Result<()> {
         match self.state.protocol_version {
             ProtocolVersion::Resp2 => {
                 // Use RESP2 encoding via the Framed codec
@@ -1419,6 +1440,190 @@ impl ConnectionHandler {
         }
     }
 
+    /// Dispatch a command to its connection-level handler.
+    ///
+    /// This method routes commands to their appropriate handlers based on the
+    /// `ConnectionLevelHandler` category. Returns `Some(responses)` if the command
+    /// was handled, or `None` if it should fall through to standard routing.
+    async fn dispatch_connection_level(
+        &mut self,
+        handler: ConnectionLevelHandler,
+        cmd_name: &str,
+        args: &[Bytes],
+    ) -> Option<Vec<Response>> {
+        match handler {
+            // Auth handlers - these are handled early in route_and_execute_with_transaction
+            // so they shouldn't reach here, but we handle them for completeness
+            ConnectionLevelHandler::Auth => Some(vec![self.handle_auth(args).await]),
+            ConnectionLevelHandler::Hello => Some(vec![self.handle_hello(args).await]),
+            ConnectionLevelHandler::Acl => Some(vec![self.handle_acl_command(args).await]),
+
+            // Pub/Sub handlers
+            ConnectionLevelHandler::PubSub => self.dispatch_pubsub(cmd_name, args).await,
+
+            // Sharded Pub/Sub handlers
+            ConnectionLevelHandler::ShardedPubSub => self.dispatch_sharded_pubsub(cmd_name, args).await,
+
+            // Transaction handlers
+            ConnectionLevelHandler::Transaction => self.dispatch_transaction(cmd_name, args).await,
+
+            // Scripting handlers
+            ConnectionLevelHandler::Scripting => self.dispatch_scripting(cmd_name, args).await,
+
+            // Function handlers
+            ConnectionLevelHandler::Function => self.dispatch_function(cmd_name, args).await,
+
+            // Admin handlers
+            ConnectionLevelHandler::Client => Some(vec![self.handle_client_command(args).await]),
+            ConnectionLevelHandler::Config => Some(vec![self.handle_config_command(args).await]),
+            ConnectionLevelHandler::Info => Some(vec![self.handle_info(args).await]),
+            ConnectionLevelHandler::Debug => self.dispatch_debug(args).await,
+            ConnectionLevelHandler::Slowlog => Some(vec![self.handle_slowlog_command(args).await]),
+            ConnectionLevelHandler::Memory => Some(vec![self.handle_memory_command(args).await]),
+            ConnectionLevelHandler::Latency => Some(vec![self.handle_latency_command(args).await]),
+            ConnectionLevelHandler::Status => Some(vec![self.handle_status_command(args).await]),
+
+            // Connection state handlers
+            ConnectionLevelHandler::ConnectionState => self.dispatch_connection_state(cmd_name, args).await,
+
+            // Cluster handlers - fall through to standard routing
+            ConnectionLevelHandler::Cluster => None,
+
+            // Replication handlers - fall through to standard routing
+            ConnectionLevelHandler::Replication => None,
+        }
+    }
+
+    /// Dispatch pub/sub commands.
+    async fn dispatch_pubsub(&mut self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
+        match cmd_name {
+            "SUBSCRIBE" => {
+                if let Err(err) = self.validate_channel_access(args) {
+                    return Some(vec![err]);
+                }
+                Some(self.handle_subscribe(args).await)
+            }
+            "UNSUBSCRIBE" => Some(self.handle_unsubscribe(args).await),
+            "PSUBSCRIBE" => {
+                if let Err(err) = self.validate_channel_access(args) {
+                    return Some(vec![err]);
+                }
+                Some(self.handle_psubscribe(args).await)
+            }
+            "PUNSUBSCRIBE" => Some(self.handle_punsubscribe(args).await),
+            "PUBLISH" => {
+                if !args.is_empty() {
+                    if let Err(err) = self.validate_channel_access(&args[..1]) {
+                        return Some(vec![err]);
+                    }
+                }
+                Some(vec![self.handle_publish(args).await])
+            }
+            "PUBSUB" => Some(vec![self.handle_pubsub_command(args).await]),
+            "RESET" => Some(vec![self.handle_reset().await]),
+            _ => None,
+        }
+    }
+
+    /// Dispatch sharded pub/sub commands.
+    async fn dispatch_sharded_pubsub(&mut self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
+        match cmd_name {
+            "SSUBSCRIBE" => {
+                if let Err(err) = self.validate_channel_access(args) {
+                    return Some(vec![err]);
+                }
+                Some(self.handle_ssubscribe(args).await)
+            }
+            "SUNSUBSCRIBE" => Some(self.handle_sunsubscribe(args).await),
+            "SPUBLISH" => {
+                if !args.is_empty() {
+                    if let Err(err) = self.validate_channel_access(&args[..1]) {
+                        return Some(vec![err]);
+                    }
+                }
+                Some(vec![self.handle_spublish(args).await])
+            }
+            _ => None,
+        }
+    }
+
+    /// Dispatch transaction commands.
+    async fn dispatch_transaction(&mut self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
+        match cmd_name {
+            "MULTI" => Some(vec![self.handle_multi()]),
+            "EXEC" => Some(vec![self.handle_exec().await]),
+            "DISCARD" => Some(vec![self.handle_discard()]),
+            "WATCH" => Some(vec![self.handle_watch(args).await]),
+            "UNWATCH" => Some(vec![self.handle_unwatch()]),
+            _ => None,
+        }
+    }
+
+    /// Dispatch scripting commands.
+    async fn dispatch_scripting(&mut self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
+        match cmd_name {
+            "EVAL" => Some(vec![self.handle_eval(args).await]),
+            "EVALSHA" => Some(vec![self.handle_evalsha(args).await]),
+            "SCRIPT" => Some(vec![self.handle_script(args).await]),
+            _ => None,
+        }
+    }
+
+    /// Dispatch function commands.
+    async fn dispatch_function(&mut self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
+        match cmd_name {
+            "FCALL" => Some(vec![self.handle_fcall(args, false).await]),
+            "FCALL_RO" => Some(vec![self.handle_fcall(args, true).await]),
+            "FUNCTION" => Some(vec![self.handle_function(args).await]),
+            _ => None,
+        }
+    }
+
+    /// Dispatch debug commands.
+    async fn dispatch_debug(&mut self, args: &[Bytes]) -> Option<Vec<Response>> {
+        if args.is_empty() {
+            return None; // Fall through to standard routing
+        }
+
+        let subcommand = args[0].to_ascii_uppercase();
+        match subcommand.as_slice() {
+            b"SLEEP" => Some(vec![self.handle_debug_sleep(args).await]),
+            b"TRACING" => {
+                if args.len() > 1 && args[1].eq_ignore_ascii_case(b"STATUS") {
+                    Some(vec![self.handle_debug_tracing_status()])
+                } else if args.len() > 1 && args[1].eq_ignore_ascii_case(b"RECENT") {
+                    Some(vec![self.handle_debug_tracing_recent(args)])
+                } else {
+                    Some(vec![Response::error(
+                        "ERR Unknown DEBUG TRACING subcommand. Use STATUS or RECENT [count].",
+                    )])
+                }
+            }
+            b"VLL" => Some(vec![self.handle_debug_vll(args).await]),
+            b"BUNDLE" => {
+                if args.len() > 1 && args[1].eq_ignore_ascii_case(b"GENERATE") {
+                    Some(vec![self.handle_debug_bundle_generate(args).await])
+                } else if args.len() > 1 && args[1].eq_ignore_ascii_case(b"LIST") {
+                    Some(vec![self.handle_debug_bundle_list()])
+                } else {
+                    Some(vec![Response::error(
+                        "ERR Unknown DEBUG BUNDLE subcommand. Use GENERATE [DURATION <seconds>] or LIST.",
+                    )])
+                }
+            }
+            _ => None, // Fall through for other DEBUG subcommands
+        }
+    }
+
+    /// Dispatch connection state commands.
+    async fn dispatch_connection_state(&mut self, cmd_name: &str, _args: &[Bytes]) -> Option<Vec<Response>> {
+        match cmd_name {
+            "RESET" => Some(vec![self.handle_reset().await]),
+            // Note: SELECT, QUIT, PING, ECHO, COMMAND are handled via standard shard routing
+            _ => None,
+        }
+    }
+
     /// Route and execute a command, handling transaction and pub/sub modes.
     /// Returns a Vec of responses since pub/sub commands can return multiple messages.
     async fn route_and_execute_with_transaction(&mut self, cmd: &ParsedCommand) -> Vec<Response> {
@@ -1445,107 +1650,15 @@ impl ConnectionHandler {
             return vec![error_response];
         }
 
-        // Handle pub/sub commands specially (they return multiple responses)
-        match cmd_name_str.as_ref() {
-            "SUBSCRIBE" => {
-                if let Err(err) = self.validate_channel_access(&cmd.args) {
-                    return vec![err];
-                }
-                return self.handle_subscribe(&cmd.args).await;
+        // Category-based dispatch using the command router
+        // This handles: pub/sub, transactions, scripting, functions, admin commands
+        if let Some(handler) = router::CommandRouter::handler_for_command(&cmd_name_str) {
+            if let Some(responses) = self.dispatch_connection_level(handler, &cmd_name_str, &cmd.args).await {
+                return responses;
             }
-            "UNSUBSCRIBE" => return self.handle_unsubscribe(&cmd.args).await,
-            "PSUBSCRIBE" => {
-                if let Err(err) = self.validate_channel_access(&cmd.args) {
-                    return vec![err];
-                }
-                return self.handle_psubscribe(&cmd.args).await;
-            }
-            "PUNSUBSCRIBE" => return self.handle_punsubscribe(&cmd.args).await,
-            "PUBLISH" => {
-                if !cmd.args.is_empty() {
-                    if let Err(err) = self.validate_channel_access(&cmd.args[..1]) {
-                        return vec![err];
-                    }
-                }
-                return vec![self.handle_publish(&cmd.args).await];
-            }
-            "SSUBSCRIBE" => {
-                if let Err(err) = self.validate_channel_access(&cmd.args) {
-                    return vec![err];
-                }
-                return self.handle_ssubscribe(&cmd.args).await;
-            }
-            "SUNSUBSCRIBE" => return self.handle_sunsubscribe(&cmd.args).await,
-            "SPUBLISH" => {
-                if !cmd.args.is_empty() {
-                    if let Err(err) = self.validate_channel_access(&cmd.args[..1]) {
-                        return vec![err];
-                    }
-                }
-                return vec![self.handle_spublish(&cmd.args).await];
-            }
-            "PUBSUB" => return vec![self.handle_pubsub_command(&cmd.args).await],
-            "RESET" => return vec![self.handle_reset().await],
-            _ => {}
         }
 
-        // Handle transaction commands specially
-        match cmd_name_str.as_ref() {
-            "MULTI" => return vec![self.handle_multi()],
-            "EXEC" => return vec![self.handle_exec().await],
-            "DISCARD" => return vec![self.handle_discard()],
-            "WATCH" => return vec![self.handle_watch(&cmd.args).await],
-            "UNWATCH" => return vec![self.handle_unwatch()],
-            _ => {}
-        }
-
-        // Handle scripting commands specially (routing needs special handling)
-        match cmd_name_str.as_ref() {
-            "EVAL" => return vec![self.handle_eval(&cmd.args).await],
-            "EVALSHA" => return vec![self.handle_evalsha(&cmd.args).await],
-            "SCRIPT" => return vec![self.handle_script(&cmd.args).await],
-            _ => {}
-        }
-
-        // Handle function commands specially
-        match cmd_name_str.as_ref() {
-            "FCALL" => return vec![self.handle_fcall(&cmd.args, false).await],
-            "FCALL_RO" => return vec![self.handle_fcall(&cmd.args, true).await],
-            "FUNCTION" => return vec![self.handle_function(&cmd.args).await],
-            _ => {}
-        }
-
-        // Handle CLIENT commands specially (need access to client registry)
-        if cmd_name_str == "CLIENT" {
-            return vec![self.handle_client_command(&cmd.args).await];
-        }
-
-        // Handle CONFIG commands specially (need access to config manager)
-        if cmd_name_str == "CONFIG" {
-            return vec![self.handle_config_command(&cmd.args).await];
-        }
-
-        // Handle SLOWLOG commands specially (need scatter-gather across shards)
-        if cmd_name_str == "SLOWLOG" {
-            return vec![self.handle_slowlog_command(&cmd.args).await];
-        }
-
-        // Handle MEMORY commands specially (need scatter-gather or key-based routing)
-        if cmd_name_str == "MEMORY" {
-            return vec![self.handle_memory_command(&cmd.args).await];
-        }
-
-        // Handle LATENCY commands specially (need scatter-gather across shards)
-        if cmd_name_str == "LATENCY" {
-            return vec![self.handle_latency_command(&cmd.args).await];
-        }
-
-        // Handle STATUS commands specially (need to collect data from various components)
-        if cmd_name_str == "STATUS" {
-            return vec![self.handle_status_command(&cmd.args).await];
-        }
-
-        // Handle BGSAVE/LASTSAVE commands specially (need snapshot coordinator)
+        // Handle persistence commands (need snapshot coordinator)
         if cmd_name_str == "BGSAVE" {
             return vec![self.handle_bgsave(&cmd.args)];
         }
@@ -1564,7 +1677,7 @@ impl ConnectionHandler {
             return vec![self.route_and_execute(cmd).await];
         }
 
-        // Handle server commands that need special routing
+        // Handle server commands that need scatter-gather routing
         match cmd_name_str.as_ref() {
             "SCAN" => return vec![self.handle_scan(&cmd.args).await],
             "KEYS" => return vec![self.handle_keys(&cmd.args).await],
@@ -1573,43 +1686,7 @@ impl ConnectionHandler {
             "FLUSHDB" => return vec![self.handle_flushdb(&cmd.args).await],
             "FLUSHALL" => return vec![self.handle_flushall(&cmd.args).await],
             "MIGRATE" => return vec![self.handle_migrate(&cmd.args).await],
-            "DEBUG" => {
-                // Check for DEBUG SLEEP subcommand
-                if !cmd.args.is_empty() && cmd.args[0].eq_ignore_ascii_case(b"SLEEP") {
-                    return vec![self.handle_debug_sleep(&cmd.args).await];
-                }
-                // Check for DEBUG TRACING subcommand
-                if !cmd.args.is_empty() && cmd.args[0].eq_ignore_ascii_case(b"TRACING") {
-                    if cmd.args.len() > 1 && cmd.args[1].eq_ignore_ascii_case(b"STATUS") {
-                        return vec![self.handle_debug_tracing_status()];
-                    }
-                    if cmd.args.len() > 1 && cmd.args[1].eq_ignore_ascii_case(b"RECENT") {
-                        return vec![self.handle_debug_tracing_recent(&cmd.args)];
-                    }
-                    return vec![Response::error(
-                        "ERR Unknown DEBUG TRACING subcommand. Use STATUS or RECENT [count].",
-                    )];
-                }
-// Check for DEBUG VLL subcommand
-                if !cmd.args.is_empty() && cmd.args[0].eq_ignore_ascii_case(b"VLL") {
-                    return vec![self.handle_debug_vll(&cmd.args).await];
-                }
-                // Check for DEBUG BUNDLE subcommand
-                if !cmd.args.is_empty() && cmd.args[0].eq_ignore_ascii_case(b"BUNDLE") {
-                    if cmd.args.len() > 1 && cmd.args[1].eq_ignore_ascii_case(b"GENERATE") {
-                        return vec![self.handle_debug_bundle_generate(&cmd.args).await];
-                    }
-                    if cmd.args.len() > 1 && cmd.args[1].eq_ignore_ascii_case(b"LIST") {
-                        return vec![self.handle_debug_bundle_list()];
-                    }
-                    return vec![Response::error(
-                        "ERR Unknown DEBUG BUNDLE subcommand. Use GENERATE [DURATION <seconds>] or LIST.",
-                    )];
-                }
-                // Fall through for other DEBUG subcommands
-            }
             "SHUTDOWN" => return vec![self.handle_shutdown(&cmd.args).await],
-            "INFO" => return vec![self.handle_info(&cmd.args).await],
             _ => {}
         }
 
