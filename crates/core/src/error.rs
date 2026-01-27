@@ -145,6 +145,10 @@ define_command_errors! {
     /// Cluster command requires being the leader.
     ClusterDown => "CLUSTERDOWN The cluster is down",
 
+    // === Replication Errors ===
+    /// Replication is not enabled.
+    ReplicationDisabled => "ERR This instance has replication support disabled",
+
     /// Wrong number of arguments for a dynamic command string.
     WrongArgCount { command: String } => "ERR wrong number of arguments for '{command}' command",
 

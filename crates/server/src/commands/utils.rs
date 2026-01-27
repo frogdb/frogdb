@@ -331,3 +331,109 @@ pub fn parse_optional_limit(args: &[Bytes], i: usize) -> Result<(usize, usize), 
         Ok((0, i))
     }
 }
+
+// ============================================================================
+// Sorted Set Range Utilities
+// ============================================================================
+
+/// Limit options for range commands (ZRANGE, ZRANGEBYSCORE, etc.).
+///
+/// This represents the `LIMIT offset count` clause where:
+/// - `offset` is the number of elements to skip
+/// - `count` is the maximum number of elements to return (None = unlimited)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LimitOptions {
+    /// Number of elements to skip.
+    pub offset: usize,
+    /// Maximum number of elements to return (None = unlimited).
+    pub count: Option<usize>,
+}
+
+impl LimitOptions {
+    /// Parse LIMIT offset count from arguments.
+    ///
+    /// Returns `(options, args_consumed)` where `args_consumed` is 2 (LIMIT is already consumed).
+    /// A count of -1 means unlimited (represented as None).
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - The remaining arguments after LIMIT keyword
+    /// * `offset_idx` - Index of the offset argument
+    pub fn parse(args: &[Bytes], offset_idx: usize) -> Result<Self, CommandError> {
+        if offset_idx + 1 >= args.len() {
+            return Err(CommandError::SyntaxError);
+        }
+
+        let offset = parse_usize(&args[offset_idx])?;
+        let count = parse_i64(&args[offset_idx + 1])?;
+
+        let count = if count < 0 {
+            None // -1 means no limit
+        } else {
+            Some(count as usize)
+        };
+
+        Ok(Self { offset, count })
+    }
+}
+
+/// Options for sorted set range commands.
+///
+/// This struct consolidates common options used by ZRANGE, ZRANGEBYSCORE,
+/// ZRANGEBYLEX, and similar commands.
+#[derive(Debug, Clone, Default)]
+pub struct RangeOptions {
+    /// LIMIT offset count options.
+    pub limit: LimitOptions,
+    /// Whether to include scores in the response.
+    pub with_scores: bool,
+    /// Whether to reverse the order (for REV option).
+    pub rev: bool,
+}
+
+impl RangeOptions {
+    /// Check if WITHSCORES is specified.
+    #[inline]
+    pub fn with_scores(&self) -> bool {
+        self.with_scores
+    }
+
+    /// Get the offset.
+    #[inline]
+    pub fn offset(&self) -> usize {
+        self.limit.offset
+    }
+
+    /// Get the count (None means unlimited).
+    #[inline]
+    pub fn count(&self) -> Option<usize> {
+        self.limit.count
+    }
+}
+
+use frogdb_protocol::Response;
+
+/// Format a sorted set response with optional scores.
+///
+/// When `with_scores` is true, returns an array with alternating member/score pairs.
+/// When `with_scores` is false, returns just the members.
+pub fn format_scored_response(members: Vec<(Bytes, f64)>, with_scores: bool) -> Response {
+    if with_scores {
+        let arr: Vec<Response> = members
+            .into_iter()
+            .flat_map(|(member, score)| {
+                vec![
+                    Response::bulk(member.to_vec()),
+                    Response::bulk(format_float(score).into_bytes()),
+                ]
+            })
+            .collect();
+        Response::Array(arr)
+    } else {
+        let arr: Vec<Response> = members
+            .into_iter()
+            .map(|(member, _)| Response::bulk(member.to_vec()))
+            .collect();
+        Response::Array(arr)
+    }
+}

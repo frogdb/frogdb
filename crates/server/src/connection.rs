@@ -19,10 +19,17 @@ mod builder;
 pub mod deps;
 pub mod handlers;
 pub mod router;
+pub mod state;
 
 // Re-export dependency groups
 pub use deps::{
     AdminDeps, ClusterDeps, ConnectionConfig, ConnectionDeps, CoreDeps, ObservabilityDeps,
+};
+
+// Re-export state types
+pub use state::{
+    AuthState, BlockedState, ConnectionState, LocalClientStats, PubSubState, ReplyMode,
+    TransactionState, TransactionTarget, STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS,
 };
 
 // Re-export builder
@@ -39,13 +46,12 @@ use bytes::{Bytes, BytesMut};
 use frogdb_core::{
     cluster::{ClusterCommand, NodeInfo, NodeRole, SlotRange},
     generate_latency_graph, persistence::SnapshotCoordinator, shard_for_key, slot_for_key,
-    AclManager, AuthenticatedUser, ClientHandle, ClientRegistry, ClientStatsDelta,
-    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandCategory, CommandFlags,
-    CommandRegistry, ConnectionLevelOp, ExecutionStrategy, GlobPattern, IntrospectionRequest,
-    IntrospectionResponse, KeyAccessType, LatencyEvent, MetricsRecorder, PartialResult, PauseMode,
-    PubSubMessage, PubSubSender, ReplicationTracker, ReplicationTrackerImpl, ScatterOp,
-    ShardReadyResult, SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId,
-    TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+    AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
+    CommandCategory, CommandFlags, CommandRegistry, ConnectionLevelOp, ExecutionStrategy,
+    GlobPattern, IntrospectionRequest, IntrospectionResponse, KeyAccessType, LatencyEvent,
+    MetricsRecorder, PartialResult, PauseMode, PubSubMessage, PubSubSender, ReplicationTracker,
+    ReplicationTrackerImpl, ScatterOp, ShardReadyResult, SharedFunctionRegistry, ShardMemoryStats,
+    ShardMessage, StreamId, TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 use openraft::error::{ClientWriteError, RaftError};
@@ -66,274 +72,6 @@ use crate::replication::PrimaryReplicationHandler;
 use crate::runtime_config::ConfigManager;
 use crate::scatter::{strategy_for_op, ScatterGatherExecutor};
 use crate::server::next_txid;
-
-/// Target shard(s) for a transaction (prepared for future multi-shard support).
-#[derive(Debug, Clone, Default)]
-pub enum TransactionTarget {
-    /// No keys yet - target undetermined.
-    #[default]
-    None,
-    /// Single shard - execute directly.
-    Single(usize),
-    /// Multiple shards detected - error in Phase 7.1, VLL in future.
-    Multi(Vec<usize>),
-}
-
-/// State for MULTI/EXEC transactions.
-#[derive(Debug, Default)]
-pub struct TransactionState {
-    /// Queue of commands to execute at EXEC time (None = not in transaction).
-    pub queue: Option<Vec<ParsedCommand>>,
-    /// Watched keys: key -> (shard_id, version_at_watch_time).
-    pub watches: HashMap<Bytes, (usize, u64)>,
-    /// Target shard(s) for this transaction.
-    pub target: TransactionTarget,
-    /// Whether any queued command had an error (abort at EXEC).
-    pub exec_abort: bool,
-    /// Error messages for commands that had syntax errors during queuing.
-    pub queued_errors: Vec<String>,
-    /// Start time of the transaction (when MULTI was called).
-    pub start_time: Option<std::time::Instant>,
-}
-
-/// Pub/Sub state for a connection.
-#[derive(Debug, Default)]
-pub struct PubSubState {
-    /// Broadcast channel subscriptions.
-    pub subscriptions: HashSet<Bytes>,
-    /// Pattern subscriptions.
-    pub patterns: HashSet<Bytes>,
-    /// Sharded channel subscriptions.
-    pub sharded_subscriptions: HashSet<Bytes>,
-}
-
-impl PubSubState {
-    /// Check if connection is in pub/sub mode.
-    pub fn in_pubsub_mode(&self) -> bool {
-        !self.subscriptions.is_empty()
-            || !self.patterns.is_empty()
-            || !self.sharded_subscriptions.is_empty()
-    }
-
-    /// Get total subscription count.
-    pub fn total_count(&self) -> usize {
-        self.subscriptions.len() + self.patterns.len() + self.sharded_subscriptions.len()
-    }
-
-    /// Get subscription count (channels + patterns, not sharded).
-    pub fn sub_count(&self) -> usize {
-        self.subscriptions.len() + self.patterns.len()
-    }
-}
-
-/// Authentication state for a connection.
-#[derive(Debug, Clone)]
-pub enum AuthState {
-    /// Not authenticated yet (default when requirepass is set).
-    NotAuthenticated,
-    /// Authenticated with a specific user.
-    Authenticated(AuthenticatedUser),
-}
-
-impl Default for AuthState {
-    fn default() -> Self {
-        // By default, use the default user with full permissions
-        AuthState::Authenticated(AuthenticatedUser::default_user())
-    }
-}
-
-impl AuthState {
-    /// Check if the connection is authenticated.
-    pub fn is_authenticated(&self) -> bool {
-        matches!(self, AuthState::Authenticated(_))
-    }
-
-    /// Get the authenticated user, if any.
-    pub fn user(&self) -> Option<&AuthenticatedUser> {
-        match self {
-            AuthState::Authenticated(user) => Some(user),
-            AuthState::NotAuthenticated => None,
-        }
-    }
-
-    /// Get the username.
-    pub fn username(&self) -> &str {
-        match self {
-            AuthState::Authenticated(user) => &user.username,
-            AuthState::NotAuthenticated => "(not authenticated)",
-        }
-    }
-}
-
-/// Blocked state for connections waiting on blocking commands.
-#[derive(Debug, Clone)]
-pub struct BlockedState {
-    /// Shard ID where the wait is registered.
-    pub shard_id: usize,
-    /// Keys the client is waiting on.
-    pub keys: Vec<Bytes>,
-}
-
-/// Reply mode for CLIENT REPLY command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ReplyMode {
-    /// Normal reply mode (default).
-    #[default]
-    On,
-    /// No replies to client commands.
-    Off,
-}
-
-/// Interval for syncing local stats to the registry (in commands).
-const STATS_SYNC_INTERVAL_COMMANDS: u64 = 100;
-
-/// Interval for syncing local stats to the registry (in milliseconds).
-const STATS_SYNC_INTERVAL_MS: u64 = 1000;
-
-/// Connection-local stats accumulator.
-/// This is kept locally in the connection handler to minimize lock contention,
-/// and synced periodically to the ClientRegistry.
-#[derive(Debug, Default)]
-pub struct LocalClientStats {
-    /// Total commands processed since last sync.
-    pub commands_total: u64,
-    /// Total latency accumulated since last sync (microseconds).
-    pub latency_total_us: u64,
-    /// Total bytes received since last sync.
-    pub bytes_recv: u64,
-    /// Total bytes sent since last sync.
-    pub bytes_sent: u64,
-    /// Per-command latencies: (command_name, latency_us).
-    pub command_latencies: Vec<(String, u64)>,
-}
-
-impl LocalClientStats {
-    /// Record a command execution.
-    pub fn record_command(&mut self, cmd_name: &str, latency_us: u64) {
-        self.commands_total += 1;
-        self.latency_total_us += latency_us;
-        self.command_latencies.push((cmd_name.to_string(), latency_us));
-    }
-
-    /// Add bytes received.
-    pub fn add_bytes_recv(&mut self, bytes: u64) {
-        self.bytes_recv += bytes;
-    }
-
-    /// Add bytes sent.
-    pub fn add_bytes_sent(&mut self, bytes: u64) {
-        self.bytes_sent += bytes;
-    }
-
-    /// Convert to a ClientStatsDelta for syncing to the registry.
-    pub fn to_delta(&self) -> ClientStatsDelta {
-        ClientStatsDelta {
-            commands_processed: self.commands_total,
-            total_latency_us: self.latency_total_us,
-            bytes_recv: self.bytes_recv,
-            bytes_sent: self.bytes_sent,
-            command_latencies: self.command_latencies.clone(),
-        }
-    }
-
-    /// Check if there's data to sync.
-    pub fn has_data(&self) -> bool {
-        self.commands_total > 0 || self.bytes_recv > 0 || self.bytes_sent > 0
-    }
-
-    /// Clear after syncing.
-    pub fn clear(&mut self) {
-        self.commands_total = 0;
-        self.latency_total_us = 0;
-        self.bytes_recv = 0;
-        self.bytes_sent = 0;
-        self.command_latencies.clear();
-    }
-}
-
-/// Connection state.
-#[allow(dead_code)]
-pub struct ConnectionState {
-    /// Unique connection ID.
-    pub id: u64,
-
-    /// Client address.
-    pub addr: SocketAddr,
-
-    /// Connection creation time.
-    pub created_at: std::time::Instant,
-
-    /// Protocol version.
-    pub protocol_version: ProtocolVersion,
-
-    /// Whether HELLO has been received on this connection.
-    pub hello_received: bool,
-
-    /// When HELLO was received (for debugging/monitoring).
-    pub hello_at: Option<std::time::Instant>,
-
-    /// Client name (from CLIENT SETNAME).
-    pub name: Option<Bytes>,
-
-    /// Transaction state for MULTI/EXEC.
-    pub transaction: TransactionState,
-
-    /// Pub/Sub state.
-    pub pubsub: PubSubState,
-
-    /// Authentication state.
-    pub auth: AuthState,
-
-    /// Blocked state for blocking commands (None = not blocked).
-    pub blocked: Option<BlockedState>,
-
-    /// Reply mode (from CLIENT REPLY).
-    pub reply_mode: ReplyMode,
-
-    /// Skip the next reply (for CLIENT REPLY SKIP).
-    pub skip_next_reply: bool,
-
-    /// ASKING flag for cluster slot migration (cleared after use).
-    pub asking: bool,
-
-    /// READONLY flag for allowing reads on cluster replicas.
-    pub readonly: bool,
-
-    /// Local stats accumulator (synced to registry periodically).
-    pub local_stats: LocalClientStats,
-
-    /// Last sync time for stats.
-    pub last_stats_sync: std::time::Instant,
-}
-
-impl ConnectionState {
-    fn new(id: u64, addr: SocketAddr, requires_auth: bool) -> Self {
-        let now = std::time::Instant::now();
-        Self {
-            id,
-            addr,
-            created_at: now,
-            protocol_version: ProtocolVersion::default(),
-            hello_received: false,
-            hello_at: None,
-            name: None,
-            transaction: TransactionState::default(),
-            pubsub: PubSubState::default(),
-            auth: if requires_auth {
-                AuthState::NotAuthenticated
-            } else {
-                AuthState::default()
-            },
-            blocked: None,
-            reply_mode: ReplyMode::default(),
-            skip_next_reply: false,
-            asking: false,
-            readonly: false,
-            local_stats: LocalClientStats::default(),
-            last_stats_sync: now,
-        }
-    }
-}
 
 /// Connection handler that processes client commands.
 pub struct ConnectionHandler {
@@ -1703,7 +1441,7 @@ impl ConnectionHandler {
 
         // Check authentication before processing other commands
         // AUTH, QUIT, HELLO, and PING are allowed without authentication (using execution strategy)
-        if !self.state.auth.is_authenticated() && !self.is_auth_exempt_by_strategy(&cmd_name_str) {
+        if !self.state.auth.is_authenticated() && !self.is_auth_exempt(&cmd_name_str) {
             return vec![Response::error("NOAUTH Authentication required.")];
         }
 
@@ -1751,7 +1489,7 @@ impl ConnectionHandler {
         }
 
         // Check pub/sub mode restrictions using execution strategy
-        if self.state.pubsub.in_pubsub_mode() && !self.is_allowed_in_pubsub_mode_by_strategy(&cmd_name_str) {
+        if self.state.pubsub.in_pubsub_mode() && !self.is_allowed_in_pubsub_mode(&cmd_name_str) {
             return vec![Response::error(format!(
                 "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
                 cmd_name_str
@@ -1998,7 +1736,7 @@ impl ConnectionHandler {
         if self.state.transaction.queue.is_some() {
             // Check if it's a blocking command - not allowed in MULTI
             // Use execution_strategy() for type-safe blocking detection
-            if self.is_blocking_command_by_strategy(&cmd_name_str) {
+            if self.is_blocking_command(&cmd_name_str) {
                 return vec![Response::error(
                     "ERR Blocking commands are not allowed inside a transaction",
                 )];
@@ -2058,24 +1796,15 @@ impl ConnectionHandler {
         vec![response]
     }
 
-    /// Check if a command is a blocking command using execution strategy.
-    fn is_blocking_command_by_strategy(&self, cmd_name: &str) -> bool {
+    /// Check if a command is a blocking command.
+    fn is_blocking_command(&self, cmd_name: &str) -> bool {
         self.registry
             .get_entry(cmd_name)
             .is_some_and(|entry| matches!(entry.execution_strategy(), ExecutionStrategy::Blocking { .. }))
     }
 
-    /// Check if a command is a blocking command (legacy string-based check).
-    /// Prefer is_blocking_command_by_strategy() for new code.
-    fn is_blocking_command(cmd: &str) -> bool {
-        matches!(
-            cmd,
-            "BLPOP" | "BRPOP" | "BLMOVE" | "BLMPOP" | "BZPOPMIN" | "BZPOPMAX" | "BZMPOP" | "BRPOPLPUSH"
-        )
-    }
-
-    /// Check if a command is allowed in pub/sub mode using execution strategy.
-    fn is_allowed_in_pubsub_mode_by_strategy(&self, cmd_name: &str) -> bool {
+    /// Check if a command is allowed in pub/sub mode.
+    fn is_allowed_in_pubsub_mode(&self, cmd_name: &str) -> bool {
         // PING and QUIT are special cases - always allowed
         if matches!(cmd_name, "PING" | "QUIT") {
             return true;
@@ -2090,18 +1819,8 @@ impl ConnectionHandler {
         })
     }
 
-    /// Check if a command is allowed in pub/sub mode (legacy string-based check).
-    /// Prefer is_allowed_in_pubsub_mode_by_strategy() for new code.
-    fn is_allowed_in_pubsub_mode(cmd: &str) -> bool {
-        matches!(
-            cmd,
-            "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE"
-                | "SSUBSCRIBE" | "SUNSUBSCRIBE" | "PING" | "QUIT" | "RESET"
-        )
-    }
-
-    /// Check if a command is exempt from authentication requirements using execution strategy.
-    fn is_auth_exempt_by_strategy(&self, cmd_name: &str) -> bool {
+    /// Check if a command is exempt from authentication requirements.
+    fn is_auth_exempt(&self, cmd_name: &str) -> bool {
         // PING and QUIT are always allowed
         if matches!(cmd_name, "PING" | "QUIT") {
             return true;
@@ -2115,15 +1834,9 @@ impl ConnectionHandler {
         })
     }
 
-    /// Check if a command is exempt from authentication requirements (legacy string-based check).
-    /// Prefer is_auth_exempt_by_strategy() for new code.
-    fn is_auth_exempt(cmd: &str) -> bool {
-        matches!(cmd, "AUTH" | "QUIT" | "HELLO" | "PING")
-    }
-
-    /// Check if a command is exempt from slot validation in cluster mode using execution strategy.
+    /// Check if a command is exempt from slot validation in cluster mode.
     /// Connection-level and admin commands that don't operate on specific keys are exempt.
-    fn is_cluster_exempt_by_strategy(&self, cmd_name: &str) -> bool {
+    fn is_cluster_exempt(&self, cmd_name: &str) -> bool {
         // Certain commands are always exempt
         if matches!(
             cmd_name,
@@ -2140,18 +1853,6 @@ impl ConnectionHandler {
         })
     }
 
-    /// Check if a command is exempt from slot validation in cluster mode (legacy string-based check).
-    /// Prefer is_cluster_exempt_by_strategy() for new code.
-    fn is_cluster_exempt(cmd: &str) -> bool {
-        matches!(
-            cmd,
-            "CLUSTER" | "ASKING" | "READONLY" | "READWRITE" | "AUTH" | "HELLO" | "QUIT"
-                | "PING" | "INFO" | "CONFIG" | "CLIENT" | "DEBUG" | "COMMAND" | "TIME"
-                | "DBSIZE" | "LASTSAVE" | "BGSAVE" | "BGREWRITEAOF" | "SLOWLOG" | "ACL"
-                | "MEMORY" | "LATENCY" | "MODULE"
-        )
-    }
-
     /// Validate slot ownership for keys in cluster mode.
     /// Returns Some(Response) if validation fails, None if OK.
     fn validate_cluster_slots(&mut self, cmd: &ParsedCommand) -> Option<Response> {
@@ -2163,7 +1864,7 @@ impl ConnectionHandler {
         let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
 
         // Skip cluster-exempt commands (using execution strategy for type-safe check)
-        if self.is_cluster_exempt_by_strategy(&cmd_name) {
+        if self.is_cluster_exempt(&cmd_name) {
             return None;
         }
 

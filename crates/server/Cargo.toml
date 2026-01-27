@@ -17,6 +17,7 @@ turmoil = ["dep:turmoil"]
 frogdb-protocol.workspace = true
 frogdb-core.workspace = true
 frogdb-metrics.workspace = true
+frogdb-macros = { path = "../frogdb-macros" }
 bytes.workspace = true
 rand.workspace = true
 tokio.workspace = true
