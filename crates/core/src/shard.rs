@@ -1802,41 +1802,39 @@ impl ShardWorker {
         let start = Instant::now();
         let now = Instant::now();
 
-        // Get expired keys from the expiry index
-        if let Some(expiry_index) = self.store.expiry_index() {
-            let expired = expiry_index.get_expired(now);
-            let mut deleted_count = 0u64;
+        // Get expired keys using the cleaner abstraction
+        let expired = self.store.get_expired_keys(now);
+        let mut deleted_count = 0u64;
 
-            for key in expired {
-                if start.elapsed() > budget {
-                    tracing::trace!(
-                        shard_id = self.shard_id,
-                        "Active expiry budget exhausted"
-                    );
-                    break;
-                }
-
-                // Delete the key
-                if self.store.delete(&key) {
-                    deleted_count += 1;
-                    tracing::trace!(
-                        shard_id = self.shard_id,
-                        key = %String::from_utf8_lossy(&key),
-                        "Active expiry deleted key"
-                    );
-                }
-            }
-
-            // Record expired keys metric and increment version
-            if deleted_count > 0 {
-                let shard_label = self.shard_id.to_string();
-                self.metrics_recorder.increment_counter(
-                    "frogdb_keys_expired_total",
-                    deleted_count,
-                    &[("shard", &shard_label)],
+        for key in expired {
+            if start.elapsed() > budget {
+                tracing::trace!(
+                    shard_id = self.shard_id,
+                    "Active expiry budget exhausted"
                 );
-                self.increment_version();
+                break;
             }
+
+            // Delete the key
+            if self.store.delete(&key) {
+                deleted_count += 1;
+                tracing::trace!(
+                    shard_id = self.shard_id,
+                    key = %String::from_utf8_lossy(&key),
+                    "Active expiry deleted key"
+                );
+            }
+        }
+
+        // Record expired keys metric and increment version
+        if deleted_count > 0 {
+            let shard_label = self.shard_id.to_string();
+            self.metrics_recorder.increment_counter(
+                "frogdb_keys_expired_total",
+                deleted_count,
+                &[("shard", &shard_label)],
+            );
+            self.increment_version();
         }
     }
 
@@ -1886,14 +1884,12 @@ impl ShardWorker {
             &[("shard", &shard_label)],
         );
 
-        // Keys with expiry
-        if let Some(expiry_index) = self.store.expiry_index() {
-            self.metrics_recorder.record_gauge(
-                "frogdb_keys_with_expiry",
-                expiry_index.len() as f64,
-                &[("shard", &shard_label)],
-            );
-        }
+        // Keys with expiry (using cleaner abstraction)
+        self.metrics_recorder.record_gauge(
+            "frogdb_keys_with_expiry",
+            self.store.keys_with_expiry_count() as f64,
+            &[("shard", &shard_label)],
+        );
     }
 
     // ========================================================================

@@ -1,0 +1,40 @@
+//! Security and ACL configuration.
+
+use serde::{Deserialize, Serialize};
+
+/// Security configuration.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityConfig {
+    /// Legacy password for the default user (like Redis requirepass).
+    /// If set, clients must AUTH with this password before running commands.
+    #[serde(default)]
+    pub requirepass: String,
+}
+
+/// ACL configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AclFileConfig {
+    /// Path to the ACL file for SAVE/LOAD operations.
+    /// If empty, ACL SAVE/LOAD will return an error.
+    #[serde(default)]
+    pub aclfile: String,
+
+    /// Maximum number of entries in the ACL LOG.
+    #[serde(default = "default_acl_log_max_len")]
+    pub log_max_len: usize,
+}
+
+fn default_acl_log_max_len() -> usize {
+    128
+}
+
+impl Default for AclFileConfig {
+    fn default() -> Self {
+        Self {
+            aclfile: String::new(),
+            log_max_len: default_acl_log_max_len(),
+        }
+    }
+}
