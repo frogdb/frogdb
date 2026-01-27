@@ -15,18 +15,10 @@
 //! - [`ConnectionConfig`] - Configuration options
 
 // Submodules
-mod acl;
 mod builder;
 mod deps;
-mod pubsub;
-mod state;
-mod transaction;
-
-// Re-export state types for backwards compatibility
-pub use state::{
-    AuthState, BlockedState, ConnectionMode, LocalClientStats, PubSubState, ReplyMode,
-    TransactionState, TransactionTarget,
-};
+pub mod handlers;
+pub mod router;
 
 // Re-export dependency groups
 pub use deps::{

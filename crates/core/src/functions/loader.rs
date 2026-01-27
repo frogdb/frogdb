@@ -8,6 +8,7 @@ use super::error::FunctionError;
 use super::function::FunctionFlags;
 use super::library::FunctionLibrary;
 use super::parser::{parse_shebang, CapturedRegistration, ParsedLibrary};
+use crate::sync::MutexExt;
 
 /// Load a function library from source code.
 ///
@@ -65,7 +66,7 @@ fn execute_in_sandbox(code: &str) -> Result<Vec<CapturedRegistration>, FunctionE
         })?;
 
     // Extract captured registrations
-    let regs = registrations.lock().unwrap().clone();
+    let regs = registrations.lock_or_panic("execute_in_sandbox::extract").clone();
 
     Ok(regs)
 }
@@ -141,7 +142,7 @@ fn setup_register_function_binding(
 
             // Check for duplicate registrations
             {
-                let existing = regs.lock().unwrap();
+                let existing = regs.lock_or_panic("register_function::check_duplicates");
                 if existing.iter().any(|r| r.name == registration.name) {
                     return Err(mlua::Error::RuntimeError(format!(
                         "Function '{}' already registered in this library",
@@ -151,7 +152,7 @@ fn setup_register_function_binding(
             }
 
             // Store the registration
-            regs.lock().unwrap().push(registration);
+            regs.lock_or_panic("register_function::store").push(registration);
 
             Ok(())
         })

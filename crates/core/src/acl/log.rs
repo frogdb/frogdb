@@ -7,6 +7,8 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::sync::MutexExt;
+
 /// Default maximum number of log entries.
 pub const DEFAULT_ACL_LOG_MAX_LEN: usize = 128;
 
@@ -169,7 +171,7 @@ impl AclLog {
         client_info: &str,
         object: &str,
     ) {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock_or_panic("AclLog::log");
 
         // Check if we can collapse with the most recent entry
         if let Some(last) = entries.front_mut() {
@@ -181,7 +183,7 @@ impl AclLog {
 
         // Create new entry
         let entry_id = {
-            let mut id = self.next_id.lock().unwrap();
+            let mut id = self.next_id.lock_or_panic("AclLog::log::next_id");
             let current = *id;
             *id += 1;
             current
@@ -242,25 +244,25 @@ impl AclLog {
 
     /// Get log entries (newest first).
     pub fn get(&self, count: Option<usize>) -> Vec<AclLogEntry> {
-        let entries = self.entries.lock().unwrap();
+        let entries = self.entries.lock_or_panic("AclLog::get");
         let count = count.unwrap_or(10).min(entries.len());
         entries.iter().take(count).cloned().collect()
     }
 
     /// Reset the log.
     pub fn reset(&self) {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock_or_panic("AclLog::reset");
         entries.clear();
     }
 
     /// Get the number of entries in the log.
     pub fn len(&self) -> usize {
-        self.entries.lock().unwrap().len()
+        self.entries.lock_or_panic("AclLog::len").len()
     }
 
     /// Check if the log is empty.
     pub fn is_empty(&self) -> bool {
-        self.entries.lock().unwrap().is_empty()
+        self.entries.lock_or_panic("AclLog::is_empty").is_empty()
     }
 }
 

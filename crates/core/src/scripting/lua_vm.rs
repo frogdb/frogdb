@@ -16,6 +16,7 @@ use crate::command::CommandContext;
 use crate::registry::CommandRegistry;
 use crate::shard::ShardMessage;
 use crate::store::Store;
+use crate::sync::{MutexExt, RwLockExt};
 
 /// Context for executing commands during script execution.
 ///
@@ -65,7 +66,7 @@ impl VmContextAccessor {
     /// This method must only be called during script execution when the
     /// command context pointers are valid.
     pub fn execute_command(&self, parts: &[Bytes]) -> Result<Response, String> {
-        let ctx_guard = self.cmd_ctx.read().unwrap();
+        let ctx_guard = self.cmd_ctx.read_or_panic("VmContextAccessor::execute_command");
         let exec_ctx = ctx_guard
             .as_ref()
             .ok_or_else(|| "ERR command execution context not available".to_string())?;
@@ -114,7 +115,7 @@ impl VmContextAccessor {
 
     /// Mark the script as having performed a write operation.
     pub fn mark_write(&self) {
-        self.state.lock().unwrap().has_writes = true;
+        self.state.lock_or_panic("VmContextAccessor::mark_write").has_writes = true;
     }
 }
 
@@ -320,7 +321,7 @@ impl LuaVm {
 
         // Reset execution state
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_or_panic("LuaVm::prepare_execution");
             state.reset();
             state.start_time = Some(start_time);
             state.timeout_ms = self.config.lua_time_limit_ms;
@@ -374,7 +375,7 @@ impl LuaVm {
         let _ = globals.set("ARGV", Value::Nil);
 
         // Reset state
-        self.state.lock().unwrap().reset();
+        self.state.lock_or_panic("LuaVm::cleanup_execution").reset();
     }
 
     /// Execute a Lua script.
@@ -421,12 +422,12 @@ impl LuaVm {
 
     /// Set the command execution context for the duration of script execution.
     pub fn set_command_context(&self, ctx: CommandExecutionContext) {
-        *self.cmd_ctx.write().unwrap() = Some(ctx);
+        *self.cmd_ctx.write_or_panic("LuaVm::set_command_context") = Some(ctx);
     }
 
     /// Clear the command execution context after script execution.
     pub fn clear_command_context(&self) {
-        *self.cmd_ctx.write().unwrap() = None;
+        *self.cmd_ctx.write_or_panic("LuaVm::clear_command_context") = None;
     }
 
     /// Create a context accessor that can be used in Lua closures.
@@ -439,17 +440,17 @@ impl LuaVm {
 
     /// Mark the script as having performed writes.
     pub fn mark_write(&self) {
-        self.state.lock().unwrap().has_writes = true;
+        self.state.lock_or_panic("LuaVm::mark_write").has_writes = true;
     }
 
     /// Check if the script has performed writes.
     pub fn has_writes(&self) -> bool {
-        self.state.lock().unwrap().has_writes
+        self.state.lock_or_panic("LuaVm::has_writes").has_writes
     }
 
     /// Request the script to be killed.
     pub fn request_kill(&self) -> Result<(), ScriptError> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock_or_panic("LuaVm::request_kill");
         if state.has_writes {
             Err(ScriptError::Unkillable)
         } else {
@@ -460,7 +461,7 @@ impl LuaVm {
 
     /// Check if the script is currently running.
     pub fn is_running(&self) -> bool {
-        self.state.lock().unwrap().start_time.is_some()
+        self.state.lock_or_panic("LuaVm::is_running").start_time.is_some()
     }
 
     /// Set up the redis.call and redis.pcall functions.
