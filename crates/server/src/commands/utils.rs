@@ -6,56 +6,19 @@
 use bytes::Bytes;
 use frogdb_core::{
     CommandContext, CommandError, HashValue, LexBound, ListValue, ScoreBound, SetValue,
-    SortedSetValue, StreamValue, Value,
+    SortedSetValue, StreamValue,
 };
 
 // ============================================================================
-// Parsing Utilities
+// Parsing Utilities - Re-exported from frogdb_core for backwards compatibility
 // ============================================================================
 
-/// Parse a byte slice as i64.
-pub fn parse_i64(arg: &[u8]) -> Result<i64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
+// Re-export generic parsing functions from core.
+// These now accept any type implementing AsRef<[u8]>, including &[u8] and &Bytes.
+pub use frogdb_core::{parse_f64, parse_i64, parse_u64, parse_usize};
 
-/// Parse a byte slice as u64.
-pub fn parse_u64(arg: &[u8]) -> Result<u64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
-
-/// Parse a byte slice as f64.
-///
-/// Supports special values:
-/// - "inf" or "+inf" -> f64::INFINITY
-/// - "-inf" -> f64::NEG_INFINITY
-pub fn parse_f64(arg: &[u8]) -> Result<f64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| {
-            if s.eq_ignore_ascii_case("inf") || s.eq_ignore_ascii_case("+inf") {
-                Some(f64::INFINITY)
-            } else if s.eq_ignore_ascii_case("-inf") {
-                Some(f64::NEG_INFINITY)
-            } else {
-                s.parse().ok()
-            }
-        })
-        .ok_or(CommandError::NotFloat)
-}
-
-/// Parse a byte slice as usize.
-pub fn parse_usize(arg: &[u8]) -> Result<usize, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
-}
+// Re-export the generic get_or_create helper from core.
+pub use frogdb_core::get_or_create;
 
 /// Format a float for Redis compatibility.
 ///
@@ -128,115 +91,60 @@ pub fn parse_lex_bound(arg: &[u8]) -> Result<LexBound, CommandError> {
 }
 
 // ============================================================================
-// Get or Create Helpers
+// Get or Create Helpers - Thin wrappers around generic get_or_create
 // ============================================================================
 
 /// Get or create a list, returning an error if the key exists but is wrong type.
+///
+/// This is a convenience wrapper around `get_or_create::<ListValue>()`.
+#[inline]
 pub fn get_or_create_list<'a>(
     ctx: &'a mut CommandContext,
     key: &Bytes,
 ) -> Result<&'a mut ListValue, CommandError> {
-    // Check if key exists and is wrong type
-    if let Some(value) = ctx.store.get(key) {
-        if value.as_list().is_none() {
-            return Err(CommandError::WrongType);
-        }
-    } else {
-        // Create new list
-        ctx.store.set(key.clone(), Value::list());
-    }
-
-    // Now get mutable reference
-    ctx.store
-        .get_mut(key)
-        .and_then(|v| v.as_list_mut())
-        .ok_or(CommandError::WrongType)
+    get_or_create::<ListValue>(ctx, key)
 }
 
 /// Get or create a set, returning an error if the key exists but is wrong type.
+///
+/// This is a convenience wrapper around `get_or_create::<SetValue>()`.
+#[inline]
 pub fn get_or_create_set<'a>(
     ctx: &'a mut CommandContext,
     key: &Bytes,
 ) -> Result<&'a mut SetValue, CommandError> {
-    // Check if key exists and is wrong type
-    if let Some(value) = ctx.store.get(key) {
-        if value.as_set().is_none() {
-            return Err(CommandError::WrongType);
-        }
-    } else {
-        // Create new set
-        ctx.store.set(key.clone(), Value::set());
-    }
-
-    // Now get mutable reference
-    ctx.store
-        .get_mut(key)
-        .and_then(|v| v.as_set_mut())
-        .ok_or(CommandError::WrongType)
+    get_or_create::<SetValue>(ctx, key)
 }
 
 /// Get or create a hash, returning an error if the key exists but is wrong type.
+///
+/// This is a convenience wrapper around `get_or_create::<HashValue>()`.
+#[inline]
 pub fn get_or_create_hash<'a>(
     ctx: &'a mut CommandContext,
     key: &Bytes,
 ) -> Result<&'a mut HashValue, CommandError> {
-    // Check if key exists and is wrong type
-    if let Some(value) = ctx.store.get(key) {
-        if value.as_hash().is_none() {
-            return Err(CommandError::WrongType);
-        }
-    } else {
-        // Create new hash
-        ctx.store.set(key.clone(), Value::hash());
-    }
-
-    // Now get mutable reference
-    ctx.store
-        .get_mut(key)
-        .and_then(|v| v.as_hash_mut())
-        .ok_or(CommandError::WrongType)
+    get_or_create::<HashValue>(ctx, key)
 }
 
 /// Get or create a sorted set, returning an error if the key exists but is wrong type.
+///
+/// This is a convenience wrapper around `get_or_create::<SortedSetValue>()`.
+#[inline]
 pub fn get_or_create_zset<'a>(
     ctx: &'a mut CommandContext,
     key: &Bytes,
 ) -> Result<&'a mut SortedSetValue, CommandError> {
-    // Check if key exists and is wrong type
-    if let Some(value) = ctx.store.get(key) {
-        if value.as_sorted_set().is_none() {
-            return Err(CommandError::WrongType);
-        }
-    } else {
-        // Create new sorted set
-        ctx.store.set(key.clone(), Value::sorted_set());
-    }
-
-    // Now get mutable reference
-    ctx.store
-        .get_mut(key)
-        .and_then(|v| v.as_sorted_set_mut())
-        .ok_or(CommandError::WrongType)
+    get_or_create::<SortedSetValue>(ctx, key)
 }
 
 /// Get or create a stream, returning an error if the key exists but is wrong type.
+///
+/// This is a convenience wrapper around `get_or_create::<StreamValue>()`.
+#[inline]
 pub fn get_or_create_stream<'a>(
     ctx: &'a mut CommandContext,
     key: &Bytes,
 ) -> Result<&'a mut StreamValue, CommandError> {
-    // Check if key exists and is wrong type
-    if let Some(value) = ctx.store.get(key) {
-        if value.as_stream().is_none() {
-            return Err(CommandError::WrongType);
-        }
-    } else {
-        // Create new stream
-        ctx.store.set(key.clone(), Value::stream());
-    }
-
-    // Now get mutable reference
-    ctx.store
-        .get_mut(key)
-        .and_then(|v| v.as_stream_mut())
-        .ok_or(CommandError::WrongType)
+    get_or_create::<StreamValue>(ctx, key)
 }

@@ -34,10 +34,12 @@ pub mod types;
 pub mod vll;
 
 pub use command::{
-    Arity, Command, CommandContext, CommandFlags, CommandMetadata, ConnectionLevelOp,
-    ExecutionStrategy, MergeStrategy, QuorumChecker,
+    Arity, ClusterContextRef, Command, CommandContext, CommandFlags, CommandMetadata,
+    ConnectionLevelOp, ExecutionStrategy, MergeStrategy, QuorumChecker, ReplicationContextRef,
+    get_or_create,
 };
-pub use error::CommandError;
+pub use store::ValueType;
+pub use error::{CommandError, RespError};
 pub use args::{
     ArgParser, CompareCondition, ExpiryOption, ScanOptions,
     parse_f64, parse_i64, parse_u64, parse_usize, parse_from_bytes,
@@ -67,8 +69,9 @@ pub use pubsub::{
 };
 pub use shard::{
     extract_hash_tag, shard_for_key, slot_for_key, BigKeyInfo, BigKeysScanResponse,
-    HotShardStatsResponse, PartialResult, ScatterOp, ShardMemoryStats, ShardMessage,
-    ShardWorker, ShardWaitQueue, TransactionResult, WaitEntry, WalLagStatsResponse,
+    HotShardStatsResponse, PartialResult, ScatterOp, ShardClusterDeps, ShardConfig, ShardCoreDeps,
+    ShardMemoryStats, ShardMessage, ShardPersistenceDeps, ShardWorker, ShardWorkerBuilder,
+    ShardWaitQueue, TransactionResult, WaitEntry, WalLagStatsResponse,
     REDIS_CLUSTER_SLOTS, REPLICA_INTERNAL_CONN_ID,
 };
 pub use store::{HashMapStore, Store};

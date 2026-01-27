@@ -13,7 +13,7 @@ use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::error::CommandError;
 use crate::replication::{ReplicationState, ReplicationTrackerImpl};
 use crate::shard::ShardMessage;
-use crate::store::Store;
+use crate::store::{Store, ValueType};
 
 /// Defines HOW a command should be executed by the connection handler.
 ///
@@ -243,7 +243,65 @@ bitflags! {
     }
 }
 
+// ============================================================================
+// Context Helper Structs
+// ============================================================================
+
+/// Cluster-related context fields (populated in cluster mode).
+///
+/// This groups cluster-specific fields from CommandContext for cleaner access.
+pub struct ClusterContextRef<'a> {
+    /// Cluster state with slot assignments and node topology.
+    pub state: &'a Arc<ClusterState>,
+    /// This node's ID in the cluster.
+    pub node_id: u64,
+    /// Raft instance for consensus operations.
+    pub raft: &'a Arc<ClusterRaft>,
+    /// Network factory for cluster communications.
+    pub network_factory: &'a Arc<ClusterNetworkFactory>,
+}
+
+/// Replication-related context fields (populated when replication is enabled).
+pub struct ReplicationContextRef<'a> {
+    /// Replication tracker for WAIT command and replica ACKs.
+    pub tracker: &'a Arc<ReplicationTrackerImpl>,
+    /// Replication state for INFO replication section.
+    pub state: Option<&'a Arc<RwLock<ReplicationState>>>,
+}
+
+// ============================================================================
+// CommandContext
+// ============================================================================
+
 /// Context provided to commands during execution.
+///
+/// This struct provides all the context a command needs to execute, including:
+/// - Access to the local shard's data store
+/// - Shard routing information
+/// - Connection and protocol details
+/// - Optional cluster and replication context
+///
+/// # Cluster Mode
+///
+/// In cluster mode, use [`cluster_context()`](Self::cluster_context) to get a
+/// typed reference to cluster-specific fields:
+///
+/// ```rust,ignore
+/// if let Some(cluster) = ctx.cluster_context() {
+///     let state = cluster.state;
+///     let node_id = cluster.node_id;
+/// }
+/// ```
+///
+/// # Replication
+///
+/// For replication-aware commands, use [`replication_context()`](Self::replication_context):
+///
+/// ```rust,ignore
+/// if let Some(repl) = ctx.replication_context() {
+///     let acks = repl.tracker.wait_for_acks(offset, count, timeout).await;
+/// }
+/// ```
 pub struct CommandContext<'a> {
     /// Local shard's data store.
     pub store: &'a mut dyn Store,
@@ -345,6 +403,124 @@ impl<'a> CommandContext<'a> {
             quorum_checker,
         }
     }
+
+    /// Check if this context is in cluster mode.
+    #[inline]
+    pub fn is_cluster_mode(&self) -> bool {
+        self.cluster_state.is_some()
+    }
+
+    /// Get cluster context if in cluster mode.
+    ///
+    /// Returns `None` in standalone mode.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if let Some(cluster) = ctx.cluster_context() {
+    ///     println!("Node ID: {}", cluster.node_id);
+    ///     println!("Cluster state: {:?}", cluster.state);
+    /// }
+    /// ```
+    pub fn cluster_context(&self) -> Option<ClusterContextRef<'_>> {
+        let state = self.cluster_state.as_ref()?;
+        let node_id = self.node_id?;
+        let raft = self.raft.as_ref()?;
+        let network_factory = self.network_factory.as_ref()?;
+
+        Some(ClusterContextRef {
+            state,
+            node_id,
+            raft,
+            network_factory,
+        })
+    }
+
+    /// Get replication context if replication is enabled.
+    ///
+    /// Returns `None` if replication is not configured.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if let Some(repl) = ctx.replication_context() {
+    ///     let current_offset = repl.tracker.current_offset();
+    /// }
+    /// ```
+    pub fn replication_context(&self) -> Option<ReplicationContextRef<'_>> {
+        let tracker = self.replication_tracker.as_ref()?;
+
+        Some(ReplicationContextRef {
+            tracker,
+            state: self.replication_state,
+        })
+    }
+
+    /// Check if replication is enabled.
+    #[inline]
+    pub fn has_replication(&self) -> bool {
+        self.replication_tracker.is_some()
+    }
+
+    /// Get or create a value of a specific type.
+    ///
+    /// If the key doesn't exist, creates a new default value of type `T`.
+    /// If the key exists but is the wrong type, returns `WrongType` error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use frogdb_core::{CommandContext, ListValue};
+    ///
+    /// fn push_to_list(ctx: &mut CommandContext, key: &Bytes) -> Result<(), CommandError> {
+    ///     let list = ctx.get_or_create::<ListValue>(key)?;
+    ///     list.push_back(Bytes::from("item"));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn get_or_create<T: ValueType>(&mut self, key: &Bytes) -> Result<&mut T, CommandError> {
+        // Check if key exists and is wrong type
+        if let Some(value) = self.store.get(key) {
+            if T::from_value(&value).is_none() {
+                return Err(CommandError::WrongType);
+            }
+        } else {
+            // Create new value
+            self.store.set(key.clone(), T::create_default());
+        }
+
+        // Get mutable reference
+        self.store
+            .get_mut(key)
+            .and_then(T::from_value_mut)
+            .ok_or(CommandError::WrongType)
+    }
+}
+
+/// Get or create a value of a specific type from a command context.
+///
+/// This is a standalone function for cases where you need to call it
+/// without borrowing the full context.
+///
+/// If the key doesn't exist, creates a new default value of type `T`.
+/// If the key exists but is the wrong type, returns `WrongType` error.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use frogdb_core::{get_or_create, ListValue, CommandContext};
+///
+/// fn push_to_list(ctx: &mut CommandContext, key: &Bytes) -> Result<(), CommandError> {
+///     let list = get_or_create::<ListValue>(ctx, key)?;
+///     list.push_back(Bytes::from("item"));
+///     Ok(())
+/// }
+/// ```
+pub fn get_or_create<'a, T: ValueType>(
+    ctx: &'a mut CommandContext,
+    key: &Bytes,
+) -> Result<&'a mut T, CommandError> {
+    ctx.get_or_create(key)
 }
 
 #[cfg(test)]

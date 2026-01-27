@@ -22,6 +22,38 @@
 //!     }
 //! }
 //! ```
+//!
+//! # Convenience Macros
+//!
+//! For common patterns, use the specialized macros:
+//!
+//! - [`define_readonly_command!`] - For read-only commands (READONLY | FAST flags)
+//! - [`define_write_command!`] - For write commands (WRITE | FAST flags)
+//!
+//! # Validation Block
+//!
+//! Commands can include a `validate(args)` block for pre-execution validation:
+//!
+//! ```rust,ignore
+//! define_command! {
+//!     pub struct SetexCommand;
+//!     name: "SETEX",
+//!     arity: Fixed(3),
+//!     flags: (WRITE | FAST),
+//!     keys: first,
+//!     validate(args) {
+//!         let seconds = parse_u64(&args[1])?;
+//!         if seconds == 0 {
+//!             return Err(CommandError::InvalidArgument {
+//!                 message: "invalid expire time in 'setex' command".to_string(),
+//!             });
+//!         }
+//!     }
+//!     execute(ctx, args) {
+//!         // ... command logic ...
+//!     }
+//! }
+//! ```
 
 /// Defines a Redis command with reduced boilerplate.
 ///
@@ -300,6 +332,309 @@ macro_rules! define_command {
             $args[$start..$end].iter().map(|a| a.as_ref()).collect()
         }
     };
+
+    // =========================================================================
+    // Variant with validate block
+    // =========================================================================
+
+    // With validate block (no strategy)
+    (
+        $(#[$meta:meta])*
+        pub struct $struct:ident;
+        name: $name:literal,
+        arity: $arity_kind:ident ( $($arity_args:tt)* ),
+        flags: ( $($flags:tt)+ ),
+        keys: $keys:ident $( ( $($keys_args:tt)* ) )?,
+        validate($v_args:ident) $validate:block
+        execute($ctx:ident, $args:ident) $body:block
+    ) => {
+        $(#[$meta])*
+        pub struct $struct;
+
+        impl $crate::Command for $struct {
+            fn name(&self) -> &'static str {
+                $name
+            }
+
+            fn arity(&self) -> $crate::Arity {
+                $crate::define_command!(@arity $arity_kind ( $($arity_args)* ))
+            }
+
+            fn flags(&self) -> $crate::CommandFlags {
+                $crate::define_command!(@flags $($flags)+)
+            }
+
+            fn execute(
+                &self,
+                $ctx: &mut $crate::CommandContext,
+                $args: &[bytes::Bytes],
+            ) -> Result<frogdb_protocol::Response, $crate::CommandError> {
+                // Run validation first
+                {
+                    let $v_args = $args;
+                    $validate
+                }
+                // Then execute
+                $body
+            }
+
+            fn keys<'a>(&self, args: &'a [bytes::Bytes]) -> Vec<&'a [u8]> {
+                $crate::define_command!(@keys args, $keys $( ( $($keys_args)* ) )? )
+            }
+        }
+    };
+
+    // With validate block and strategy
+    (
+        $(#[$meta:meta])*
+        pub struct $struct:ident;
+        name: $name:literal,
+        arity: $arity_kind:ident ( $($arity_args:tt)* ),
+        flags: ( $($flags:tt)+ ),
+        strategy: $strategy:expr,
+        keys: $keys:ident $( ( $($keys_args:tt)* ) )?,
+        validate($v_args:ident) $validate:block
+        execute($ctx:ident, $args:ident) $body:block
+    ) => {
+        $(#[$meta])*
+        pub struct $struct;
+
+        impl $crate::Command for $struct {
+            fn name(&self) -> &'static str {
+                $name
+            }
+
+            fn arity(&self) -> $crate::Arity {
+                $crate::define_command!(@arity $arity_kind ( $($arity_args)* ))
+            }
+
+            fn flags(&self) -> $crate::CommandFlags {
+                $crate::define_command!(@flags $($flags)+)
+            }
+
+            fn execution_strategy(&self) -> $crate::ExecutionStrategy {
+                $strategy
+            }
+
+            fn execute(
+                &self,
+                $ctx: &mut $crate::CommandContext,
+                $args: &[bytes::Bytes],
+            ) -> Result<frogdb_protocol::Response, $crate::CommandError> {
+                // Run validation first
+                {
+                    let $v_args = $args;
+                    $validate
+                }
+                // Then execute
+                $body
+            }
+
+            fn keys<'a>(&self, args: &'a [bytes::Bytes]) -> Vec<&'a [u8]> {
+                $crate::define_command!(@keys args, $keys $( ( $($keys_args)* ) )? )
+            }
+        }
+    };
+}
+
+/// Defines a read-only command with READONLY | FAST flags.
+///
+/// This is a convenience wrapper around [`define_command!`] for commands that
+/// only read data and are fast (O(1) or O(log N)).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// define_readonly_command! {
+///     /// Get the value of a key.
+///     pub struct GetCommand;
+///     name: "GET",
+///     arity: Fixed(1),
+///     keys: first,
+///     execute(ctx, args) {
+///         Ok(ctx.store.get(&args[0])
+///             .map(|v| Response::bulk(v.as_bytes()))
+///             .unwrap_or(Response::Null))
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! define_readonly_command {
+    // Basic form
+    (
+        $(#[$meta:meta])*
+        pub struct $struct:ident;
+        name: $name:literal,
+        arity: $arity_kind:ident ( $($arity_args:tt)* ),
+        keys: $keys:ident $( ( $($keys_args:tt)* ) )?,
+        execute($ctx:ident, $args:ident) $body:block
+    ) => {
+        $crate::define_command! {
+            $(#[$meta])*
+            pub struct $struct;
+            name: $name,
+            arity: $arity_kind ( $($arity_args)* ),
+            flags: (READONLY | FAST),
+            keys: $keys $( ( $($keys_args)* ) )?,
+            execute($ctx, $args) $body
+        }
+    };
+
+    // With validate block
+    (
+        $(#[$meta:meta])*
+        pub struct $struct:ident;
+        name: $name:literal,
+        arity: $arity_kind:ident ( $($arity_args:tt)* ),
+        keys: $keys:ident $( ( $($keys_args:tt)* ) )?,
+        validate($v_args:ident) $validate:block
+        execute($ctx:ident, $args:ident) $body:block
+    ) => {
+        $crate::define_command! {
+            $(#[$meta])*
+            pub struct $struct;
+            name: $name,
+            arity: $arity_kind ( $($arity_args)* ),
+            flags: (READONLY | FAST),
+            keys: $keys $( ( $($keys_args)* ) )?,
+            validate($v_args) $validate
+            execute($ctx, $args) $body
+        }
+    };
+
+    // With strategy
+    (
+        $(#[$meta:meta])*
+        pub struct $struct:ident;
+        name: $name:literal,
+        arity: $arity_kind:ident ( $($arity_args:tt)* ),
+        strategy: $strategy:expr,
+        keys: $keys:ident $( ( $($keys_args:tt)* ) )?,
+        execute($ctx:ident, $args:ident) $body:block
+    ) => {
+        $crate::define_command! {
+            $(#[$meta])*
+            pub struct $struct;
+            name: $name,
+            arity: $arity_kind ( $($arity_args)* ),
+            flags: (READONLY | FAST),
+            strategy: $strategy,
+            keys: $keys $( ( $($keys_args)* ) )?,
+            execute($ctx, $args) $body
+        }
+    };
+}
+
+/// Defines a write command with WRITE | FAST flags.
+///
+/// This is a convenience wrapper around [`define_command!`] for commands that
+/// modify data and are fast (O(1) or O(log N)).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// define_write_command! {
+///     /// Set the value of a key.
+///     pub struct SetnxCommand;
+///     name: "SETNX",
+///     arity: Fixed(2),
+///     keys: first,
+///     execute(ctx, args) {
+///         let key = args[0].clone();
+///         let value = args[1].clone();
+///         // ... set logic ...
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! define_write_command {
+    // Basic form
+    (
+        $(#[$meta:meta])*
+        pub struct $struct:ident;
+        name: $name:literal,
+        arity: $arity_kind:ident ( $($arity_args:tt)* ),
+        keys: $keys:ident $( ( $($keys_args:tt)* ) )?,
+        execute($ctx:ident, $args:ident) $body:block
+    ) => {
+        $crate::define_command! {
+            $(#[$meta])*
+            pub struct $struct;
+            name: $name,
+            arity: $arity_kind ( $($arity_args)* ),
+            flags: (WRITE | FAST),
+            keys: $keys $( ( $($keys_args)* ) )?,
+            execute($ctx, $args) $body
+        }
+    };
+
+    // With validate block
+    (
+        $(#[$meta:meta])*
+        pub struct $struct:ident;
+        name: $name:literal,
+        arity: $arity_kind:ident ( $($arity_args:tt)* ),
+        keys: $keys:ident $( ( $($keys_args:tt)* ) )?,
+        validate($v_args:ident) $validate:block
+        execute($ctx:ident, $args:ident) $body:block
+    ) => {
+        $crate::define_command! {
+            $(#[$meta])*
+            pub struct $struct;
+            name: $name,
+            arity: $arity_kind ( $($arity_args)* ),
+            flags: (WRITE | FAST),
+            keys: $keys $( ( $($keys_args)* ) )?,
+            validate($v_args) $validate
+            execute($ctx, $args) $body
+        }
+    };
+
+    // With strategy
+    (
+        $(#[$meta:meta])*
+        pub struct $struct:ident;
+        name: $name:literal,
+        arity: $arity_kind:ident ( $($arity_args:tt)* ),
+        strategy: $strategy:expr,
+        keys: $keys:ident $( ( $($keys_args:tt)* ) )?,
+        execute($ctx:ident, $args:ident) $body:block
+    ) => {
+        $crate::define_command! {
+            $(#[$meta])*
+            pub struct $struct;
+            name: $name,
+            arity: $arity_kind ( $($arity_args)* ),
+            flags: (WRITE | FAST),
+            strategy: $strategy,
+            keys: $keys $( ( $($keys_args)* ) )?,
+            execute($ctx, $args) $body
+        }
+    };
+
+    // With strategy and requires_same_slot
+    (
+        $(#[$meta:meta])*
+        pub struct $struct:ident;
+        name: $name:literal,
+        arity: $arity_kind:ident ( $($arity_args:tt)* ),
+        strategy: $strategy:expr,
+        requires_same_slot: $same_slot:expr,
+        keys: $keys:ident $( ( $($keys_args:tt)* ) )?,
+        execute($ctx:ident, $args:ident) $body:block
+    ) => {
+        $crate::define_command! {
+            $(#[$meta])*
+            pub struct $struct;
+            name: $name,
+            arity: $arity_kind ( $($arity_args)* ),
+            flags: (WRITE | FAST),
+            strategy: $strategy,
+            requires_same_slot: $same_slot,
+            keys: $keys $( ( $($keys_args)* ) )?,
+            execute($ctx, $args) $body
+        }
+    };
 }
 
 /// Defines a metadata-only command (for commands handled at connection level).
@@ -362,9 +697,10 @@ mod tests {
     use bytes::Bytes;
     use frogdb_protocol::Response;
 
+    #[allow(unused_imports)]
     use crate::{
         Arity, Command, CommandContext, CommandError, CommandFlags, CommandMetadata,
-        ConnectionLevelOp, ExecutionStrategy, MergeStrategy,
+        ConnectionLevelOp, ExecutionStrategy, MergeStrategy, parse_u64,
     };
 
     // Test basic command definition
@@ -575,5 +911,129 @@ mod tests {
         // skip pattern with insufficient args
         let keys = TestCopyCommand.keys(&one);
         assert!(keys.is_empty());
+    }
+
+    // Test command with validate block
+    define_command! {
+        /// Command with validation.
+        pub struct TestValidateCommand;
+        name: "TEST_VALIDATE",
+        arity: Fixed(2),
+        flags: (WRITE | FAST),
+        keys: first,
+        validate(args) {
+            let value = parse_u64(&args[1])?;
+            if value == 0 {
+                return Err(CommandError::InvalidArgument {
+                    message: "value cannot be zero".to_string(),
+                });
+            }
+        }
+        execute(_ctx, args) {
+            Ok(Response::Integer(parse_u64(&args[1]).unwrap() as i64))
+        }
+    }
+
+    #[test]
+    fn test_validate_block() {
+        assert_eq!(TestValidateCommand.name(), "TEST_VALIDATE");
+        // Note: can't easily test execute without a real context,
+        // but we verify the struct was generated correctly
+        assert!(matches!(TestValidateCommand.arity(), Arity::Fixed(2)));
+    }
+
+    // Test define_readonly_command macro
+    define_readonly_command! {
+        /// A read-only test command.
+        pub struct TestReadonlyCommand;
+        name: "TEST_READONLY",
+        arity: Fixed(1),
+        keys: first,
+        execute(_ctx, args) {
+            Ok(Response::bulk(args[0].clone()))
+        }
+    }
+
+    #[test]
+    fn test_readonly_command() {
+        assert_eq!(TestReadonlyCommand.name(), "TEST_READONLY");
+        assert_eq!(
+            TestReadonlyCommand.flags(),
+            CommandFlags::READONLY | CommandFlags::FAST
+        );
+    }
+
+    // Test define_write_command macro
+    define_write_command! {
+        /// A write test command.
+        pub struct TestWriteCommand;
+        name: "TEST_WRITE",
+        arity: Fixed(2),
+        keys: first,
+        execute(_ctx, _args) {
+            Ok(Response::ok())
+        }
+    }
+
+    #[test]
+    fn test_write_command() {
+        assert_eq!(TestWriteCommand.name(), "TEST_WRITE");
+        assert_eq!(
+            TestWriteCommand.flags(),
+            CommandFlags::WRITE | CommandFlags::FAST
+        );
+    }
+
+    // Test define_readonly_command with validate block
+    define_readonly_command! {
+        pub struct TestReadonlyValidateCommand;
+        name: "TEST_READONLY_VALIDATE",
+        arity: Fixed(2),
+        keys: first,
+        validate(args) {
+            if args[1].is_empty() {
+                return Err(CommandError::SyntaxError);
+            }
+        }
+        execute(_ctx, args) {
+            Ok(Response::bulk(args[1].clone()))
+        }
+    }
+
+    #[test]
+    fn test_readonly_with_validate() {
+        assert_eq!(TestReadonlyValidateCommand.name(), "TEST_READONLY_VALIDATE");
+        assert_eq!(
+            TestReadonlyValidateCommand.flags(),
+            CommandFlags::READONLY | CommandFlags::FAST
+        );
+    }
+
+    // Test define_write_command with validate block
+    define_write_command! {
+        pub struct TestWriteValidateCommand;
+        name: "TEST_WRITE_VALIDATE",
+        arity: Fixed(2),
+        keys: first,
+        validate(args) {
+            let count = parse_u64(&args[1])?;
+            if count > 1000 {
+                return Err(CommandError::InvalidArgument {
+                    message: "count too large".to_string(),
+                });
+            }
+        }
+        execute(_ctx, _args) {
+            Ok(Response::ok())
+        }
+    }
+
+    #[test]
+    fn test_write_with_validate() {
+        assert_eq!(TestWriteValidateCommand.name(), "TEST_WRITE_VALIDATE");
+        assert_eq!(
+            TestWriteValidateCommand.flags(),
+            CommandFlags::WRITE | CommandFlags::FAST
+        );
     }
 }
