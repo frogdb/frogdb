@@ -6,7 +6,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     CommandContext, CommandError, HashValue, LexBound, ListValue, ScoreBound, SetValue,
-    SortedSetValue, StreamValue,
+    SortedSetValue, StreamTrimMode, StreamValue,
 };
 
 // ============================================================================
@@ -147,4 +147,187 @@ pub fn get_or_create_stream<'a>(
     key: &Bytes,
 ) -> Result<&'a mut StreamValue, CommandError> {
     get_or_create::<StreamValue>(ctx, key)
+}
+
+// ============================================================================
+// Common Option Parsing Utilities
+// ============================================================================
+
+/// NX/XX mutually exclusive options (used by ZADD, SET, GEOADD, etc.).
+///
+/// - NX: Only perform the operation if the element does not already exist.
+/// - XX: Only perform the operation if the element already exists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NxXxOptions {
+    /// Only add new elements (don't update existing).
+    pub nx: bool,
+    /// Only update existing elements (don't add new).
+    pub xx: bool,
+}
+
+impl NxXxOptions {
+    /// Parse NX/XX option from an argument.
+    ///
+    /// Returns `Some(updated_options)` if the argument was recognized,
+    /// `None` if the argument is not NX or XX.
+    ///
+    /// Returns an error if NX and XX are both set.
+    pub fn try_parse(&self, arg: &[u8]) -> Result<Option<Self>, CommandError> {
+        let upper = arg.to_ascii_uppercase();
+        match upper.as_slice() {
+            b"NX" => {
+                if self.xx {
+                    return Err(CommandError::InvalidArgument {
+                        message: "XX and NX options at the same time are not compatible".to_string(),
+                    });
+                }
+                Ok(Some(Self { nx: true, ..*self }))
+            }
+            b"XX" => {
+                if self.nx {
+                    return Err(CommandError::InvalidArgument {
+                        message: "XX and NX options at the same time are not compatible".to_string(),
+                    });
+                }
+                Ok(Some(Self { xx: true, ..*self }))
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
+/// GT/LT mutually exclusive options (used by ZADD, etc.).
+///
+/// - GT: Only update if new score is greater than current score.
+/// - LT: Only update if new score is less than current score.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GtLtOptions {
+    /// Only update if new score > current score.
+    pub gt: bool,
+    /// Only update if new score < current score.
+    pub lt: bool,
+}
+
+impl GtLtOptions {
+    /// Parse GT/LT option from an argument.
+    ///
+    /// Returns `Some(updated_options)` if the argument was recognized,
+    /// `None` if the argument is not GT or LT.
+    ///
+    /// Returns an error if GT and LT are both set.
+    pub fn try_parse(&self, arg: &[u8]) -> Result<Option<Self>, CommandError> {
+        let upper = arg.to_ascii_uppercase();
+        match upper.as_slice() {
+            b"GT" => {
+                if self.lt {
+                    return Err(CommandError::InvalidArgument {
+                        message: "GT and LT options at the same time are not compatible".to_string(),
+                    });
+                }
+                Ok(Some(Self { gt: true, ..*self }))
+            }
+            b"LT" => {
+                if self.gt {
+                    return Err(CommandError::InvalidArgument {
+                        message: "GT and LT options at the same time are not compatible".to_string(),
+                    });
+                }
+                Ok(Some(Self { lt: true, ..*self }))
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
+/// Combined options for ZADD command.
+///
+/// Parses: NX, XX, GT, LT, CH, INCR options.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ZaddOptions {
+    /// NX/XX options.
+    pub nx_xx: NxXxOptions,
+    /// GT/LT options.
+    pub gt_lt: GtLtOptions,
+    /// Return number of changed elements (not just added).
+    pub ch: bool,
+    /// Increment mode (ZINCRBY behavior).
+    pub incr: bool,
+}
+
+impl ZaddOptions {
+    /// Parse all ZADD options from arguments starting at given index.
+    ///
+    /// Returns `(options, next_index)` where `next_index` points to the first
+    /// argument that is not an option (i.e., start of score-member pairs).
+    pub fn parse(args: &[Bytes], mut i: usize) -> Result<(Self, usize), CommandError> {
+        let mut opts = Self::default();
+
+        while i < args.len() {
+            let arg = args[i].as_ref();
+            let upper = arg.to_ascii_uppercase();
+
+            match upper.as_slice() {
+                b"NX" | b"XX" => {
+                    if let Some(new_nx_xx) = opts.nx_xx.try_parse(arg)? {
+                        opts.nx_xx = new_nx_xx;
+                    } else {
+                        break;
+                    }
+                }
+                b"GT" | b"LT" => {
+                    if let Some(new_gt_lt) = opts.gt_lt.try_parse(arg)? {
+                        opts.gt_lt = new_gt_lt;
+                    } else {
+                        break;
+                    }
+                }
+                b"CH" => opts.ch = true,
+                b"INCR" => opts.incr = true,
+                _ => break, // Start of score-member pairs
+            }
+            i += 1;
+        }
+
+        // Check for GT/LT with NX - not compatible
+        if opts.nx_xx.nx && (opts.gt_lt.gt || opts.gt_lt.lt) {
+            return Err(CommandError::InvalidArgument {
+                message: "GT, LT, and NX options at the same time are not compatible".to_string(),
+            });
+        }
+
+        Ok((opts, i))
+    }
+}
+
+// ============================================================================
+// Stream Trim Option Parsing Utilities
+// ============================================================================
+
+/// Parse trim mode from `=` or `~` symbol.
+///
+/// Returns `(mode, consumed)` where `consumed` is true if a mode symbol was
+/// found, false if using the default (exact).
+pub fn parse_trim_mode(arg: &[u8]) -> (StreamTrimMode, bool) {
+    match arg {
+        b"=" => (StreamTrimMode::Exact, true),
+        b"~" => (StreamTrimMode::Approximate, true),
+        _ => (StreamTrimMode::Exact, false),
+    }
+}
+
+/// Parse an optional LIMIT clause from arguments.
+///
+/// If `args[i]` is "LIMIT", parses the limit value from `args[i+1]` and
+/// returns `(limit_value, next_index)`. Otherwise returns `(0, i)`.
+pub fn parse_optional_limit(args: &[Bytes], i: usize) -> Result<(usize, usize), CommandError> {
+    if i < args.len() && args[i].to_ascii_uppercase().as_slice() == b"LIMIT" {
+        let next = i + 1;
+        if next >= args.len() {
+            return Err(CommandError::SyntaxError);
+        }
+        let limit = parse_usize(&args[next])?;
+        Ok((limit, next + 1))
+    } else {
+        Ok((0, i))
+    }
 }

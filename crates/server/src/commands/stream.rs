@@ -23,7 +23,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::{BlockingOp, Response};
 
-use super::utils::{get_or_create_stream, parse_u64, parse_usize};
+use super::utils::{get_or_create_stream, parse_optional_limit, parse_trim_mode, parse_u64, parse_usize};
 
 /// Convert StreamIdParseError to CommandError.
 fn stream_id_error(_: StreamIdParseError) -> CommandError {
@@ -74,16 +74,11 @@ fn parse_trim_options(args: &[Bytes], mut i: usize) -> Result<(Option<StreamTrim
                 return Err(CommandError::SyntaxError);
             }
 
-            // Check for mode (= or ~)
-            let mode = if args[i].as_ref() == b"=" {
+            // Parse mode (= or ~) using shared utility
+            let (mode, consumed) = parse_trim_mode(args[i].as_ref());
+            if consumed {
                 i += 1;
-                StreamTrimMode::Exact
-            } else if args[i].as_ref() == b"~" {
-                i += 1;
-                StreamTrimMode::Approximate
-            } else {
-                StreamTrimMode::Exact
-            };
+            }
 
             if i >= args.len() {
                 return Err(CommandError::SyntaxError);
@@ -92,18 +87,9 @@ fn parse_trim_options(args: &[Bytes], mut i: usize) -> Result<(Option<StreamTrim
             let threshold = parse_u64(&args[i])?;
             i += 1;
 
-            // Check for LIMIT
-            let limit = if i < args.len() && args[i].to_ascii_uppercase().as_slice() == b"LIMIT" {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                let l = parse_usize(&args[i])?;
-                i += 1;
-                l
-            } else {
-                0
-            };
+            // Parse optional LIMIT using shared utility
+            let (limit, next_i) = parse_optional_limit(args, i)?;
+            i = next_i;
 
             Some(StreamTrimOptions {
                 strategy: StreamTrimStrategy::MaxLen(threshold),
@@ -117,16 +103,11 @@ fn parse_trim_options(args: &[Bytes], mut i: usize) -> Result<(Option<StreamTrim
                 return Err(CommandError::SyntaxError);
             }
 
-            // Check for mode (= or ~)
-            let mode = if args[i].as_ref() == b"=" {
+            // Parse mode (= or ~) using shared utility
+            let (mode, consumed) = parse_trim_mode(args[i].as_ref());
+            if consumed {
                 i += 1;
-                StreamTrimMode::Exact
-            } else if args[i].as_ref() == b"~" {
-                i += 1;
-                StreamTrimMode::Approximate
-            } else {
-                StreamTrimMode::Exact
-            };
+            }
 
             if i >= args.len() {
                 return Err(CommandError::SyntaxError);
@@ -135,18 +116,9 @@ fn parse_trim_options(args: &[Bytes], mut i: usize) -> Result<(Option<StreamTrim
             let min_id = StreamId::parse(&args[i]).map_err(stream_id_error)?;
             i += 1;
 
-            // Check for LIMIT
-            let limit = if i < args.len() && args[i].to_ascii_uppercase().as_slice() == b"LIMIT" {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                let l = parse_usize(&args[i])?;
-                i += 1;
-                l
-            } else {
-                0
-            };
+            // Parse optional LIMIT using shared utility
+            let (limit, next_i) = parse_optional_limit(args, i)?;
+            i = next_i;
 
             Some(StreamTrimOptions {
                 strategy: StreamTrimStrategy::MinId(min_id),

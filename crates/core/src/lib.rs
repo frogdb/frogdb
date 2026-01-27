@@ -31,13 +31,15 @@ pub mod store;
 pub mod sync;
 pub use sync::{LockError, MutexExt, RwLockExt};
 pub mod timeseries;
+pub mod traits;
 pub mod types;
 pub mod vll;
+pub mod metrics;
 
 pub use command::{
-    Arity, ClusterContextRef, Command, CommandContext, CommandFlags, CommandMetadata,
-    ConnectionLevelOp, ExecutionStrategy, MergeStrategy, QuorumChecker, ReplicationContextRef,
-    get_or_create,
+    Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
+    CommandMetadata, ConnectionLevelOp, ExecutionStrategy, MergeStrategy, QuorumChecker,
+    ReplicationContextRef, get_or_create,
 };
 pub use store::ValueType;
 pub use error::{CommandError, RespError};
@@ -54,6 +56,10 @@ pub use noop::{
     ExpiryIndex, MetricsRecorder, NoopMetricsRecorder,
     NoopReplicationTracker, NoopTracer, NoopWalWriter, ReplicationConfig, ReplicationTracker,
     Tracer, WalOperation, WalWriter,
+};
+pub use metrics::{
+    HotShardDetector, HotShardReport, MemoryDiagnosticsCollector, MemoryReport,
+    NoopObservability, ObservabilityConfig,
 };
 pub use persistence::{
     deserialize, recover_all_shards, recover_shard, serialize, spawn_periodic_sync, CompressionType,

@@ -16,7 +16,7 @@
 
 // Submodules
 mod builder;
-mod deps;
+pub mod deps;
 pub mod handlers;
 pub mod router;
 
@@ -815,7 +815,14 @@ impl ConnectionHandler {
 
     /// Create a new connection handler (legacy interface with individual parameters).
     ///
-    /// Consider using [`from_deps`](Self::from_deps) for new code.
+    /// # Deprecated
+    ///
+    /// This constructor takes many individual parameters and is hard to maintain.
+    /// Use [`from_deps`](Self::from_deps) or [`ConnectionHandlerBuilder`] instead.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use from_deps() or ConnectionHandlerBuilder for better organization"
+    )]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         socket: TcpStream,

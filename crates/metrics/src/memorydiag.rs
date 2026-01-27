@@ -456,6 +456,27 @@ fn format_key_display(key: &[u8], max_len: usize) -> String {
     }
 }
 
+// ============================================================================
+// Trait Implementations
+// ============================================================================
+
+impl std::fmt::Display for MemoryDiagReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", format_report(self))
+    }
+}
+
+impl frogdb_core::MemoryReport for MemoryDiagReport {}
+
+impl frogdb_core::MemoryDiagnosticsCollector for MemoryDiagCollector {
+    fn collect(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Arc<dyn frogdb_core::MemoryReport>> + Send + '_>> {
+        Box::pin(async move {
+            let report = self.collect().await;
+            Arc::new(report) as Arc<dyn frogdb_core::MemoryReport>
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -272,6 +272,72 @@ pub struct ReplicationContextRef<'a> {
 }
 
 // ============================================================================
+// CommandContextCore
+// ============================================================================
+
+/// Core context fields that 90% of commands need.
+///
+/// This is a lightweight view into `CommandContext` containing only the
+/// essential fields. Use this for commands that don't need cluster or
+/// replication features.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+///     // Get just the core fields we need
+///     let core = ctx.as_core();
+///
+///     // Access store, shard info, connection details
+///     let value = core.store.get(&args[0]);
+///     let shard = core.shard_id;
+/// }
+/// ```
+pub struct CommandContextCore<'a> {
+    /// Local shard's data store.
+    pub store: &'a mut dyn Store,
+
+    /// For commands that need to reach other shards.
+    pub shard_senders: &'a Arc<Vec<mpsc::Sender<ShardMessage>>>,
+
+    /// This shard's ID.
+    pub shard_id: usize,
+
+    /// Total number of shards.
+    pub num_shards: usize,
+
+    /// Connection ID (for client-specific operations).
+    pub conn_id: u64,
+
+    /// Protocol version for response encoding (RESP2 or RESP3).
+    pub protocol_version: ProtocolVersion,
+}
+
+impl<'a> CommandContextCore<'a> {
+    /// Get or create a value of a specific type.
+    ///
+    /// If the key doesn't exist, creates a new default value of type `T`.
+    /// If the key exists but is the wrong type, returns `WrongType` error.
+    pub fn get_or_create<T: ValueType>(&mut self, key: &Bytes) -> Result<&mut T, CommandError> {
+        // Check if key exists and is wrong type
+        if let Some(value) = self.store.get(key) {
+            if T::from_value(&value).is_none() {
+                return Err(CommandError::WrongType);
+            }
+        } else {
+            // Create new value
+            self.store.set(key.clone(), T::create_default());
+        }
+
+        // Get mutable reference
+        self.store
+            .get_mut(key)
+            .and_then(T::from_value_mut)
+            .ok_or(CommandError::WrongType)
+    }
+}
+
+// ============================================================================
 // CommandContext
 // ============================================================================
 
@@ -410,6 +476,37 @@ impl<'a> CommandContext<'a> {
     #[inline]
     pub fn is_cluster_mode(&self) -> bool {
         self.cluster_state.is_some()
+    }
+
+    /// Extract a core context view containing only essential fields.
+    ///
+    /// This is useful for commands that don't need cluster or replication
+    /// features. The extraction is zero-cost - it just reborrows fields.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+    ///     let core = ctx.as_core();
+    ///     // Use core.store, core.shard_id, etc.
+    /// }
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// Because this borrows `self.store` mutably, you cannot use the original
+    /// `CommandContext` while the `CommandContextCore` is alive. This is
+    /// enforced by the borrow checker.
+    #[inline]
+    pub fn as_core(&mut self) -> CommandContextCore<'_> {
+        CommandContextCore {
+            store: self.store,
+            shard_senders: self.shard_senders,
+            shard_id: self.shard_id,
+            num_shards: self.num_shards,
+            conn_id: self.conn_id,
+            protocol_version: self.protocol_version,
+        }
     }
 
     /// Get cluster context if in cluster mode.

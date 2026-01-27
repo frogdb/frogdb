@@ -378,6 +378,28 @@ pub fn format_hotshards_info(report: &HotShardReport) -> String {
     )
 }
 
+// ============================================================================
+// Trait Implementations
+// ============================================================================
+
+impl std::fmt::Display for HotShardReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", format_hotshards_report(self))
+    }
+}
+
+impl frogdb_core::HotShardReport for HotShardReport {}
+
+impl frogdb_core::HotShardDetector for HotShardCollector {
+    fn collect(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Arc<dyn frogdb_core::HotShardReport>> + Send + '_>> {
+        Box::pin(async move {
+            // Use default period from config
+            let report = self.collect(None).await;
+            Arc::new(report) as Arc<dyn frogdb_core::HotShardReport>
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
