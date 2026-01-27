@@ -42,7 +42,7 @@ pub use command::{
     ReplicationContextRef, get_or_create,
 };
 pub use store::ValueType;
-pub use error::{CommandError, RespError};
+pub use error::{CommandError, FrogDbError, RespError};
 pub use args::{
     ArgParser, CompareCondition, ExpiryOption, ScanOptions,
     parse_f64, parse_i64, parse_u64, parse_usize, parse_from_bytes,

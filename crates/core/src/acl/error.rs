@@ -77,6 +77,14 @@ impl AclError {
     }
 }
 
+impl From<crate::sync::LockError> for AclError {
+    fn from(err: crate::sync::LockError) -> Self {
+        AclError::Internal {
+            message: format!("Lock error: {}", err),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
