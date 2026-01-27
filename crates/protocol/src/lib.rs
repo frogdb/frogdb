@@ -11,7 +11,10 @@ mod version;
 
 pub use command::ParsedCommand;
 pub use error::ProtocolError;
-pub use response::{BlockingOp, BytesFrame, Direction, RaftClusterOp, Response};
+pub use response::{
+    BlockingOp, BytesFrame, Direction, InternalAction, RaftClusterOp, Response, WireResponse,
+    WireResult,
+};
 pub use version::ProtocolVersion;
 
 // Re-export RESP3 frame type for protocol-aware sending
