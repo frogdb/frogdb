@@ -4,7 +4,7 @@
 #   cross build --release --target x86_64-unknown-linux-gnu --bin frogdb-server
 # Or use: just cross-build
 
-FROM debian:bookworm-slim
+FROM --platform=linux/amd64 debian:bookworm-slim
 
 # Install runtime dependencies and tools for Jepsen testing
 RUN apt-get update && apt-get install -y \
