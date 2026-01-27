@@ -13,6 +13,7 @@ pub mod failure_detector;
 pub mod latency_test;
 pub mod migrate;
 pub mod net;
+pub mod operations;
 pub mod replication;
 pub mod routing;
 pub mod runtime_config;

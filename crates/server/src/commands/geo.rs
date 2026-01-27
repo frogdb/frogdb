@@ -17,7 +17,9 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use super::utils::{format_float, get_or_create_zset as get_or_create_geo, parse_f64, parse_usize};
+use super::utils::{
+    format_float, get_or_create_zset as get_or_create_geo, parse_f64, parse_usize, NxXxOptions,
+};
 
 /// Search result with member and optional distance/hash/coordinates.
 #[derive(Debug)]
@@ -54,40 +56,25 @@ impl Command for GeoaddCommand {
     ) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        // Parse options
-        let mut nx = false;
-        let mut xx = false;
+        // Parse options using shared utility
+        let mut nx_xx = NxXxOptions::default();
         let mut ch = false;
         let mut i = 1;
 
         while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"NX" => {
-                    if xx {
-                        return Err(CommandError::InvalidArgument {
-                            message: "XX and NX options at the same time are not compatible".to_string(),
-                        });
-                    }
-                    nx = true;
-                    i += 1;
-                }
-                b"XX" => {
-                    if nx {
-                        return Err(CommandError::InvalidArgument {
-                            message: "XX and NX options at the same time are not compatible".to_string(),
-                        });
-                    }
-                    xx = true;
-                    i += 1;
-                }
-                b"CH" => {
-                    ch = true;
-                    i += 1;
-                }
-                _ => break,
+            let arg = args[i].as_ref();
+            if let Some(new_opts) = nx_xx.try_parse(arg)? {
+                nx_xx = new_opts;
+                i += 1;
+            } else if arg.to_ascii_uppercase() == b"CH" {
+                ch = true;
+                i += 1;
+            } else {
+                break;
             }
         }
+        let nx = nx_xx.nx;
+        let xx = nx_xx.xx;
 
         // Parse coordinate-member triplets
         let remaining = &args[i..];

@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use super::utils::{
     format_float, get_or_create_zset, parse_f64, parse_i64, parse_lex_bound, parse_score_bound,
-    parse_usize,
+    parse_usize, ZaddOptions,
 };
 
 // ============================================================================
@@ -47,67 +47,14 @@ impl Command for ZaddCommand {
     ) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        // Parse options
-        let mut nx = false; // Only add new elements
-        let mut xx = false; // Only update existing elements
-        let mut gt = false; // Only update if new score > current
-        let mut lt = false; // Only update if new score < current
-        let mut ch = false; // Return number of changed elements (not just added)
-        let mut incr = false; // Increment mode (ZINCRBY behavior)
-
-        let mut i = 1;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"NX" => {
-                    if xx {
-                        return Err(CommandError::InvalidArgument {
-                            message: "XX and NX options at the same time are not compatible"
-                                .to_string(),
-                        });
-                    }
-                    nx = true;
-                }
-                b"XX" => {
-                    if nx {
-                        return Err(CommandError::InvalidArgument {
-                            message: "XX and NX options at the same time are not compatible"
-                                .to_string(),
-                        });
-                    }
-                    xx = true;
-                }
-                b"GT" => {
-                    if lt {
-                        return Err(CommandError::InvalidArgument {
-                            message: "GT, LT, and NX options at the same time are not compatible"
-                                .to_string(),
-                        });
-                    }
-                    gt = true;
-                }
-                b"LT" => {
-                    if gt {
-                        return Err(CommandError::InvalidArgument {
-                            message: "GT, LT, and NX options at the same time are not compatible"
-                                .to_string(),
-                        });
-                    }
-                    lt = true;
-                }
-                b"CH" => ch = true,
-                b"INCR" => incr = true,
-                _ => break, // Start of score-member pairs
-            }
-            i += 1;
-        }
-
-        // Check for GT/LT with NX
-        if nx && (gt || lt) {
-            return Err(CommandError::InvalidArgument {
-                message: "GT, LT, and NX options at the same time are not compatible".to_string(),
-            });
-        }
+        // Parse options using shared utility
+        let (opts, i) = ZaddOptions::parse(args, 1)?;
+        let nx = opts.nx_xx.nx;
+        let xx = opts.nx_xx.xx;
+        let gt = opts.gt_lt.gt;
+        let lt = opts.gt_lt.lt;
+        let ch = opts.ch;
+        let incr = opts.incr;
 
         // Parse score-member pairs
         let remaining = &args[i..];

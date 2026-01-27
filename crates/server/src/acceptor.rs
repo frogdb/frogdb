@@ -218,65 +218,62 @@ impl Acceptor {
                         "Accepted connection"
                     );
 
-                    // For simplicity, we spawn the connection handler directly
-                    // instead of sending to the shard's new_conn channel
-                    let registry = self.registry.clone();
-                    let client_registry = self.client_registry.clone();
-                    let config_manager = self.config_manager.clone();
-                    let shard_senders = self.shard_senders.clone();
-                    let num_shards = self.shard_senders.len();
-                    let allow_cross_slot = self.allow_cross_slot;
-                    let scatter_gather_timeout_ms = self.scatter_gather_timeout_ms;
+                    // Build grouped dependencies for the connection handler
+                    use crate::connection::deps::{
+                        AdminDeps, ClusterDeps, ConnectionConfig, CoreDeps, ObservabilityDeps,
+                    };
+                    use std::time::Duration;
+
+                    let core = CoreDeps {
+                        registry: self.registry.clone(),
+                        shard_senders: self.shard_senders.clone(),
+                        metrics_recorder: self.metrics_recorder.clone(),
+                        acl_manager: self.acl_manager.clone(),
+                    };
+                    let admin = AdminDeps {
+                        client_registry: self.client_registry.clone(),
+                        config_manager: self.config_manager.clone(),
+                        snapshot_coordinator: self.snapshot_coordinator.clone(),
+                        function_registry: self.function_registry.clone(),
+                    };
+                    let cluster = ClusterDeps {
+                        cluster_state: self.cluster_state.clone(),
+                        node_id: self.node_id,
+                        raft: self.raft.clone(),
+                        network_factory: self.network_factory.clone(),
+                        replication_tracker: self.replication_tracker.clone(),
+                        primary_replication_handler: self.primary_replication_handler.clone(),
+                    };
+                    let config = ConnectionConfig {
+                        num_shards: self.shard_senders.len(),
+                        allow_cross_slot: self.allow_cross_slot,
+                        scatter_gather_timeout: Duration::from_millis(self.scatter_gather_timeout_ms),
+                        is_admin: self.is_admin,
+                        admin_enabled: self.admin_enabled,
+                        hotshards_config: self.hotshards_config.clone(),
+                        memory_diag_config: self.memory_diag_config.clone(),
+                    };
+                    let observability = ObservabilityDeps {
+                        shared_tracer: self.shared_tracer.clone(),
+                        tracing_config: self.tracing_config.clone(),
+                        band_tracker: self.band_tracker.clone(),
+                    };
+
                     let metrics_recorder = self.metrics_recorder.clone();
                     let current_connections = self.current_connections.clone();
-                    let acl_manager = self.acl_manager.clone();
-                    let snapshot_coordinator = self.snapshot_coordinator.clone();
-                    let function_registry = self.function_registry.clone();
-                    let shared_tracer = self.shared_tracer.clone();
-                    let tracing_config = self.tracing_config.clone();
-                    let replication_tracker = self.replication_tracker.clone();
-                    let cluster_state = self.cluster_state.clone();
-                    let node_id = self.node_id;
-                    let is_admin = self.is_admin;
-                    let admin_enabled = self.admin_enabled;
-                    let hotshards_config = self.hotshards_config.clone();
-                    let memory_diag_config = self.memory_diag_config.clone();
-                    let band_tracker = self.band_tracker.clone();
-                    let raft = self.raft.clone();
-                    let network_factory = self.network_factory.clone();
-                    let primary_replication_handler = self.primary_replication_handler.clone();
 
                     spawn(async move {
-                        let handler = ConnectionHandler::new(
+                        let handler = ConnectionHandler::from_deps(
                             socket,
                             addr,
                             conn_id,
                             shard_id,
-                            num_shards,
-                            registry,
-                            client_registry,
-                            config_manager,
                             client_handle,
-                            shard_senders,
-                            allow_cross_slot,
-                            scatter_gather_timeout_ms,
-                            metrics_recorder.clone(),
-                            acl_manager,
-                            snapshot_coordinator,
-                            function_registry,
-                            shared_tracer,
-                            tracing_config,
-                            replication_tracker,
-                            cluster_state,
-                            node_id,
-                            is_admin,
-                            admin_enabled,
-                            hotshards_config,
-                            memory_diag_config,
-                            band_tracker,
-                            raft,
-                            network_factory,
-                            primary_replication_handler,
+                            core,
+                            admin,
+                            cluster,
+                            config,
+                            observability,
                         );
 
                         if let Err(e) = handler.run().await {
