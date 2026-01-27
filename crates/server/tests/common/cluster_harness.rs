@@ -294,8 +294,8 @@ impl ClusterTestNode {
             self.shutdown().await;
         }
 
-        // Wait a bit for ports to be released
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Wait a bit for ports to be released (500ms provides extra margin for OS cleanup)
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Create cluster data directory if needed
         let cluster_data_dir = restart_info.data_dir.join("cluster");

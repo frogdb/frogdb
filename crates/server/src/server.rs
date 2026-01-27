@@ -31,7 +31,7 @@ use crate::acceptor::Acceptor;
 use crate::config::{Config, MemoryConfig, PersistenceConfig};
 use crate::failure_detector::{spawn_failure_detector_task, FailureDetector, FailureDetectorConfig};
 use crate::latency_test::{self, LatencyTestResult};
-use crate::net::{spawn, TcpListener};
+use crate::net::{spawn, tcp_listener_reusable, TcpListener};
 use crate::replication::{
     consume_frames, PrimaryReplicationHandler, ReplicaCommandExecutor, ReplicaReplicationHandler,
 };
@@ -192,17 +192,19 @@ impl Server {
             (Arc::new(frogdb_core::NoopMetricsRecorder::new()), None)
         };
 
-        // Bind TCP listener
-        let listener = TcpListener::bind(config.bind_addr()).await?;
+        // Bind TCP listener with SO_REUSEADDR for rapid restarts
+        let bind_addr: std::net::SocketAddr = config.bind_addr().parse()?;
+        let listener = tcp_listener_reusable(bind_addr).await?;
 
         info!(
-            addr = %config.bind_addr(),
+            addr = %bind_addr,
             "TCP listener bound"
         );
 
         // Bind admin TCP listener if enabled
         let admin_listener = if config.admin.enabled {
-            let admin_listener = TcpListener::bind(config.admin.bind_addr()).await?;
+            let admin_bind_addr: std::net::SocketAddr = config.admin.bind_addr().parse()?;
+            let admin_listener = tcp_listener_reusable(admin_bind_addr).await?;
             info!(
                 addr = %config.admin.bind_addr(),
                 "Admin TCP listener bound"
