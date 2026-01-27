@@ -1582,7 +1582,8 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Connection
     registry.register(crate::commands::stub::SelectCommand);
     registry.register(crate::commands::stub::SwapdbCommand);
-    registry.register(crate::commands::stub::ResetCommand);
+    // RESET is handled at connection level, use metadata
+    registry.register_metadata(crate::commands::metadata::ResetMetadata);
 
     // Server
     registry.register(crate::commands::stub::BgrewriteaofCommand);

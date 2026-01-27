@@ -14,7 +14,10 @@
 //! - CLIENT UNPAUSE: Resume command processing
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 /// CLIENT command - connection management commands.
@@ -33,6 +36,10 @@ impl Command for ClientCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
     }
 
     fn execute(

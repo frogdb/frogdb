@@ -10,7 +10,10 @@
 //! - SLOWLOG HELP: Show help
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 /// SLOWLOG command - slow query log management.
@@ -34,6 +37,11 @@ impl Command for SlowlogCommand {
             | CommandFlags::FAST
             | CommandFlags::SKIP_SLOWLOG
             | CommandFlags::LOADING
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        // SLOWLOG is handled at connection level (scatter-gather across shards)
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
     }
 
     fn execute(

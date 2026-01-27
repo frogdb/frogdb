@@ -13,7 +13,10 @@
 //! - MEMORY USAGE <key> [SAMPLES count]: Get memory usage for a key
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 /// MEMORY command - memory introspection and diagnostics.
@@ -32,6 +35,11 @@ impl Command for MemoryCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::READONLY | CommandFlags::RANDOM
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        // MEMORY is handled at connection level (scatter-gather for STATS, key-based for USAGE)
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
     }
 
     fn execute(
