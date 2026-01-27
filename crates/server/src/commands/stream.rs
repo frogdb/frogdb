@@ -17,36 +17,12 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, StreamAddError,
-    StreamEntry, StreamGroupError, StreamId, StreamIdParseError, StreamTrimMode, StreamTrimOptions,
-    StreamTrimStrategy, Value,
+    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy,
+    StreamEntry, StreamId, StreamTrimOptions, StreamTrimStrategy, Value,
 };
 use frogdb_protocol::{BlockingOp, Response};
 
 use super::utils::{get_or_create_stream, parse_optional_limit, parse_trim_mode, parse_u64, parse_usize};
-
-/// Convert StreamIdParseError to CommandError.
-fn stream_id_error(_: StreamIdParseError) -> CommandError {
-    CommandError::InvalidArgument {
-        message: "Invalid stream ID specified as stream command argument".to_string(),
-    }
-}
-
-/// Convert StreamAddError to CommandError.
-fn stream_add_error(_: StreamAddError) -> CommandError {
-    CommandError::InvalidArgument {
-        message: "The ID specified in XADD is equal or smaller than the target stream top item"
-            .to_string(),
-    }
-}
-
-/// Convert StreamGroupError to CommandError.
-fn stream_group_error(e: StreamGroupError) -> CommandError {
-    match e {
-        StreamGroupError::GroupExists => CommandError::BusyGroup,
-        StreamGroupError::NoGroup => CommandError::NoGroup,
-    }
-}
 
 /// Format a stream entry as a Response.
 fn entry_to_response(entry: &StreamEntry) -> Response {
@@ -113,7 +89,7 @@ fn parse_trim_options(args: &[Bytes], mut i: usize) -> Result<(Option<StreamTrim
                 return Err(CommandError::SyntaxError);
             }
 
-            let min_id = StreamId::parse(&args[i]).map_err(stream_id_error)?;
+            let min_id = StreamId::parse(&args[i])?;
             i += 1;
 
             // Parse optional LIMIT using shared utility
@@ -182,7 +158,7 @@ impl Command for XaddCommand {
         if i >= args.len() {
             return Err(CommandError::WrongArity { command: "XADD" });
         }
-        let id_spec = StreamId::parse_for_add(&args[i]).map_err(stream_id_error)?;
+        let id_spec = StreamId::parse_for_add(&args[i])?;
         i += 1;
 
         // Parse field-value pairs
@@ -210,7 +186,7 @@ impl Command for XaddCommand {
         let stream = get_or_create_stream(ctx, key)?;
 
         // Add entry
-        let id = stream.add(id_spec, fields).map_err(stream_add_error)?;
+        let id = stream.add(id_spec, fields)?;
 
         // Apply trimming if specified
         if let Some(opts) = trim_options {
@@ -298,8 +274,8 @@ impl Command for XrangeCommand {
         args: &[Bytes],
     ) -> Result<Response, CommandError> {
         let key = &args[0];
-        let start = StreamId::parse_range_bound(&args[1]).map_err(stream_id_error)?;
-        let end = StreamId::parse_range_bound(&args[2]).map_err(stream_id_error)?;
+        let start = StreamId::parse_range_bound(&args[1])?;
+        let end = StreamId::parse_range_bound(&args[2])?;
 
         let count = if args.len() > 3 {
             if args[3].to_ascii_uppercase().as_slice() != b"COUNT" {
@@ -359,8 +335,8 @@ impl Command for XrevrangeCommand {
     ) -> Result<Response, CommandError> {
         let key = &args[0];
         // Note: XREVRANGE has end first, then start
-        let end = StreamId::parse_range_bound(&args[1]).map_err(stream_id_error)?;
-        let start = StreamId::parse_range_bound(&args[2]).map_err(stream_id_error)?;
+        let end = StreamId::parse_range_bound(&args[1])?;
+        let start = StreamId::parse_range_bound(&args[2])?;
 
         let count = if args.len() > 3 {
             if args[3].to_ascii_uppercase().as_slice() != b"COUNT" {
@@ -423,7 +399,7 @@ impl Command for XdelCommand {
         // Parse IDs
         let mut ids = Vec::with_capacity(args.len() - 1);
         for arg in &args[1..] {
-            let id = StreamId::parse(arg).map_err(stream_id_error)?;
+            let id = StreamId::parse(arg)?;
             ids.push(id);
         }
 
@@ -584,7 +560,7 @@ impl Command for XreadCommand {
                     None => StreamId::default(),
                 }
             } else {
-                StreamId::parse(id_arg).map_err(stream_id_error)?
+                StreamId::parse(id_arg)?
             };
 
             // Track resolved ID for blocking
@@ -785,12 +761,12 @@ fn xgroup_create(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, C
     } else if id_arg.as_ref() == b"0" || id_arg.as_ref() == b"0-0" {
         StreamId::default()
     } else {
-        StreamId::parse(id_arg).map_err(stream_id_error)?
+        StreamId::parse(id_arg)?
     };
 
     // Create the group
     let stream = ctx.store.get_mut(key).unwrap().as_stream_mut().ok_or(CommandError::WrongType)?;
-    stream.create_group(group_name, last_id, entries_read).map_err(stream_group_error)?;
+    stream.create_group(group_name, last_id, entries_read)?;
 
     Ok(Response::ok())
 }
@@ -894,10 +870,10 @@ fn xgroup_setid(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
             } else if id_arg.as_ref() == b"0" || id_arg.as_ref() == b"0-0" {
                 StreamId::default()
             } else {
-                StreamId::parse(id_arg).map_err(stream_id_error)?
+                StreamId::parse(id_arg)?
             };
 
-            stream.set_group_id(group_name, new_id, entries_read).map_err(stream_group_error)?;
+            stream.set_group_id(group_name, new_id, entries_read)?;
             Ok(Response::ok())
         }
         None => Err(CommandError::InvalidArgument {
@@ -1071,7 +1047,7 @@ impl Command for XreadgroupCommand {
             let start_id = if id_arg.as_ref() == b"0" || id_arg.as_ref() == b"0-0" {
                 StreamId::default()
             } else {
-                StreamId::parse(id_arg).map_err(stream_id_error)?
+                StreamId::parse(id_arg)?
             };
 
             // Find pending entries for this consumer starting from start_id
@@ -1164,7 +1140,7 @@ impl Command for XackCommand {
         // Parse IDs
         let mut ids = Vec::with_capacity(args.len() - 2);
         for arg in &args[2..] {
-            let id = StreamId::parse(arg).map_err(stream_id_error)?;
+            let id = StreamId::parse(arg)?;
             ids.push(id);
         }
 
@@ -1274,8 +1250,8 @@ impl Command for XpendingCommand {
                         return Err(CommandError::SyntaxError);
                     }
 
-                    let start = StreamId::parse_range_bound(&args[i]).map_err(stream_id_error)?;
-                    let end = StreamId::parse_range_bound(&args[i + 1]).map_err(stream_id_error)?;
+                    let start = StreamId::parse_range_bound(&args[i])?;
+                    let end = StreamId::parse_range_bound(&args[i + 1])?;
                     let count = parse_usize(&args[i + 2])?;
                     i += 3;
 
@@ -1550,7 +1526,7 @@ impl Command for XautoclaimCommand {
         let start_id = if args[4].as_ref() == b"0" || args[4].as_ref() == b"0-0" {
             StreamId::default()
         } else {
-            StreamId::parse(&args[4]).map_err(stream_id_error)?
+            StreamId::parse(&args[4])?
         };
 
         let mut count: usize = 100; // Default count
@@ -1961,7 +1937,7 @@ impl Command for XsetidCommand {
         args: &[Bytes],
     ) -> Result<Response, CommandError> {
         let key = &args[0];
-        let new_last_id = StreamId::parse(&args[1]).map_err(stream_id_error)?;
+        let new_last_id = StreamId::parse(&args[1])?;
 
         // Parse optional arguments (not fully implemented)
         // ENTRIESADDED and MAXDELETEDID are for replication purposes

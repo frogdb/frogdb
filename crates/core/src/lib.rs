@@ -76,9 +76,9 @@ pub use pubsub::{
 };
 pub use shard::{
     extract_hash_tag, shard_for_key, slot_for_key, BigKeyInfo, BigKeysScanResponse,
-    HotShardStatsResponse, PartialResult, ScatterOp, ShardClusterDeps, ShardConfig, ShardCoreDeps,
-    ShardMemoryStats, ShardMessage, ShardPersistenceDeps, ShardWorker, ShardWorkerBuilder,
-    ShardWaitQueue, TransactionResult, WaitEntry, WalLagStatsResponse,
+    HotShardStatsResponse, PartialResult, ScatterOp, ShardBuilderError, ShardClusterDeps,
+    ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardMessage, ShardPersistenceDeps, ShardWorker,
+    ShardWorkerBuilder, ShardWaitQueue, TransactionResult, WaitEntry, WalLagStatsResponse,
     REDIS_CLUSTER_SLOTS, REPLICA_INTERNAL_CONN_ID,
 };
 pub use store::{HashMapStore, Store};

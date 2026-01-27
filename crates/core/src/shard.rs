@@ -28,6 +28,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::sync::RwLockExt;
+
 use bytes::Bytes;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use tokio::sync::{mpsc, oneshot};
@@ -1356,6 +1358,25 @@ pub struct ShardWorker {
 // ShardWorker Builder
 // ============================================================================
 
+/// Error returned when building a [`ShardWorker`] fails due to missing required fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShardBuilderError {
+    /// A required field was not set.
+    MissingField(&'static str),
+}
+
+impl std::fmt::Display for ShardBuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShardBuilderError::MissingField(field) => {
+                write!(f, "missing required field: {}", field)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ShardBuilderError {}
+
 /// Builder for creating [`ShardWorker`] instances with a fluent API.
 ///
 /// This provides a cleaner way to construct shard workers with optional
@@ -1560,16 +1581,23 @@ impl ShardWorkerBuilder {
         self
     }
 
-    /// Build the ShardWorker.
+    /// Try to build the ShardWorker, returning an error if required fields are missing.
     ///
-    /// # Panics
-    ///
-    /// Panics if required dependencies are not set.
-    pub fn build(self) -> ShardWorker {
-        let message_rx = self.message_rx.expect("message_rx is required");
-        let new_conn_rx = self.new_conn_rx.expect("new_conn_rx is required");
-        let shard_senders = self.shard_senders.expect("shard_senders is required");
-        let registry = self.registry.expect("registry is required");
+    /// This is the fallible version of [`build()`](Self::build) that returns a
+    /// `Result` instead of panicking on missing required fields.
+    pub fn try_build(self) -> Result<ShardWorker, ShardBuilderError> {
+        let message_rx = self
+            .message_rx
+            .ok_or(ShardBuilderError::MissingField("message_rx"))?;
+        let new_conn_rx = self
+            .new_conn_rx
+            .ok_or(ShardBuilderError::MissingField("new_conn_rx"))?;
+        let shard_senders = self
+            .shard_senders
+            .ok_or(ShardBuilderError::MissingField("shard_senders"))?;
+        let registry = self
+            .registry
+            .ok_or(ShardBuilderError::MissingField("registry"))?;
         let metrics_recorder = self
             .metrics_recorder
             .unwrap_or_else(|| Arc::new(crate::noop::NoopMetricsRecorder::new()));
@@ -1626,7 +1654,21 @@ impl ShardWorkerBuilder {
         // VLL initialization is handled separately via enable_vll() method on ShardWorker
         // since it requires runtime configuration
 
-        worker
+        Ok(worker)
+    }
+
+    /// Build the ShardWorker.
+    ///
+    /// # Panics
+    ///
+    /// Panics if required dependencies are not set:
+    /// - `message_rx`
+    /// - `new_conn_rx`
+    /// - `shard_senders`
+    /// - `registry`
+    pub fn build(self) -> ShardWorker {
+        self.try_build()
+            .expect("ShardWorkerBuilder: missing required fields")
     }
 }
 
@@ -3696,7 +3738,10 @@ impl ShardWorker {
         // Get function from registry
         let func_name = String::from_utf8_lossy(function_name);
         let (function, library_name) = {
-            let registry_guard = registry.read().unwrap();
+            let registry_guard = match registry.try_read_err() {
+                Ok(r) => r,
+                Err(_) => return Response::error("ERR internal lock contention"),
+            };
             match registry_guard.get_function(&func_name) {
                 Some((func, lib_name)) => (func.clone(), lib_name.to_string()),
                 None => {
@@ -3718,7 +3763,10 @@ impl ShardWorker {
 
         // Get the library code
         let library_code = {
-            let registry_guard = registry.read().unwrap();
+            let registry_guard = match registry.try_read_err() {
+                Ok(r) => r,
+                Err(_) => return Response::error("ERR internal lock contention"),
+            };
             match registry_guard.get_library(&library_name) {
                 Some(lib) => lib.code.clone(),
                 None => {

@@ -50,7 +50,7 @@ use frogdb_core::{
     ClusterNetworkFactory, ClusterRaft, ClusterState, CommandCategory, CommandFlags,
     CommandRegistry, ConnectionLevelOp, ExecutionStrategy, GlobPattern, IntrospectionRequest,
     IntrospectionResponse, KeyAccessType, LatencyEvent, MetricsRecorder, PartialResult, PauseMode,
-    PubSubMessage, PubSubSender, ReplicationTracker, ReplicationTrackerImpl, ScatterOp,
+    PubSubMessage, PubSubSender, ReplicationTracker, ReplicationTrackerImpl, RwLockExt, ScatterOp,
     ShardReadyResult, SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId,
     TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
@@ -4381,7 +4381,10 @@ impl ConnectionHandler {
 
         // Register in the global registry
         {
-            let mut registry = self.function_registry.write().unwrap();
+            let mut registry = match self.function_registry.try_write_err() {
+                Ok(r) => r,
+                Err(_) => return Response::error("ERR internal lock contention"),
+            };
             match registry.load_library(library, replace) {
                 Ok(_) => {}
                 Err(e) => return Response::error(e.to_string()),
@@ -4423,7 +4426,10 @@ impl ConnectionHandler {
             i += 1;
         }
 
-        let registry = self.function_registry.read().unwrap();
+        let registry = match self.function_registry.try_read_err() {
+            Ok(r) => r,
+            Err(_) => return Response::error("ERR internal lock contention"),
+        };
         let libraries = registry.list_libraries(pattern);
 
         let mut result = Vec::new();
@@ -4489,7 +4495,10 @@ impl ConnectionHandler {
         };
 
         {
-            let mut registry = self.function_registry.write().unwrap();
+            let mut registry = match self.function_registry.try_write_err() {
+                Ok(r) => r,
+                Err(_) => return Response::error("ERR internal lock contention"),
+            };
             match registry.delete_library(library_name) {
                 Ok(()) => {}
                 Err(e) => return Response::error(e.to_string()),
@@ -4515,7 +4524,10 @@ impl ConnectionHandler {
         }
 
         {
-            let mut registry = self.function_registry.write().unwrap();
+            let mut registry = match self.function_registry.try_write_err() {
+                Ok(r) => r,
+                Err(_) => return Response::error("ERR internal lock contention"),
+            };
             registry.flush();
         }
 
@@ -4527,7 +4539,10 @@ impl ConnectionHandler {
 
     /// Handle FUNCTION STATS.
     fn handle_function_stats(&self) -> Response {
-        let registry = self.function_registry.read().unwrap();
+        let registry = match self.function_registry.try_read_err() {
+            Ok(r) => r,
+            Err(_) => return Response::error("ERR internal lock contention"),
+        };
         let stats = registry.stats();
 
         let mut result = Vec::new();
@@ -4564,7 +4579,10 @@ impl ConnectionHandler {
 
     /// Handle FUNCTION DUMP.
     fn handle_function_dump(&self) -> Response {
-        let registry = self.function_registry.read().unwrap();
+        let registry = match self.function_registry.try_read_err() {
+            Ok(r) => r,
+            Err(_) => return Response::error("ERR internal lock contention"),
+        };
         let dump = frogdb_core::dump_libraries(&registry);
         Response::bulk(Bytes::from(dump))
     }
@@ -4593,7 +4611,10 @@ impl ConnectionHandler {
 
         // Apply based on policy
         {
-            let mut registry = self.function_registry.write().unwrap();
+            let mut registry = match self.function_registry.try_write_err() {
+                Ok(r) => r,
+                Err(_) => return Response::error("ERR internal lock contention"),
+            };
 
             if policy == frogdb_core::RestorePolicy::Flush {
                 registry.flush();
@@ -4660,7 +4681,13 @@ impl ConnectionHandler {
         }
 
         let path = PathBuf::from(self.config_manager.data_dir()).join("functions.fdb");
-        let registry = self.function_registry.read().unwrap();
+        let registry = match self.function_registry.try_read_err() {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "Failed to acquire function registry lock for persistence");
+                return;
+            }
+        };
 
         if let Err(e) = frogdb_core::save_to_file(&registry, &path) {
             warn!(error = %e, "Failed to persist functions to disk");
@@ -5046,7 +5073,7 @@ impl ConnectionHandler {
         match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
             Ok(Ok(partial)) => {
                 // Return the random key (or null if shard is now empty)
-                for (_, response) in partial.results {
+                if let Some((_, response)) = partial.results.into_iter().next() {
                     return response;
                 }
                 Response::null()

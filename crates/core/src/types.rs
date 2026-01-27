@@ -626,6 +626,18 @@ pub enum IncrementError {
     Overflow,
 }
 
+impl std::fmt::Display for IncrementError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IncrementError::NotInteger => write!(f, "ERR value is not an integer or out of range"),
+            IncrementError::NotFloat => write!(f, "ERR value is not a valid float"),
+            IncrementError::Overflow => write!(f, "ERR increment or decrement would overflow"),
+        }
+    }
+}
+
+impl std::error::Error for IncrementError {}
+
 /// Format a float for Redis compatibility.
 ///
 /// Redis uses specific formatting rules:
@@ -2319,6 +2331,18 @@ pub enum StreamIdParseError {
     InvalidFormat,
 }
 
+impl std::fmt::Display for StreamIdParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamIdParseError::InvalidFormat => {
+                write!(f, "ERR Invalid stream ID specified as stream command argument")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StreamIdParseError {}
+
 /// Stream ID specification for XADD.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamIdSpec {
@@ -2924,6 +2948,18 @@ pub enum StreamAddError {
     IdTooSmall,
 }
 
+impl std::fmt::Display for StreamAddError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamAddError::IdTooSmall => {
+                write!(f, "ERR The ID specified in XADD is equal or smaller than the target stream top item")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StreamAddError {}
+
 /// Error for consumer group operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamGroupError {
@@ -2932,6 +2968,21 @@ pub enum StreamGroupError {
     /// Consumer group doesn't exist.
     NoGroup,
 }
+
+impl std::fmt::Display for StreamGroupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamGroupError::GroupExists => {
+                write!(f, "BUSYGROUP Consumer Group name already exists")
+            }
+            StreamGroupError::NoGroup => {
+                write!(f, "NOGROUP No such consumer group")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StreamGroupError {}
 
 #[cfg(test)]
 mod tests {
