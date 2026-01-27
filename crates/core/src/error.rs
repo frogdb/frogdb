@@ -349,3 +349,44 @@ impl RespError for FrogDbError {
         FrogDbError::to_response(self)
     }
 }
+
+// =============================================================================
+// From implementations for type-specific errors to CommandError
+// =============================================================================
+
+impl From<crate::types::IncrementError> for CommandError {
+    fn from(err: crate::types::IncrementError) -> Self {
+        match err {
+            crate::types::IncrementError::NotInteger => CommandError::NotInteger,
+            crate::types::IncrementError::NotFloat => CommandError::NotFloat,
+            crate::types::IncrementError::Overflow => CommandError::InvalidArgument {
+                message: "increment or decrement would overflow".to_string(),
+            },
+        }
+    }
+}
+
+impl From<crate::types::StreamIdParseError> for CommandError {
+    fn from(_err: crate::types::StreamIdParseError) -> Self {
+        CommandError::InvalidArgument {
+            message: "Invalid stream ID specified as stream command argument".to_string(),
+        }
+    }
+}
+
+impl From<crate::types::StreamAddError> for CommandError {
+    fn from(_err: crate::types::StreamAddError) -> Self {
+        CommandError::InvalidArgument {
+            message: "The ID specified in XADD is equal or smaller than the target stream top item".to_string(),
+        }
+    }
+}
+
+impl From<crate::types::StreamGroupError> for CommandError {
+    fn from(err: crate::types::StreamGroupError) -> Self {
+        match err {
+            crate::types::StreamGroupError::GroupExists => CommandError::BusyGroup,
+            crate::types::StreamGroupError::NoGroup => CommandError::NoGroup,
+        }
+    }
+}
