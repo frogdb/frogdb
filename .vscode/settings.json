@@ -1,10 +1,21 @@
 {
     "cSpell.words": [
+        "bitfield",
+        "bitop",
+        "bitpos",
         "clippy",
         "frogdb",
+        "fullresync",
+        "getbit",
+        "incrby",
         "Jepsen",
         "linearizability",
+        "nocapture",
+        "popcount",
+        "psync",
+        "replconf",
         "serde",
+        "setbit",
         "SLOWLOG",
         "thiserror"
     ],
