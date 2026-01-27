@@ -1,87 +1,173 @@
 //! Command execution errors.
+//!
+//! This module uses the `define_command_errors!` macro to define error variants
+//! with a single source of truth for error messages, eliminating duplication
+//! between Display impl and RESP encoding.
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
-use thiserror::Error;
 use tracing::error;
 
-/// Core error variants for command execution.
-#[derive(Debug, Clone, Error)]
-pub enum CommandError {
+/// Trait for error types that can be converted to RESP error responses.
+///
+/// This provides a unified interface for all FrogDB error types to convert
+/// themselves to wire-format bytes or `Response` objects.
+pub trait RespError: std::error::Error {
+    /// Convert to bytes for RESP encoding.
+    ///
+    /// The default implementation uses the `Display` implementation.
+    fn to_bytes(&self) -> Bytes {
+        Bytes::from(self.to_string())
+    }
+
+    /// Convert to RESP error response.
+    ///
+    /// The default implementation wraps `to_bytes()` in `Response::Error`.
+    fn to_response(&self) -> Response {
+        Response::Error(self.to_bytes())
+    }
+}
+
+/// Macro to define command errors with a single source of truth for error messages.
+///
+/// This macro generates:
+/// - The enum variant definition
+/// - Display implementation using the error message
+/// - `to_bytes()` method that uses `Bytes::from_static()` for static messages
+///
+/// # Syntax
+///
+/// ```rust,ignore
+/// define_command_errors! {
+///     /// Documentation for the error.
+///     VariantName => "static error message",
+///
+///     /// Documentation for error with fields.
+///     VariantWithField { field: Type } => "ERR message with {field}",
+/// }
+/// ```
+macro_rules! define_command_errors {
+    (
+        $(
+            $(#[$meta:meta])*
+            $variant:ident $({ $($field:ident : $field_ty:ty),* $(,)? })? => $msg:literal
+        ),* $(,)?
+    ) => {
+        /// Core error variants for command execution.
+        #[derive(Debug, Clone)]
+        pub enum CommandError {
+            $(
+                $(#[$meta])*
+                $variant $({ $($field : $field_ty),* })?,
+            )*
+        }
+
+        impl std::fmt::Display for CommandError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $(
+                        define_command_errors!(@pattern $variant $({ $($field),* })?) => {
+                            write!(f, $msg $(, $($field = $field),*)?)
+                        }
+                    )*
+                }
+            }
+        }
+
+        impl std::error::Error for CommandError {}
+
+        impl CommandError {
+            /// Convert to bytes for RESP encoding.
+            ///
+            /// Uses `Bytes::from_static()` for static messages to avoid allocation.
+            pub fn to_bytes(&self) -> Bytes {
+                match self {
+                    $(
+                        define_command_errors!(@pattern $variant $({ $($field),* })?) => {
+                            define_command_errors!(@to_bytes $msg $(, $($field),*)?)
+                        }
+                    )*
+                }
+            }
+        }
+    };
+
+    // Helper to generate the match pattern
+    (@pattern $variant:ident) => {
+        Self::$variant
+    };
+    (@pattern $variant:ident { $($field:ident),* }) => {
+        Self::$variant { $($field),* }
+    };
+
+    // Helper to generate Bytes - static version (no format args)
+    (@to_bytes $msg:literal) => {
+        Bytes::from_static($msg.as_bytes())
+    };
+    // Helper to generate Bytes - dynamic version (with format args)
+    (@to_bytes $msg:literal, $($field:ident),+) => {
+        Bytes::from(format!($msg, $($field = $field),+))
+    };
+}
+
+define_command_errors! {
     // === Syntax/Argument Errors ===
     /// Wrong number of arguments for command.
-    #[error("ERR wrong number of arguments for '{command}' command")]
-    WrongArity { command: &'static str },
+    WrongArity { command: &'static str } => "ERR wrong number of arguments for '{command}' command",
 
     /// Invalid argument value or format.
-    #[error("ERR {message}")]
-    InvalidArgument { message: String },
+    InvalidArgument { message: String } => "ERR {message}",
 
     /// General syntax error.
-    #[error("ERR syntax error")]
-    SyntaxError,
+    SyntaxError => "ERR syntax error",
 
     /// Unknown command.
-    #[error("ERR unknown command '{name}'")]
-    UnknownCommand { name: String },
+    UnknownCommand { name: String } => "ERR unknown command '{name}', with args beginning with:",
 
     // === Type Errors ===
     /// Operation against wrong value type.
-    #[error("WRONGTYPE Operation against a key holding the wrong kind of value")]
-    WrongType,
+    WrongType => "WRONGTYPE Operation against a key holding the wrong kind of value",
 
     /// Value is not an integer or out of range.
-    #[error("ERR value is not an integer or out of range")]
-    NotInteger,
+    NotInteger => "ERR value is not an integer or out of range",
 
     /// Value is not a valid float.
-    #[error("ERR value is not a valid float")]
-    NotFloat,
+    NotFloat => "ERR value is not a valid float",
 
     // === Routing Errors ===
     /// Keys in request don't hash to the same slot.
-    #[error("CROSSSLOT Keys in request don't hash to the same slot")]
-    CrossSlot,
+    CrossSlot => "CROSSSLOT Keys in request don't hash to the same slot",
 
     // === Cluster Errors ===
     /// Cluster mode is not enabled.
-    #[error("ERR This instance has cluster support disabled")]
-    ClusterDisabled,
+    ClusterDisabled => "ERR This instance has cluster support disabled",
 
     /// Cluster command requires being the leader.
-    #[error("CLUSTERDOWN The cluster is down")]
-    ClusterDown,
+    ClusterDown => "CLUSTERDOWN The cluster is down",
 
     /// Wrong number of arguments for a dynamic command string.
-    #[error("ERR wrong number of arguments for '{command}' command")]
-    WrongArgCount { command: String },
+    WrongArgCount { command: String } => "ERR wrong number of arguments for '{command}' command",
 
     // === Key State Errors ===
     /// Target key already exists (for RESTORE without REPLACE).
-    #[error("BUSYKEY Target key name already exists")]
-    BusyKey,
+    BusyKey => "BUSYKEY Target key name already exists",
 
     // === Stream Errors ===
     /// Consumer group already exists.
-    #[error("BUSYGROUP Consumer Group name already exists")]
-    BusyGroup,
+    BusyGroup => "BUSYGROUP Consumer Group name already exists",
 
     /// Consumer group doesn't exist.
-    #[error("NOGROUP No such consumer group")]
-    NoGroup,
+    NoGroup => "NOGROUP No such consumer group",
 
     // === System Errors ===
     /// Out of memory.
-    #[error("OOM command not allowed when used memory > 'maxmemory'")]
-    OutOfMemory,
+    OutOfMemory => "OOM command not allowed when used memory > 'maxmemory'",
 
     /// Internal server error.
-    #[error("ERR {message}")]
-    Internal { message: String },
+    Internal { message: String } => "ERR {message}",
 
     /// Command is recognized but not yet implemented.
-    #[error("ERR command '{command}' is not yet implemented")]
-    NotImplemented { command: &'static str },
+    NotImplemented { command: &'static str } => "ERR command '{command}' is not yet implemented",
 }
 
 impl CommandError {
@@ -89,57 +175,14 @@ impl CommandError {
     ///
     /// This should be used for unexpected internal errors that indicate a bug
     /// or system issue, not for user-facing errors.
-    pub fn internal(command: &str, message: impl Into<String>) -> Self {
+    pub fn internal(cmd: &str, message: impl Into<String>) -> Self {
         let message = message.into();
-        error!(command, error = %message, "Command internal error");
+        error!(command = cmd, error = %message, "Command internal error");
         Self::Internal { message }
     }
 
     /// Convert to RESP error response.
     pub fn to_response(&self) -> Response {
         Response::Error(self.to_bytes())
-    }
-
-    /// Convert to bytes for RESP encoding.
-    pub fn to_bytes(&self) -> Bytes {
-        match self {
-            Self::WrongArity { command } => {
-                Bytes::from(format!("ERR wrong number of arguments for '{}' command", command))
-            }
-            Self::InvalidArgument { message } => Bytes::from(format!("ERR {}", message)),
-            Self::SyntaxError => Bytes::from_static(b"ERR syntax error"),
-            Self::UnknownCommand { name } => {
-                Bytes::from(format!("ERR unknown command '{}', with args beginning with:", name))
-            }
-            Self::WrongType => {
-                Bytes::from_static(b"WRONGTYPE Operation against a key holding the wrong kind of value")
-            }
-            Self::NotInteger => {
-                Bytes::from_static(b"ERR value is not an integer or out of range")
-            }
-            Self::NotFloat => Bytes::from_static(b"ERR value is not a valid float"),
-            Self::CrossSlot => {
-                Bytes::from_static(b"CROSSSLOT Keys in request don't hash to the same slot")
-            }
-            Self::ClusterDisabled => {
-                Bytes::from_static(b"ERR This instance has cluster support disabled")
-            }
-            Self::ClusterDown => Bytes::from_static(b"CLUSTERDOWN The cluster is down"),
-            Self::WrongArgCount { command } => {
-                Bytes::from(format!("ERR wrong number of arguments for '{}' command", command))
-            }
-            Self::BusyKey => Bytes::from_static(b"BUSYKEY Target key name already exists"),
-            Self::BusyGroup => {
-                Bytes::from_static(b"BUSYGROUP Consumer Group name already exists")
-            }
-            Self::NoGroup => Bytes::from_static(b"NOGROUP No such consumer group"),
-            Self::OutOfMemory => {
-                Bytes::from_static(b"OOM command not allowed when used memory > 'maxmemory'")
-            }
-            Self::Internal { message } => Bytes::from(format!("ERR {}", message)),
-            Self::NotImplemented { command } => {
-                Bytes::from(format!("ERR command '{}' is not yet implemented", command))
-            }
-        }
     }
 }

@@ -257,39 +257,62 @@ impl<'a> ArgParser<'a> {
 }
 
 /// Parse bytes as a string and then as a type.
-pub fn parse_from_bytes<T>(bytes: &Bytes) -> Result<T, CommandError>
+///
+/// Works with any type that can be viewed as a byte slice, including:
+/// - `&[u8]`
+/// - `&Bytes`
+/// - `&Vec<u8>`
+pub fn parse_from_bytes<T, B: AsRef<[u8]>>(bytes: B) -> Result<T, CommandError>
 where
     T: FromStr,
     T::Err: std::fmt::Display,
 {
-    let s = std::str::from_utf8(bytes).map_err(|_| CommandError::SyntaxError)?;
+    let s = std::str::from_utf8(bytes.as_ref()).map_err(|_| CommandError::SyntaxError)?;
     s.parse().map_err(|e: T::Err| CommandError::InvalidArgument {
         message: e.to_string(),
     })
 }
 
 /// Parse bytes as u64.
-pub fn parse_u64(bytes: &Bytes) -> Result<u64, CommandError> {
-    let s = std::str::from_utf8(bytes).map_err(|_| CommandError::NotInteger)?;
+///
+/// Works with any type that can be viewed as a byte slice.
+pub fn parse_u64<B: AsRef<[u8]>>(bytes: B) -> Result<u64, CommandError> {
+    let s = std::str::from_utf8(bytes.as_ref()).map_err(|_| CommandError::NotInteger)?;
     s.parse().map_err(|_| CommandError::NotInteger)
 }
 
 /// Parse bytes as i64.
-pub fn parse_i64(bytes: &Bytes) -> Result<i64, CommandError> {
-    let s = std::str::from_utf8(bytes).map_err(|_| CommandError::NotInteger)?;
+///
+/// Works with any type that can be viewed as a byte slice.
+pub fn parse_i64<B: AsRef<[u8]>>(bytes: B) -> Result<i64, CommandError> {
+    let s = std::str::from_utf8(bytes.as_ref()).map_err(|_| CommandError::NotInteger)?;
     s.parse().map_err(|_| CommandError::NotInteger)
 }
 
 /// Parse bytes as usize.
-pub fn parse_usize(bytes: &Bytes) -> Result<usize, CommandError> {
-    let s = std::str::from_utf8(bytes).map_err(|_| CommandError::NotInteger)?;
+///
+/// Works with any type that can be viewed as a byte slice.
+pub fn parse_usize<B: AsRef<[u8]>>(bytes: B) -> Result<usize, CommandError> {
+    let s = std::str::from_utf8(bytes.as_ref()).map_err(|_| CommandError::NotInteger)?;
     s.parse().map_err(|_| CommandError::NotInteger)
 }
 
 /// Parse bytes as f64.
-pub fn parse_f64(bytes: &Bytes) -> Result<f64, CommandError> {
-    let s = std::str::from_utf8(bytes).map_err(|_| CommandError::NotFloat)?;
-    s.parse().map_err(|_| CommandError::NotFloat)
+///
+/// Works with any type that can be viewed as a byte slice.
+///
+/// Supports special values:
+/// - "inf" or "+inf" -> f64::INFINITY
+/// - "-inf" -> f64::NEG_INFINITY
+pub fn parse_f64<B: AsRef<[u8]>>(bytes: B) -> Result<f64, CommandError> {
+    let s = std::str::from_utf8(bytes.as_ref()).map_err(|_| CommandError::NotFloat)?;
+    if s.eq_ignore_ascii_case("inf") || s.eq_ignore_ascii_case("+inf") {
+        Ok(f64::INFINITY)
+    } else if s.eq_ignore_ascii_case("-inf") {
+        Ok(f64::NEG_INFINITY)
+    } else {
+        s.parse().map_err(|_| CommandError::NotFloat)
+    }
 }
 
 /// Helper for MATCH/COUNT style scan options.

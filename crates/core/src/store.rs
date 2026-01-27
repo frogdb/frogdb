@@ -9,7 +9,138 @@ use tracing::{debug, warn};
 use crate::glob::glob_match;
 use crate::noop::ExpiryIndex;
 use crate::shard::slot_for_key;
-use crate::types::{KeyMetadata, KeyType, SetCondition, SetOptions, SetResult, Value};
+use crate::types::{
+    HashValue, KeyMetadata, KeyType, ListValue, SetCondition, SetOptions, SetResult, SetValue,
+    SortedSetValue, StreamValue, Value,
+};
+
+// ============================================================================
+// ValueType Trait - Generic interface for typed value access
+// ============================================================================
+
+/// Trait for types that can be stored as values in the key-value store.
+///
+/// This trait enables generic helpers like `get_or_create` that work with
+/// any value type (List, Set, Hash, SortedSet, Stream).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use frogdb_core::{get_or_create, ListValue, CommandContext};
+///
+/// fn my_command(ctx: &mut CommandContext, key: &Bytes) -> Result<(), CommandError> {
+///     let list = get_or_create::<ListValue>(ctx, key)?;
+///     list.push_back(Bytes::from("item"));
+///     Ok(())
+/// }
+/// ```
+pub trait ValueType: Sized {
+    /// Returns the type name for error messages (e.g., "list", "set").
+    fn type_name() -> &'static str;
+
+    /// Creates a new default value of this type wrapped in `Value`.
+    fn create_default() -> Value;
+
+    /// Attempts to extract a reference to this type from a `Value`.
+    ///
+    /// Returns `None` if the value is not of this type.
+    fn from_value(value: &Value) -> Option<&Self>;
+
+    /// Attempts to extract a mutable reference to this type from a `Value`.
+    ///
+    /// Returns `None` if the value is not of this type.
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self>;
+}
+
+impl ValueType for ListValue {
+    fn type_name() -> &'static str {
+        "list"
+    }
+
+    fn create_default() -> Value {
+        Value::list()
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_list()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_list_mut()
+    }
+}
+
+impl ValueType for SetValue {
+    fn type_name() -> &'static str {
+        "set"
+    }
+
+    fn create_default() -> Value {
+        Value::set()
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_set()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_set_mut()
+    }
+}
+
+impl ValueType for HashValue {
+    fn type_name() -> &'static str {
+        "hash"
+    }
+
+    fn create_default() -> Value {
+        Value::hash()
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_hash()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_hash_mut()
+    }
+}
+
+impl ValueType for SortedSetValue {
+    fn type_name() -> &'static str {
+        "sorted set"
+    }
+
+    fn create_default() -> Value {
+        Value::sorted_set()
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_sorted_set()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_sorted_set_mut()
+    }
+}
+
+impl ValueType for StreamValue {
+    fn type_name() -> &'static str {
+        "stream"
+    }
+
+    fn create_default() -> Value {
+        Value::stream()
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_stream()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_stream_mut()
+    }
+}
 
 /// Storage trait for key-value operations.
 pub trait Store: Send {

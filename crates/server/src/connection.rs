@@ -1,4 +1,40 @@
 //! Connection handling.
+//!
+//! This module provides the [`ConnectionHandler`] which processes client commands.
+//! The handler can be created using either the legacy `new()` method with many
+//! individual parameters, or the more organized `from_deps()` method with grouped
+//! dependencies, or the [`ConnectionHandlerBuilder`] for a fluent API.
+//!
+//! # Dependency Groups
+//!
+//! Dependencies are organized into logical groups:
+//! - [`CoreDeps`] - Essential dependencies for command execution
+//! - [`AdminDeps`] - Dependencies for administrative commands
+//! - [`ClusterDeps`] - Dependencies for cluster mode (optional)
+//! - [`ObservabilityDeps`] - Dependencies for tracing and monitoring
+//! - [`ConnectionConfig`] - Configuration options
+
+// Submodules
+mod acl;
+mod builder;
+mod deps;
+mod pubsub;
+mod state;
+mod transaction;
+
+// Re-export state types for backwards compatibility
+pub use state::{
+    AuthState, BlockedState, ConnectionMode, LocalClientStats, PubSubState, ReplyMode,
+    TransactionState, TransactionTarget,
+};
+
+// Re-export dependency groups
+pub use deps::{
+    AdminDeps, ClusterDeps, ConnectionConfig, ConnectionDeps, CoreDeps, ObservabilityDeps,
+};
+
+// Re-export builder
+pub use builder::{ConnectionHandlerBuilder, connection_builder, standalone_config};
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -700,7 +736,84 @@ fn extract_subcommand(command: &str, args: &[Bytes]) -> Option<String> {
 }
 
 impl ConnectionHandler {
-    /// Create a new connection handler.
+    /// Create a new connection handler using grouped dependencies.
+    ///
+    /// This is the preferred way to create a ConnectionHandler as it uses
+    /// logical dependency groups for better organization.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let handler = ConnectionHandler::from_deps(
+    ///     socket,
+    ///     addr,
+    ///     conn_id,
+    ///     shard_id,
+    ///     client_handle,
+    ///     core_deps,
+    ///     admin_deps,
+    ///     cluster_deps,
+    ///     config,
+    ///     observability_deps,
+    /// );
+    /// ```
+    pub fn from_deps(
+        socket: TcpStream,
+        addr: SocketAddr,
+        conn_id: u64,
+        shard_id: usize,
+        client_handle: ClientHandle,
+        core: CoreDeps,
+        admin: AdminDeps,
+        cluster: ClusterDeps,
+        config: ConnectionConfig,
+        observability: ObservabilityDeps,
+    ) -> Self {
+        let framed = Framed::new(socket, Resp2);
+        let requires_auth = core.acl_manager.requires_auth();
+        let state = ConnectionState::new(conn_id, addr, requires_auth);
+
+        // Create pub/sub channel
+        let (pubsub_tx, pubsub_rx) = mpsc::unbounded_channel();
+
+        debug!(conn_id = conn_id, addr = %addr, "Connection established");
+
+        Self {
+            framed,
+            state,
+            shard_id,
+            num_shards: config.num_shards,
+            registry: core.registry,
+            client_registry: admin.client_registry,
+            config_manager: admin.config_manager,
+            client_handle,
+            shard_senders: core.shard_senders,
+            allow_cross_slot: config.allow_cross_slot,
+            scatter_gather_timeout: config.scatter_gather_timeout,
+            pubsub_tx,
+            pubsub_rx,
+            metrics_recorder: core.metrics_recorder,
+            acl_manager: core.acl_manager,
+            snapshot_coordinator: admin.snapshot_coordinator,
+            function_registry: admin.function_registry,
+            shared_tracer: observability.shared_tracer,
+            tracing_config: observability.tracing_config,
+            replication_tracker: cluster.replication_tracker,
+            cluster_state: cluster.cluster_state,
+            node_id: cluster.node_id,
+            is_admin: config.is_admin,
+            admin_enabled: config.admin_enabled,
+            hotshards_config: config.hotshards_config,
+            memory_diag_config: config.memory_diag_config,
+            band_tracker: observability.band_tracker,
+            raft: cluster.raft,
+            network_factory: cluster.network_factory,
+        }
+    }
+
+    /// Create a new connection handler (legacy interface with individual parameters).
+    ///
+    /// Consider using [`from_deps`](Self::from_deps) for new code.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         socket: TcpStream,
@@ -732,46 +845,53 @@ impl ConnectionHandler {
         raft: Option<Arc<ClusterRaft>>,
         network_factory: Option<Arc<ClusterNetworkFactory>>,
     ) -> Self {
-        let framed = Framed::new(socket, Resp2);
-        let requires_auth = acl_manager.requires_auth();
-        let state = ConnectionState::new(conn_id, addr, requires_auth);
-
-        // Create pub/sub channel
-        let (pubsub_tx, pubsub_rx) = mpsc::unbounded_channel();
-
-        debug!(conn_id = conn_id, addr = %addr, "Connection established");
-
-        Self {
-            framed,
-            state,
-            shard_id,
-            num_shards,
+        // Convert to grouped dependencies and delegate
+        let core = CoreDeps {
             registry,
-            client_registry,
-            config_manager,
-            client_handle,
             shard_senders,
-            allow_cross_slot,
-            scatter_gather_timeout: Duration::from_millis(scatter_gather_timeout_ms),
-            pubsub_tx,
-            pubsub_rx,
             metrics_recorder,
             acl_manager,
+        };
+        let admin = AdminDeps {
+            client_registry,
+            config_manager,
             snapshot_coordinator,
             function_registry,
-            shared_tracer,
-            tracing_config,
-            replication_tracker,
+        };
+        let cluster = ClusterDeps {
             cluster_state,
             node_id,
+            raft,
+            network_factory,
+            replication_tracker,
+        };
+        let config = ConnectionConfig {
+            num_shards,
+            allow_cross_slot,
+            scatter_gather_timeout: Duration::from_millis(scatter_gather_timeout_ms),
             is_admin,
             admin_enabled,
             hotshards_config,
             memory_diag_config,
+        };
+        let observability = ObservabilityDeps {
+            shared_tracer,
+            tracing_config,
             band_tracker,
-            raft,
-            network_factory,
-        }
+        };
+
+        Self::from_deps(
+            socket,
+            addr,
+            conn_id,
+            shard_id,
+            client_handle,
+            core,
+            admin,
+            cluster,
+            config,
+            observability,
+        )
     }
 
     /// Send a response to the client, using appropriate encoding based on protocol version.
