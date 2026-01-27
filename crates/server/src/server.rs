@@ -32,7 +32,9 @@ use crate::config::{Config, MemoryConfig, PersistenceConfig};
 use crate::failure_detector::{spawn_failure_detector_task, FailureDetector, FailureDetectorConfig};
 use crate::latency_test::{self, LatencyTestResult};
 use crate::net::{spawn, TcpListener};
-use crate::replication::PrimaryReplicationHandler;
+use crate::replication::{
+    consume_frames, PrimaryReplicationHandler, ReplicaCommandExecutor, ReplicaReplicationHandler,
+};
 use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
 
 /// Channel capacity for shard message queues.
@@ -146,6 +148,12 @@ pub struct Server {
 
     /// Optional failure detector task handle (only when cluster mode is enabled).
     failure_detector_handle: Option<crate::net::JoinHandle<()>>,
+
+    /// Optional replica replication handler (only when running as replica).
+    replica_handler: Option<Arc<ReplicaReplicationHandler>>,
+
+    /// Optional replica frame receiver (only when running as replica).
+    replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>>,
 }
 
 impl Server {
@@ -333,7 +341,10 @@ impl Server {
         // Convert recovered stores to an iterator if available
         let mut recovered_iter = recovered_stores.map(|v| v.into_iter());
 
-        // Create replication broadcaster and tracker
+        // Create replication broadcaster, tracker, and replica handler
+        let mut replica_handler: Option<Arc<ReplicaReplicationHandler>> = None;
+        let mut replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>> = None;
+
         let (replication_broadcaster, replication_tracker): (SharedBroadcaster, Option<Arc<ReplicationTrackerImpl>>) =
             if config.replication.is_primary() {
                 // Initialize PrimaryReplicationHandler for primary role
@@ -358,7 +369,41 @@ impl Server {
                 ));
 
                 (handler as SharedBroadcaster, Some(tracker))
+            } else if config.replication.is_replica() {
+                // Initialize ReplicaReplicationHandler for replica role
+                let primary_addr = format!(
+                    "{}:{}",
+                    config.replication.primary_host,
+                    config.replication.primary_port
+                )
+                .parse::<std::net::SocketAddr>()
+                .map_err(|e| anyhow::anyhow!("Invalid primary address: {}", e))?;
+
+                let state_path = config.persistence.data_dir.join(&config.replication.state_file);
+                let repl_state = frogdb_core::ReplicationState::load_or_create(&state_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to load replication state: {}", e))?;
+
+                info!(
+                    primary = %primary_addr,
+                    replication_id = %repl_state.replication_id,
+                    offset = repl_state.replication_offset,
+                    "Initialized replica replication state"
+                );
+
+                let (handler, frame_rx) = ReplicaReplicationHandler::new(
+                    primary_addr,
+                    config.server.port,
+                    repl_state,
+                    config.persistence.data_dir.clone(),
+                );
+
+                replica_handler = Some(Arc::new(handler));
+                replica_frame_rx = Some(frame_rx);
+
+                // Replicas use NoopBroadcaster (they don't broadcast to other replicas)
+                (Arc::new(NoopBroadcaster), None)
             } else {
+                // Standalone mode
                 (Arc::new(NoopBroadcaster), None)
             };
 
@@ -705,6 +750,8 @@ impl Server {
             band_tracker,
             network_factory,
             failure_detector_handle,
+            replica_handler,
+            replica_frame_rx,
         })
     }
 
@@ -991,6 +1038,34 @@ impl Server {
             None
         };
 
+        // Start replica replication if running as replica
+        let replica_handle = if let (Some(handler), Some(frame_rx)) =
+            (self.replica_handler.take(), self.replica_frame_rx.take())
+        {
+            let shard_senders = self.shard_senders.clone();
+            let num_shards = self.config.server.num_shards.max(1);
+
+            // Spawn replication connection task (connects to primary and receives frames)
+            let handler_clone = handler.clone();
+            let repl_conn_handle = spawn(async move {
+                if let Err(e) = handler_clone.start().await {
+                    error!(error = %e, "Replica replication connection error");
+                }
+            });
+
+            // Spawn frame consumer task (applies replicated commands to shards)
+            let executor = ReplicaCommandExecutor::new(shard_senders, num_shards);
+            let frame_consumer_handle = spawn(async move {
+                consume_frames(frame_rx, executor).await;
+            });
+
+            info!("Replica replication tasks started");
+
+            Some((repl_conn_handle, frame_consumer_handle))
+        } else {
+            None
+        };
+
         // Create main acceptor (regular client connections)
         // When admin port is enabled, this acceptor blocks admin commands
         let acceptor = Acceptor::new(
@@ -1122,6 +1197,12 @@ impl Server {
         }
         if let Some(handle) = cluster_bus_handle {
             handle.abort();
+        }
+
+        // Stop replica replication tasks if running
+        if let Some((conn_handle, consumer_handle)) = replica_handle {
+            conn_handle.abort();
+            consumer_handle.abort();
         }
 
         // Stop failure detector task if running

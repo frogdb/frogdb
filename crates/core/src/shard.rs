@@ -2448,7 +2448,8 @@ impl ShardWorker {
             self.persist_command_to_wal(&cmd_name_str, &command.args).await;
 
             // Broadcast to replicas (if running as primary with connected replicas)
-            if self.replication_broadcaster.is_active() {
+            // Skip broadcast if this command came from replication (to avoid infinite loops)
+            if conn_id != REPLICA_INTERNAL_CONN_ID && self.replication_broadcaster.is_active() {
                 self.replication_broadcaster.broadcast_command(&cmd_name_str, &command.args);
             }
         }
@@ -4166,6 +4167,13 @@ pub fn extract_hash_tag(key: &[u8]) -> Option<&[u8]> {
 
 /// Number of Redis cluster hash slots.
 pub const REDIS_CLUSTER_SLOTS: usize = 16384;
+
+/// Reserved connection ID for internally replicated commands.
+///
+/// Commands received via replication should use this connection ID to prevent
+/// them from being re-broadcast back to replicas, which would cause infinite loops.
+/// Connection IDs for real clients start at 1 (from NEXT_CONN_ID in server.rs).
+pub const REPLICA_INTERNAL_CONN_ID: u64 = 0;
 
 /// Determine which shard owns a key using Redis-compatible CRC16 hashing.
 ///

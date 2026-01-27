@@ -1067,7 +1067,6 @@ async fn test_wait_with_disconnected_replica(#[case] persistence: bool) {
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
 #[tokio::test]
-#[ignore = "Replica hangs under high write load - documents broadcast overflow issue"]
 async fn test_replica_lag_behavior(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
@@ -1127,7 +1126,6 @@ async fn test_replica_lag_behavior(#[case] persistence: bool) {
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
 #[tokio::test]
-#[ignore = "Replica hangs during full resync - documents RDB data loading issue"]
 async fn test_fullresync_data_integrity(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
@@ -1204,7 +1202,6 @@ async fn test_fullresync_data_integrity(#[case] persistence: bool) {
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
 #[tokio::test]
-#[ignore = "Replica hangs with large values - documents large value replication issue"]
 async fn test_large_value_replication_stress(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 

@@ -11,11 +11,14 @@ use bytes::{Bytes, BytesMut};
 use frogdb_core::{
     cluster::{ClusterCommand, NodeInfo, NodeRole, SlotRange},
     generate_latency_graph, persistence::SnapshotCoordinator, shard_for_key, slot_for_key,
-    AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
-    CommandFlags, CommandRegistry, ConnectionLevelOp, ExecutionStrategy, KeyAccessType,
-    LatencyEvent, MetricsRecorder, PartialResult, PauseMode, PubSubMessage, PubSubSender,
-    ReplicationTracker, ReplicationTrackerImpl, ScatterOp, ShardReadyResult, SharedFunctionRegistry,
-    ShardMemoryStats, ShardMessage, StreamId,
+    AclManager, AuthenticatedUser, ClientHandle, ClientRegistry, ClientStatsDelta,
+    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandCategory, CommandFlags,
+    CommandRegistry, ConnectionLevelOp, ExecutionStrategy, GlobPattern, IntrospectionRequest,
+    IntrospectionResponse, KeyAccessType, LatencyEvent, MetricsRecorder, PartialResult, PauseMode,
+    PubSubMessage, PubSubSender, ReplicationTracker, ReplicationTrackerImpl, ScatterOp,
+    ShardReadyResult, SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId,
+    TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 use openraft::error::{ClientWriteError, RaftError};
 use frogdb_metrics::SharedTracer;
@@ -1114,19 +1117,15 @@ impl ConnectionHandler {
         // Get the current replication offset that replicas need to acknowledge
         let current_offset = tracker.current_offset();
 
-        // If num_replicas is 0, return immediately with current replica count
-        if num_replicas == 0 {
+        // If num_replicas is 0 or timeout_ms is 0, return immediately with current replica count
+        // Redis behavior: timeout=0 means "check and return immediately, don't wait"
+        if num_replicas == 0 || timeout_ms == 0 {
             let count = tracker.count_acked(current_offset);
             return Response::Integer(count as i64);
         }
 
         // Wait for replicas with timeout
-        let timeout_duration = if timeout_ms == 0 {
-            // 0 means block forever, but we use a very long timeout for safety
-            Duration::from_secs(86400)
-        } else {
-            Duration::from_millis(timeout_ms)
-        };
+        let timeout_duration = Duration::from_millis(timeout_ms);
 
         let wait_future = tracker.wait_for_acks(current_offset, num_replicas);
         let result = tokio::time::timeout(timeout_duration, wait_future).await;
