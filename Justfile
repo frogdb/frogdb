@@ -41,6 +41,10 @@ cargo test -p frogdb-server --features turmoil --test simulation
 # Run all deterministic simulation tests (Shuttle + Turmoil)
 test-dst: test-shuttle test-turmoil
 
+# Run browser integration tests (requires chromedriver running on port 9515)
+test-browser:
+    cargo test -p frogdb-browser-tests --features browser-tests
+
 # Run linearizability checker tests
 test-linearizability:
 cargo test -p frogdb-testing
