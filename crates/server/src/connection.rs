@@ -46,12 +46,13 @@ use bytes::{Bytes, BytesMut};
 use frogdb_core::{
     cluster::{ClusterCommand, NodeInfo, NodeRole, SlotRange},
     generate_latency_graph, persistence::SnapshotCoordinator, shard_for_key, slot_for_key,
-    AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
-    CommandCategory, CommandFlags, CommandRegistry, ConnectionLevelOp, ExecutionStrategy,
-    GlobPattern, IntrospectionRequest, IntrospectionResponse, KeyAccessType, LatencyEvent,
-    MetricsRecorder, PartialResult, PauseMode, PubSubMessage, PubSubSender, ReplicationTracker,
-    ReplicationTrackerImpl, ScatterOp, ShardReadyResult, SharedFunctionRegistry, ShardMemoryStats,
-    ShardMessage, StreamId, TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+    AclManager, AuthenticatedUser, ClientHandle, ClientRegistry, ClientStatsDelta,
+    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandCategory, CommandFlags,
+    CommandRegistry, ConnectionLevelOp, ExecutionStrategy, GlobPattern, IntrospectionRequest,
+    IntrospectionResponse, KeyAccessType, LatencyEvent, MetricsRecorder, PartialResult, PauseMode,
+    PubSubMessage, PubSubSender, ReplicationTracker, ReplicationTrackerImpl, ScatterOp,
+    ShardReadyResult, SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId,
+    TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
     MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 use openraft::error::{ClientWriteError, RaftError};

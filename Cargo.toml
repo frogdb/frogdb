@@ -5,11 +5,13 @@ members = [
     "crates/core",
     "crates/server",
     "crates/metrics",
+    "crates/metrics-derive",
     "crates/testing",
     "crates/browser-tests",
     "crates/frogdb-macros",
     "benches",
     "tools/helm-gen",
+    "tools/dashboard-gen",
 ]
 
 [workspace.package]
@@ -48,6 +50,7 @@ serde_yaml = "0.9"
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
 schemars = { version = "0.8", features = ["derive"] }
+askama = "0.12"
 
 # Logging/Tracing
 tracing = "0.1"
@@ -89,6 +92,7 @@ jsonpath-rust = "0.7"
 frogdb-protocol = { path = "crates/protocol" }
 frogdb-core = { path = "crates/core" }
 frogdb-metrics = { path = "crates/metrics" }
+frogdb-metrics-derive = { path = "crates/metrics-derive" }
 frogdb-testing = { path = "crates/testing" }
 
 # Benchmarking

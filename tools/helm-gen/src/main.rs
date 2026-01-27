@@ -7,6 +7,7 @@
 //! - templates/configmap.yaml (frogdb.toml template)
 
 use anyhow::{Context, Result};
+use askama::Template;
 use clap::Parser;
 use frogdb_server::config::Config;
 use schemars::schema_for;
@@ -18,8 +19,7 @@ const GENERATED_HEADER: &str = r#"# ============================================
 # =============================================================================
 # Source: crates/server/src/config/
 # Regenerate with: just helm-gen
-# =============================================================================
-"#;
+# ============================================================================="#;
 
 #[derive(Parser, Debug)]
 #[command(name = "helm-gen", about = "Generate Helm chart files from FrogDB config")]
@@ -31,6 +31,21 @@ struct Args {
     /// Check mode - verify generated files match existing ones
     #[arg(long)]
     check: bool,
+}
+
+/// Askama template for Chart.yaml
+#[derive(Template)]
+#[template(path = "chart.yaml.askama", syntax = "helm")]
+struct ChartTemplate<'a> {
+    header: &'a str,
+    version: &'a str,
+}
+
+/// Askama template for configmap.yaml
+#[derive(Template)]
+#[template(path = "configmap.yaml.askama", syntax = "helm")]
+struct ConfigMapTemplate<'a> {
+    header: &'a str,
 }
 
 fn main() -> Result<()> {
@@ -67,7 +82,7 @@ fn generate_files(output_dir: &PathBuf, version: &str) -> Result<()> {
     fs::create_dir_all(output_dir.join("templates"))?;
 
     // Generate Chart.yaml
-    let chart_yaml = generate_chart_yaml(version);
+    let chart_yaml = generate_chart_yaml(version)?;
     let chart_path = output_dir.join("Chart.yaml");
     fs::write(&chart_path, &chart_yaml)?;
     println!("Generated: {}", chart_path.display());
@@ -85,7 +100,7 @@ fn generate_files(output_dir: &PathBuf, version: &str) -> Result<()> {
     println!("Generated: {}", schema_path.display());
 
     // Generate templates/configmap.yaml
-    let configmap_yaml = generate_configmap_yaml();
+    let configmap_yaml = generate_configmap_yaml()?;
     let configmap_path = output_dir.join("templates/configmap.yaml");
     fs::write(&configmap_path, &configmap_yaml)?;
     println!("Generated: {}", configmap_path.display());
@@ -98,7 +113,7 @@ fn check_files(output_dir: &PathBuf, version: &str) -> Result<()> {
     let mut has_diff = false;
 
     // Check Chart.yaml
-    let chart_yaml = generate_chart_yaml(version);
+    let chart_yaml = generate_chart_yaml(version)?;
     let chart_path = output_dir.join("Chart.yaml");
     if check_file(&chart_path, &chart_yaml)? {
         has_diff = true;
@@ -119,7 +134,7 @@ fn check_files(output_dir: &PathBuf, version: &str) -> Result<()> {
     }
 
     // Check templates/configmap.yaml
-    let configmap_yaml = generate_configmap_yaml();
+    let configmap_yaml = generate_configmap_yaml()?;
     let configmap_path = output_dir.join("templates/configmap.yaml");
     if check_file(&configmap_path, &configmap_yaml)? {
         has_diff = true;
@@ -148,29 +163,12 @@ fn check_file(path: &PathBuf, expected: &str) -> Result<bool> {
     Ok(false)
 }
 
-fn generate_chart_yaml(version: &str) -> String {
-    format!(
-        r#"{GENERATED_HEADER}
-apiVersion: v2
-name: frogdb
-description: A high-performance Redis-compatible database with Raft consensus
-type: application
-version: {version}
-appVersion: "{version}"
-keywords:
-  - database
-  - redis
-  - key-value
-  - raft
-  - distributed
-home: https://github.com/nathanjordan/frogdb
-sources:
-  - https://github.com/nathanjordan/frogdb
-maintainers:
-  - name: Nathan Jordan
-    url: https://github.com/nathanjordan
-"#
-    )
+fn generate_chart_yaml(version: &str) -> Result<String> {
+    let template = ChartTemplate {
+        header: GENERATED_HEADER,
+        version,
+    };
+    template.render().context("Failed to render Chart.yaml")
 }
 
 fn generate_values_yaml() -> Result<String> {
@@ -180,7 +178,7 @@ fn generate_values_yaml() -> Result<String> {
     let values = HelmValues::from_config(&config);
 
     let yaml = serde_yaml::to_string(&values)?;
-    Ok(format!("{GENERATED_HEADER}\n{yaml}"))
+    Ok(format!("{GENERATED_HEADER}\n\n{yaml}"))
 }
 
 fn generate_schema_json() -> Result<String> {
@@ -189,81 +187,11 @@ fn generate_schema_json() -> Result<String> {
     Ok(json)
 }
 
-fn generate_configmap_yaml() -> String {
-    format!(
-        r#"{GENERATED_HEADER}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{{{ include "frogdb.fullname" . }}}}-config
-  labels:
-    {{{{- include "frogdb.labels" . | nindent 4 }}}}
-data:
-  frogdb.toml: |
-    # FrogDB Configuration
-    # Generated from Helm values
-
-    [server]
-    bind = "0.0.0.0"
-    port = {{{{ .Values.frogdb.port }}}}
-    num_shards = {{{{ .Values.frogdb.numShards }}}}
-    allow_cross_slot_standalone = {{{{ .Values.frogdb.allowCrossSlotStandalone }}}}
-    scatter_gather_timeout_ms = {{{{ .Values.frogdb.scatterGatherTimeoutMs }}}}
-
-    [logging]
-    level = "{{{{ .Values.frogdb.logging.level }}}}"
-    format = "{{{{ .Values.frogdb.logging.format }}}}"
-
-    [persistence]
-    enabled = {{{{ .Values.frogdb.persistence.enabled }}}}
-    data_dir = "{{{{ .Values.frogdb.persistence.dataDir }}}}"
-    durability_mode = "{{{{ .Values.frogdb.persistence.durabilityMode }}}}"
-    sync_interval_ms = {{{{ .Values.frogdb.persistence.syncIntervalMs }}}}
-    write_buffer_size_mb = {{{{ .Values.frogdb.persistence.writeBufferSizeMb }}}}
-    compression = "{{{{ .Values.frogdb.persistence.compression }}}}"
-
-    [snapshot]
-    snapshot_dir = "{{{{ .Values.frogdb.snapshot.dir }}}}"
-    snapshot_interval_secs = {{{{ .Values.frogdb.snapshot.intervalSecs }}}}
-    max_snapshots = {{{{ .Values.frogdb.snapshot.maxSnapshots }}}}
-
-    [metrics]
-    enabled = {{{{ .Values.frogdb.metrics.enabled }}}}
-    bind = "0.0.0.0"
-    port = {{{{ .Values.frogdb.metrics.port }}}}
-    {{{{- if .Values.frogdb.metrics.otlp.enabled }}}}
-    otlp_enabled = true
-    otlp_endpoint = "{{{{ .Values.frogdb.metrics.otlp.endpoint }}}}"
-    otlp_interval_secs = {{{{ .Values.frogdb.metrics.otlp.intervalSecs }}}}
-    {{{{- end }}}}
-
-    [admin]
-    enabled = {{{{ .Values.frogdb.admin.enabled }}}}
-    bind = "0.0.0.0"
-    port = {{{{ .Values.frogdb.admin.port }}}}
-
-    [memory]
-    maxmemory = {{{{ .Values.frogdb.memory.maxmemory }}}}
-    maxmemory_policy = "{{{{ .Values.frogdb.memory.policy }}}}"
-    maxmemory_samples = {{{{ .Values.frogdb.memory.samples }}}}
-
-    [security]
-    {{{{- if .Values.frogdb.security.requirepass }}}}
-    requirepass = "{{{{ .Values.frogdb.security.requirepass }}}}"
-    {{{{- end }}}}
-
-    [cluster]
-    enabled = {{{{ .Values.cluster.enabled }}}}
-    {{{{- if .Values.cluster.enabled }}}}
-    node_id = 0
-    cluster_bus_addr = "0.0.0.0:{{{{ .Values.cluster.busPort }}}}"
-    data_dir = "{{{{ .Values.cluster.dataDir }}}}"
-    election_timeout_ms = {{{{ .Values.cluster.electionTimeoutMs }}}}
-    heartbeat_interval_ms = {{{{ .Values.cluster.heartbeatIntervalMs }}}}
-    auto_failover = {{{{ .Values.cluster.autoFailover }}}}
-    {{{{- end }}}}
-"#
-    )
+fn generate_configmap_yaml() -> Result<String> {
+    let template = ConfigMapTemplate {
+        header: GENERATED_HEADER,
+    };
+    template.render().context("Failed to render configmap.yaml")
 }
 
 /// Helm values structure that maps to values.yaml

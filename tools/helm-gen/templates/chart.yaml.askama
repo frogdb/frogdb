@@ -1,0 +1,19 @@
+[% header %]
+apiVersion: v2
+name: frogdb
+description: A high-performance Redis-compatible database with Raft consensus
+type: application
+version: [% version %]
+appVersion: "[% version %]"
+keywords:
+  - database
+  - redis
+  - key-value
+  - raft
+  - distributed
+home: https://github.com/nathanjordan/frogdb
+sources:
+  - https://github.com/nathanjordan/frogdb
+maintainers:
+  - name: Nathan Jordan
+    url: https://github.com/nathanjordan

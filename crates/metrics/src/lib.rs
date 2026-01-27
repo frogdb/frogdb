@@ -5,12 +5,15 @@
 //! - OTLP push export (optional)
 //! - Health check endpoints (`/health/live`, `/health/ready`)
 //! - System metrics collection (CPU, memory, uptime)
+//! - Typed metrics with compile-time safety
 
 pub mod bundle;
 pub mod config;
 pub mod debug;
+pub mod definitions;
 pub mod health;
 pub mod hotshards;
+pub mod labels;
 pub mod latency_bands;
 pub mod memorydiag;
 pub mod otlp;
@@ -19,6 +22,7 @@ pub mod server;
 pub mod status;
 pub mod system;
 pub mod tracing;
+pub mod typed;
 
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -51,6 +55,14 @@ pub use bundle::{
     BundleConfig, BundleGenerator, BundleInfo, BundleManifest, BundleStore, ClusterStateJson,
     DiagnosticCollector, DiagnosticData, ShardMemoryJson, SlowlogEntryJson, TraceEntryJson,
 };
+
+// Re-export typed metrics system
+pub use definitions::{ALL_METRICS, METRICS_COUNT};
+pub use labels::{
+    BlockingResolution, ErrorType, PersistenceErrorType, RejectionReason, ScatterGatherStatus,
+    ServerMode, TransactionOutcome,
+};
+pub use typed::{MetricDefinition, MetricType};
 
 #[cfg(feature = "testing")]
 pub use tracing::TestTracer;
