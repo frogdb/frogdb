@@ -62,7 +62,8 @@
       "Bash(RUST_LOG=frogdb_server::replication=debug cargo test:*)",
       "Bash(RUST_LOG=frogdb_server=debug cargo test:*)",
       "Bash(git add:*)",
-      "Bash(git cherry-pick:*)"
+      "Bash(git cherry-pick:*)",
+      "WebFetch(domain:lib.rs)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -71,3 +71,6 @@ Thumbs.db
 
 # Proptest regression files
 *.proptest-regressions
+
+# Insta snapshot testing (pending snapshots)
+*.snap.new

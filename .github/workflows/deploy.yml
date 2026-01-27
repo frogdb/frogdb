@@ -1,147 +1,123 @@
-name: Deploy
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: tools/workflow-gen/src/workflows/
+# Regenerate with: just workflow-gen
+# =============================================================================
 
+name: Deploy
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Environment to deploy to'
+        description: Environment to deploy to
         required: true
         type: choice
         options:
-          - dev
-          - staging
-          - production
+        - dev
+        - staging
+        - production
       cloud:
-        description: 'Cloud provider'
+        description: Cloud provider
         required: true
         type: choice
         options:
-          - aws
-          - gcp
-          - azure
+        - aws
+        - gcp
+        - azure
       action:
-        description: 'Action to perform'
+        description: Action to perform
         required: true
         type: choice
         options:
-          - plan
-          - apply
-          - destroy
-
+        - plan
+        - apply
+        - destroy
 env:
-  TERRAFORM_VERSION: "1.6.0"
-
+  TERRAFORM_VERSION: 1.6.0
 jobs:
   terraform:
     name: Terraform ${{ inputs.action }} (${{ inputs.cloud }}/${{ inputs.environment }})
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-
     permissions:
       id-token: write
       contents: read
-
     defaults:
       run:
         working-directory: deploy/terraform/${{ inputs.cloud }}/environments/${{ inputs.environment }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-
-      # AWS Authentication
-      - name: Configure AWS credentials
-        if: inputs.cloud == 'aws'
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      # GCP Authentication
-      - name: Authenticate to Google Cloud
-        if: inputs.cloud == 'gcp'
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      # Azure Authentication
-      - name: Azure Login
-        if: inputs.cloud == 'azure'
-        uses: azure/login@v1
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Terraform Init
-        run: terraform init
-
-      - name: Terraform Format Check
-        run: terraform fmt -check
-
-      - name: Terraform Plan
-        if: inputs.action == 'plan' || inputs.action == 'apply'
-        run: terraform plan -out=tfplan
-
-      - name: Terraform Apply
-        if: inputs.action == 'apply'
-        run: terraform apply -auto-approve tfplan
-
-      - name: Terraform Destroy
-        if: inputs.action == 'destroy'
-        run: terraform destroy -auto-approve
-
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      if: inputs.cloud == 'aws'
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        aws-region: ${{ vars.AWS_REGION }}
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      if: inputs.cloud == 'gcp'
+      with:
+        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+    - name: Azure Login
+      uses: azure/login@v1
+      if: inputs.cloud == 'azure'
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    - name: Terraform Init
+      run: terraform init
+    - name: Terraform Format Check
+      run: terraform fmt -check
+    - name: Terraform Plan
+      run: terraform plan -out=tfplan
+      if: inputs.action == 'plan' || inputs.action == 'apply'
+    - name: Terraform Apply
+      run: terraform apply -auto-approve tfplan
+      if: inputs.action == 'apply'
+    - name: Terraform Destroy
+      run: terraform destroy -auto-approve
+      if: inputs.action == 'destroy'
   deploy-frogdb:
     name: Deploy FrogDB
-    needs: terraform
-    if: inputs.action == 'apply'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-
+    needs: terraform
+    if: inputs.action == 'apply'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: v3.13.0
-
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v3
-
-      # Get kubeconfig based on cloud provider
-      - name: Get EKS kubeconfig
-        if: inputs.cloud == 'aws'
-        run: |
-          aws eks update-kubeconfig --name frogdb-${{ inputs.environment }} --region ${{ vars.AWS_REGION }}
-
-      - name: Get GKE kubeconfig
-        if: inputs.cloud == 'gcp'
-        run: |
-          gcloud container clusters get-credentials frogdb-${{ inputs.environment }} --region ${{ vars.GCP_REGION }}
-
-      - name: Get AKS kubeconfig
-        if: inputs.cloud == 'azure'
-        run: |
-          az aks get-credentials --resource-group frogdb-${{ inputs.environment }} --name frogdb-${{ inputs.environment }}
-
-      - name: Deploy FrogDB with Helm
-        run: |
-          helm upgrade --install frogdb deploy/helm/frogdb \
-            -f deploy/helm/frogdb/values-cluster.yaml \
-            --namespace frogdb \
-            --create-namespace \
-            --set image.tag=${{ github.sha }} \
-            --wait --timeout 10m
-
-      - name: Verify deployment
-        run: |
-          kubectl -n frogdb rollout status statefulset/frogdb --timeout=5m
-          kubectl -n frogdb exec frogdb-0 -- redis-cli PING
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: v3.13.0
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+    - name: Get EKS kubeconfig
+      run: aws eks update-kubeconfig --name frogdb-${{ inputs.environment }} --region ${{ vars.AWS_REGION }}
+      if: inputs.cloud == 'aws'
+    - name: Get GKE kubeconfig
+      run: gcloud container clusters get-credentials frogdb-${{ inputs.environment }} --region ${{ vars.GCP_REGION }}
+      if: inputs.cloud == 'gcp'
+    - name: Get AKS kubeconfig
+      run: az aks get-credentials --resource-group frogdb-${{ inputs.environment }} --name frogdb-${{ inputs.environment }}
+      if: inputs.cloud == 'azure'
+    - name: Deploy FrogDB with Helm
+      run: |-
+        helm upgrade --install frogdb deploy/helm/frogdb \
+          -f deploy/helm/frogdb/values-cluster.yaml \
+          --namespace frogdb \
+          --create-namespace \
+          --set image.tag=${{ github.sha }} \
+          --wait --timeout 10m
+    - name: Verify deployment
+      run: |-
+        kubectl -n frogdb rollout status statefulset/frogdb --timeout=5m
+        kubectl -n frogdb exec frogdb-0 -- redis-cli PING

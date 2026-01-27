@@ -12,6 +12,7 @@ members = [
     "benches",
     "tools/helm-gen",
     "tools/dashboard-gen",
+    "tools/workflow-gen",
 ]
 
 [workspace.package]
