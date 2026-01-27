@@ -6,8 +6,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, KeyType,
-    MergeStrategy,
+    ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy,
+    KeyType, MergeStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -68,55 +68,27 @@ impl Command for ScanCommand {
         args: &[Bytes],
     ) -> Result<Response, CommandError> {
         // Parse cursor
-        let cursor_str = std::str::from_utf8(&args[0])
-            .map_err(|_| CommandError::InvalidArgument {
-                message: "invalid cursor".to_string(),
-            })?;
-        let cursor: u64 = cursor_str.parse().map_err(|_| CommandError::InvalidArgument {
+        let mut parser = ArgParser::new(args);
+        let cursor: u64 = parser.next_parsed().map_err(|_| CommandError::InvalidArgument {
             message: "invalid cursor".to_string(),
         })?;
 
-        // Parse optional arguments
+        // Parse optional arguments [MATCH pattern] [COUNT count] [TYPE type]
         let mut pattern: Option<&[u8]> = None;
         let mut count: usize = 10; // Default count
         let mut key_type: Option<KeyType> = None;
 
-        let mut i = 1;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"MATCH" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    pattern = Some(&args[i]);
-                }
-                b"COUNT" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    count = std::str::from_utf8(&args[i])
-                        .ok()
-                        .and_then(|s| s.parse().ok())
-                        .ok_or(CommandError::InvalidArgument {
-                            message: "value is not an integer or out of range".to_string(),
-                        })?;
-                }
-                b"TYPE" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    let type_str = args[i].to_ascii_lowercase();
-                    key_type = Some(parse_key_type(&type_str)?);
-                }
-                _ => {
-                    return Err(CommandError::SyntaxError);
-                }
+        while parser.has_more() {
+            if let Some(value) = parser.try_flag_value(b"MATCH")? {
+                pattern = Some(value.as_ref());
+            } else if let Some(value) = parser.try_flag_usize(b"COUNT")? {
+                count = value;
+            } else if let Some(value) = parser.try_flag_value(b"TYPE")? {
+                let type_str = value.to_ascii_lowercase();
+                key_type = Some(parse_key_type(&type_str)?);
+            } else {
+                return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         // Execute scan on local shard

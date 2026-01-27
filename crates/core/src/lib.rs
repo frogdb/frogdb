@@ -4,8 +4,10 @@
 //! This crate provides the foundational types used by the server.
 
 pub mod acl;
+pub mod args;
 pub mod cluster;
 pub mod bitmap;
+pub mod command_macro;
 pub mod bloom;
 pub mod client_registry;
 pub mod command;
@@ -36,6 +38,10 @@ pub use command::{
     ExecutionStrategy, MergeStrategy, QuorumChecker,
 };
 pub use error::CommandError;
+pub use args::{
+    ArgParser, CompareCondition, ExpiryOption, ScanOptions,
+    parse_f64, parse_i64, parse_u64, parse_usize, parse_from_bytes,
+};
 pub use acl::{
     AclChecker, AclConfig, AclError, AclLog, AclManager, AllowAllChecker, AuthenticatedUser,
     CommandCategory, FullAclChecker, KeyAccessType, PermissionResult, User, UserPermissions,

@@ -8,7 +8,7 @@
 //! - HSCAN, HRANDFIELD - iteration & random
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags};
 use frogdb_protocol::Response;
 
 use super::utils::{format_float, get_or_create_hash, parse_f64, parse_i64, parse_usize};
@@ -796,31 +796,19 @@ impl Command for HscanCommand {
         let key = &args[0];
         let cursor = parse_usize(&args[1])?;
 
-        // Parse options
+        // Parse options [MATCH pattern] [COUNT count]
         let mut _match_pattern: Option<&[u8]> = None;
         let mut count: usize = 10;
+        let mut parser = ArgParser::from_position(args, 2);
 
-        let mut i = 2;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"MATCH" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    _match_pattern = Some(&args[i]);
-                }
-                b"COUNT" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    count = parse_usize(&args[i])?;
-                }
-                _ => return Err(CommandError::SyntaxError),
+        while parser.has_more() {
+            if let Some(value) = parser.try_flag_value(b"MATCH")? {
+                _match_pattern = Some(value.as_ref());
+            } else if let Some(value) = parser.try_flag_usize(b"COUNT")? {
+                count = value;
+            } else {
+                return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         match ctx.store.get_with_expiry_check(key) {
