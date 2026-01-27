@@ -326,3 +326,79 @@ just jepsen-lag --time-limit 30
 just jepsen-split-brain --time-limit 60
 just jepsen-zombie --time-limit 60
 just jepsen-replication-chaos --time-limit 120
+
+# ==============================================================================
+# Jepsen Raft Cluster Tests (5-node Raft consensus)
+# ==============================================================================
+
+# Start Jepsen Raft cluster test environment (5-node)
+jepsen-raft-cluster-up:
+docker compose -f jepsen/frogdb/docker-compose.raft-cluster.yml up -d
+
+# Stop Jepsen Raft cluster test environment
+jepsen-raft-cluster-down:
+docker compose -f jepsen/frogdb/docker-compose.raft-cluster.yml down -v
+
+# Run Jepsen cluster formation workload (cluster membership)
+jepsen-cluster-formation *args:
+cd jepsen/frogdb && lein run test --workload cluster-formation --nemesis none --cluster {{args}}
+
+# Run Jepsen leader election workload (Raft consensus)
+jepsen-leader-election *args:
+cd jepsen/frogdb && lein run test --workload leader-election --nemesis none --cluster {{args}}
+
+# Run Jepsen slot migration workload (hash slot redistribution)
+jepsen-slot-migration *args:
+cd jepsen/frogdb && lein run test --workload slot-migration --nemesis none --cluster {{args}}
+
+# Run Jepsen cross-slot workload (hash tag transactions)
+jepsen-cross-slot *args:
+cd jepsen/frogdb && lein run test --workload cross-slot --nemesis none --cluster {{args}}
+
+# Run Jepsen key routing workload (MOVED/ASK redirects)
+jepsen-key-routing *args:
+cd jepsen/frogdb && lein run test --workload key-routing --nemesis none --cluster {{args}}
+
+# Run Jepsen leader election with partition nemesis
+jepsen-leader-election-partition *args:
+cd jepsen/frogdb && lein run test --workload leader-election --nemesis partition --cluster {{args}}
+
+# Run Jepsen key routing with kill nemesis
+jepsen-key-routing-kill *args:
+cd jepsen/frogdb && lein run test --workload key-routing --nemesis kill --cluster {{args}}
+
+# Run Jepsen slot migration with partition nemesis
+jepsen-slot-migration-partition *args:
+cd jepsen/frogdb && lein run test --workload slot-migration --nemesis partition --cluster {{args}}
+
+# Run Jepsen Raft cluster with combined chaos nemesis
+jepsen-raft-chaos *args:
+cd jepsen/frogdb && lein run test --workload key-routing --nemesis raft-cluster --cluster {{args}}
+
+# Run Jepsen with clock skew nemesis
+jepsen-clock-skew *args:
+cd jepsen/frogdb && lein run test --workload register --nemesis clock-skew --cluster {{args}}
+
+# Run Jepsen with disk failure nemesis
+jepsen-disk-failure *args:
+cd jepsen/frogdb && lein run test --workload register --nemesis disk-failure --cluster {{args}}
+
+# Run Jepsen with slow network nemesis
+jepsen-slow-network *args:
+cd jepsen/frogdb && lein run test --workload register --nemesis slow-network --cluster {{args}}
+
+# Run Jepsen with memory pressure nemesis
+jepsen-memory-pressure *args:
+cd jepsen/frogdb && lein run test --workload register --nemesis memory-pressure --cluster {{args}}
+
+# Full Raft cluster test suite
+jepsen-raft-all: jepsen-build jepsen-raft-cluster-up
+just jepsen-cluster-formation --time-limit 30
+just jepsen-leader-election --time-limit 30
+just jepsen-slot-migration --time-limit 60
+just jepsen-cross-slot --time-limit 30
+just jepsen-key-routing --time-limit 30
+just jepsen-leader-election-partition --time-limit 60
+just jepsen-key-routing-kill --time-limit 60
+just jepsen-slot-migration-partition --time-limit 90
+just jepsen-raft-chaos --time-limit 120

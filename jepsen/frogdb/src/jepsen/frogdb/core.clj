@@ -27,7 +27,15 @@
             [jepsen.frogdb.sortedset :as sortedset]
             [jepsen.frogdb.split-brain :as split-brain]
             [jepsen.frogdb.transaction :as transaction]
-            [jepsen.frogdb.zombie :as zombie])
+            [jepsen.frogdb.zombie :as zombie]
+            ;; Raft cluster workloads
+            [jepsen.frogdb.cluster-db :as cluster-db]
+            [jepsen.frogdb.cluster-client :as cluster-client]
+            [jepsen.frogdb.cluster-formation :as cluster-formation]
+            [jepsen.frogdb.leader-election :as leader-election]
+            [jepsen.frogdb.slot-migration :as slot-migration]
+            [jepsen.frogdb.cross-slot :as cross-slot]
+            [jepsen.frogdb.key-routing :as key-routing])
   (:gen-class))
 
 ;; ===========================================================================
@@ -64,7 +72,13 @@
    :replication replication/workload
    :split-brain split-brain/workload
    :zombie zombie/workload
-   :lag lag/workload})
+   :lag lag/workload
+   ;; Raft cluster workloads
+   :cluster-formation cluster-formation/workload
+   :leader-election leader-election/workload
+   :slot-migration slot-migration/workload
+   :cross-slot cross-slot/workload
+   :key-routing key-routing/workload})
 
 (defn get-workload
   "Get a workload by name with options."
@@ -83,24 +97,34 @@
   "Construct a Jepsen test for FrogDB.
 
    Options:
-   - :workload - workload name (register, counter, replication, etc.)
-   - :nemesis - nemesis type (none, kill, pause, partition, all, all-replication)
+   - :workload - workload name (register, counter, replication, cluster-*, etc.)
+   - :nemesis - nemesis type (none, kill, pause, partition, all, all-replication, raft-cluster)
    - :rate - operations per second
    - :time-limit - test duration in seconds
    - :nodes - list of nodes to test
-   - :replication - if true, use 3-node replication cluster"
+   - :replication - if true, use 3-node replication cluster
+   - :cluster - if true, use Raft cluster mode
+   - :cluster-nodes - number of nodes for cluster mode (default 3)"
   [opts]
   (let [workload (get-workload (:workload opts) opts)
         nemesis-pkg (nemesis/nemesis-package (keyword (:nemesis opts)) opts)
         local? (:local opts)
         docker? (:docker opts)
         replication? (:replication opts)
+        cluster? (:cluster opts)
+        cluster-node-count (get opts :cluster-nodes 3)
         ;; Replication workloads default to multi-node
         replication-workload? (contains? #{:replication :split-brain :zombie :lag}
                                          (keyword (:workload opts)))
+        ;; Cluster workloads default to cluster mode
+        cluster-workload? (contains? #{:cluster-formation :leader-election :slot-migration
+                                       :cross-slot :key-routing}
+                                     (keyword (:workload opts)))
         multi-node? (or replication? replication-workload?)
+        cluster-mode? (or cluster? cluster-workload?)
         nodes (cond
                 local? ["n1"]
+                cluster-mode? (vec (map #(str "n" (inc %)) (range cluster-node-count)))
                 multi-node? ["n1" "n2" "n3"]
                 docker? ["n1"]
                 :else (or (:nodes opts) ["n1"]))]
@@ -111,16 +135,20 @@
                          (str "-" (:nemesis opts)))
                        (when local? "-local")
                        (when docker? "-docker")
-                       (when multi-node? "-replication"))
+                       (when cluster-mode? "-cluster")
+                       (when (and multi-node? (not cluster-mode?)) "-replication"))
             :nodes nodes
+            :cluster-nodes nodes  ; Make available to clients
             :os docker-os
             :db (cond
                   local? (db/local-db)
+                  cluster-mode? (cluster-db/cluster-db {:initial-nodes nodes
+                                                         :docker-host? true})
                   multi-node? (db/replication-db)
                   docker? (db/docker-db)
                   :else (db/docker-db))
             ;; Use dummy SSH for docker/local modes - we use docker exec instead
-            :ssh (when (or local? docker? multi-node?)
+            :ssh (when (or local? docker? multi-node? cluster-mode?)
                    {:dummy? true})
             :client (:client workload)
             :nemesis (:nemesis nemesis-pkg)
@@ -151,15 +179,17 @@
 
 (def cli-opts
   "CLI options for FrogDB Jepsen tests."
-  [["-w" "--workload WORKLOAD" "Workload to run (register, counter, append, transaction, queue, set, hash, sortedset, expiry, blocking, replication, split-brain, zombie, lag)"
+  [["-w" "--workload WORKLOAD" "Workload to run"
     :default "register"
     :validate [#(contains? workloads (keyword %))
                (str "Must be one of: " (str/join ", " (map name (keys workloads))))]]
 
-   [nil "--nemesis NEMESIS" "Nemesis type (none, kill, pause, rapid-kill, partition, all, all-replication)"
+   [nil "--nemesis NEMESIS" "Nemesis type"
     :default "none"
-    :validate [#(contains? #{:none :kill :pause :rapid-kill :partition :all :all-replication} (keyword %))
-               "Must be one of: none, kill, pause, rapid-kill, partition, all, all-replication"]]
+    :validate [#(contains? #{:none :kill :pause :rapid-kill :partition
+                             :clock-skew :disk-failure :slow-network :memory-pressure
+                             :all :all-replication :raft-cluster} (keyword %))
+               "Must be one of: none, kill, pause, rapid-kill, partition, clock-skew, disk-failure, slow-network, memory-pressure, all, all-replication, raft-cluster"]]
 
    ["-r" "--rate RATE" "Operations per second"
     :default 10
@@ -181,7 +211,15 @@
     :default false]
 
    [nil "--replication" "Use 3-node replication cluster"
-    :default false]])
+    :default false]
+
+   [nil "--cluster" "Use Raft cluster mode (5-node)"
+    :default false]
+
+   [nil "--cluster-nodes NUM" "Number of cluster nodes (default 3)"
+    :default 3
+    :parse-fn #(Integer/parseInt %)
+    :validate [#(and (>= % 1) (<= % 5)) "Must be between 1 and 5"]]])
 
 (def all-cli-opts
   "All CLI options including Jepsen's standard options."

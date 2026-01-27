@@ -1,0 +1,210 @@
+# Jepsen 5-node Raft cluster for FrogDB
+# Used for Raft consensus and distributed systems testing
+#
+# Topology:
+#   n1, n2, n3 - Initial Raft cluster members (quorum = 2)
+#   n4, n5     - Available for membership change tests
+#
+# Ports (from host):
+#   n1: localhost:6379 (client), localhost:16379 (cluster bus)
+#   n2: localhost:6380 (client), localhost:16380 (cluster bus)
+#   n3: localhost:6381 (client), localhost:16381 (cluster bus)
+#   n4: localhost:6382 (client), localhost:16382 (cluster bus)
+#   n5: localhost:6383 (client), localhost:16383 (cluster bus)
+#
+# Network: 172.21.0.0/16 subnet (separate from replication cluster)
+
+services:
+  n1:
+    image: frogdb:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: frogdb-raft-n1
+    hostname: n1
+    ports:
+      - "6379:6379"
+      - "16379:16379"
+    volumes:
+      - frogdb-raft-n1-data:/data
+      - /tmp/frogdb-raft-n1:/tmp/frogdb
+    environment:
+      FROGDB_PORT: 6379
+      FROGDB_CLUSTER_PORT: 16379
+      FROGDB_DATA_DIR: /data
+      FROGDB_CLUSTER_ENABLED: "yes"
+      FROGDB_CLUSTER_CONFIG_FILE: /data/nodes.conf
+      FROGDB_CLUSTER_NODE_TIMEOUT: 5000
+      FROGDB_CLUSTER_ANNOUNCE_IP: 172.21.0.2
+      FROGDB_CLUSTER_ANNOUNCE_PORT: 6379
+      FROGDB_CLUSTER_ANNOUNCE_BUS_PORT: 16379
+    cap_add:
+      - NET_ADMIN   # For iptables-based partition testing and tc/netem
+      - SYS_PTRACE  # For process manipulation
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks:
+      frogdb-raft-net:
+        ipv4_address: 172.21.0.2
+
+  n2:
+    image: frogdb:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: frogdb-raft-n2
+    hostname: n2
+    ports:
+      - "6380:6379"
+      - "16380:16379"
+    volumes:
+      - frogdb-raft-n2-data:/data
+      - /tmp/frogdb-raft-n2:/tmp/frogdb
+    environment:
+      FROGDB_PORT: 6379
+      FROGDB_CLUSTER_PORT: 16379
+      FROGDB_DATA_DIR: /data
+      FROGDB_CLUSTER_ENABLED: "yes"
+      FROGDB_CLUSTER_CONFIG_FILE: /data/nodes.conf
+      FROGDB_CLUSTER_NODE_TIMEOUT: 5000
+      FROGDB_CLUSTER_ANNOUNCE_IP: 172.21.0.3
+      FROGDB_CLUSTER_ANNOUNCE_PORT: 6379
+      FROGDB_CLUSTER_ANNOUNCE_BUS_PORT: 16379
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks:
+      frogdb-raft-net:
+        ipv4_address: 172.21.0.3
+
+  n3:
+    image: frogdb:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: frogdb-raft-n3
+    hostname: n3
+    ports:
+      - "6381:6379"
+      - "16381:16379"
+    volumes:
+      - frogdb-raft-n3-data:/data
+      - /tmp/frogdb-raft-n3:/tmp/frogdb
+    environment:
+      FROGDB_PORT: 6379
+      FROGDB_CLUSTER_PORT: 16379
+      FROGDB_DATA_DIR: /data
+      FROGDB_CLUSTER_ENABLED: "yes"
+      FROGDB_CLUSTER_CONFIG_FILE: /data/nodes.conf
+      FROGDB_CLUSTER_NODE_TIMEOUT: 5000
+      FROGDB_CLUSTER_ANNOUNCE_IP: 172.21.0.4
+      FROGDB_CLUSTER_ANNOUNCE_PORT: 6379
+      FROGDB_CLUSTER_ANNOUNCE_BUS_PORT: 16379
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks:
+      frogdb-raft-net:
+        ipv4_address: 172.21.0.4
+
+  n4:
+    image: frogdb:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: frogdb-raft-n4
+    hostname: n4
+    ports:
+      - "6382:6379"
+      - "16382:16379"
+    volumes:
+      - frogdb-raft-n4-data:/data
+      - /tmp/frogdb-raft-n4:/tmp/frogdb
+    environment:
+      FROGDB_PORT: 6379
+      FROGDB_CLUSTER_PORT: 16379
+      FROGDB_DATA_DIR: /data
+      FROGDB_CLUSTER_ENABLED: "yes"
+      FROGDB_CLUSTER_CONFIG_FILE: /data/nodes.conf
+      FROGDB_CLUSTER_NODE_TIMEOUT: 5000
+      FROGDB_CLUSTER_ANNOUNCE_IP: 172.21.0.5
+      FROGDB_CLUSTER_ANNOUNCE_PORT: 6379
+      FROGDB_CLUSTER_ANNOUNCE_BUS_PORT: 16379
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks:
+      frogdb-raft-net:
+        ipv4_address: 172.21.0.5
+
+  n5:
+    image: frogdb:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: frogdb-raft-n5
+    hostname: n5
+    ports:
+      - "6383:6379"
+      - "16383:16379"
+    volumes:
+      - frogdb-raft-n5-data:/data
+      - /tmp/frogdb-raft-n5:/tmp/frogdb
+    environment:
+      FROGDB_PORT: 6379
+      FROGDB_CLUSTER_PORT: 16379
+      FROGDB_DATA_DIR: /data
+      FROGDB_CLUSTER_ENABLED: "yes"
+      FROGDB_CLUSTER_CONFIG_FILE: /data/nodes.conf
+      FROGDB_CLUSTER_NODE_TIMEOUT: 5000
+      FROGDB_CLUSTER_ANNOUNCE_IP: 172.21.0.6
+      FROGDB_CLUSTER_ANNOUNCE_PORT: 6379
+      FROGDB_CLUSTER_ANNOUNCE_BUS_PORT: 16379
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks:
+      frogdb-raft-net:
+        ipv4_address: 172.21.0.6
+
+volumes:
+  frogdb-raft-n1-data:
+  frogdb-raft-n2-data:
+  frogdb-raft-n3-data:
+  frogdb-raft-n4-data:
+  frogdb-raft-n5-data:
+
+networks:
+  frogdb-raft-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16

@@ -245,6 +245,14 @@
    "n2" "172.20.0.3"
    "n3" "172.20.0.4"})
 
+(def raft-cluster-node-ips
+  "Map of node names to their IP addresses in the Raft cluster Docker network."
+  {"n1" "172.21.0.2"
+   "n2" "172.21.0.3"
+   "n3" "172.21.0.4"
+   "n4" "172.21.0.5"
+   "n5" "172.21.0.6"})
+
 (defn partition-node!
   "Partition a node from specific other nodes using iptables.
    Blocks both incoming and outgoing traffic to the target IPs."
