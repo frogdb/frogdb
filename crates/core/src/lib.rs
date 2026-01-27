@@ -29,6 +29,7 @@ pub mod functions;
 pub mod shard;
 pub mod store;
 pub mod sync;
+pub use sync::{LockError, MutexExt, RwLockExt};
 pub mod timeseries;
 pub mod types;
 pub mod vll;

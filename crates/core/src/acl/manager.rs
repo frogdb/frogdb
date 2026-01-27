@@ -16,6 +16,7 @@ use super::error::AclError;
 use super::log::{AclLog, DEFAULT_ACL_LOG_MAX_LEN};
 use super::parser::{hash_password, parse_acl_line, AclRule};
 use super::user::{AuthenticatedUser, User, UserPermissions};
+use crate::sync::RwLockExt;
 
 /// Configuration for the ACL manager.
 #[derive(Debug, Clone)]
@@ -108,7 +109,7 @@ impl AclManager {
         password: &str,
         client_info: &str,
     ) -> Result<AuthenticatedUser, AclError> {
-        let users = self.users.read().unwrap();
+        let users = self.users.read_or_panic("AclManager::authenticate");
 
         let user = users.get(username).ok_or_else(|| {
             self.log.log_auth_failure(username, client_info);
@@ -143,7 +144,7 @@ impl AclManager {
 
     /// Set or create a user with the given rules.
     pub fn set_user(&self, username: &str, rules: &[&str]) -> Result<(), AclError> {
-        let mut users = self.users.write().unwrap();
+        let mut users = self.users.write_or_panic("AclManager::set_user");
 
         let user = users
             .entry(username.to_string())
@@ -163,7 +164,7 @@ impl AclManager {
             return Err(AclError::CannotDeleteDefaultUser);
         }
 
-        let mut users = self.users.write().unwrap();
+        let mut users = self.users.write_or_panic("AclManager::delete_user");
         users.remove(username).ok_or(AclError::UserNotFound {
             username: username.to_string(),
         })?;
@@ -181,7 +182,7 @@ impl AclManager {
             }
         }
 
-        let mut users = self.users.write().unwrap();
+        let mut users = self.users.write_or_panic("AclManager::delete_users");
         for username in usernames {
             if users.remove(*username).is_some() {
                 count += 1;
@@ -193,25 +194,25 @@ impl AclManager {
 
     /// List all usernames.
     pub fn list_users(&self) -> Vec<String> {
-        let users = self.users.read().unwrap();
+        let users = self.users.read_or_panic("AclManager::list_users");
         users.keys().cloned().collect()
     }
 
     /// Get user details (for ACL LIST).
     pub fn list_users_detailed(&self) -> Vec<String> {
-        let users = self.users.read().unwrap();
+        let users = self.users.read_or_panic("AclManager::list_users_detailed");
         users.values().map(|u| u.to_acl_string()).collect()
     }
 
     /// Get a specific user's info (for ACL GETUSER).
     pub fn get_user(&self, username: &str) -> Option<User> {
-        let users = self.users.read().unwrap();
+        let users = self.users.read_or_panic("AclManager::get_user");
         users.get(username).cloned()
     }
 
     /// Check if a user exists.
     pub fn user_exists(&self, username: &str) -> bool {
-        let users = self.users.read().unwrap();
+        let users = self.users.read_or_panic("AclManager::user_exists");
         users.contains_key(username)
     }
 
@@ -219,7 +220,7 @@ impl AclManager {
     pub fn save(&self) -> Result<(), AclError> {
         let aclfile = self.aclfile.as_ref().ok_or(AclError::NoAclFile)?;
 
-        let users = self.users.read().unwrap();
+        let users = self.users.read_or_panic("AclManager::save");
         let mut content = String::new();
 
         for user in users.values() {
@@ -276,7 +277,7 @@ impl AclManager {
         }
 
         // Replace users atomically
-        let mut users = self.users.write().unwrap();
+        let mut users = self.users.write_or_panic("AclManager::load");
         *users = new_users;
 
         Ok(())
@@ -293,7 +294,7 @@ impl std::fmt::Debug for AclManager {
         f.debug_struct("AclManager")
             .field("requires_auth", &self.requires_auth)
             .field("aclfile", &self.aclfile)
-            .field("users_count", &self.users.read().unwrap().len())
+            .field("users_count", &self.users.read_or_panic("AclManager::fmt").len())
             .finish()
     }
 }
