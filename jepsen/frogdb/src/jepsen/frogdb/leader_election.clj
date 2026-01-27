@@ -169,19 +169,19 @@
    Mixes leader reads with verify operations and some data operations."
   [opts]
   (let [rate (get opts :rate 10)]
-    (->> (gen/mix [(fn [_] (read-leader))
-                   (fn [_] (verify-single-leader))
-                   (fn [_] (write-op))
-                   (fn [_] (read-op))])
+    (->> (gen/mix [(fn [] (read-leader))
+                   (fn [] (verify-single-leader))
+                   (fn [] (write-op))
+                   (fn [] (read-op))])
          (gen/stagger (/ 1 rate)))))
 
 (defn leader-stability-generator
   "Generator focused on leader stability monitoring."
   [opts]
   (let [rate (get opts :rate 20)]
-    (->> (gen/mix [(fn [_] (read-leader))
-                   (fn [_] (read-leader))
-                   (fn [_] (verify-single-leader))])
+    (->> (gen/mix [(fn [] (read-leader))
+                   (fn [] (read-leader))
+                   (fn [] (verify-single-leader))])
          (gen/stagger (/ 1 rate)))))
 
 ;; ===========================================================================

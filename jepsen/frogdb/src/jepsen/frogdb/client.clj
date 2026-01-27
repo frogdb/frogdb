@@ -301,9 +301,9 @@
 
 (defn wait-for-ready
   "Wait for FrogDB to be ready to accept connections."
-  [node & {:keys [timeout-ms interval-ms]
-           :or {timeout-ms 30000 interval-ms 500}}]
-  (let [conn (conn-spec node)
+  [node & {:keys [timeout-ms interval-ms docker-host?]
+           :or {timeout-ms 30000 interval-ms 500 docker-host? true}}]
+  (let [conn (conn-spec node default-port docker-host?)
         deadline (+ (System/currentTimeMillis) timeout-ms)]
     (loop []
       (cond

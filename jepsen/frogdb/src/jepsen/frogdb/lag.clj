@@ -142,11 +142,11 @@
    Primarily measures lag with occasional burst writes."
   [opts]
   (let [rate (get opts :rate 5)]  ; Lower rate for lag measurement
-    (->> (gen/mix [(fn [_] (measure-lag-op))
-                   (fn [_] (measure-lag-op))
-                   (fn [_] (measure-lag-op))
-                   (fn [_] (burst-write-op 10))
-                   (fn [_] (repl-info-op))])
+    (->> (gen/mix [(fn [] (measure-lag-op))
+                   (fn [] (measure-lag-op))
+                   (fn [] (measure-lag-op))
+                   (fn [] (burst-write-op 10))
+                   (fn [] (repl-info-op))])
          (gen/stagger (/ 1 rate)))))
 
 ;; ===========================================================================

@@ -130,13 +130,13 @@
         counter (atom 0)
         nodes ["n1" "n2" "n3"]]
     (->> (gen/mix [;; Write to primary
-                   (fn [_] (write-node-op "n1" (swap! counter inc)))
+                   (fn [] (write-node-op "n1" (swap! counter inc)))
                    ;; Try write to replica (should fail with READONLY)
-                   (fn [_] (write-node-op (rand-nth ["n2" "n3"]) (swap! counter inc)))
+                   (fn [] (write-node-op (rand-nth ["n2" "n3"]) (swap! counter inc)))
                    ;; Check roles
-                   (fn [_] (check-role-op (rand-nth nodes)))
+                   (fn [] (check-role-op (rand-nth nodes)))
                    ;; Read from all
-                   (fn [_] (read-all-op))])
+                   (fn [] (read-all-op))])
          (gen/stagger (/ 1 rate)))))
 
 ;; ===========================================================================

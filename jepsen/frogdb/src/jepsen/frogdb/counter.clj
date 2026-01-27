@@ -83,10 +83,10 @@
    Primarily increments with occasional reads."
   [opts]
   (let [rate (get opts :rate 10)]
-    (->> (gen/mix [(fn [_] (add-op))
-                   (fn [_] (add-op))
-                   (fn [_] (add-op))
-                   (fn [_] (read-op))])
+    (->> (gen/mix [(fn [] (add-op))
+                   (fn [] (add-op))
+                   (fn [] (add-op))
+                   (fn [] (read-op))])
          (gen/stagger (/ 1 rate)))))
 
 ;; ===========================================================================

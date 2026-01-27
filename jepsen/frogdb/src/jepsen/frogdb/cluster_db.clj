@@ -112,6 +112,12 @@
    "n4" {:host "localhost" :port 6382}
    "n5" {:host "localhost" :port 6383}})
 
+(defn get-node-for-ip
+  "Find node name for an IP address."
+  [ip]
+  (first (filter #(= (get raft-cluster-node-ips %) ip)
+                 (keys raft-cluster-node-ips))))
+
 (defn raft-container-name
   "Get the Docker container name for a Raft cluster node."
   [node]

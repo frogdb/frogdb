@@ -130,11 +130,11 @@
   (let [rate (get opts :rate 10)
         counter (atom 0)]
     (->> (gen/mix [;; Durable writes (should survive partition)
-                   (fn [_] (write-durable-op (swap! counter inc)))
+                   (fn [] (write-durable-op (swap! counter inc)))
                    ;; Async writes (may be lost)
-                   (fn [_] (write-async-op (swap! counter inc)))
+                   (fn [] (write-async-op (swap! counter inc)))
                    ;; Quorum reads
-                   (fn [_] (read-quorum-op))])
+                   (fn [] (read-quorum-op))])
          (gen/stagger (/ 1 rate)))))
 
 ;; ===========================================================================

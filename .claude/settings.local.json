@@ -48,7 +48,15 @@
       "Bash(docker rm:*)",
       "Bash(redis-server:*)",
       "Bash(brew bundle:*)",
-      "Bash(bun run build:*)"
+      "Bash(bun run build:*)",
+      "Bash(just jepsen-up:*)",
+      "Bash(docker logs:*)",
+      "Bash(just jepsen-down:*)",
+      "Bash(docker inspect:*)",
+      "Bash(lein run:*)",
+      "Bash(lein repl:*)",
+      "Bash(time cross build:*)",
+      "Bash(cargo install:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

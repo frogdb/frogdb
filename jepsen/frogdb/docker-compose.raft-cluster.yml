@@ -29,15 +29,13 @@ services:
       - frogdb-raft-n1-data:/data
       - /tmp/frogdb-raft-n1:/tmp/frogdb
     environment:
-      FROGDB_PORT: 6379
-      FROGDB_CLUSTER_PORT: 16379
-      FROGDB_DATA_DIR: /data
-      FROGDB_CLUSTER_ENABLED: "yes"
-      FROGDB_CLUSTER_CONFIG_FILE: /data/nodes.conf
-      FROGDB_CLUSTER_NODE_TIMEOUT: 5000
-      FROGDB_CLUSTER_ANNOUNCE_IP: 172.21.0.2
-      FROGDB_CLUSTER_ANNOUNCE_PORT: 6379
-      FROGDB_CLUSTER_ANNOUNCE_BUS_PORT: 16379
+      FROGDB_SERVER__BIND: "0.0.0.0"
+      FROGDB_SERVER__PORT: 6379
+      FROGDB_PERSISTENCE__DATA_DIR: /data
+      FROGDB_CLUSTER__ENABLED: "true"
+      FROGDB_CLUSTER__CLIENT_ADDR: "172.21.0.2:6379"
+      FROGDB_CLUSTER__CLUSTER_BUS_ADDR: "172.21.0.2:16379"
+      FROGDB_CLUSTER__DATA_DIR: /data/cluster
     cap_add:
       - NET_ADMIN   # For iptables-based partition testing and tc/netem
       - SYS_PTRACE  # For process manipulation
@@ -65,15 +63,13 @@ services:
       - frogdb-raft-n2-data:/data
       - /tmp/frogdb-raft-n2:/tmp/frogdb
     environment:
-      FROGDB_PORT: 6379
-      FROGDB_CLUSTER_PORT: 16379
-      FROGDB_DATA_DIR: /data
-      FROGDB_CLUSTER_ENABLED: "yes"
-      FROGDB_CLUSTER_CONFIG_FILE: /data/nodes.conf
-      FROGDB_CLUSTER_NODE_TIMEOUT: 5000
-      FROGDB_CLUSTER_ANNOUNCE_IP: 172.21.0.3
-      FROGDB_CLUSTER_ANNOUNCE_PORT: 6379
-      FROGDB_CLUSTER_ANNOUNCE_BUS_PORT: 16379
+      FROGDB_SERVER__BIND: "0.0.0.0"
+      FROGDB_SERVER__PORT: 6379
+      FROGDB_PERSISTENCE__DATA_DIR: /data
+      FROGDB_CLUSTER__ENABLED: "true"
+      FROGDB_CLUSTER__CLIENT_ADDR: "172.21.0.3:6379"
+      FROGDB_CLUSTER__CLUSTER_BUS_ADDR: "172.21.0.3:16379"
+      FROGDB_CLUSTER__DATA_DIR: /data/cluster
     cap_add:
       - NET_ADMIN
       - SYS_PTRACE
@@ -101,15 +97,13 @@ services:
       - frogdb-raft-n3-data:/data
       - /tmp/frogdb-raft-n3:/tmp/frogdb
     environment:
-      FROGDB_PORT: 6379
-      FROGDB_CLUSTER_PORT: 16379
-      FROGDB_DATA_DIR: /data
-      FROGDB_CLUSTER_ENABLED: "yes"
-      FROGDB_CLUSTER_CONFIG_FILE: /data/nodes.conf
-      FROGDB_CLUSTER_NODE_TIMEOUT: 5000
-      FROGDB_CLUSTER_ANNOUNCE_IP: 172.21.0.4
-      FROGDB_CLUSTER_ANNOUNCE_PORT: 6379
-      FROGDB_CLUSTER_ANNOUNCE_BUS_PORT: 16379
+      FROGDB_SERVER__BIND: "0.0.0.0"
+      FROGDB_SERVER__PORT: 6379
+      FROGDB_PERSISTENCE__DATA_DIR: /data
+      FROGDB_CLUSTER__ENABLED: "true"
+      FROGDB_CLUSTER__CLIENT_ADDR: "172.21.0.4:6379"
+      FROGDB_CLUSTER__CLUSTER_BUS_ADDR: "172.21.0.4:16379"
+      FROGDB_CLUSTER__DATA_DIR: /data/cluster
     cap_add:
       - NET_ADMIN
       - SYS_PTRACE
@@ -137,15 +131,13 @@ services:
       - frogdb-raft-n4-data:/data
       - /tmp/frogdb-raft-n4:/tmp/frogdb
     environment:
-      FROGDB_PORT: 6379
-      FROGDB_CLUSTER_PORT: 16379
-      FROGDB_DATA_DIR: /data
-      FROGDB_CLUSTER_ENABLED: "yes"
-      FROGDB_CLUSTER_CONFIG_FILE: /data/nodes.conf
-      FROGDB_CLUSTER_NODE_TIMEOUT: 5000
-      FROGDB_CLUSTER_ANNOUNCE_IP: 172.21.0.5
-      FROGDB_CLUSTER_ANNOUNCE_PORT: 6379
-      FROGDB_CLUSTER_ANNOUNCE_BUS_PORT: 16379
+      FROGDB_SERVER__BIND: "0.0.0.0"
+      FROGDB_SERVER__PORT: 6379
+      FROGDB_PERSISTENCE__DATA_DIR: /data
+      FROGDB_CLUSTER__ENABLED: "true"
+      FROGDB_CLUSTER__CLIENT_ADDR: "172.21.0.5:6379"
+      FROGDB_CLUSTER__CLUSTER_BUS_ADDR: "172.21.0.5:16379"
+      FROGDB_CLUSTER__DATA_DIR: /data/cluster
     cap_add:
       - NET_ADMIN
       - SYS_PTRACE
@@ -173,15 +165,13 @@ services:
       - frogdb-raft-n5-data:/data
       - /tmp/frogdb-raft-n5:/tmp/frogdb
     environment:
-      FROGDB_PORT: 6379
-      FROGDB_CLUSTER_PORT: 16379
-      FROGDB_DATA_DIR: /data
-      FROGDB_CLUSTER_ENABLED: "yes"
-      FROGDB_CLUSTER_CONFIG_FILE: /data/nodes.conf
-      FROGDB_CLUSTER_NODE_TIMEOUT: 5000
-      FROGDB_CLUSTER_ANNOUNCE_IP: 172.21.0.6
-      FROGDB_CLUSTER_ANNOUNCE_PORT: 6379
-      FROGDB_CLUSTER_ANNOUNCE_BUS_PORT: 16379
+      FROGDB_SERVER__BIND: "0.0.0.0"
+      FROGDB_SERVER__PORT: 6379
+      FROGDB_PERSISTENCE__DATA_DIR: /data
+      FROGDB_CLUSTER__ENABLED: "true"
+      FROGDB_CLUSTER__CLIENT_ADDR: "172.21.0.6:6379"
+      FROGDB_CLUSTER__CLUSTER_BUS_ADDR: "172.21.0.6:16379"
+      FROGDB_CLUSTER__DATA_DIR: /data/cluster
     cap_add:
       - NET_ADMIN
       - SYS_PTRACE

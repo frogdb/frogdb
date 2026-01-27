@@ -158,9 +158,29 @@ profile-load workload="mixed" requests="10000" *args:
 profile-load-save workload="mixed" requests="10000" *args:
     uv run tools/loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} --save-only {{args}}
 
-# Build FrogDB for Jepsen testing
-jepsen-build:
-    uv run jepsen/build.py
+# =============================================================================
+# Cross-Compilation (for faster Jepsen builds)
+# =============================================================================
+
+# Install cargo-zigbuild for native cross-compilation
+cross-install:
+    cargo install cargo-zigbuild
+
+# Cross-compile for Linux x86_64 using zig
+cross-build:
+    cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server
+
+# Verify binary is valid Linux ELF
+cross-verify:
+    @file target/x86_64-unknown-linux-gnu/release/frogdb-server
+
+# Build Docker image (requires cross-build first)
+docker-build: cross-build
+    docker build -t frogdb:latest .
+
+# Build FrogDB for Jepsen testing (uses cross-compilation)
+jepsen-build: cross-build
+    docker build -t frogdb:latest .
 
 # Start Jepsen test environment (FrogDB node only)
 jepsen-up:
