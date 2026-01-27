@@ -178,46 +178,46 @@ impl PrometheusRecorder {
         let metric_families = self.registry.gather();
         for mf in metric_families {
             if mf.get_name() == name {
-                // Get the first metric from the family
-                let m = mf.get_metric().first()?;
-                let h = m.get_histogram();
-                let count = h.get_sample_count();
-                if count == 0 {
-                    return Some((0.0, 0.0, 0.0));
+                if let Some(m) = mf.get_metric().first() {
+                    let h = m.get_histogram();
+                    let count = h.get_sample_count();
+                    if count == 0 {
+                        return Some((0.0, 0.0, 0.0));
+                    }
+
+                    // Calculate approximate quantiles from buckets
+                    let buckets = h.get_bucket();
+                    let p50_target = count as f64 * 0.5;
+                    let p95_target = count as f64 * 0.95;
+                    let p99_target = count as f64 * 0.99;
+
+                    let mut p50 = 0.0;
+                    let mut p95 = 0.0;
+                    let mut p99 = 0.0;
+                    let mut p50_found = false;
+                    let mut p95_found = false;
+                    let mut p99_found = false;
+
+                    for bucket in buckets {
+                        let upper = bucket.get_upper_bound();
+                        let cumulative = bucket.get_cumulative_count() as f64;
+
+                        if !p50_found && cumulative >= p50_target {
+                            p50 = upper * 1000.0; // Convert to ms
+                            p50_found = true;
+                        }
+                        if !p95_found && cumulative >= p95_target {
+                            p95 = upper * 1000.0;
+                            p95_found = true;
+                        }
+                        if !p99_found && cumulative >= p99_target {
+                            p99 = upper * 1000.0;
+                            p99_found = true;
+                        }
+                    }
+
+                    return Some((p50, p95, p99));
                 }
-
-                // Calculate approximate quantiles from buckets
-                let buckets = h.get_bucket();
-                let p50_target = count as f64 * 0.5;
-                let p95_target = count as f64 * 0.95;
-                let p99_target = count as f64 * 0.99;
-
-                let mut p50 = 0.0;
-                let mut p95 = 0.0;
-                let mut p99 = 0.0;
-                let mut p50_found = false;
-                let mut p95_found = false;
-                let mut p99_found = false;
-
-                for bucket in buckets {
-                    let upper = bucket.get_upper_bound();
-                    let cumulative = bucket.get_cumulative_count() as f64;
-
-                    if !p50_found && cumulative >= p50_target {
-                        p50 = upper * 1000.0; // Convert to ms
-                        p50_found = true;
-                    }
-                    if !p95_found && cumulative >= p95_target {
-                        p95 = upper * 1000.0;
-                        p95_found = true;
-                    }
-                    if !p99_found && cumulative >= p99_target {
-                        p99 = upper * 1000.0;
-                        p99_found = true;
-                    }
-                }
-
-                return Some((p50, p95, p99));
             }
         }
         None
