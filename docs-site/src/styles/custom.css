@@ -1,10 +1,10 @@
 /* FrogDB Custom Styles */
 
-/* Override accent colors with frog-inspired green */
+/* Override accent colors with frog-inspired lime green (matches logo) */
 :root {
-	--sl-color-accent-low: #1a4d2e;
-	--sl-color-accent: #2d8a4e;
-	--sl-color-accent-high: #4ade80;
+	--sl-color-accent-low: #3d5c2a;    /* Dark lime for backgrounds */
+	--sl-color-accent: #6BAA3D;         /* Medium lime (matches frog stripes) */
+	--sl-color-accent-high: #8DC63F;    /* Bright lime (matches frog body) */
 }
 
 /* Dark mode as default - make it feel native */
@@ -24,7 +24,13 @@
 	padding-block: 3rem;
 }
 
-/* Logo styling if we add one later */
+/* Make hero image larger */
+.hero > img {
+	width: min(100%, 30rem);
+}
+
+/* Logo and title styling */
 .site-title {
 	font-weight: 700;
+	gap: 0.4rem; /* Reduce gap between logo and title */
 }
