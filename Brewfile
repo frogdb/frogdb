@@ -17,3 +17,6 @@ brew "uv"      # Python script runner for test harness
 # Profiling tools
 brew "cargo-flamegraph"  # CPU flamegraphs
 brew "samply"            # CPU profiler with UI
+
+# Browser testing
+cask "chromedriver"      # WebDriver for browser integration tests

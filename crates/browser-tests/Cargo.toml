@@ -1,0 +1,38 @@
+[package]
+name = "frogdb-browser-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Browser integration tests for FrogDB debug UI"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# Enable browser tests - requires chromedriver running
+browser-tests = []
+
+[dependencies]
+# Empty - this is a test-only crate
+
+[dev-dependencies]
+# WebDriver client
+thirtyfour = "0.35"
+
+# Async runtime
+tokio = { workspace = true, features = ["full", "test-util"] }
+
+# Server for spawning test instances
+frogdb-server = { path = "../server" }
+
+# Temp directories
+tempfile = { workspace = true }
+
+# Serialization for checking responses
+serde_json = { workspace = true }
+
+# HTTP client for checking chromedriver status
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
