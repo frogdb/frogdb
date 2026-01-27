@@ -417,23 +417,57 @@ use frogdb_protocol::Response;
 ///
 /// When `with_scores` is true, returns an array with alternating member/score pairs.
 /// When `with_scores` is false, returns just the members.
-pub fn format_scored_response(members: Vec<(Bytes, f64)>, with_scores: bool) -> Response {
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let results = zset.range_by_score(&min, &max, 0, None);
+/// Ok(scored_array(results, with_scores))
+/// ```
+#[inline]
+pub fn scored_array(members: Vec<(Bytes, f64)>, with_scores: bool) -> Response {
     if with_scores {
-        let arr: Vec<Response> = members
-            .into_iter()
-            .flat_map(|(member, score)| {
-                vec![
-                    Response::bulk(member.to_vec()),
-                    Response::bulk(format_float(score).into_bytes()),
-                ]
-            })
-            .collect();
-        Response::Array(arr)
+        Response::Array(
+            members
+                .into_iter()
+                .flat_map(|(member, score)| {
+                    [
+                        Response::bulk(member),
+                        Response::bulk(Bytes::from(format_float(score))),
+                    ]
+                })
+                .collect(),
+        )
     } else {
-        let arr: Vec<Response> = members
-            .into_iter()
-            .map(|(member, _)| Response::bulk(member.to_vec()))
-            .collect();
-        Response::Array(arr)
+        Response::Array(
+            members
+                .into_iter()
+                .map(|(member, _)| Response::bulk(member))
+                .collect(),
+        )
     }
+}
+
+/// Format a sorted set response with optional scores (alias for compatibility).
+///
+/// Deprecated: Use `scored_array` instead.
+#[inline]
+pub fn format_scored_response(members: Vec<(Bytes, f64)>, with_scores: bool) -> Response {
+    scored_array(members, with_scores)
+}
+
+/// Format a pop response (always includes scores).
+///
+/// Used by ZPOPMIN, ZPOPMAX, ZMPOP - these always return member/score pairs.
+#[inline]
+pub fn pop_response(members: Vec<(Bytes, f64)>) -> Response {
+    scored_array(members, true)
+}
+
+/// Members-only array response (no scores).
+///
+/// Used by lexicographic ranges and other member-only responses.
+#[inline]
+pub fn members_array(members: Vec<(Bytes, f64)>) -> Response {
+    scored_array(members, false)
 }
