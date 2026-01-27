@@ -12,13 +12,14 @@ use frogdb_core::{
     cluster::{ClusterCommand, NodeInfo, NodeRole, SlotRange},
     generate_latency_graph, persistence::SnapshotCoordinator, shard_for_key, slot_for_key,
     AclManager, AuthenticatedUser, ClientHandle, ClientRegistry, ClientStatsDelta,
-    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandCategory, CommandFlags,
-    CommandRegistry, ExecuteSignal, GlobPattern, IntrospectionRequest, IntrospectionResponse,
-    KeyAccessType, LatencyEvent, LockMode, MetricsRecorder, PartialResult, PauseMode,
-    PubSubMessage, PubSubSender, ReplicationTracker, ReplicationTrackerImpl, ScatterOp,
-    ShardReadyResult, SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId,
-    TransactionResult, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
+    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandCategory, CommandEntry,
+    CommandFlags, CommandRegistry, ConnectionLevelOp, ExecuteSignal, ExecutionStrategy,
+    GlobPattern, IntrospectionRequest, IntrospectionResponse, KeyAccessType, LatencyEvent,
+    LockMode, MergeStrategy, MetricsRecorder, PartialResult, PauseMode, PubSubMessage,
+    PubSubSender, ReplicationTracker, ReplicationTrackerImpl, ScatterOp, ShardReadyResult,
+    SharedFunctionRegistry, ShardMemoryStats, ShardMessage, StreamId, TransactionResult,
+    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SUBSCRIPTIONS_PER_CONNECTION,
 };
 use openraft::error::{ClientWriteError, RaftError};
 use frogdb_metrics::SharedTracer;
@@ -1458,8 +1459,8 @@ impl ConnectionHandler {
         }
 
         // Check authentication before processing other commands
-        // AUTH, QUIT, HELLO, and PING are allowed without authentication
-        if !self.state.auth.is_authenticated() && !Self::is_auth_exempt(&cmd_name_str) {
+        // AUTH, QUIT, HELLO, and PING are allowed without authentication (using execution strategy)
+        if !self.state.auth.is_authenticated() && !self.is_auth_exempt_by_strategy(&cmd_name_str) {
             return vec![Response::error("NOAUTH Authentication required.")];
         }
 
@@ -1506,8 +1507,8 @@ impl ConnectionHandler {
             }
         }
 
-        // Check pub/sub mode restrictions
-        if self.state.pubsub.in_pubsub_mode() && !Self::is_allowed_in_pubsub_mode(&cmd_name_str) {
+        // Check pub/sub mode restrictions using execution strategy
+        if self.state.pubsub.in_pubsub_mode() && !self.is_allowed_in_pubsub_mode_by_strategy(&cmd_name_str) {
             return vec![Response::error(format!(
                 "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
                 cmd_name_str
@@ -1742,7 +1743,8 @@ impl ConnectionHandler {
         // If in transaction mode, queue the command instead of executing
         if self.state.transaction.queue.is_some() {
             // Check if it's a blocking command - not allowed in MULTI
-            if Self::is_blocking_command(&cmd_name_str) {
+            // Use execution_strategy() for type-safe blocking detection
+            if self.is_blocking_command_by_strategy(&cmd_name_str) {
                 return vec![Response::error(
                     "ERR Blocking commands are not allowed inside a transaction",
                 )];
@@ -1802,7 +1804,15 @@ impl ConnectionHandler {
         vec![response]
     }
 
-    /// Check if a command is a blocking command.
+    /// Check if a command is a blocking command using execution strategy.
+    fn is_blocking_command_by_strategy(&self, cmd_name: &str) -> bool {
+        self.registry
+            .get_entry(cmd_name)
+            .is_some_and(|entry| matches!(entry.execution_strategy(), ExecutionStrategy::Blocking { .. }))
+    }
+
+    /// Check if a command is a blocking command (legacy string-based check).
+    /// Prefer is_blocking_command_by_strategy() for new code.
     fn is_blocking_command(cmd: &str) -> bool {
         matches!(
             cmd,
@@ -1810,7 +1820,24 @@ impl ConnectionHandler {
         )
     }
 
-    /// Check if a command is allowed in pub/sub mode.
+    /// Check if a command is allowed in pub/sub mode using execution strategy.
+    fn is_allowed_in_pubsub_mode_by_strategy(&self, cmd_name: &str) -> bool {
+        // PING and QUIT are special cases - always allowed
+        if matches!(cmd_name, "PING" | "QUIT") {
+            return true;
+        }
+        // Commands with PubSub or ConnectionState strategy are allowed
+        self.registry.get_entry(cmd_name).is_some_and(|entry| {
+            matches!(
+                entry.execution_strategy(),
+                ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
+                    | ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
+            )
+        })
+    }
+
+    /// Check if a command is allowed in pub/sub mode (legacy string-based check).
+    /// Prefer is_allowed_in_pubsub_mode_by_strategy() for new code.
     fn is_allowed_in_pubsub_mode(cmd: &str) -> bool {
         matches!(
             cmd,
@@ -1819,12 +1846,48 @@ impl ConnectionHandler {
         )
     }
 
-    /// Check if a command is exempt from authentication requirements.
+    /// Check if a command is exempt from authentication requirements using execution strategy.
+    fn is_auth_exempt_by_strategy(&self, cmd_name: &str) -> bool {
+        // PING and QUIT are always allowed
+        if matches!(cmd_name, "PING" | "QUIT") {
+            return true;
+        }
+        // Commands with Auth strategy are exempt (they handle their own auth)
+        self.registry.get_entry(cmd_name).is_some_and(|entry| {
+            matches!(
+                entry.execution_strategy(),
+                ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth)
+            )
+        })
+    }
+
+    /// Check if a command is exempt from authentication requirements (legacy string-based check).
+    /// Prefer is_auth_exempt_by_strategy() for new code.
     fn is_auth_exempt(cmd: &str) -> bool {
         matches!(cmd, "AUTH" | "QUIT" | "HELLO" | "PING")
     }
 
-    /// Check if a command is exempt from slot validation in cluster mode.
+    /// Check if a command is exempt from slot validation in cluster mode using execution strategy.
+    /// Connection-level and admin commands that don't operate on specific keys are exempt.
+    fn is_cluster_exempt_by_strategy(&self, cmd_name: &str) -> bool {
+        // Certain commands are always exempt
+        if matches!(
+            cmd_name,
+            "CLUSTER" | "PING" | "COMMAND" | "TIME" | "DEBUG"
+        ) {
+            return true;
+        }
+        // Connection-level commands and scatter-gather commands are exempt
+        self.registry.get_entry(cmd_name).is_some_and(|entry| {
+            matches!(
+                entry.execution_strategy(),
+                ExecutionStrategy::ConnectionLevel(_) | ExecutionStrategy::ScatterGather { .. }
+            )
+        })
+    }
+
+    /// Check if a command is exempt from slot validation in cluster mode (legacy string-based check).
+    /// Prefer is_cluster_exempt_by_strategy() for new code.
     fn is_cluster_exempt(cmd: &str) -> bool {
         matches!(
             cmd,
@@ -1845,8 +1908,8 @@ impl ConnectionHandler {
         let cmd_name_bytes = cmd.name_uppercase();
         let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
 
-        // Skip cluster-exempt commands
-        if Self::is_cluster_exempt(&cmd_name) {
+        // Skip cluster-exempt commands (using execution strategy for type-safe check)
+        if self.is_cluster_exempt_by_strategy(&cmd_name) {
             return None;
         }
 

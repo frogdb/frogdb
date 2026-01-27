@@ -8,7 +8,10 @@
 //! - STATUS HELP: Show subcommand help
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 /// STATUS command - server status and health information.
@@ -27,6 +30,11 @@ impl Command for StatusCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::READONLY | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::FAST
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        // STATUS is handled at connection level (collects data from various components)
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
     }
 
     fn execute(

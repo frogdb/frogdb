@@ -3,6 +3,10 @@
 //! These commands are recognized by the server but return a "not implemented" error.
 //! This allows clients to discover which commands exist but aren't yet functional,
 //! rather than receiving "unknown command" errors.
+//!
+//! Note: Commands that have been implemented elsewhere (e.g., replication commands
+//! in the replication module, pub/sub commands as metadata) should not be here.
+//! This file only contains stubs for commands that are truly not yet implemented.
 
 use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
@@ -42,116 +46,14 @@ macro_rules! stub_command {
 }
 
 // =============================================================================
-// Pub/Sub Commands
+// Replication Commands (not yet implemented)
 // =============================================================================
-
-stub_command!(
-    SubscribeCommand,
-    "SUBSCRIBE",
-    Arity::AtLeast(1),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE
-);
-
-stub_command!(
-    PsubscribeCommand,
-    "PSUBSCRIBE",
-    Arity::AtLeast(1),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE
-);
-
-stub_command!(
-    SsubscribeCommand,
-    "SSUBSCRIBE",
-    Arity::AtLeast(1),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE
-);
-
-stub_command!(
-    UnsubscribeCommand,
-    "UNSUBSCRIBE",
-    Arity::AtLeast(0),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE
-);
-
-stub_command!(
-    PunsubscribeCommand,
-    "PUNSUBSCRIBE",
-    Arity::AtLeast(0),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE
-);
-
-stub_command!(
-    SunsubscribeCommand,
-    "SUNSUBSCRIBE",
-    Arity::AtLeast(0),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE
-);
-
-stub_command!(
-    PublishCommand,
-    "PUBLISH",
-    Arity::Fixed(2),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::FAST
-);
-
-stub_command!(
-    SpublishCommand,
-    "SPUBLISH",
-    Arity::Fixed(2),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::FAST
-);
-
-stub_command!(
-    PubsubCommand,
-    "PUBSUB",
-    Arity::AtLeast(1),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE
-);
-
-// =============================================================================
-// Replication Commands
-// =============================================================================
-
-stub_command!(
-    ReplicaofCommand,
-    "REPLICAOF",
-    Arity::Fixed(2),
-    CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::STALE
-);
-
-stub_command!(
-    SlaveofCommand,
-    "SLAVEOF",
-    Arity::Fixed(2),
-    CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::STALE
-);
-
-stub_command!(
-    WaitCommand,
-    "WAIT",
-    Arity::Fixed(2),
-    CommandFlags::NOSCRIPT
-);
 
 stub_command!(
     WaitaofCommand,
     "WAITAOF",
     Arity::Fixed(3),
     CommandFlags::NOSCRIPT
-);
-
-stub_command!(
-    PsyncCommand,
-    "PSYNC",
-    Arity::Fixed(2),
-    CommandFlags::ADMIN | CommandFlags::NOSCRIPT
-);
-
-stub_command!(
-    ReplconfCommand,
-    "REPLCONF",
-    Arity::AtLeast(0),
-    CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
 );
 
 // =============================================================================
@@ -194,13 +96,6 @@ stub_command!(
     CommandFlags::WRITE | CommandFlags::FAST
 );
 
-stub_command!(
-    ResetCommand,
-    "RESET",
-    Arity::Fixed(0),
-    CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::NOSCRIPT
-);
-
 // =============================================================================
 // Server Commands
 // =============================================================================
@@ -210,13 +105,6 @@ stub_command!(
     "BGREWRITEAOF",
     Arity::Fixed(0),
     CommandFlags::ADMIN
-);
-
-stub_command!(
-    RoleCommand,
-    "ROLE",
-    Arity::Fixed(0),
-    CommandFlags::READONLY | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::FAST | CommandFlags::NOSCRIPT
 );
 
 stub_command!(

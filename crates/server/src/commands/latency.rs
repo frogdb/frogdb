@@ -13,7 +13,10 @@
 //! - LATENCY RESET [event...]: Clear latency data
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 /// LATENCY command - latency monitoring and diagnostics.
@@ -35,6 +38,11 @@ impl Command for LatencyCommand {
             | CommandFlags::NOSCRIPT
             | CommandFlags::LOADING
             | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        // LATENCY is handled at connection level (scatter-gather across shards)
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
     }
 
     fn execute(

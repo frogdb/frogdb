@@ -5,7 +5,10 @@
 //! for help/documentation purposes.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 /// ACL command - manage access control lists.
@@ -38,6 +41,11 @@ impl Command for Acl {
     fn flags(&self) -> CommandFlags {
         // ACL is an admin command
         CommandFlags::ADMIN
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        // ACL is handled at connection level (needs access to AclManager)
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
     }
 
     fn execute(
