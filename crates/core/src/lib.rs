@@ -31,7 +31,7 @@ pub mod timeseries;
 pub mod types;
 pub mod vll;
 
-pub use command::{Arity, Command, CommandContext, CommandFlags};
+pub use command::{Arity, Command, CommandContext, CommandFlags, QuorumChecker};
 pub use error::CommandError;
 pub use acl::{
     AclChecker, AclConfig, AclError, AclLog, AclManager, AllowAllChecker, AuthenticatedUser,

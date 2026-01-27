@@ -188,8 +188,16 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             .values()
             .any(|n| n.is_primary() && n.flags.fail);
 
+        // Check if we can form a quorum with reachable nodes (local perspective)
+        let has_local_quorum = ctx
+            .quorum_checker
+            .map(|qc| qc.has_quorum())
+            .unwrap_or(true); // If no quorum checker, assume healthy
+
         let cluster_state_str = if has_failed_primary {
             "fail" // A primary is marked as failed
+        } else if !has_local_quorum {
+            "fail" // Cannot form quorum with reachable nodes
         } else if let Some(ref raft) = ctx.raft {
             use openraft::ServerState;
             let metrics = raft.metrics().borrow().clone();
@@ -197,11 +205,12 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             match (metrics.state, metrics.current_leader, metrics.millis_since_quorum_ack) {
                 (ServerState::Candidate, _, _) => "fail", // Trying to elect but can't get quorum
                 (_, None, _) => "fail",                   // No leader known
-                // Check if quorum ack is stale (leader hasn't heard from majority recently)
-                (ServerState::Leader, _, Some(millis)) if millis > QUORUM_TIMEOUT_MS => "fail",
-                // For followers/leaders with known leader
+                // Leader: require RECENT quorum ack (within timeout) to report healthy
+                (ServerState::Leader, _, Some(millis)) if millis <= QUORUM_TIMEOUT_MS => "ok",
+                // Leader: stale quorum ack OR no quorum ack (None) = partitioned/unhealthy
+                (ServerState::Leader, _, _) => "fail",
+                // Follower: trust that we have a leader (they'll discover otherwise via election)
                 (ServerState::Follower, Some(_), _) => "ok",
-                (ServerState::Leader, _, _) => "ok",
                 _ => "ok", // Learner with leader, etc.
             }
         } else {
