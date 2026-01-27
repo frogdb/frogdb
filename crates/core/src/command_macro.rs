@@ -692,6 +692,118 @@ macro_rules! define_metadata_command {
     };
 }
 
+// =============================================================================
+// Standalone Key Extraction Macros
+// =============================================================================
+//
+// These macros can be used in manual `impl Command` blocks to reduce boilerplate
+// for the `keys()` method. They generate the full method implementation.
+//
+// # Example
+//
+// ```rust,ignore
+// impl Command for MyCommand {
+//     // ... other methods ...
+//
+//     impl_keys_first!();  // Generates keys() that returns &args[0]
+// }
+// ```
+
+/// Implements `keys()` method that returns the first argument as the key.
+///
+/// This is the most common pattern for single-key commands like GET, SET, ZADD, etc.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// impl Command for ZaddCommand {
+///     fn name(&self) -> &'static str { "ZADD" }
+///     fn arity(&self) -> Arity { Arity::AtLeast(3) }
+///     fn flags(&self) -> CommandFlags { CommandFlags::WRITE | CommandFlags::FAST }
+///     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+///         // ... command logic ...
+///     }
+///     impl_keys_first!();
+/// }
+/// ```
+#[macro_export]
+macro_rules! impl_keys_first {
+    () => {
+        fn keys<'a>(&self, args: &'a [bytes::Bytes]) -> Vec<&'a [u8]> {
+            if args.is_empty() {
+                vec![]
+            } else {
+                vec![&args[0]]
+            }
+        }
+    };
+}
+
+/// Implements `keys()` method that returns no keys.
+///
+/// Used for keyless commands like PING, INFO, DEBUG, etc.
+#[macro_export]
+macro_rules! impl_keys_none {
+    () => {
+        fn keys<'a>(&self, _args: &'a [bytes::Bytes]) -> Vec<&'a [u8]> {
+            vec![]
+        }
+    };
+}
+
+/// Implements `keys()` method that returns the first two arguments as keys.
+///
+/// Used for commands like RENAME, RENAMENX, COPY, etc.
+#[macro_export]
+macro_rules! impl_keys_two {
+    () => {
+        fn keys<'a>(&self, args: &'a [bytes::Bytes]) -> Vec<&'a [u8]> {
+            if args.len() < 2 {
+                vec![]
+            } else {
+                vec![&args[0], &args[1]]
+            }
+        }
+    };
+}
+
+/// Implements `keys()` method that returns all arguments as keys.
+///
+/// Used for commands like DEL, EXISTS, TOUCH, UNLINK, etc.
+#[macro_export]
+macro_rules! impl_keys_all {
+    () => {
+        fn keys<'a>(&self, args: &'a [bytes::Bytes]) -> Vec<&'a [u8]> {
+            args.iter().map(|a| a.as_ref()).collect()
+        }
+    };
+}
+
+/// Implements `keys()` method that skips the first N arguments.
+///
+/// Used for commands where initial arguments are options/counts before keys.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// impl Command for EvalCommand {
+///     // EVAL script numkeys key [key ...] arg [arg ...]
+///     impl_keys_skip!(2);  // Skip script and numkeys
+/// }
+/// ```
+#[macro_export]
+macro_rules! impl_keys_skip {
+    ($n:expr) => {
+        fn keys<'a>(&self, args: &'a [bytes::Bytes]) -> Vec<&'a [u8]> {
+            if args.len() <= $n {
+                vec![]
+            } else {
+                args[$n..].iter().map(|a| a.as_ref()).collect()
+            }
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;

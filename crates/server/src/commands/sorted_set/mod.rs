@@ -10,16 +10,17 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    shard_for_key, Arity, Command, CommandContext, CommandError, CommandFlags, SortedSetValue,
-    Value,
+    impl_keys_first, shard_for_key, Arity, Command, CommandContext, CommandError, CommandFlags,
+    SortedSetValue, Value,
 };
 use frogdb_protocol::Response;
 use std::collections::HashMap;
 
 use super::utils::{
-    format_float, get_or_create_zset, parse_f64, parse_i64, parse_lex_bound, parse_score_bound,
-    parse_usize, ZaddOptions,
+    format_float, get_or_create_zset, members_array, parse_f64, parse_i64, parse_lex_bound,
+    parse_score_bound, parse_usize, pop_response, scored_array, ZaddOptions,
 };
+use crate::routing::require_same_shard;
 
 // ============================================================================
 // ZADD - Add members to sorted set
@@ -164,13 +165,7 @@ impl Command for ZaddCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -219,13 +214,7 @@ impl Command for ZremCommand {
         Ok(Response::Integer(removed))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -273,13 +262,7 @@ impl Command for ZscoreCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -335,13 +318,7 @@ impl Command for ZmscoreCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -379,13 +356,7 @@ impl Command for ZcardCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -430,13 +401,7 @@ impl Command for ZincrbyCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -478,13 +443,7 @@ impl Command for ZrankCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -526,13 +485,7 @@ impl Command for ZrevrankCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -639,34 +592,10 @@ impl Command for ZrangeCommand {
             }
         };
 
-        // Build response
-        if with_scores {
-            let response: Vec<Response> = results
-                .into_iter()
-                .flat_map(|(member, score)| {
-                    vec![
-                        Response::bulk(member),
-                        Response::bulk(Bytes::from(format_float(score))),
-                    ]
-                })
-                .collect();
-            Ok(Response::Array(response))
-        } else {
-            let response: Vec<Response> = results
-                .into_iter()
-                .map(|(member, _)| Response::bulk(member))
-                .collect();
-            Ok(Response::Array(response))
-        }
+        Ok(scored_array(results, with_scores))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -728,33 +657,10 @@ impl Command for ZrangebyscoreCommand {
 
         let results = zset.range_by_score(&min, &max, offset, count);
 
-        if with_scores {
-            let response: Vec<Response> = results
-                .into_iter()
-                .flat_map(|(member, score)| {
-                    vec![
-                        Response::bulk(member),
-                        Response::bulk(Bytes::from(format_float(score))),
-                    ]
-                })
-                .collect();
-            Ok(Response::Array(response))
-        } else {
-            let response: Vec<Response> = results
-                .into_iter()
-                .map(|(member, _)| Response::bulk(member))
-                .collect();
-            Ok(Response::Array(response))
-        }
+        Ok(scored_array(results, with_scores))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -817,33 +723,10 @@ impl Command for ZrevrangebyscoreCommand {
 
         let results = zset.rev_range_by_score(&min, &max, offset, count);
 
-        if with_scores {
-            let response: Vec<Response> = results
-                .into_iter()
-                .flat_map(|(member, score)| {
-                    vec![
-                        Response::bulk(member),
-                        Response::bulk(Bytes::from(format_float(score))),
-                    ]
-                })
-                .collect();
-            Ok(Response::Array(response))
-        } else {
-            let response: Vec<Response> = results
-                .into_iter()
-                .map(|(member, _)| Response::bulk(member))
-                .collect();
-            Ok(Response::Array(response))
-        }
+        Ok(scored_array(results, with_scores))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -903,20 +786,10 @@ impl Command for ZrangebylexCommand {
 
         let results = zset.range_by_lex(&min, &max, offset, count);
 
-        let response: Vec<Response> = results
-            .into_iter()
-            .map(|(member, _)| Response::bulk(member))
-            .collect();
-        Ok(Response::Array(response))
+        Ok(members_array(results))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -977,20 +850,10 @@ impl Command for ZrevrangebylexCommand {
 
         let results = zset.rev_range_by_lex(&min, &max, offset, count);
 
-        let response: Vec<Response> = results
-            .into_iter()
-            .map(|(member, _)| Response::bulk(member))
-            .collect();
-        Ok(Response::Array(response))
+        Ok(members_array(results))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -1031,13 +894,7 @@ impl Command for ZcountCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -1078,13 +935,7 @@ impl Command for ZlexcountCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -1130,25 +981,10 @@ impl Command for ZpopminCommand {
             ctx.store.delete(key);
         }
 
-        let response: Vec<Response> = results
-            .into_iter()
-            .flat_map(|(member, score)| {
-                vec![
-                    Response::bulk(member),
-                    Response::bulk(Bytes::from(format_float(score))),
-                ]
-            })
-            .collect();
-        Ok(Response::Array(response))
+        Ok(pop_response(results))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -1194,25 +1030,10 @@ impl Command for ZpopmaxCommand {
             ctx.store.delete(key);
         }
 
-        let response: Vec<Response> = results
-            .into_iter()
-            .flat_map(|(member, score)| {
-                vec![
-                    Response::bulk(member),
-                    Response::bulk(Bytes::from(format_float(score))),
-                ]
-            })
-            .collect();
-        Ok(Response::Array(response))
+        Ok(pop_response(results))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -1248,12 +1069,7 @@ impl Command for ZmpopCommand {
         let remaining = &args[numkeys + 1..];
 
         // Check all keys are in same shard
-        let first_shard = shard_for_key(&keys[0], ctx.num_shards);
-        for key in &keys[1..] {
-            if shard_for_key(key, ctx.num_shards) != first_shard {
-                return Err(CommandError::CrossSlot);
-            }
-        }
+        require_same_shard(keys, ctx.num_shards)?;
 
         // Parse MIN|MAX and COUNT
         if remaining.is_empty() {
@@ -1305,19 +1121,9 @@ impl Command for ZmpopCommand {
             }
 
             if !results.is_empty() {
-                let elements: Vec<Response> = results
-                    .into_iter()
-                    .flat_map(|(member, score)| {
-                        vec![
-                            Response::bulk(member),
-                            Response::bulk(Bytes::from(format_float(score))),
-                        ]
-                    })
-                    .collect();
-
                 return Ok(Response::Array(vec![
                     Response::bulk(key.clone()),
-                    Response::Array(elements),
+                    pop_response(results),
                 ]));
             }
         }
@@ -1392,34 +1198,11 @@ impl Command for ZrandmemberCommand {
 
             let results = zset.random_members(count);
 
-            if with_scores {
-                let response: Vec<Response> = results
-                    .into_iter()
-                    .flat_map(|(member, score)| {
-                        vec![
-                            Response::bulk(member),
-                            Response::bulk(Bytes::from(format_float(score))),
-                        ]
-                    })
-                    .collect();
-                Ok(Response::Array(response))
-            } else {
-                let response: Vec<Response> = results
-                    .into_iter()
-                    .map(|(member, _)| Response::bulk(member))
-                    .collect();
-                Ok(Response::Array(response))
-            }
+            Ok(scored_array(results, with_scores))
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -1522,12 +1305,7 @@ impl Command for ZunionCommand {
         let options = &args[numkeys + 1..];
 
         // Check all keys are in same shard
-        let first_shard = shard_for_key(&keys[0], ctx.num_shards);
-        for key in &keys[1..] {
-            if shard_for_key(key, ctx.num_shards) != first_shard {
-                return Err(CommandError::CrossSlot);
-            }
-        }
+        require_same_shard(keys, ctx.num_shards)?;
 
         let (weights, aggregate, with_scores) = parse_set_op_options(options, numkeys)?;
 
@@ -1558,24 +1336,7 @@ impl Command for ZunionCommand {
                 .then_with(|| a.0.cmp(&b.0))
         });
 
-        if with_scores {
-            let response: Vec<Response> = members
-                .into_iter()
-                .flat_map(|(member, score)| {
-                    vec![
-                        Response::bulk(member),
-                        Response::bulk(Bytes::from(format_float(score))),
-                    ]
-                })
-                .collect();
-            Ok(Response::Array(response))
-        } else {
-            let response: Vec<Response> = members
-                .into_iter()
-                .map(|(member, _)| Response::bulk(member))
-                .collect();
-            Ok(Response::Array(response))
-        }
+        Ok(scored_array(members, with_scores))
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -1718,12 +1479,7 @@ impl Command for ZinterCommand {
         let options = &args[numkeys + 1..];
 
         // Check all keys are in same shard
-        let first_shard = shard_for_key(&keys[0], ctx.num_shards);
-        for key in &keys[1..] {
-            if shard_for_key(key, ctx.num_shards) != first_shard {
-                return Err(CommandError::CrossSlot);
-            }
-        }
+        require_same_shard(keys, ctx.num_shards)?;
 
         let (weights, aggregate, with_scores) = parse_set_op_options(options, numkeys)?;
 
@@ -1772,24 +1528,7 @@ impl Command for ZinterCommand {
                 .then_with(|| a.0.cmp(&b.0))
         });
 
-        if with_scores {
-            let response: Vec<Response> = members
-                .into_iter()
-                .flat_map(|(member, score)| {
-                    vec![
-                        Response::bulk(member),
-                        Response::bulk(Bytes::from(format_float(score))),
-                    ]
-                })
-                .collect();
-            Ok(Response::Array(response))
-        } else {
-            let response: Vec<Response> = members
-                .into_iter()
-                .map(|(member, _)| Response::bulk(member))
-                .collect();
-            Ok(Response::Array(response))
-        }
+        Ok(scored_array(members, with_scores))
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -1957,12 +1696,7 @@ impl Command for ZintercardCommand {
         let remaining = &args[numkeys + 1..];
 
         // Check all keys are in same shard
-        let first_shard = shard_for_key(&keys[0], ctx.num_shards);
-        for key in &keys[1..] {
-            if shard_for_key(key, ctx.num_shards) != first_shard {
-                return Err(CommandError::CrossSlot);
-            }
-        }
+        require_same_shard(keys, ctx.num_shards)?;
 
         // Parse LIMIT option
         let mut limit: Option<usize> = None;
@@ -2063,12 +1797,7 @@ impl Command for ZdiffCommand {
         let remaining = &args[numkeys + 1..];
 
         // Check all keys are in same shard
-        let first_shard = shard_for_key(&keys[0], ctx.num_shards);
-        for key in &keys[1..] {
-            if shard_for_key(key, ctx.num_shards) != first_shard {
-                return Err(CommandError::CrossSlot);
-            }
-        }
+        require_same_shard(keys, ctx.num_shards)?;
 
         let with_scores = !remaining.is_empty()
             && remaining[0].to_ascii_uppercase().as_slice() == b"WITHSCORES";
@@ -2105,24 +1834,7 @@ impl Command for ZdiffCommand {
                 .then_with(|| a.0.cmp(&b.0))
         });
 
-        if with_scores {
-            let response: Vec<Response> = members
-                .into_iter()
-                .flat_map(|(member, score)| {
-                    vec![
-                        Response::bulk(member),
-                        Response::bulk(Bytes::from(format_float(score))),
-                    ]
-                })
-                .collect();
-            Ok(Response::Array(response))
-        } else {
-            let response: Vec<Response> = members
-                .into_iter()
-                .map(|(member, _)| Response::bulk(member))
-                .collect();
-            Ok(Response::Array(response))
-        }
+        Ok(scored_array(members, with_scores))
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -2339,13 +2051,7 @@ impl Command for ZscanCommand {
         ]))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 /// Simple glob pattern matching (supports * and ?)
@@ -2554,13 +2260,7 @@ impl Command for ZremrangebyrankCommand {
         Ok(Response::Integer(removed as i64))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -2606,13 +2306,7 @@ impl Command for ZremrangebyscoreCommand {
         Ok(Response::Integer(removed as i64))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -2658,11 +2352,5 @@ impl Command for ZremrangebylexCommand {
         Ok(Response::Integer(removed as i64))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
