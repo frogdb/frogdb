@@ -47,7 +47,8 @@
       "Bash(docker stop:*)",
       "Bash(docker rm:*)",
       "Bash(redis-server:*)",
-      "Bash(brew bundle:*)"
+      "Bash(brew bundle:*)",
+      "Bash(bun run build:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -1,0 +1,180 @@
+---
+title: Persistence
+description: Configure FrogDB's durability and persistence options
+---
+
+FrogDB offers multiple persistence modes to balance durability guarantees with performance. All persistence is backed by RocksDB.
+
+## Persistence Modes
+
+### None (In-Memory Only)
+
+```toml
+[persistence]
+enabled = false
+```
+
+Data exists only in memory. Fast but data is lost on restart. Suitable for caching use cases where durability isn't required.
+
+### Periodic Snapshots
+
+```toml
+[persistence]
+enabled = true
+mode = "periodic"
+data_dir = "/var/lib/frogdb"
+snapshot_interval = "5m"
+```
+
+FrogDB periodically writes the entire dataset to disk. Good balance of performance and durability for most use cases.
+
+- **Pros**: Low write amplification, fast recovery
+- **Cons**: May lose up to `snapshot_interval` of data on crash
+
+### Append-Only File (AOF)
+
+```toml
+[persistence]
+enabled = true
+mode = "aof"
+data_dir = "/var/lib/frogdb"
+aof_fsync = "everysec"
+```
+
+Every write operation is appended to a log file. Higher durability but more disk I/O.
+
+**AOF fsync policies:**
+
+| Policy | Description | Durability | Performance |
+|--------|-------------|------------|-------------|
+| `always` | Sync after every write | Highest | Lowest |
+| `everysec` | Sync once per second | High | Good |
+| `no` | Let OS decide | Lowest | Highest |
+
+### Hybrid (Recommended for Production)
+
+```toml
+[persistence]
+enabled = true
+mode = "hybrid"
+data_dir = "/var/lib/frogdb"
+snapshot_interval = "5m"
+aof_fsync = "everysec"
+```
+
+Combines periodic snapshots with AOF for fast recovery and high durability:
+
+1. Snapshots provide fast recovery baseline
+2. AOF captures writes since last snapshot
+3. On startup, load snapshot then replay AOF
+
+## Data Directory Structure
+
+```
+/var/lib/frogdb/
+├── db/                    # RocksDB data files
+│   ├── 000001.sst
+│   ├── CURRENT
+│   ├── MANIFEST-000001
+│   └── ...
+├── aof/                   # AOF files (if enabled)
+│   └── appendonly.aof
+└── snapshots/             # Periodic snapshots
+    ├── snapshot-1704067200.rdb
+    └── snapshot-1704067500.rdb
+```
+
+## Manual Snapshot
+
+Force an immediate snapshot:
+
+```redis
+BGSAVE
+```
+
+Check snapshot status:
+
+```redis
+LASTSAVE
+# (integer) 1704067500
+
+INFO persistence
+# persistence_enabled:true
+# persistence_mode:hybrid
+# last_save_time:1704067500
+# aof_current_size:1048576
+```
+
+## Recovery Process
+
+On startup, FrogDB recovers data in this order:
+
+1. **Load latest snapshot** — Fast bulk restore
+2. **Replay AOF** — Apply writes since snapshot
+3. **Ready to serve** — Accept new connections
+
+Recovery time depends on data size and AOF length.
+
+## Durability Guarantees
+
+| Mode | Data Loss Window | Recovery Speed |
+|------|------------------|----------------|
+| None | All data | Instant (empty) |
+| Periodic | Up to snapshot_interval | Fast |
+| AOF (always) | None | Slower |
+| AOF (everysec) | ~1 second | Slower |
+| Hybrid | ~1 second | Fast |
+
+## Performance Tuning
+
+### Reduce Write Amplification
+
+For write-heavy workloads:
+
+```toml
+[persistence]
+mode = "periodic"
+snapshot_interval = "15m"  # Less frequent snapshots
+```
+
+### Maximize Durability
+
+For critical data:
+
+```toml
+[persistence]
+mode = "aof"
+aof_fsync = "always"  # Sync every write
+```
+
+### Background Save Tuning
+
+Control background save behavior:
+
+```toml
+[persistence]
+# Don't block on large saves
+bgsave_no_stall = true
+
+# Compress snapshots
+snapshot_compression = true
+```
+
+## Monitoring Persistence
+
+```redis
+INFO persistence
+```
+
+Key metrics to monitor:
+
+- `last_save_time` — Unix timestamp of last successful save
+- `aof_current_size` — Current AOF file size
+- `rdb_bgsave_in_progress` — Whether a background save is running
+- `rdb_last_bgsave_status` — Status of last background save
+
+## Next Steps
+
+- [Backup & Restore](/operations/backup-restore/) — Backup strategies
+- [Replication](/guides/replication/) — Replicate data for high availability
+- [Monitoring](/operations/monitoring/) — Monitor persistence health

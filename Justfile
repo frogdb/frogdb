@@ -406,3 +406,23 @@ just jepsen-leader-election-partition --time-limit 60
 just jepsen-key-routing-kill --time-limit 60
 just jepsen-slot-migration-partition --time-limit 90
 just jepsen-raft-chaos --time-limit 120
+
+# =============================================================================
+# Documentation Site
+# =============================================================================
+
+# Install documentation site dependencies
+docs-install:
+    cd docs-site && bun install
+
+# Run documentation site development server
+docs-dev:
+    cd docs-site && bun run dev
+
+# Build documentation site for production
+docs-build:
+    cd docs-site && bun run build
+
+# Preview production build of documentation site
+docs-preview:
+    cd docs-site && bun run preview
