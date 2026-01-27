@@ -11,6 +11,7 @@ use frogdb_core::{
 use frogdb_metrics::{metric_names, SharedTracer};
 
 use crate::config::TracingConfig;
+use crate::replication::PrimaryReplicationHandler;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
@@ -120,6 +121,9 @@ pub struct Acceptor {
 
     /// Optional network factory for cluster node management.
     network_factory: Option<Arc<ClusterNetworkFactory>>,
+
+    /// Optional primary replication handler for PSYNC connection handoff.
+    primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
 }
 
 impl Acceptor {
@@ -150,6 +154,7 @@ impl Acceptor {
         band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
         raft: Option<Arc<ClusterRaft>>,
         network_factory: Option<Arc<ClusterNetworkFactory>>,
+        primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         Self {
@@ -179,6 +184,7 @@ impl Acceptor {
             band_tracker,
             raft,
             network_factory,
+            primary_replication_handler,
         }
     }
 
@@ -238,6 +244,7 @@ impl Acceptor {
                     let band_tracker = self.band_tracker.clone();
                     let raft = self.raft.clone();
                     let network_factory = self.network_factory.clone();
+                    let primary_replication_handler = self.primary_replication_handler.clone();
 
                     spawn(async move {
                         let handler = ConnectionHandler::new(
@@ -269,6 +276,7 @@ impl Acceptor {
                             band_tracker,
                             raft,
                             network_factory,
+                            primary_replication_handler,
                         );
 
                         if let Err(e) = handler.run().await {

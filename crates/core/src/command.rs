@@ -73,6 +73,8 @@ pub enum ConnectionLevelOp {
     Auth,
     /// Connection state: ASKING, READONLY, READWRITE, QUIT, RESET.
     ConnectionState,
+    /// Replication: PSYNC - requires connection takeover.
+    Replication,
 }
 
 /// Strategy for merging results from scatter-gather operations.

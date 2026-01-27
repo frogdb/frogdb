@@ -154,6 +154,10 @@ pub struct Server {
 
     /// Optional replica frame receiver (only when running as replica).
     replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>>,
+
+    /// Optional primary replication handler (only when running as primary).
+    /// Used for PSYNC connection handoff.
+    primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
 }
 
 impl Server {
@@ -344,6 +348,7 @@ impl Server {
         // Create replication broadcaster, tracker, and replica handler
         let mut replica_handler: Option<Arc<ReplicaReplicationHandler>> = None;
         let mut replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>> = None;
+        let mut primary_replication_handler: Option<Arc<PrimaryReplicationHandler>> = None;
 
         let (replication_broadcaster, replication_tracker): (SharedBroadcaster, Option<Arc<ReplicationTrackerImpl>>) =
             if config.replication.is_primary() {
@@ -367,6 +372,9 @@ impl Server {
                     rocks_store.clone(),
                     config.persistence.data_dir.clone(),
                 ));
+
+                // Store a reference for PSYNC connection handoff
+                primary_replication_handler = Some(handler.clone());
 
                 (handler as SharedBroadcaster, Some(tracker))
             } else if config.replication.is_replica() {
@@ -752,6 +760,7 @@ impl Server {
             failure_detector_handle,
             replica_handler,
             replica_frame_rx,
+            primary_replication_handler,
         })
     }
 
@@ -1093,6 +1102,7 @@ impl Server {
             self.band_tracker.clone(),
             self.raft.clone(),
             self.network_factory.clone(),
+            self.primary_replication_handler.clone(),
         );
 
         // Spawn main acceptor task
@@ -1129,6 +1139,7 @@ impl Server {
                 self.band_tracker.clone(),
                 self.raft.clone(),
                 self.network_factory.clone(),
+                self.primary_replication_handler.clone(),
             );
 
             Some(spawn(async move {

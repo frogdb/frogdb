@@ -70,6 +70,7 @@ use tracing::{debug, info, trace, warn};
 use crate::config::TracingConfig;
 use crate::migrate::{MigrateArgs, MigrateClient, MigrateError};
 use crate::net::TcpStream;
+use crate::replication::PrimaryReplicationHandler;
 use crate::runtime_config::ConfigManager;
 use crate::scatter::{strategy_for_op, ScatterGatherExecutor};
 use crate::server::next_txid;
@@ -430,6 +431,13 @@ pub struct ConnectionHandler {
 
     /// Optional network factory for cluster node management.
     network_factory: Option<Arc<ClusterNetworkFactory>>,
+
+    /// Optional primary replication handler for PSYNC connection handoff.
+    primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
+
+    /// Pending PSYNC handoff parameters (replication_id, offset).
+    /// Set when PSYNC command returns PSYNC_HANDOFF, processed after the loop.
+    pending_psync_handoff: Option<(String, i64)>,
 }
 
 /// Determine key access type from command flags.
@@ -808,6 +816,8 @@ impl ConnectionHandler {
             band_tracker: observability.band_tracker,
             raft: cluster.raft,
             network_factory: cluster.network_factory,
+            primary_replication_handler: cluster.primary_replication_handler,
+            pending_psync_handoff: None,
         }
     }
 
@@ -844,6 +854,7 @@ impl ConnectionHandler {
         band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
         raft: Option<Arc<ClusterRaft>>,
         network_factory: Option<Arc<ClusterNetworkFactory>>,
+        primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
     ) -> Self {
         // Convert to grouped dependencies and delegate
         let core = CoreDeps {
@@ -864,6 +875,7 @@ impl ConnectionHandler {
             raft,
             network_factory,
             replication_tracker,
+            primary_replication_handler,
         };
         let config = ConnectionConfig {
             num_shards,
@@ -1016,6 +1028,21 @@ impl ConnectionHandler {
                     // Route and execute (with transaction and pub/sub handling)
                     let responses = self.route_and_execute_with_transaction(&cmd).await;
 
+                    // Check for PSYNC_HANDOFF signal - this requires special handling
+                    // because we need to hand off the TCP connection to the replication handler
+                    if let Some(handoff_params) = Self::extract_psync_handoff(&responses) {
+                        info!(
+                            conn_id = self.state.id,
+                            addr = %self.state.addr,
+                            replication_id = %handoff_params.0,
+                            offset = handoff_params.1,
+                            "PSYNC handoff requested - will transfer connection to replication handler"
+                        );
+                        // Store params for handoff after the loop (where we have ownership of self)
+                        self.pending_psync_handoff = Some(handoff_params);
+                        break;
+                    }
+
                     // Calculate elapsed time in microseconds for slowlog
                     let elapsed_us = start_time.elapsed().as_micros() as u64;
 
@@ -1074,6 +1101,66 @@ impl ConnectionHandler {
             }
         }
 
+        // Check if we need to do PSYNC handoff
+        if let Some((replication_id, offset)) = self.pending_psync_handoff.take() {
+            info!(
+                conn_id = self.state.id,
+                addr = %self.state.addr,
+                replication_id = %replication_id,
+                offset = offset,
+                "Performing PSYNC handoff"
+            );
+
+            // Get the primary replication handler
+            if let Some(ref handler) = self.primary_replication_handler {
+                // Extract the raw TcpStream from the Framed codec.
+                // into_inner() consumes the Framed and returns the underlying stream.
+                // crate::net::TcpStream is tokio::net::TcpStream (or turmoil::net::TcpStream in tests)
+                let stream = self.framed.into_inner();
+
+                // Call the replication handler - this takes over the connection
+                // Note: PrimaryReplicationHandler uses tokio::net::TcpStream directly.
+                // In production (non-turmoil), crate::net::TcpStream IS tokio::net::TcpStream.
+                // In turmoil mode, we'd need to handle this differently.
+                #[cfg(not(feature = "turmoil"))]
+                {
+                    if let Err(e) = handler.handle_psync(
+                        stream,
+                        self.state.addr,
+                        &replication_id,
+                        offset,
+                    ).await {
+                        warn!(
+                            conn_id = self.state.id,
+                            error = %e,
+                            "PSYNC handoff failed"
+                        );
+                    }
+                }
+
+                #[cfg(feature = "turmoil")]
+                {
+                    // In turmoil mode, we can't directly pass the turmoil TcpStream
+                    // to the handler which expects tokio TcpStream.
+                    // For now, log an error. A proper solution would use a trait.
+                    warn!(
+                        conn_id = self.state.id,
+                        "PSYNC handoff not supported in turmoil simulation mode"
+                    );
+                    let _ = stream; // Suppress unused warning
+                }
+            } else {
+                warn!(
+                    conn_id = self.state.id,
+                    "PSYNC handoff requested but no primary replication handler available"
+                );
+            }
+
+            // Don't run normal cleanup - replication handler has the connection
+            debug!(conn_id = self.state.id, "Connection handler finished (PSYNC handoff)");
+            return Ok(());
+        }
+
         // Cleanup: notify all shards that this connection is closed
         self.notify_connection_closed().await;
 
@@ -1104,6 +1191,47 @@ impl ConnectionHandler {
             }
         }
     }
+
+    /// Extract PSYNC_HANDOFF parameters from responses.
+    ///
+    /// The PSYNC command returns a special response array to signal that
+    /// the connection should be handed off to the replication handler:
+    /// `[PSYNC_HANDOFF, replication_id, offset]`
+    ///
+    /// Returns `Some((replication_id, offset))` if handoff is needed.
+    fn extract_psync_handoff(responses: &[Response]) -> Option<(String, i64)> {
+        if responses.len() != 1 {
+            return None;
+        }
+
+        if let Response::Array(items) = &responses[0] {
+            if items.len() >= 3 {
+                // Check for PSYNC_HANDOFF marker
+                if let Response::Simple(marker) = &items[0] {
+                    if marker.as_ref() == b"PSYNC_HANDOFF" {
+                        // Extract replication_id
+                        let replication_id = match &items[1] {
+                            Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+                            _ => return None,
+                        };
+
+                        // Extract offset
+                        let offset = match &items[2] {
+                            Response::Bulk(Some(b)) => {
+                                String::from_utf8_lossy(b).parse::<i64>().ok()?
+                            }
+                            _ => return None,
+                        };
+
+                        return Some((replication_id, offset));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
 
     /// Periodically sync local stats to the registry.
     /// Syncs every STATS_SYNC_INTERVAL_COMMANDS commands or STATS_SYNC_INTERVAL_MS milliseconds.
@@ -1805,6 +1933,17 @@ impl ConnectionHandler {
         }
         if cmd_name_str == "LASTSAVE" {
             return vec![self.handle_lastsave()];
+        }
+
+        // Handle PSYNC command - validates args and returns handoff signal
+        // The actual handoff happens in the run() loop when it detects PSYNC_HANDOFF
+        if cmd_name_str == "PSYNC" {
+            // Check if we have a primary replication handler (we're running as primary)
+            if self.primary_replication_handler.is_none() {
+                return vec![Response::error("ERR PSYNC not supported - server is not running as primary")];
+            }
+            // Execute PSYNC command which will return PSYNC_HANDOFF signal
+            return vec![self.route_and_execute(cmd).await];
         }
 
         // Handle server commands that need special routing

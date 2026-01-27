@@ -7,7 +7,7 @@
 //! - WAIT: Wait for replica acknowledgments
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp, ExecutionStrategy};
 use frogdb_protocol::Response;
 
 // ============================================================================
@@ -300,6 +300,10 @@ impl Command for PsyncCommand {
         CommandFlags::ADMIN | CommandFlags::NOSCRIPT
     }
 
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Replication)
+    }
+
     fn execute(
         &self,
         _ctx: &mut CommandContext,
@@ -329,26 +333,18 @@ impl Command for PsyncCommand {
         tracing::info!(
             replication_id = %replication_id,
             offset = offset,
-            "PSYNC request"
+            "PSYNC request - returning handoff signal"
         );
 
-        // The actual PSYNC logic is handled by the replication connection handler,
-        // not in this command. This command just parses and validates.
-        //
-        // The real implementation will be in the primary replication handler which
-        // has access to the replication state and can initiate the appropriate sync type.
-        //
-        // PSYNC responses (+FULLRESYNC, +CONTINUE) bypass normal command response
-        // handling and are sent directly by the replication handler.
-
-        // Check if this is a full sync request
-        if replication_id == "?" && offset == -1 {
-            // Full sync requested - will be handled by replication handler
-            tracing::info!("Full sync requested");
-        }
-
-        // Return OK as placeholder - actual response comes from replication handler
-        Ok(Response::ok())
+        // Return a special PSYNC_HANDOFF response that signals the connection handler
+        // to hand off this connection to the PrimaryReplicationHandler.
+        // The connection handler will detect this response, extract the raw TCP stream,
+        // and call PrimaryReplicationHandler::handle_psync() with the replication_id and offset.
+        Ok(Response::Array(vec![
+            Response::Simple(Bytes::from_static(b"PSYNC_HANDOFF")),
+            Response::Bulk(Some(args[0].clone())),  // replication_id
+            Response::Bulk(Some(args[1].clone())),  // offset
+        ]))
     }
 
     fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {

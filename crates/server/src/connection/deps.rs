@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use frogdb_core::ClientRegistry;
 
 use crate::config::TracingConfig;
+use crate::replication::PrimaryReplicationHandler;
 use crate::runtime_config::ConfigManager;
 
 // ============================================================================
@@ -88,6 +89,9 @@ pub struct ClusterDeps {
 
     /// Replication tracker for WAIT command and replica acknowledgments.
     pub replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+
+    /// Primary replication handler for PSYNC command.
+    pub primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
 }
 
 impl ClusterDeps {
@@ -103,6 +107,7 @@ impl ClusterDeps {
         raft: Arc<ClusterRaft>,
         network_factory: Arc<ClusterNetworkFactory>,
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+        primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
     ) -> Self {
         Self {
             cluster_state: Some(cluster_state),
@@ -110,6 +115,7 @@ impl ClusterDeps {
             raft: Some(raft),
             network_factory: Some(network_factory),
             replication_tracker,
+            primary_replication_handler,
         }
     }
 
