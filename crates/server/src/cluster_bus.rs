@@ -10,7 +10,9 @@ use std::sync::Arc;
 use frogdb_core::cluster::{
     handle_rpc_request, parse_rpc_message, send_rpc_response, ClusterRaft,
 };
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
+
+use crate::net::tcp_listener_reusable;
 use tracing::{debug, error, info, warn};
 
 /// Run the cluster bus TCP server.
@@ -27,7 +29,7 @@ use tracing::{debug, error, info, warn};
 ///
 /// This function runs indefinitely and only returns on error.
 pub async fn run(addr: SocketAddr, raft: Arc<ClusterRaft>) -> std::io::Result<()> {
-    let listener = TcpListener::bind(addr).await?;
+    let listener = tcp_listener_reusable(addr).await?;
     info!(%addr, "Cluster bus listening");
 
     loop {
@@ -100,8 +102,8 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
 
         // We can't easily test run() without a real Raft instance,
-        // but we can verify TcpListener behavior
-        let result = TcpListener::bind(addr).await;
+        // but we can verify tcp_listener_reusable behavior
+        let result = tcp_listener_reusable(addr).await;
         // This should fail due to permission denied or address in use
         assert!(result.is_err() || cfg!(target_os = "macos")); // macOS sometimes allows this
     }

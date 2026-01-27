@@ -35,3 +35,31 @@ pub use tokio::spawn;
 
 // JoinHandle - tokio's JoinHandle works inside turmoil simulations
 pub use tokio::task::JoinHandle;
+
+use std::net::SocketAddr;
+
+/// Creates a TcpListener with SO_REUSEADDR enabled.
+/// This allows rebinding to ports in TIME_WAIT state, which is essential
+/// for rapid server restarts in tests and production deployments.
+#[cfg(not(feature = "turmoil"))]
+pub async fn tcp_listener_reusable(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(1024)?;
+    TcpListener::from_std(socket.into())
+}
+
+/// Turmoil doesn't need SO_REUSEADDR - use regular bind.
+#[cfg(feature = "turmoil")]
+pub async fn tcp_listener_reusable(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    TcpListener::bind(addr).await
+}

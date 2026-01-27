@@ -42,6 +42,7 @@ openraft.workspace = true
 axum.workspace = true
 tower.workspace = true
 schemars.workspace = true
+socket2 = "0.5"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
