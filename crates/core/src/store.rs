@@ -128,13 +128,41 @@ pub trait Store: Send {
     fn get_mut(&mut self, key: &[u8]) -> Option<&mut Value>;
 
     /// Access the expiry index directly (for active expiry).
+    ///
+    /// **Deprecated**: Use `get_expired_keys()` and `keys_with_expiry_count()` instead.
+    /// This method leaks internal implementation details.
+    #[deprecated(since = "0.2.0", note = "use get_expired_keys() or keys_with_expiry_count() instead")]
     fn expiry_index(&self) -> Option<&ExpiryIndex> {
         None
     }
 
     /// Access the expiry index mutably (for active expiry cleanup).
+    ///
+    /// **Deprecated**: Use `get_expired_keys()` instead.
+    /// This method leaks internal implementation details.
+    #[deprecated(since = "0.2.0", note = "use get_expired_keys() instead")]
     fn expiry_index_mut(&mut self) -> Option<&mut ExpiryIndex> {
         None
+    }
+
+    // ========================================================================
+    // Cleaner expiry abstraction (Phase 5.2)
+    // ========================================================================
+
+    /// Get all keys that have expired at or before `now`.
+    ///
+    /// Returns keys in expiration order (oldest first). This method provides
+    /// a cleaner interface than direct expiry_index access for active expiry.
+    fn get_expired_keys(&self, now: std::time::Instant) -> Vec<Bytes> {
+        let _ = now;
+        vec![]
+    }
+
+    /// Get the count of keys that have an expiry (TTL) set.
+    ///
+    /// Used for metrics reporting.
+    fn keys_with_expiry_count(&self) -> usize {
+        0
     }
 
     // ========================================================================
@@ -579,12 +607,22 @@ impl Store for HashMapStore {
         })
     }
 
+    #[allow(deprecated)]
     fn expiry_index(&self) -> Option<&ExpiryIndex> {
         Some(&self.expiry_index)
     }
 
+    #[allow(deprecated)]
     fn expiry_index_mut(&mut self) -> Option<&mut ExpiryIndex> {
         Some(&mut self.expiry_index)
+    }
+
+    fn get_expired_keys(&self, now: std::time::Instant) -> Vec<Bytes> {
+        self.expiry_index.get_expired(now)
+    }
+
+    fn keys_with_expiry_count(&self) -> usize {
+        self.expiry_index.len()
     }
 
     // ========================================================================
