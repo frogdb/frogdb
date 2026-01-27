@@ -5074,9 +5074,10 @@ impl ConnectionHandler {
             Ok(Ok(partial)) => {
                 // Return the random key (or null if shard is now empty)
                 if let Some((_, response)) = partial.results.into_iter().next() {
-                    return response;
+                    response
+                } else {
+                    Response::null()
                 }
-                Response::null()
             }
             Ok(Err(_)) => {
                 warn!(selected_shard, "Shard dropped RANDOMKEY request");
