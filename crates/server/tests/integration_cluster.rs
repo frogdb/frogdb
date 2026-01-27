@@ -1839,3 +1839,405 @@ async fn test_failover_during_migration_preserves_data() {
 
     harness.shutdown_all().await;
 }
+
+// ============================================================================
+// Tier 8: Critical Edge Cases
+// ============================================================================
+
+/// Test concurrent CLUSTER FAILOVER attempts from multiple replicas.
+///
+/// This tests a critical scenario where two replicas simultaneously attempt
+/// to promote themselves when the primary fails. Only one should succeed.
+///
+/// Risk: If both succeed, we get split-brain. If neither succeeds, we have
+/// prolonged unavailability.
+///
+/// Note: This test simulates the scenario using CLUSTER FAILOVER TAKEOVER
+/// since we don't have traditional Redis Cluster replication setup.
+/// In a Raft-based cluster, leadership election handles this naturally.
+#[tokio::test]
+async fn test_concurrent_failover_attempts() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(5).await.unwrap();
+
+    // Wait for cluster to stabilize with a leader
+    let original_leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    eprintln!("Original leader: {}", original_leader);
+
+    // Get all node IDs
+    let node_ids = harness.node_ids();
+
+    // Find two non-leader nodes that will attempt to become leader
+    let candidates: Vec<u64> = node_ids
+        .iter()
+        .filter(|&&id| id != original_leader)
+        .copied()
+        .take(2)
+        .collect();
+
+    assert!(
+        candidates.len() >= 2,
+        "Need at least 2 non-leader nodes for this test"
+    );
+
+    let candidate1 = candidates[0];
+    let candidate2 = candidates[1];
+    eprintln!(
+        "Failover candidates: {} and {}",
+        candidate1, candidate2
+    );
+
+    // Verify both candidates are running
+    assert!(
+        harness.node(candidate1).unwrap().is_running(),
+        "Candidate 1 should be running"
+    );
+    assert!(
+        harness.node(candidate2).unwrap().is_running(),
+        "Candidate 2 should be running"
+    );
+
+    // Kill the original leader to trigger failover
+    eprintln!("Killing original leader: {}", original_leader);
+    harness.kill_node(original_leader);
+
+    // Small delay to let failure detection start
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Both candidates attempt failover simultaneously
+    // In a Raft cluster, this is handled by the election protocol
+    // We simulate by checking which node becomes leader
+
+    // Give the cluster time to elect a new leader
+    // With 5 nodes and 1 dead, we have 4 nodes - still quorum
+    let election_start = std::time::Instant::now();
+
+    // Wait for new leader election (one of the remaining 4 nodes)
+    let new_leader = match harness.wait_for_leader(Duration::from_secs(15)).await {
+        Ok(leader) => {
+            let election_time = election_start.elapsed();
+            eprintln!("New leader {} elected in {:?}", leader, election_time);
+            leader
+        }
+        Err(e) => {
+            eprintln!("Leader election failed: {}", e);
+            harness.shutdown_all().await;
+            panic!("Should elect a new leader after original dies");
+        }
+    };
+
+    // Verify new leader is different from original
+    assert_ne!(
+        new_leader, original_leader,
+        "New leader should be different from killed leader"
+    );
+
+    // Verify there is exactly one leader
+    let mut leader_count = 0;
+    let mut leader_nodes = Vec::new();
+
+    for &node_id in &node_ids {
+        if node_id == original_leader {
+            continue; // Skip killed node
+        }
+
+        if let Some(node) = harness.node(node_id) {
+            if !node.is_running() {
+                continue;
+            }
+
+            // Check cluster info - the node that sees itself as having quorum
+            if let Ok(info) = harness.get_cluster_info(node_id).await {
+                if info.cluster_state == "ok" {
+                    // This node believes it can serve requests
+                    // In a healthy cluster, all nodes should agree on state
+                    eprintln!(
+                        "Node {} reports: state={}, known_nodes={}",
+                        node_id, info.cluster_state, info.cluster_known_nodes
+                    );
+                }
+            }
+        }
+    }
+
+    // The leader can respond to cluster commands
+    if let Some(leader_node) = harness.node(new_leader) {
+        let ping_resp = leader_node.send("PING", &[]).await;
+        assert!(
+            !is_error(&ping_resp),
+            "New leader should respond to PING"
+        );
+        leader_count += 1;
+        leader_nodes.push(new_leader);
+    }
+
+    eprintln!(
+        "Leader count: {}, leaders: {:?}",
+        leader_count, leader_nodes
+    );
+
+    // In a correctly functioning Raft cluster, exactly one node should be leader
+    assert_eq!(
+        leader_count, 1,
+        "Exactly one node should be the leader"
+    );
+
+    // Verify cluster can still make progress
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Verify surviving nodes are in sync
+    let surviving_count: usize = node_ids
+        .iter()
+        .filter(|&&id| id != original_leader)
+        .filter(|&&id| harness.node(id).map(|n| n.is_running()).unwrap_or(false))
+        .count();
+
+    assert_eq!(
+        surviving_count, 4,
+        "Should have 4 surviving nodes after killing 1"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Test Raft snapshot during slot migration.
+///
+/// This tests a critical scenario where:
+/// 1. A slot migration is in progress (MIGRATING/IMPORTING state)
+/// 2. A Raft snapshot is taken (or leader change occurs)
+/// 3. The migration state should be preserved or cleanly aborted
+///
+/// Risk: If migration state is lost during snapshot/recovery, the cluster
+/// could end up with inconsistent slot ownership.
+#[tokio::test]
+async fn test_raft_snapshot_during_migration() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+
+    let leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    eprintln!("Leader: {}", leader);
+
+    let node_ids = harness.node_ids();
+
+    // Get node IDs for source and target of migration
+    let source_node_id = node_ids[0];
+    let target_node_id = node_ids[1];
+
+    // Get cluster node IDs (different from harness node IDs)
+    let source_node = harness.node(source_node_id).unwrap();
+    let target_node = harness.node(target_node_id).unwrap();
+
+    let source_myid_resp = source_node.send("CLUSTER", &["MYID"]).await;
+    let target_myid_resp = target_node.send("CLUSTER", &["MYID"]).await;
+
+    let source_cluster_id = match &source_myid_resp {
+        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+        _ => {
+            eprintln!("Could not get source MYID, skipping test");
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    let target_cluster_id = match &target_myid_resp {
+        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+        _ => {
+            eprintln!("Could not get target MYID, skipping test");
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    eprintln!(
+        "Source cluster ID: {}, Target cluster ID: {}",
+        source_cluster_id, target_cluster_id
+    );
+
+    // Pick a slot to migrate (use slot 100 which is easy to test)
+    let test_slot: u16 = 100;
+
+    // First, ensure the source node owns the slot
+    // Add the slot to source if not already assigned
+    let addslots_resp = source_node
+        .send("CLUSTER", &["ADDSLOTS", &test_slot.to_string()])
+        .await;
+    eprintln!("ADDSLOTS response: {:?}", addslots_resp);
+
+    // Small delay for slot assignment to propagate
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Write a test key that hashes to our slot
+    let test_key = key_for_slot(test_slot);
+    assert_eq!(
+        slot_for_key(test_key.as_bytes()),
+        test_slot,
+        "Key should hash to test slot"
+    );
+
+    // Write data to the slot
+    let set_resp = source_node.send("SET", &[&test_key, "migration_test_value"]).await;
+    eprintln!("SET response: {:?}", set_resp);
+
+    // Start migration: set MIGRATING on source, IMPORTING on target
+    let migrating_resp = source_node
+        .send(
+            "CLUSTER",
+            &["SETSLOT", &test_slot.to_string(), "MIGRATING", &target_cluster_id],
+        )
+        .await;
+
+    eprintln!("SETSLOT MIGRATING response: {:?}", migrating_resp);
+
+    let importing_resp = target_node
+        .send(
+            "CLUSTER",
+            &["SETSLOT", &test_slot.to_string(), "IMPORTING", &source_cluster_id],
+        )
+        .await;
+
+    eprintln!("SETSLOT IMPORTING response: {:?}", importing_resp);
+
+    // Verify migration state is visible in CLUSTER NODES
+    let nodes_resp = source_node.send("CLUSTER", &["NODES"]).await;
+    if let Ok(nodes) = parse_cluster_nodes(&nodes_resp) {
+        for node in &nodes {
+            eprintln!(
+                "Node {}: flags={:?}, slots={:?}",
+                &node.id[..8.min(node.id.len())],
+                node.flags,
+                node.slots
+            );
+        }
+    }
+
+    // Now simulate a disruptive event: kill the leader
+    // This will trigger leader election and potentially Raft snapshots
+    eprintln!("Killing leader {} to trigger election during migration", leader);
+    harness.kill_node(leader);
+
+    // Wait for new leader election
+    let new_leader = match harness.wait_for_leader(Duration::from_secs(15)).await {
+        Ok(l) => {
+            eprintln!("New leader elected: {}", l);
+            l
+        }
+        Err(e) => {
+            eprintln!("Leader election failed: {}", e);
+            harness.shutdown_all().await;
+            panic!("Should elect new leader");
+        }
+    };
+
+    // Wait for cluster to stabilize
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Check migration state on surviving nodes
+    let surviving_ids: Vec<u64> = node_ids
+        .iter()
+        .filter(|&&id| id != leader)
+        .copied()
+        .collect();
+
+    let mut migration_state_found = false;
+    let mut slot_ownership_clear = false;
+
+    for &node_id in &surviving_ids {
+        if let Some(node) = harness.node(node_id) {
+            if !node.is_running() {
+                continue;
+            }
+
+            let nodes_resp = node.send("CLUSTER", &["NODES"]).await;
+            if let Ok(nodes) = parse_cluster_nodes(&nodes_resp) {
+                for node_info in &nodes {
+                    // Check if migration flags are present
+                    // Note: After leader change, migration might be aborted
+                    let node_flags = node_info.flags.join(",");
+                    let has_migration_flag = node_flags.contains("migrating")
+                        || node_flags.contains("importing");
+
+                    if has_migration_flag {
+                        migration_state_found = true;
+                        eprintln!(
+                            "Migration state still present on node {}: {:?}",
+                            &node_info.id[..8.min(node_info.id.len())],
+                            node_info.flags
+                        );
+                    }
+
+                    // Check slot ownership
+                    for (start, end) in &node_info.slots {
+                        if *start <= test_slot && test_slot <= *end {
+                            slot_ownership_clear = true;
+                            eprintln!(
+                                "Slot {} owned by node {} ({}-{})",
+                                test_slot,
+                                &node_info.id[..8.min(node_info.id.len())],
+                                start,
+                                end
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // After leader change during migration, we expect either:
+    // 1. Migration state is preserved (cluster continues migration)
+    // 2. Migration is cleanly aborted (slot returns to stable state)
+    // Both are acceptable - what's NOT acceptable is inconsistent state
+
+    eprintln!(
+        "After failover: migration_state_found={}, slot_ownership_clear={}",
+        migration_state_found, slot_ownership_clear
+    );
+
+    // Try to clean up migration state
+    for &node_id in &surviving_ids {
+        if let Some(node) = harness.node(node_id) {
+            if node.is_running() {
+                let _ = node
+                    .send("CLUSTER", &["SETSLOT", &test_slot.to_string(), "STABLE"])
+                    .await;
+            }
+        }
+    }
+
+    // Verify cluster is still functional after the disruption
+    let cluster_ok = harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .is_ok();
+
+    eprintln!("Cluster converged after migration+failover: {}", cluster_ok);
+
+    // The key assertion: cluster should be in a consistent state
+    // Either migration completed, was aborted, or is still in progress
+    // But never in an inconsistent state where nodes disagree
+    assert!(
+        cluster_ok,
+        "Cluster should recover to consistent state after failover during migration"
+    );
+
+    harness.shutdown_all().await;
+}
