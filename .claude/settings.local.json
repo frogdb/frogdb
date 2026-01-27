@@ -56,7 +56,9 @@
       "Bash(lein run:*)",
       "Bash(lein repl:*)",
       "Bash(time cross build:*)",
-      "Bash(cargo install:*)"
+      "Bash(cargo install:*)",
+      "Bash(time just jepsen-build:*)",
+      "Bash(time just jepsen-register:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
