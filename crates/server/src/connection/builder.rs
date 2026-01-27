@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 
 use crate::config::TracingConfig;
 use crate::net::TcpStream;
+use crate::replication::PrimaryReplicationHandler;
 use crate::runtime_config::ConfigManager;
 
 use super::{
@@ -110,6 +111,7 @@ impl ConnectionHandlerBuilder {
         raft: Arc<ClusterRaft>,
         network_factory: Arc<ClusterNetworkFactory>,
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+        primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
     ) -> Self {
         self.cluster = ClusterDeps::cluster(
             cluster_state,
@@ -117,6 +119,7 @@ impl ConnectionHandlerBuilder {
             raft,
             network_factory,
             replication_tracker,
+            primary_replication_handler,
         );
         self
     }
