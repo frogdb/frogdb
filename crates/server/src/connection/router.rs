@@ -84,6 +84,8 @@ pub enum ConnectionLevelHandler {
     ConnectionState,
     /// Cluster commands.
     Cluster,
+    /// Replication commands (PSYNC, REPLCONF, etc.).
+    Replication,
 }
 
 /// Strategy for scatter-gather operations.
@@ -204,6 +206,7 @@ impl CommandRouter {
             ConnectionLevelOp::Scripting => ConnectionLevelHandler::Scripting,
             ConnectionLevelOp::Admin => ConnectionLevelHandler::Client,
             ConnectionLevelOp::ConnectionState => ConnectionLevelHandler::ConnectionState,
+            ConnectionLevelOp::Replication => ConnectionLevelHandler::Replication,
         }
     }
 

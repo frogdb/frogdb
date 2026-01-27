@@ -1199,6 +1199,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "frogdb-metrics"
 version = "0.1.0"
 dependencies = [
@@ -1257,6 +1266,7 @@ dependencies = [
  "crc16",
  "figment",
  "frogdb-core",
+ "frogdb-macros",
  "frogdb-metrics",
  "frogdb-protocol",
  "frogdb-testing",

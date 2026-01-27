@@ -561,6 +561,38 @@ impl<'a> CommandContext<'a> {
         self.replication_tracker.is_some()
     }
 
+    /// Get cluster context, returning an error if not in cluster mode.
+    ///
+    /// Use this when a command requires cluster mode to execute.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let cluster = ctx.require_cluster()?;
+    /// let node_id = cluster.node_id;
+    /// ```
+    #[inline]
+    pub fn require_cluster(&self) -> Result<ClusterContextRef<'_>, CommandError> {
+        self.cluster_context()
+            .ok_or(CommandError::ClusterDisabled)
+    }
+
+    /// Get replication context, returning an error if replication is not enabled.
+    ///
+    /// Use this when a command requires replication to execute.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let repl = ctx.require_replication()?;
+    /// let offset = repl.tracker.current_offset();
+    /// ```
+    #[inline]
+    pub fn require_replication(&self) -> Result<ReplicationContextRef<'_>, CommandError> {
+        self.replication_context()
+            .ok_or(CommandError::ReplicationDisabled)
+    }
+
     /// Get or create a value of a specific type.
     ///
     /// If the key doesn't exist, creates a new default value of type `T`.
