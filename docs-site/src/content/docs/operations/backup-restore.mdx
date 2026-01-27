@@ -1,0 +1,301 @@
+---
+title: Backup & Restore
+description: Backup strategies and data recovery procedures
+---
+
+Protecting your data requires regular backups and tested restore procedures.
+
+## Backup Methods
+
+### Method 1: BGSAVE (Recommended)
+
+Create a point-in-time snapshot without blocking operations:
+
+```redis
+BGSAVE
+```
+
+The snapshot is saved to the configured data directory. Check status:
+
+```redis
+LASTSAVE
+# (integer) 1704067500
+
+INFO persistence
+# rdb_bgsave_in_progress:0
+# rdb_last_bgsave_status:ok
+```
+
+**Copy the snapshot:**
+
+```bash
+# After BGSAVE completes
+cp /var/lib/frogdb/dump.rdb /backup/frogdb-$(date +%Y%m%d-%H%M%S).rdb
+```
+
+### Method 2: SAVE (Blocking)
+
+Creates an immediate snapshot but blocks all operations:
+
+```redis
+SAVE
+```
+
+Only use for small datasets or during maintenance windows.
+
+### Method 3: File System Snapshot
+
+If using a file system or storage system with snapshot capabilities:
+
+```bash
+# Pause writes temporarily
+redis-cli DEBUG SLEEP 1
+
+# Take filesystem snapshot
+zfs snapshot tank/frogdb@backup-$(date +%Y%m%d)
+
+# Or for cloud volumes
+aws ec2 create-snapshot --volume-id vol-xxx
+```
+
+### Method 4: Replication-Based Backup
+
+Use a replica dedicated to backups:
+
+```
+Primary ──▶ Backup Replica ──▶ Backup Storage
+```
+
+Run backups on the replica to avoid impacting the primary:
+
+```bash
+# On backup replica
+redis-cli BGSAVE
+cp /var/lib/frogdb/dump.rdb /backup/
+```
+
+## Automated Backup Script
+
+```bash
+#!/bin/bash
+# backup_frogdb.sh
+
+BACKUP_DIR="/backup/frogdb"
+DATA_DIR="/var/lib/frogdb"
+RETENTION_DAYS=7
+HOST="localhost"
+PORT="6379"
+
+# Create backup directory
+mkdir -p "$BACKUP_DIR"
+
+# Trigger background save
+redis-cli -h "$HOST" -p "$PORT" BGSAVE
+
+# Wait for save to complete
+while [ "$(redis-cli -h "$HOST" -p "$PORT" LASTSAVE)" == "$(redis-cli -h "$HOST" -p "$PORT" LASTSAVE)" ]; do
+  sleep 1
+done
+
+# Copy snapshot with timestamp
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+cp "$DATA_DIR/dump.rdb" "$BACKUP_DIR/frogdb-$TIMESTAMP.rdb"
+
+# Also backup AOF if exists
+if [ -f "$DATA_DIR/appendonly.aof" ]; then
+  cp "$DATA_DIR/appendonly.aof" "$BACKUP_DIR/appendonly-$TIMESTAMP.aof"
+fi
+
+# Compress backup
+gzip "$BACKUP_DIR/frogdb-$TIMESTAMP.rdb"
+
+# Remove old backups
+find "$BACKUP_DIR" -name "*.rdb.gz" -mtime +$RETENTION_DAYS -delete
+find "$BACKUP_DIR" -name "*.aof" -mtime +$RETENTION_DAYS -delete
+
+echo "Backup completed: frogdb-$TIMESTAMP.rdb.gz"
+```
+
+Add to crontab:
+
+```bash
+# Daily backup at 2 AM
+0 2 * * * /usr/local/bin/backup_frogdb.sh >> /var/log/frogdb-backup.log 2>&1
+```
+
+## Cloud Backup
+
+### Upload to S3
+
+```bash
+#!/bin/bash
+# backup_to_s3.sh
+
+BUCKET="my-backups"
+PREFIX="frogdb"
+
+# Trigger and wait for BGSAVE
+redis-cli BGSAVE
+sleep 5
+
+# Upload to S3
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+aws s3 cp /var/lib/frogdb/dump.rdb "s3://$BUCKET/$PREFIX/frogdb-$TIMESTAMP.rdb"
+
+# Set lifecycle policy in S3 for retention
+```
+
+### Upload to GCS
+
+```bash
+gsutil cp /var/lib/frogdb/dump.rdb "gs://my-bucket/frogdb/backup-$(date +%Y%m%d).rdb"
+```
+
+## Restore Procedures
+
+### Restore from RDB Snapshot
+
+1. **Stop FrogDB:**
+   ```bash
+   sudo systemctl stop frogdb
+   ```
+
+2. **Replace data files:**
+   ```bash
+   # Backup current data (just in case)
+   mv /var/lib/frogdb/dump.rdb /var/lib/frogdb/dump.rdb.old
+
+   # Restore from backup
+   gunzip -c /backup/frogdb-20240101-020000.rdb.gz > /var/lib/frogdb/dump.rdb
+
+   # Set correct permissions
+   chown frogdb:frogdb /var/lib/frogdb/dump.rdb
+   ```
+
+3. **Start FrogDB:**
+   ```bash
+   sudo systemctl start frogdb
+   ```
+
+4. **Verify restore:**
+   ```redis
+   INFO keyspace
+   # Verify expected key counts
+   ```
+
+### Restore from AOF
+
+If you have AOF backups:
+
+```bash
+# Stop FrogDB
+sudo systemctl stop frogdb
+
+# Replace AOF file
+cp /backup/appendonly-20240101.aof /var/lib/frogdb/appendonly.aof
+chown frogdb:frogdb /var/lib/frogdb/appendonly.aof
+
+# Start FrogDB (will replay AOF)
+sudo systemctl start frogdb
+```
+
+### Point-in-Time Recovery
+
+With hybrid persistence (snapshots + AOF):
+
+1. Restore the snapshot closest to your target time
+2. Replay AOF entries up to the desired point
+
+```bash
+# Restore base snapshot
+cp /backup/frogdb-20240101-020000.rdb /var/lib/frogdb/dump.rdb
+
+# Truncate AOF to specific timestamp (requires custom tooling)
+frogdb-aof-tool truncate --timestamp 1704067500 < /backup/appendonly.aof > /var/lib/frogdb/appendonly.aof
+```
+
+## Backup Verification
+
+Always verify backups are restorable:
+
+```bash
+#!/bin/bash
+# verify_backup.sh
+
+BACKUP_FILE=$1
+VERIFY_PORT=6390
+VERIFY_DIR="/tmp/frogdb-verify"
+
+mkdir -p "$VERIFY_DIR"
+gunzip -c "$BACKUP_FILE" > "$VERIFY_DIR/dump.rdb"
+
+# Start temporary instance
+frogdb-server \
+  --port $VERIFY_PORT \
+  --data-dir "$VERIFY_DIR" \
+  --daemonize yes
+
+sleep 5
+
+# Verify data
+KEYS=$(redis-cli -p $VERIFY_PORT DBSIZE)
+echo "Backup contains $KEYS keys"
+
+# Check specific keys if known
+redis-cli -p $VERIFY_PORT GET "health:check" || true
+
+# Cleanup
+redis-cli -p $VERIFY_PORT SHUTDOWN NOSAVE
+rm -rf "$VERIFY_DIR"
+
+echo "Backup verification complete"
+```
+
+## Disaster Recovery
+
+### Recovery Time Objective (RTO)
+
+Plan for recovery time based on data size:
+
+| Data Size | Approximate Recovery Time |
+|-----------|---------------------------|
+| 1 GB | 1-2 minutes |
+| 10 GB | 5-10 minutes |
+| 100 GB | 30-60 minutes |
+
+### Recovery Point Objective (RPO)
+
+| Persistence Mode | Maximum Data Loss |
+|------------------|-------------------|
+| None | All data |
+| Periodic (5m) | Up to 5 minutes |
+| AOF (everysec) | ~1 second |
+| AOF (always) | ~0 |
+
+### Runbook
+
+1. **Detect failure** — Monitoring alerts
+2. **Assess damage** — Check logs, disk state
+3. **Decide recovery path:**
+   - Restart if recoverable
+   - Restore from replica if available
+   - Restore from backup if necessary
+4. **Restore data** — Follow restore procedure
+5. **Verify integrity** — Check key counts, sample data
+6. **Resume traffic** — Update DNS/load balancer
+7. **Post-mortem** — Document and improve
+
+## Best Practices
+
+1. **Test restores regularly** — Untested backups aren't backups
+2. **Store backups off-site** — Different region/provider
+3. **Encrypt sensitive data** — Use GPG or cloud encryption
+4. **Monitor backup success** — Alert on failures
+5. **Document procedures** — Runbooks for recovery
+6. **Use replicas for backups** — Don't impact production
+
+## Next Steps
+
+- [Monitoring](/operations/monitoring/) — Monitor backup health
+- [Deployment](/operations/deployment/) — HA deployment patterns
+- [Troubleshooting](/operations/troubleshooting/) — Debug backup issues

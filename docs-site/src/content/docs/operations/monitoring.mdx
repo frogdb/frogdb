@@ -1,0 +1,339 @@
+---
+title: Monitoring
+description: Monitor FrogDB health, performance, and operations
+---
+
+FrogDB provides built-in monitoring capabilities through the `INFO` command and can integrate with external monitoring systems.
+
+## INFO Command
+
+The primary monitoring interface:
+
+```redis
+INFO
+# Returns all sections
+
+INFO server
+# Server-specific information
+
+INFO memory
+# Memory usage details
+
+INFO stats
+# Operation statistics
+```
+
+### Available Sections
+
+| Section | Description |
+|---------|-------------|
+| `server` | General server information |
+| `clients` | Connected client stats |
+| `memory` | Memory usage |
+| `persistence` | RDB and AOF status |
+| `stats` | General statistics |
+| `replication` | Primary/replica info |
+| `cluster` | Cluster state (if enabled) |
+| `keyspace` | Database key statistics |
+
+## Key Metrics
+
+### Server Health
+
+```redis
+INFO server
+# frogdb_version:1.0.0
+# uptime_in_seconds:86400
+# uptime_in_days:1
+# process_id:1234
+```
+
+**Monitor:**
+- `uptime_in_seconds` — Detect unexpected restarts
+
+### Memory
+
+```redis
+INFO memory
+# used_memory:1073741824
+# used_memory_human:1.00G
+# used_memory_peak:1073741824
+# used_memory_peak_human:1.00G
+# maxmemory:4294967296
+# maxmemory_human:4.00G
+# maxmemory_policy:allkeys-lru
+# mem_fragmentation_ratio:1.02
+```
+
+**Monitor:**
+- `used_memory` — Current memory usage
+- `maxmemory` — Configured limit
+- `mem_fragmentation_ratio` — Memory fragmentation (1.0-1.5 is normal)
+
+**Alert when:**
+- `used_memory` > 90% of `maxmemory`
+- `mem_fragmentation_ratio` > 1.5
+
+### Clients
+
+```redis
+INFO clients
+# connected_clients:42
+# blocked_clients:0
+# tracking_clients:0
+# clients_in_timeout_table:0
+```
+
+**Monitor:**
+- `connected_clients` — Active connections
+- `blocked_clients` — Clients blocked on BLPOP/BRPOP
+
+**Alert when:**
+- `connected_clients` approaches `maxclients`
+- `blocked_clients` increases unexpectedly
+
+### Operations
+
+```redis
+INFO stats
+# total_connections_received:10000
+# total_commands_processed:1000000
+# instantaneous_ops_per_sec:1500
+# rejected_connections:0
+# expired_keys:5000
+# evicted_keys:100
+# keyspace_hits:900000
+# keyspace_misses:100000
+```
+
+**Key metrics:**
+- `instantaneous_ops_per_sec` — Current throughput
+- `keyspace_hits` / `keyspace_misses` — Cache hit ratio
+- `evicted_keys` — Keys evicted due to memory pressure
+
+**Calculate hit ratio:**
+```
+hit_ratio = keyspace_hits / (keyspace_hits + keyspace_misses)
+```
+
+### Persistence
+
+```redis
+INFO persistence
+# rdb_bgsave_in_progress:0
+# rdb_last_save_time:1704067500
+# rdb_last_bgsave_status:ok
+# aof_enabled:1
+# aof_current_size:10485760
+# aof_pending_rewrite:0
+```
+
+**Monitor:**
+- `rdb_last_bgsave_status` — Should be `ok`
+- `rdb_last_save_time` — Time since last save
+
+**Alert when:**
+- `rdb_last_bgsave_status` is not `ok`
+- `rdb_last_save_time` is too old
+
+### Replication
+
+```redis
+INFO replication
+# role:master
+# connected_slaves:2
+# slave0:ip=192.168.1.11,port=6379,state=online,offset=12345,lag=0
+# slave1:ip=192.168.1.12,port=6379,state=online,offset=12340,lag=1
+```
+
+**Monitor:**
+- `connected_slaves` — Expected replica count
+- Replica `lag` — Replication delay in seconds
+
+**Alert when:**
+- Replica lag > threshold (e.g., 30 seconds)
+- Replica `state` is not `online`
+
+## Prometheus Integration
+
+FrogDB can export metrics in Prometheus format:
+
+```toml
+[metrics]
+prometheus_enabled = true
+prometheus_port = 9121
+```
+
+### Example Prometheus Config
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'frogdb'
+    static_configs:
+      - targets: ['frogdb:9121']
+```
+
+### Key Prometheus Metrics
+
+```
+# Memory
+frogdb_memory_used_bytes
+frogdb_memory_max_bytes
+
+# Operations
+frogdb_commands_total
+frogdb_commands_duration_seconds
+
+# Connections
+frogdb_connected_clients
+frogdb_blocked_clients
+
+# Persistence
+frogdb_last_save_timestamp_seconds
+frogdb_aof_current_size_bytes
+
+# Replication
+frogdb_replica_lag_seconds
+frogdb_connected_replicas
+```
+
+## Grafana Dashboard
+
+Import the FrogDB dashboard from the repository or create panels for:
+
+1. **Overview**
+   - Uptime
+   - Memory usage %
+   - Operations/sec
+   - Connected clients
+
+2. **Memory**
+   - Used memory over time
+   - Memory vs maxmemory
+   - Fragmentation ratio
+
+3. **Performance**
+   - Commands/sec by type
+   - Latency percentiles
+   - Cache hit ratio
+
+4. **Persistence**
+   - Last save time
+   - AOF size
+   - Rewrite status
+
+5. **Replication** (if applicable)
+   - Replica lag
+   - Sync status
+   - Connected replicas
+
+## Slow Log
+
+Track slow commands:
+
+```redis
+# Configure slow log (microseconds)
+CONFIG SET slowlog-log-slower-than 10000
+
+# View slow log
+SLOWLOG GET 10
+
+# 1) 1) (integer) 1
+#    2) (integer) 1704067500
+#    3) (integer) 15000
+#    4) 1) "KEYS"
+#       2) "*"
+```
+
+Fields:
+1. Entry ID
+2. Unix timestamp
+3. Execution time (microseconds)
+4. Command and arguments
+
+## Client List
+
+Monitor connected clients:
+
+```redis
+CLIENT LIST
+# id=1 addr=192.168.1.100:45678 name= db=0 cmd=INFO
+```
+
+Useful for:
+- Identifying problematic clients
+- Debugging connection issues
+- Capacity planning
+
+## Alerting Rules
+
+### Example Alert Definitions
+
+```yaml
+# Prometheus alerting rules
+groups:
+  - name: frogdb
+    rules:
+      - alert: FrogDBDown
+        expr: up{job="frogdb"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FrogDB instance is down"
+
+      - alert: FrogDBMemoryHigh
+        expr: frogdb_memory_used_bytes / frogdb_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FrogDB memory usage above 90%"
+
+      - alert: FrogDBReplicaLag
+        expr: frogdb_replica_lag_seconds > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FrogDB replica lag exceeds 30 seconds"
+
+      - alert: FrogDBPersistenceFailure
+        expr: frogdb_last_bgsave_status != 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FrogDB background save failed"
+```
+
+## Health Checks
+
+Simple health check script:
+
+```bash
+#!/bin/bash
+# health_check.sh
+
+if redis-cli -p 6379 ping | grep -q PONG; then
+  echo "FrogDB is healthy"
+  exit 0
+else
+  echo "FrogDB health check failed"
+  exit 1
+fi
+```
+
+For load balancers:
+
+```bash
+# HAProxy health check
+redis-cli -p 6379 ping
+```
+
+## Next Steps
+
+- [Troubleshooting](/operations/troubleshooting/) — Diagnose issues
+- [Backup & Restore](/operations/backup-restore/) — Data protection
+- [Deployment](/operations/deployment/) — Production deployment

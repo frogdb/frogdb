@@ -1,0 +1,713 @@
+---
+title: Commands Reference
+description: Complete reference for FrogDB commands
+---
+
+FrogDB implements the Redis command set. This reference covers supported commands and any differences from Redis.
+
+## String Commands
+
+### GET
+
+Get the value of a key.
+
+```redis
+GET key
+```
+
+**Returns:** The value, or nil if key doesn't exist.
+
+### SET
+
+Set the value of a key.
+
+```redis
+SET key value [EX seconds] [PX milliseconds] [NX|XX] [GET]
+```
+
+**Options:**
+- `EX seconds` — Set expiration in seconds
+- `PX milliseconds` — Set expiration in milliseconds
+- `NX` — Only set if key doesn't exist
+- `XX` — Only set if key exists
+- `GET` — Return the old value
+
+**Examples:**
+
+```redis
+SET mykey "Hello"
+SET mykey "World" EX 60
+SET mykey "value" NX
+SET mykey "value" XX GET
+```
+
+### INCR / INCRBY / INCRBYFLOAT
+
+Increment a key's value.
+
+```redis
+INCR key
+INCRBY key increment
+INCRBYFLOAT key increment
+```
+
+### DECR / DECRBY
+
+Decrement a key's value.
+
+```redis
+DECR key
+DECRBY key decrement
+```
+
+### MGET / MSET
+
+Multiple key operations.
+
+```redis
+MGET key [key ...]
+MSET key value [key value ...]
+```
+
+### APPEND
+
+Append to a string value.
+
+```redis
+APPEND key value
+```
+
+### STRLEN
+
+Get the length of a string value.
+
+```redis
+STRLEN key
+```
+
+### GETRANGE / SETRANGE
+
+Substring operations.
+
+```redis
+GETRANGE key start end
+SETRANGE key offset value
+```
+
+## Hash Commands
+
+### HSET / HGET
+
+Set and get hash fields.
+
+```redis
+HSET key field value [field value ...]
+HGET key field
+```
+
+### HMSET / HMGET
+
+Multiple field operations.
+
+```redis
+HMSET key field value [field value ...]
+HMGET key field [field ...]
+```
+
+### HGETALL
+
+Get all fields and values.
+
+```redis
+HGETALL key
+```
+
+### HDEL
+
+Delete hash fields.
+
+```redis
+HDEL key field [field ...]
+```
+
+### HEXISTS
+
+Check if field exists.
+
+```redis
+HEXISTS key field
+```
+
+### HINCRBY / HINCRBYFLOAT
+
+Increment hash field.
+
+```redis
+HINCRBY key field increment
+HINCRBYFLOAT key field increment
+```
+
+### HKEYS / HVALS / HLEN
+
+Hash introspection.
+
+```redis
+HKEYS key
+HVALS key
+HLEN key
+```
+
+### HSCAN
+
+Iterate hash fields.
+
+```redis
+HSCAN key cursor [MATCH pattern] [COUNT count]
+```
+
+## List Commands
+
+### LPUSH / RPUSH
+
+Add elements to list.
+
+```redis
+LPUSH key element [element ...]
+RPUSH key element [element ...]
+```
+
+### LPOP / RPOP
+
+Remove and return elements.
+
+```redis
+LPOP key [count]
+RPOP key [count]
+```
+
+### LRANGE
+
+Get range of elements.
+
+```redis
+LRANGE key start stop
+```
+
+### LLEN
+
+Get list length.
+
+```redis
+LLEN key
+```
+
+### LINDEX
+
+Get element by index.
+
+```redis
+LINDEX key index
+```
+
+### LSET
+
+Set element at index.
+
+```redis
+LSET key index element
+```
+
+### LINSERT
+
+Insert element before/after pivot.
+
+```redis
+LINSERT key BEFORE|AFTER pivot element
+```
+
+### LTRIM
+
+Trim list to range.
+
+```redis
+LTRIM key start stop
+```
+
+### BLPOP / BRPOP
+
+Blocking pop operations.
+
+```redis
+BLPOP key [key ...] timeout
+BRPOP key [key ...] timeout
+```
+
+## Set Commands
+
+### SADD
+
+Add members to set.
+
+```redis
+SADD key member [member ...]
+```
+
+### SREM
+
+Remove members from set.
+
+```redis
+SREM key member [member ...]
+```
+
+### SMEMBERS
+
+Get all members.
+
+```redis
+SMEMBERS key
+```
+
+### SISMEMBER / SMISMEMBER
+
+Check membership.
+
+```redis
+SISMEMBER key member
+SMISMEMBER key member [member ...]
+```
+
+### SCARD
+
+Get set cardinality.
+
+```redis
+SCARD key
+```
+
+### SINTER / SUNION / SDIFF
+
+Set operations.
+
+```redis
+SINTER key [key ...]
+SUNION key [key ...]
+SDIFF key [key ...]
+```
+
+### SINTERSTORE / SUNIONSTORE / SDIFFSTORE
+
+Store set operation results.
+
+```redis
+SINTERSTORE destination key [key ...]
+SUNIONSTORE destination key [key ...]
+SDIFFSTORE destination key [key ...]
+```
+
+### SPOP / SRANDMEMBER
+
+Random member operations.
+
+```redis
+SPOP key [count]
+SRANDMEMBER key [count]
+```
+
+### SSCAN
+
+Iterate set members.
+
+```redis
+SSCAN key cursor [MATCH pattern] [COUNT count]
+```
+
+## Sorted Set Commands
+
+### ZADD
+
+Add members with scores.
+
+```redis
+ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]
+```
+
+### ZREM
+
+Remove members.
+
+```redis
+ZREM key member [member ...]
+```
+
+### ZRANGE / ZREVRANGE
+
+Get range by rank.
+
+```redis
+ZRANGE key start stop [WITHSCORES]
+ZREVRANGE key start stop [WITHSCORES]
+```
+
+### ZRANGEBYSCORE / ZREVRANGEBYSCORE
+
+Get range by score.
+
+```redis
+ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]
+ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]
+```
+
+### ZSCORE
+
+Get member score.
+
+```redis
+ZSCORE key member
+```
+
+### ZRANK / ZREVRANK
+
+Get member rank.
+
+```redis
+ZRANK key member
+ZREVRANK key member
+```
+
+### ZCARD
+
+Get sorted set cardinality.
+
+```redis
+ZCARD key
+```
+
+### ZCOUNT
+
+Count members in score range.
+
+```redis
+ZCOUNT key min max
+```
+
+### ZINCRBY
+
+Increment member score.
+
+```redis
+ZINCRBY key increment member
+```
+
+### ZINTER / ZUNION
+
+Sorted set operations.
+
+```redis
+ZINTER numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]
+ZUNION numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]
+```
+
+### ZSCAN
+
+Iterate sorted set.
+
+```redis
+ZSCAN key cursor [MATCH pattern] [COUNT count]
+```
+
+## Key Commands
+
+### DEL
+
+Delete keys.
+
+```redis
+DEL key [key ...]
+```
+
+### EXISTS
+
+Check if keys exist.
+
+```redis
+EXISTS key [key ...]
+```
+
+### EXPIRE / EXPIREAT
+
+Set expiration.
+
+```redis
+EXPIRE key seconds
+EXPIREAT key timestamp
+```
+
+### PEXPIRE / PEXPIREAT
+
+Set expiration in milliseconds.
+
+```redis
+PEXPIRE key milliseconds
+PEXPIREAT key milliseconds-timestamp
+```
+
+### TTL / PTTL
+
+Get time to live.
+
+```redis
+TTL key
+PTTL key
+```
+
+### PERSIST
+
+Remove expiration.
+
+```redis
+PERSIST key
+```
+
+### TYPE
+
+Get key type.
+
+```redis
+TYPE key
+```
+
+### RENAME / RENAMENX
+
+Rename a key.
+
+```redis
+RENAME key newkey
+RENAMENX key newkey
+```
+
+### SCAN
+
+Iterate keys.
+
+```redis
+SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]
+```
+
+### KEYS
+
+Find keys matching pattern. **Warning: blocks server on large datasets.**
+
+```redis
+KEYS pattern
+```
+
+### RANDOMKEY
+
+Return a random key.
+
+```redis
+RANDOMKEY
+```
+
+## Server Commands
+
+### INFO
+
+Get server information.
+
+```redis
+INFO [section]
+```
+
+### PING
+
+Test connection.
+
+```redis
+PING [message]
+```
+
+### ECHO
+
+Echo a message.
+
+```redis
+ECHO message
+```
+
+### DBSIZE
+
+Get number of keys.
+
+```redis
+DBSIZE
+```
+
+### FLUSHDB / FLUSHALL
+
+Delete all keys.
+
+```redis
+FLUSHDB [ASYNC]
+FLUSHALL [ASYNC]
+```
+
+### CONFIG GET / CONFIG SET
+
+Get/set configuration.
+
+```redis
+CONFIG GET parameter
+CONFIG SET parameter value
+```
+
+### CLIENT
+
+Client management.
+
+```redis
+CLIENT LIST
+CLIENT SETNAME name
+CLIENT GETNAME
+CLIENT ID
+CLIENT KILL [ip:port] [ID client-id]
+```
+
+### TIME
+
+Get server time.
+
+```redis
+TIME
+```
+
+### LASTSAVE
+
+Get last save timestamp.
+
+```redis
+LASTSAVE
+```
+
+### BGSAVE / SAVE
+
+Trigger persistence.
+
+```redis
+BGSAVE
+SAVE
+```
+
+## Transaction Commands
+
+### MULTI / EXEC / DISCARD
+
+Transaction control.
+
+```redis
+MULTI
+SET key1 value1
+SET key2 value2
+EXEC
+```
+
+### WATCH / UNWATCH
+
+Optimistic locking.
+
+```redis
+WATCH key
+MULTI
+SET key newvalue
+EXEC
+```
+
+## Scripting Commands
+
+### EVAL / EVALSHA
+
+Execute Lua scripts.
+
+```redis
+EVAL script numkeys key [key ...] arg [arg ...]
+EVALSHA sha1 numkeys key [key ...] arg [arg ...]
+```
+
+### SCRIPT LOAD / SCRIPT EXISTS / SCRIPT FLUSH
+
+Script management.
+
+```redis
+SCRIPT LOAD script
+SCRIPT EXISTS sha1 [sha1 ...]
+SCRIPT FLUSH
+```
+
+## Pub/Sub Commands
+
+### SUBSCRIBE / UNSUBSCRIBE
+
+Subscribe to channels.
+
+```redis
+SUBSCRIBE channel [channel ...]
+UNSUBSCRIBE [channel [channel ...]]
+```
+
+### PUBLISH
+
+Publish a message.
+
+```redis
+PUBLISH channel message
+```
+
+### PSUBSCRIBE / PUNSUBSCRIBE
+
+Pattern-based subscriptions.
+
+```redis
+PSUBSCRIBE pattern [pattern ...]
+PUNSUBSCRIBE [pattern [pattern ...]]
+```
+
+## Cluster Commands
+
+### CLUSTER INFO
+
+Get cluster state.
+
+```redis
+CLUSTER INFO
+```
+
+### CLUSTER NODES
+
+Get cluster nodes.
+
+```redis
+CLUSTER NODES
+```
+
+### CLUSTER SLOTS
+
+Get slot-to-node mapping.
+
+```redis
+CLUSTER SLOTS
+```
+
+### CLUSTER KEYSLOT
+
+Get slot for key.
+
+```redis
+CLUSTER KEYSLOT key
+```
+
+## See Also
+
+- [Redis Differences](/compatibility/redis-differences/) — Commands with different behavior
+- [Lua Scripting](/guides/lua-scripting/) — Scripting details
+- [CLI Reference](/reference/cli/) — Command-line options

@@ -1,0 +1,319 @@
+---
+title: CLI Reference
+description: Command-line options for FrogDB server and tools
+---
+
+Reference for FrogDB command-line tools and their options.
+
+## frogdb-server
+
+The main FrogDB server process.
+
+```bash
+frogdb-server [OPTIONS]
+```
+
+### General Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--config <FILE>` | `-c` | - | Path to configuration file |
+| `--help` | `-h` | - | Print help information |
+| `--version` | `-V` | - | Print version information |
+
+### Server Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--bind <ADDRESS>` | `127.0.0.1` | IP address to bind to |
+| `--port <PORT>` | `6379` | Port to listen on |
+| `--unixsocket <PATH>` | - | Unix socket path |
+
+### Persistence Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--data-dir <DIR>` | - | Data directory (enables persistence) |
+| `--persistence <MODE>` | `periodic` | Persistence mode: `none`, `periodic`, `aof`, `hybrid` |
+| `--appendonly` | `false` | Enable AOF (shorthand for `--persistence aof`) |
+
+### Memory Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--maxmemory <SIZE>` | `0` | Maximum memory limit (e.g., `1gb`, `512mb`) |
+| `--maxmemory-policy <POLICY>` | `noeviction` | Eviction policy |
+
+### Replication Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--replicaof <HOST> <PORT>` | - | Start as replica of specified primary |
+
+### Cluster Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--cluster-enabled` | `false` | Enable cluster mode |
+| `--cluster-node-id <ID>` | - | Node ID for cluster |
+| `--cluster-announce-ip <IP>` | - | IP to announce to cluster |
+| `--cluster-port <PORT>` | `16379` | Cluster bus port |
+
+### Logging Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--log-level <LEVEL>` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
+| `--log-format <FORMAT>` | `text` | Log format: `text`, `json` |
+| `--log-file <FILE>` | - | Log to file instead of stdout |
+
+### Security Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--requirepass <PASSWORD>` | - | Require password for connections |
+| `--tls-cert <FILE>` | - | TLS certificate file |
+| `--tls-key <FILE>` | - | TLS private key file |
+
+### Examples
+
+```bash
+# Start with defaults
+frogdb-server
+
+# Start with configuration file
+frogdb-server --config /etc/frogdb/frogdb.toml
+
+# Start with persistence
+frogdb-server --data-dir /var/lib/frogdb --persistence hybrid
+
+# Start with memory limit and eviction
+frogdb-server --maxmemory 4gb --maxmemory-policy allkeys-lru
+
+# Start as replica
+frogdb-server --replicaof primary.example.com 6379
+
+# Start with TLS
+frogdb-server --tls-cert /etc/frogdb/server.crt --tls-key /etc/frogdb/server.key
+
+# Start with all options
+frogdb-server \
+  --bind 0.0.0.0 \
+  --port 6379 \
+  --data-dir /var/lib/frogdb \
+  --persistence hybrid \
+  --maxmemory 8gb \
+  --maxmemory-policy allkeys-lru \
+  --requirepass "secure-password" \
+  --log-level info \
+  --log-format json
+```
+
+## frogdb-cli
+
+Command-line interface for interacting with FrogDB.
+
+```bash
+frogdb-cli [OPTIONS] [COMMAND...]
+```
+
+### Connection Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--host <HOST>` | `-h` | `127.0.0.1` | Server hostname |
+| `--port <PORT>` | `-p` | `6379` | Server port |
+| `--socket <PATH>` | `-s` | - | Unix socket path |
+| `--user <USERNAME>` | | - | Username for ACL authentication |
+| `--pass <PASSWORD>` | `-a` | - | Password for authentication |
+| `--tls` | | `false` | Enable TLS connection |
+
+### Output Options
+
+| Option | Description |
+|--------|-------------|
+| `--no-raw` | Force formatted output |
+| `--raw` | Force raw output |
+| `--csv` | Output in CSV format |
+| `--json` | Output in JSON format |
+
+### Cluster Options
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--cluster` | `-c` | Enable cluster mode |
+| `--cluster-create` | | Create a new cluster |
+| `--cluster-add-node` | | Add node to cluster |
+
+### Utility Options
+
+| Option | Description |
+|--------|-------------|
+| `--latency` | Measure latency |
+| `--latency-history` | Measure latency over time |
+| `--bigkeys` | Find big keys |
+| `--memkeys` | Sample memory usage by key |
+| `--stat` | Print rolling stats |
+| `--scan <PATTERN>` | Scan keys matching pattern |
+
+### Examples
+
+```bash
+# Interactive mode
+frogdb-cli
+
+# Execute single command
+frogdb-cli GET mykey
+
+# Connect to different host/port
+frogdb-cli -h redis.example.com -p 6380
+
+# Connect with password
+frogdb-cli -a "password" GET mykey
+
+# Measure latency
+frogdb-cli --latency
+
+# Find big keys
+frogdb-cli --bigkeys
+
+# Output as JSON
+frogdb-cli --json GET mykey
+
+# Cluster mode
+frogdb-cli -c GET mykey
+
+# Create cluster
+frogdb-cli --cluster-create 192.168.1.10:6379 192.168.1.11:6379 192.168.1.12:6379 --replicas 1
+```
+
+## frogdb-benchmark
+
+Benchmarking tool for FrogDB.
+
+```bash
+frogdb-benchmark [OPTIONS]
+```
+
+### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--host <HOST>` | `-h` | `127.0.0.1` | Server hostname |
+| `--port <PORT>` | `-p` | `6379` | Server port |
+| `--clients <NUM>` | `-c` | `50` | Number of parallel connections |
+| `--requests <NUM>` | `-n` | `100000` | Total number of requests |
+| `--size <BYTES>` | `-d` | `3` | Data size in bytes |
+| `--keyspacelen <NUM>` | `-r` | `0` | Use random keys in range |
+| `--pipeline <NUM>` | `-P` | `1` | Pipeline N requests |
+| `--tests <TESTS>` | `-t` | all | Comma-separated list of tests |
+| `--quiet` | `-q` | `false` | Quiet mode, show only QPS |
+| `--csv` | | `false` | Output in CSV format |
+
+### Available Tests
+
+- `ping_inline` — PING with inline protocol
+- `ping_mbulk` — PING with multi-bulk protocol
+- `set` — SET key value
+- `get` — GET key
+- `incr` — INCR key
+- `lpush` — LPUSH key value
+- `rpush` — RPUSH key value
+- `lpop` — LPOP key
+- `rpop` — RPOP key
+- `sadd` — SADD key member
+- `hset` — HSET key field value
+- `spop` — SPOP key
+- `zadd` — ZADD key score member
+- `zpopmin` — ZPOPMIN key
+- `lrange` — LRANGE key 0 N
+- `mset` — MSET key value [key value ...]
+
+### Examples
+
+```bash
+# Run all benchmarks
+frogdb-benchmark
+
+# Run specific tests
+frogdb-benchmark -t get,set
+
+# Use pipelining
+frogdb-benchmark -P 16
+
+# More clients and requests
+frogdb-benchmark -c 100 -n 1000000
+
+# Custom data size
+frogdb-benchmark -d 256
+
+# CSV output for analysis
+frogdb-benchmark --csv > results.csv
+```
+
+## frogdb-check-aof
+
+AOF file verification and repair tool.
+
+```bash
+frogdb-check-aof [OPTIONS] <FILE>
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--fix` | Attempt to fix the AOF file |
+| `--truncate-to-timestamp <TS>` | Truncate to specific timestamp |
+
+### Examples
+
+```bash
+# Check AOF file
+frogdb-check-aof /var/lib/frogdb/appendonly.aof
+
+# Fix corrupted AOF
+frogdb-check-aof --fix /var/lib/frogdb/appendonly.aof
+```
+
+## frogdb-check-rdb
+
+RDB file verification tool.
+
+```bash
+frogdb-check-rdb <FILE>
+```
+
+### Examples
+
+```bash
+# Verify RDB file
+frogdb-check-rdb /var/lib/frogdb/dump.rdb
+```
+
+## Environment Variables
+
+FrogDB tools respect these environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `FROGDB_HOST` | Default host for CLI tools |
+| `FROGDB_PORT` | Default port for CLI tools |
+| `FROGDB_AUTH` | Default password |
+| `FROGDB_*` | Configuration overrides (see Configuration Reference) |
+
+Example:
+
+```bash
+export FROGDB_HOST="redis.example.com"
+export FROGDB_PORT="6380"
+export FROGDB_AUTH="password"
+
+frogdb-cli GET mykey  # Uses environment variables
+```
+
+## See Also
+
+- [Configuration Reference](/reference/configuration/) — Configuration file options
+- [Commands Reference](/reference/commands/) — Redis command documentation
+- [Quickstart](/getting-started/quickstart/) — Getting started guide

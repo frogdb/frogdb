@@ -1,0 +1,229 @@
+---
+title: Configuration
+description: Configure FrogDB for your environment
+---
+
+FrogDB can be configured via command-line flags, a TOML configuration file, or environment variables.
+
+## Configuration Methods
+
+Configuration is applied in this order (later sources override earlier ones):
+
+1. Default values
+2. Configuration file (`--config`)
+3. Environment variables (`FROGDB_*`)
+4. Command-line flags
+
+## Configuration File
+
+Create a `frogdb.toml` file:
+
+```toml
+# frogdb.toml
+
+[server]
+# Network binding
+bind = "0.0.0.0"
+port = 6379
+
+# Connection limits
+max_clients = 10000
+timeout = 0  # 0 = no timeout
+
+# TLS (optional)
+# tls_cert = "/path/to/cert.pem"
+# tls_key = "/path/to/key.pem"
+
+[persistence]
+enabled = true
+data_dir = "/var/lib/frogdb"
+
+# Options: "none", "periodic", "aof", "hybrid"
+mode = "hybrid"
+
+# Snapshot interval for periodic/hybrid modes
+snapshot_interval = "5m"
+
+# AOF fsync policy: "always", "everysec", "no"
+aof_fsync = "everysec"
+
+[memory]
+# Maximum memory limit (0 = unlimited)
+maxmemory = "1gb"
+
+# Eviction policy when maxmemory is reached
+# Options: "noeviction", "allkeys-lru", "volatile-lru",
+#          "allkeys-random", "volatile-random", "volatile-ttl"
+maxmemory_policy = "noeviction"
+
+[replication]
+# Role: "primary" or "replica"
+role = "primary"
+
+# If replica, connect to:
+# primary_host = "primary.example.com"
+# primary_port = 6379
+
+[cluster]
+enabled = false
+# node_id = "node1"
+# announce_ip = "192.168.1.10"
+# announce_port = 6379
+# cluster_port = 16379
+
+[logging]
+# Level: "trace", "debug", "info", "warn", "error"
+level = "info"
+
+# Format: "text" or "json"
+format = "text"
+```
+
+Start with the configuration file:
+
+```bash
+frogdb-server --config frogdb.toml
+```
+
+## Environment Variables
+
+All configuration options can be set via environment variables with the `FROGDB_` prefix:
+
+```bash
+export FROGDB_SERVER_BIND="0.0.0.0"
+export FROGDB_SERVER_PORT="6379"
+export FROGDB_PERSISTENCE_ENABLED="true"
+export FROGDB_PERSISTENCE_DATA_DIR="/var/lib/frogdb"
+export FROGDB_MEMORY_MAXMEMORY="2gb"
+
+frogdb-server
+```
+
+Nested configuration uses underscores:
+- `server.port` → `FROGDB_SERVER_PORT`
+- `persistence.data_dir` → `FROGDB_PERSISTENCE_DATA_DIR`
+
+## Command-Line Flags
+
+Common flags for quick configuration:
+
+```bash
+# Basic server options
+frogdb-server --bind 0.0.0.0 --port 6379
+
+# Enable persistence
+frogdb-server --data-dir /var/lib/frogdb --persistence hybrid
+
+# Memory limit
+frogdb-server --maxmemory 1gb --maxmemory-policy allkeys-lru
+
+# Logging
+frogdb-server --log-level debug --log-format json
+
+# Full example
+frogdb-server \
+  --bind 0.0.0.0 \
+  --port 6379 \
+  --data-dir /var/lib/frogdb \
+  --persistence hybrid \
+  --maxmemory 4gb \
+  --maxmemory-policy allkeys-lru \
+  --log-level info
+```
+
+See all available flags:
+
+```bash
+frogdb-server --help
+```
+
+## Configuration Sections
+
+### Server
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `bind` | `127.0.0.1` | IP address to bind to |
+| `port` | `6379` | Port to listen on |
+| `max_clients` | `10000` | Maximum concurrent connections |
+| `timeout` | `0` | Client idle timeout (0 = disabled) |
+
+### Persistence
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `false` | Enable persistence |
+| `data_dir` | `./frogdb-data` | Directory for data files |
+| `mode` | `periodic` | Persistence mode |
+| `snapshot_interval` | `5m` | Interval between snapshots |
+| `aof_fsync` | `everysec` | AOF sync policy |
+
+### Memory
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `maxmemory` | `0` | Memory limit (0 = unlimited) |
+| `maxmemory_policy` | `noeviction` | Eviction policy |
+
+## Example Configurations
+
+### Development
+
+```toml
+[server]
+bind = "127.0.0.1"
+port = 6379
+
+[persistence]
+enabled = false
+
+[logging]
+level = "debug"
+```
+
+### Production Single Node
+
+```toml
+[server]
+bind = "0.0.0.0"
+port = 6379
+max_clients = 10000
+
+[persistence]
+enabled = true
+data_dir = "/var/lib/frogdb"
+mode = "hybrid"
+aof_fsync = "everysec"
+
+[memory]
+maxmemory = "8gb"
+maxmemory_policy = "allkeys-lru"
+
+[logging]
+level = "info"
+format = "json"
+```
+
+### Replica Node
+
+```toml
+[server]
+bind = "0.0.0.0"
+port = 6379
+
+[replication]
+role = "replica"
+primary_host = "primary.internal"
+primary_port = 6379
+
+[persistence]
+enabled = true
+data_dir = "/var/lib/frogdb"
+mode = "periodic"
+```
+
+## Next Steps
+
+- [Persistence Guide](/guides/persistence/) — Detailed persistence configuration
+- [Replication Guide](/guides/replication/) — Set up primary-replica replication
+- [CLI Reference](/reference/cli/) — All command-line options

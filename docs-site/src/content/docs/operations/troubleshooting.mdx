@@ -1,0 +1,441 @@
+---
+title: Troubleshooting
+description: Diagnose and resolve common FrogDB issues
+---
+
+This guide covers common issues and how to diagnose and resolve them.
+
+## Connection Issues
+
+### Cannot Connect to FrogDB
+
+**Symptoms:**
+```
+Error: Connection refused
+Error: No route to host
+```
+
+**Diagnosis:**
+
+1. **Check if FrogDB is running:**
+   ```bash
+   systemctl status frogdb
+   # or
+   ps aux | grep frogdb
+   ```
+
+2. **Check binding address:**
+   ```bash
+   netstat -tlnp | grep 6379
+   # Should show frogdb listening
+   ```
+
+3. **Check firewall:**
+   ```bash
+   sudo iptables -L -n | grep 6379
+   # or for UFW
+   sudo ufw status
+   ```
+
+**Solutions:**
+
+- Start FrogDB if not running
+- Check `bind` configuration (use `0.0.0.0` for external access)
+- Open firewall port: `sudo ufw allow 6379/tcp`
+
+### Connection Timeout
+
+**Symptoms:**
+```
+Error: Connection timed out
+```
+
+**Diagnosis:**
+
+```redis
+INFO clients
+# Check connected_clients vs maxclients
+
+CONFIG GET timeout
+# Check client timeout setting
+```
+
+**Solutions:**
+
+- Increase `maxclients` if at limit
+- Check network connectivity
+- Verify no packet loss: `ping -c 100 frogdb-host`
+
+### Too Many Connections
+
+**Symptoms:**
+```
+Error: max number of clients reached
+```
+
+**Solutions:**
+
+1. **Increase max clients:**
+   ```toml
+   [server]
+   max_clients = 20000
+   ```
+
+2. **Check for connection leaks** in your application
+
+3. **Use connection pooling:**
+   ```python
+   # Python example
+   pool = redis.ConnectionPool(max_connections=100)
+   r = redis.Redis(connection_pool=pool)
+   ```
+
+## Memory Issues
+
+### Out of Memory
+
+**Symptoms:**
+```
+Error: OOM command not allowed when used memory > 'maxmemory'
+```
+
+**Diagnosis:**
+
+```redis
+INFO memory
+# Check used_memory vs maxmemory
+```
+
+**Solutions:**
+
+1. **Increase maxmemory:**
+   ```toml
+   [memory]
+   maxmemory = "8gb"
+   ```
+
+2. **Enable eviction:**
+   ```toml
+   [memory]
+   maxmemory_policy = "allkeys-lru"
+   ```
+
+3. **Delete unnecessary keys:**
+   ```redis
+   # Find large keys
+   redis-cli --bigkeys
+   ```
+
+### High Memory Fragmentation
+
+**Symptoms:**
+- `mem_fragmentation_ratio` > 1.5
+
+**Diagnosis:**
+
+```redis
+INFO memory
+# mem_fragmentation_ratio:2.1
+```
+
+**Solutions:**
+
+1. **Restart FrogDB** (during maintenance window)
+2. **Use MEMORY PURGE** to release memory back to OS
+3. **Consider `activedefrag`** if available
+
+### Memory Keeps Growing
+
+**Diagnosis:**
+
+1. **Check for key growth:**
+   ```redis
+   INFO keyspace
+   # Track db0:keys=X over time
+   ```
+
+2. **Find large keys:**
+   ```bash
+   redis-cli --bigkeys
+   ```
+
+3. **Check for missing expirations:**
+   ```redis
+   TTL suspicious_key
+   # Returns -1 if no expiration
+   ```
+
+**Solutions:**
+
+- Set TTL on keys: `EXPIRE key 3600`
+- Review key naming patterns
+- Implement cleanup jobs
+
+## Performance Issues
+
+### Slow Commands
+
+**Diagnosis:**
+
+```redis
+# Check slow log
+SLOWLOG GET 10
+
+# Common slow commands
+# KEYS * - Never use in production
+# SMEMBERS on large sets
+# HGETALL on large hashes
+```
+
+**Solutions:**
+
+1. **Avoid KEYS command:**
+   ```redis
+   # Bad
+   KEYS user:*
+
+   # Better - use SCAN
+   SCAN 0 MATCH user:* COUNT 100
+   ```
+
+2. **Paginate large collections:**
+   ```redis
+   # Instead of SMEMBERS
+   SSCAN myset 0 COUNT 100
+   ```
+
+3. **Use appropriate data structures**
+
+### High Latency
+
+**Diagnosis:**
+
+```redis
+# Check latency
+redis-cli --latency
+
+# Check for blocking operations
+INFO commandstats
+```
+
+**Possible causes:**
+
+1. **Network latency** — Check round-trip time
+2. **Slow persistence** — Check `rdb_last_bgsave_time_sec`
+3. **Large commands** — Check slow log
+4. **Swap usage** — `INFO memory` shows `used_memory_rss`
+
+**Solutions:**
+
+- Move to faster network/same datacenter
+- Use faster storage for persistence
+- Optimize commands
+- Add more memory to avoid swap
+
+### Sudden Latency Spikes
+
+**Diagnosis:**
+
+```redis
+INFO persistence
+# Check rdb_bgsave_in_progress
+# Check aof_rewrite_in_progress
+```
+
+**Causes:**
+
+- Background save (BGSAVE)
+- AOF rewrite
+- Large key operations
+
+**Solutions:**
+
+- Schedule saves during low traffic
+- Use replica for backups
+- Break up large operations
+
+## Persistence Issues
+
+### BGSAVE Failed
+
+**Symptoms:**
+
+```redis
+INFO persistence
+# rdb_last_bgsave_status:err
+```
+
+**Diagnosis:**
+
+1. **Check disk space:**
+   ```bash
+   df -h /var/lib/frogdb
+   ```
+
+2. **Check permissions:**
+   ```bash
+   ls -la /var/lib/frogdb
+   ```
+
+3. **Check logs:**
+   ```bash
+   journalctl -u frogdb -n 100
+   ```
+
+**Solutions:**
+
+- Free disk space
+- Fix permissions: `chown -R frogdb:frogdb /var/lib/frogdb`
+- Check for disk errors
+
+### AOF File Corrupted
+
+**Symptoms:**
+- FrogDB won't start
+- Error about AOF file corruption
+
+**Solutions:**
+
+1. **Try AOF repair:**
+   ```bash
+   redis-check-aof --fix /var/lib/frogdb/appendonly.aof
+   ```
+
+2. **Restore from backup** if repair fails
+
+3. **Disable AOF temporarily** to start:
+   ```bash
+   frogdb-server --appendonly no
+   ```
+
+### Slow Recovery
+
+**Diagnosis:**
+
+- Check data file sizes
+- Monitor recovery progress in logs
+
+**Solutions:**
+
+- Use faster storage (NVMe SSD)
+- Consider smaller, more frequent snapshots
+- Pre-warm replicas before failover
+
+## Replication Issues
+
+### Replica Not Syncing
+
+**Symptoms:**
+
+```redis
+INFO replication
+# master_link_status:down
+```
+
+**Diagnosis:**
+
+1. **Check network connectivity** to primary
+2. **Check primary logs** for connection attempts
+3. **Verify configuration:**
+   ```redis
+   CONFIG GET replicaof
+   ```
+
+**Solutions:**
+
+- Fix network/firewall issues
+- Verify primary host/port
+- Check authentication if required
+
+### Replica Lag
+
+**Symptoms:**
+
+```redis
+INFO replication
+# slave0:lag=30
+```
+
+**Causes:**
+
+- Network bandwidth limitations
+- Slow replica disk
+- High write rate on primary
+
+**Solutions:**
+
+- Improve network bandwidth
+- Use faster storage on replica
+- Add more replicas to distribute load
+
+## Cluster Issues
+
+### CLUSTERDOWN
+
+**Symptoms:**
+
+```
+(error) CLUSTERDOWN The cluster is down
+```
+
+**Diagnosis:**
+
+```redis
+CLUSTER INFO
+# cluster_state:fail
+# cluster_slots_ok:X
+```
+
+**Causes:**
+
+- Too many nodes down (no quorum)
+- Slot coverage incomplete
+
+**Solutions:**
+
+1. **Bring failed nodes back online**
+2. **Check if slots are assigned:**
+   ```redis
+   CLUSTER SLOTS
+   ```
+3. **Manually fix slot assignment** if needed
+
+### MOVED Errors
+
+**Symptoms:**
+
+```
+(error) MOVED 5617 192.168.1.11:6379
+```
+
+**Solutions:**
+
+- Use a cluster-aware client
+- Handle redirects in application
+- Check cluster topology: `CLUSTER NODES`
+
+## Getting Help
+
+If you can't resolve an issue:
+
+1. **Gather diagnostics:**
+   ```bash
+   redis-cli INFO > frogdb-info.txt
+   redis-cli SLOWLOG GET 100 > slowlog.txt
+   journalctl -u frogdb -n 1000 > frogdb-logs.txt
+   ```
+
+2. **Check GitHub issues** for similar problems
+
+3. **Open a new issue** with:
+   - FrogDB version
+   - Operating system
+   - Configuration (sanitized)
+   - Steps to reproduce
+   - Diagnostic output
+
+## Next Steps
+
+- [Monitoring](/operations/monitoring/) — Set up proactive monitoring
+- [Deployment](/operations/deployment/) — Best practices
+- [Backup & Restore](/operations/backup-restore/) — Recovery procedures

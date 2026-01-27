@@ -1,0 +1,172 @@
+---
+title: Quickstart
+description: Get up and running with FrogDB in 5 minutes
+---
+
+This guide will help you start using FrogDB quickly. By the end, you'll have a running server and understand basic operations.
+
+## Start the Server
+
+```bash
+# Start with default settings (port 6379, in-memory only)
+frogdb-server
+
+# Or with persistence enabled
+frogdb-server --data-dir ./frogdb-data
+```
+
+You should see output like:
+
+```
+FrogDB starting on 127.0.0.1:6379
+Persistence: enabled (./frogdb-data)
+Ready to accept connections
+```
+
+## Connect with a Client
+
+FrogDB speaks the Redis protocol, so you can use any Redis client:
+
+```bash
+# Using redis-cli
+redis-cli -p 6379
+```
+
+Or from your application:
+
+```python
+# Python with redis-py
+import redis
+r = redis.Redis(host='localhost', port=6379)
+r.set('key', 'value')
+```
+
+```javascript
+// Node.js with ioredis
+const Redis = require('ioredis');
+const redis = new Redis(6379);
+await redis.set('key', 'value');
+```
+
+## Basic Operations
+
+### Strings
+
+```redis
+SET user:1:name "Alice"
+GET user:1:name
+# "Alice"
+
+# With expiration (seconds)
+SET session:abc123 "user:1" EX 3600
+
+# Increment counters
+INCR page:views
+INCRBY page:views 10
+```
+
+### Hashes
+
+```redis
+HSET user:1 name "Alice" email "alice@example.com" age 30
+HGET user:1 name
+# "Alice"
+
+HGETALL user:1
+# 1) "name"
+# 2) "Alice"
+# 3) "email"
+# 4) "alice@example.com"
+# 5) "age"
+# 6) "30"
+```
+
+### Lists
+
+```redis
+LPUSH tasks "send email"
+LPUSH tasks "write docs"
+RPUSH tasks "deploy"
+
+LRANGE tasks 0 -1
+# 1) "write docs"
+# 2) "send email"
+# 3) "deploy"
+
+LPOP tasks
+# "write docs"
+```
+
+### Sets
+
+```redis
+SADD tags:post:1 "rust" "database" "redis"
+SMEMBERS tags:post:1
+# 1) "database"
+# 2) "redis"
+# 3) "rust"
+
+SISMEMBER tags:post:1 "rust"
+# (integer) 1
+```
+
+### Sorted Sets
+
+```redis
+ZADD leaderboard 100 "player1" 85 "player2" 95 "player3"
+ZRANGE leaderboard 0 -1 WITHSCORES
+# 1) "player2"
+# 2) "85"
+# 3) "player3"
+# 4) "95"
+# 5) "player1"
+# 6) "100"
+
+ZRANK leaderboard "player1"
+# (integer) 2
+```
+
+## Persistence
+
+FrogDB supports multiple persistence modes:
+
+```bash
+# Periodic snapshots (default when --data-dir is set)
+frogdb-server --data-dir ./data --persistence periodic
+
+# Append-only file for durability
+frogdb-server --data-dir ./data --persistence aof
+
+# Hybrid: snapshots + AOF
+frogdb-server --data-dir ./data --persistence hybrid
+```
+
+## Using a Configuration File
+
+For production, use a TOML configuration file:
+
+```toml
+# frogdb.toml
+[server]
+bind = "0.0.0.0"
+port = 6379
+
+[persistence]
+enabled = true
+data_dir = "/var/lib/frogdb"
+mode = "hybrid"
+
+[memory]
+maxmemory = "1gb"
+maxmemory_policy = "allkeys-lru"
+```
+
+```bash
+frogdb-server --config frogdb.toml
+```
+
+## Next Steps
+
+- [Configuration Guide](/getting-started/configuration/) — All configuration options
+- [Persistence Guide](/guides/persistence/) — Deep dive into durability options
+- [Commands Reference](/reference/commands/) — Full command documentation

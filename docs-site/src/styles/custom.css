@@ -1,0 +1,30 @@
+/* FrogDB Custom Styles */
+
+/* Override accent colors with frog-inspired green */
+:root {
+	--sl-color-accent-low: #1a4d2e;
+	--sl-color-accent: #2d8a4e;
+	--sl-color-accent-high: #4ade80;
+}
+
+/* Dark mode as default - make it feel native */
+:root[data-theme='dark'] {
+	--sl-color-bg: #0d1117;
+	--sl-color-bg-nav: #161b22;
+	--sl-color-bg-sidebar: #0d1117;
+}
+
+/* Code block styling */
+.expressive-code {
+	--ec-codeBg: #161b22;
+}
+
+/* Hero section customization */
+.hero {
+	padding-block: 3rem;
+}
+
+/* Logo styling if we add one later */
+.site-title {
+	font-weight: 700;
+}

@@ -1,0 +1,414 @@
+---
+title: Migration Guide
+description: Migrate from Redis to FrogDB
+---
+
+This guide walks through migrating from Redis to FrogDB with minimal disruption.
+
+## Migration Overview
+
+There are several approaches to migration:
+
+1. **Application-level migration** — Read from Redis, write to FrogDB
+2. **Dual-write migration** — Write to both during transition
+3. **Replication-based** — Use FrogDB as a Redis replica (limited support)
+4. **Cold migration** — Stop Redis, migrate data, start FrogDB
+
+Choose based on your downtime tolerance and data freshness requirements.
+
+## Pre-Migration Checklist
+
+Before migrating:
+
+- [ ] Review [Redis Differences](/compatibility/redis-differences/)
+- [ ] Test your application against FrogDB in staging
+- [ ] Convert configuration from redis.conf to frogdb.toml
+- [ ] Plan rollback procedure
+- [ ] Notify stakeholders of maintenance window (if needed)
+- [ ] Set up FrogDB monitoring
+
+## Method 1: Application-Level Migration
+
+Best for: Zero-downtime migrations, selective data migration
+
+### Step 1: Deploy FrogDB Alongside Redis
+
+```bash
+# Start FrogDB on different port
+frogdb-server --port 6380 --data-dir /var/lib/frogdb
+```
+
+### Step 2: Update Application for Dual-Read
+
+```python
+import redis
+
+redis_client = redis.Redis(host='localhost', port=6379)
+frogdb_client = redis.Redis(host='localhost', port=6380)
+
+def get_with_migration(key):
+    # Try FrogDB first
+    value = frogdb_client.get(key)
+    if value is not None:
+        return value
+
+    # Fall back to Redis
+    value = redis_client.get(key)
+    if value is not None:
+        # Migrate to FrogDB
+        frogdb_client.set(key, value)
+    return value
+```
+
+### Step 3: Enable Dual-Write
+
+```python
+def set_with_migration(key, value, **kwargs):
+    # Write to both
+    redis_client.set(key, value, **kwargs)
+    frogdb_client.set(key, value, **kwargs)
+```
+
+### Step 4: Monitor and Verify
+
+- Track hit rates on both systems
+- Verify data consistency
+- Monitor error rates
+
+### Step 5: Switch Primary to FrogDB
+
+```python
+def get(key):
+    return frogdb_client.get(key)
+
+def set(key, value, **kwargs):
+    return frogdb_client.set(key, value, **kwargs)
+```
+
+### Step 6: Decommission Redis
+
+After verification period:
+- Remove Redis client code
+- Stop Redis server
+- Archive Redis data
+
+## Method 2: Batch Migration Script
+
+Best for: Static data, scheduled maintenance windows
+
+### Migration Script
+
+```python
+#!/usr/bin/env python3
+"""Migrate data from Redis to FrogDB"""
+
+import redis
+from tqdm import tqdm
+
+# Connect to both
+redis_client = redis.Redis(host='localhost', port=6379)
+frogdb_client = redis.Redis(host='localhost', port=6380)
+
+def migrate_all_keys():
+    cursor = 0
+    migrated = 0
+    errors = []
+
+    while True:
+        cursor, keys = redis_client.scan(cursor, count=1000)
+
+        for key in tqdm(keys, desc="Migrating"):
+            try:
+                migrate_key(key)
+                migrated += 1
+            except Exception as e:
+                errors.append((key, str(e)))
+
+        if cursor == 0:
+            break
+
+    print(f"Migrated: {migrated}, Errors: {len(errors)}")
+    return errors
+
+def migrate_key(key):
+    key_type = redis_client.type(key)
+    ttl = redis_client.ttl(key)
+
+    if key_type == b'string':
+        value = redis_client.get(key)
+        frogdb_client.set(key, value)
+
+    elif key_type == b'hash':
+        data = redis_client.hgetall(key)
+        if data:
+            frogdb_client.hset(key, mapping=data)
+
+    elif key_type == b'list':
+        values = redis_client.lrange(key, 0, -1)
+        if values:
+            frogdb_client.rpush(key, *values)
+
+    elif key_type == b'set':
+        members = redis_client.smembers(key)
+        if members:
+            frogdb_client.sadd(key, *members)
+
+    elif key_type == b'zset':
+        members = redis_client.zrange(key, 0, -1, withscores=True)
+        if members:
+            frogdb_client.zadd(key, dict(members))
+
+    # Restore TTL
+    if ttl > 0:
+        frogdb_client.expire(key, ttl)
+
+if __name__ == '__main__':
+    errors = migrate_all_keys()
+    if errors:
+        print("Failed keys:")
+        for key, error in errors:
+            print(f"  {key}: {error}")
+```
+
+### Usage
+
+```bash
+# Stop writes to Redis (or accept slight data loss)
+# Run migration
+python migrate_redis_to_frogdb.py
+
+# Verify counts match
+redis-cli -p 6379 DBSIZE
+redis-cli -p 6380 DBSIZE
+
+# Switch application to FrogDB
+# Update connection strings to port 6380
+```
+
+## Method 3: Blue-Green Deployment
+
+Best for: Containerized/Kubernetes environments
+
+### Step 1: Deploy FrogDB Service
+
+```yaml
+# kubernetes/frogdb-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frogdb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frogdb
+  template:
+    spec:
+      containers:
+      - name: frogdb
+        image: frogdb/frogdb:latest
+        ports:
+        - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache-frogdb  # New service name
+spec:
+  selector:
+    app: frogdb
+  ports:
+  - port: 6379
+```
+
+### Step 2: Migrate Data
+
+Run migration script targeting `cache-frogdb` service.
+
+### Step 3: Switch Service
+
+```yaml
+# Update existing service to point to FrogDB
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache  # Application uses this name
+spec:
+  selector:
+    app: frogdb  # Changed from: app: redis
+  ports:
+  - port: 6379
+```
+
+### Step 4: Monitor and Rollback if Needed
+
+```bash
+# Rollback by switching selector back
+kubectl patch service cache -p '{"spec":{"selector":{"app":"redis"}}}'
+```
+
+## Configuration Migration
+
+### Convert redis.conf to frogdb.toml
+
+**redis.conf:**
+```
+bind 0.0.0.0
+port 6379
+requirepass mypassword
+maxmemory 1gb
+maxmemory-policy allkeys-lru
+appendonly yes
+appendfsync everysec
+save 900 1
+save 300 10
+save 60 10000
+```
+
+**frogdb.toml:**
+```toml
+[server]
+bind = "0.0.0.0"
+port = 6379
+
+[auth]
+requirepass = "mypassword"
+
+[memory]
+maxmemory = "1gb"
+maxmemory_policy = "allkeys-lru"
+
+[persistence]
+enabled = true
+mode = "hybrid"
+
+[persistence.aof]
+fsync = "everysec"
+
+[persistence.snapshot]
+interval = "5m"  # FrogDB uses time-based, not change-based
+```
+
+## Verification
+
+### Data Integrity Check
+
+```python
+def verify_migration():
+    cursor = 0
+    checked = 0
+    mismatches = []
+
+    while True:
+        cursor, keys = redis_client.scan(cursor, count=1000)
+
+        for key in keys:
+            redis_value = get_value(redis_client, key)
+            frogdb_value = get_value(frogdb_client, key)
+
+            if redis_value != frogdb_value:
+                mismatches.append(key)
+
+            checked += 1
+
+        if cursor == 0:
+            break
+
+    print(f"Checked: {checked}, Mismatches: {len(mismatches)}")
+    return mismatches
+
+def get_value(client, key):
+    key_type = client.type(key)
+    if key_type == b'string':
+        return client.get(key)
+    elif key_type == b'hash':
+        return client.hgetall(key)
+    elif key_type == b'list':
+        return client.lrange(key, 0, -1)
+    elif key_type == b'set':
+        return client.smembers(key)
+    elif key_type == b'zset':
+        return client.zrange(key, 0, -1, withscores=True)
+```
+
+### Functional Testing
+
+```bash
+# Run your application test suite against FrogDB
+REDIS_URL=redis://localhost:6380 pytest tests/
+```
+
+### Load Testing
+
+```bash
+# Benchmark FrogDB
+frogdb-benchmark -h localhost -p 6380 -c 50 -n 100000
+
+# Compare with Redis baseline
+redis-benchmark -h localhost -p 6379 -c 50 -n 100000
+```
+
+## Rollback Plan
+
+If issues arise:
+
+### Quick Rollback (Dual-Write Active)
+
+1. Update application to read from Redis
+2. Continue dual-writes until stable
+3. Investigate FrogDB issues
+
+### Full Rollback
+
+1. Stop application writes
+2. Migrate data back to Redis (reverse migration script)
+3. Update application to use Redis
+4. Start application
+
+### Rollback Script
+
+```python
+#!/usr/bin/env python3
+"""Emergency rollback: FrogDB to Redis"""
+
+# Swap source and destination
+source = redis.Redis(host='localhost', port=6380)  # FrogDB
+dest = redis.Redis(host='localhost', port=6379)    # Redis
+
+# Use same migration logic as before
+```
+
+## Post-Migration
+
+After successful migration:
+
+1. **Remove dual-write code** — Simplify application
+2. **Update documentation** — Connection strings, runbooks
+3. **Decommission Redis** — After monitoring period
+4. **Archive Redis data** — Keep backup for compliance
+
+## Troubleshooting Migration Issues
+
+### Slow Migration
+
+- Increase batch size in SCAN
+- Run migration during low-traffic periods
+- Use pipelining for bulk operations
+
+### Memory Issues
+
+- Migrate in smaller batches
+- Increase FrogDB maxmemory during migration
+- Clean up expired keys before migration
+
+### Connection Errors
+
+- Check network connectivity
+- Verify firewall rules
+- Increase connection timeouts
+
+## See Also
+
+- [Redis Differences](/compatibility/redis-differences/) — Compatibility details
+- [Configuration Reference](/reference/configuration/) — FrogDB configuration
+- [Troubleshooting](/operations/troubleshooting/) — Common issues

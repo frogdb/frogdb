@@ -1,0 +1,352 @@
+---
+title: Configuration Reference
+description: Complete reference for FrogDB configuration options
+---
+
+This reference documents all configuration options available in FrogDB.
+
+## Configuration File Format
+
+FrogDB uses TOML for configuration files:
+
+```toml
+# frogdb.toml
+
+[server]
+bind = "127.0.0.1"
+port = 6379
+
+[persistence]
+enabled = true
+data_dir = "/var/lib/frogdb"
+```
+
+## Server Section
+
+Network and connection settings.
+
+```toml
+[server]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `bind` | string | `"127.0.0.1"` | IP address to bind to. Use `"0.0.0.0"` for all interfaces. |
+| `port` | integer | `6379` | Port to listen on. |
+| `max_clients` | integer | `10000` | Maximum number of simultaneous client connections. |
+| `timeout` | integer | `0` | Close connection after N seconds of idle. 0 = disabled. |
+| `tcp_backlog` | integer | `511` | TCP listen backlog size. |
+| `tcp_keepalive` | integer | `300` | TCP keepalive interval in seconds. 0 = disabled. |
+| `unixsocket` | string | `""` | Unix socket path. Empty = disabled. |
+| `unixsocketperm` | integer | `0` | Unix socket permissions (octal). |
+
+### TLS Settings
+
+```toml
+[server.tls]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable TLS for client connections. |
+| `cert` | string | `""` | Path to TLS certificate file (PEM format). |
+| `key` | string | `""` | Path to TLS private key file (PEM format). |
+| `ca_cert` | string | `""` | Path to CA certificate for client verification. |
+| `require_client_cert` | boolean | `false` | Require clients to present certificates. |
+
+Example:
+
+```toml
+[server.tls]
+enabled = true
+cert = "/etc/frogdb/tls/server.crt"
+key = "/etc/frogdb/tls/server.key"
+```
+
+## Persistence Section
+
+Data durability settings.
+
+```toml
+[persistence]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable persistence. |
+| `data_dir` | string | `"./frogdb-data"` | Directory for data files. |
+| `mode` | string | `"periodic"` | Persistence mode: `"none"`, `"periodic"`, `"aof"`, `"hybrid"`. |
+
+### Snapshot Settings
+
+```toml
+[persistence.snapshot]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `interval` | string | `"5m"` | Interval between automatic snapshots. |
+| `compression` | boolean | `true` | Compress snapshots. |
+| `checksum` | boolean | `true` | Include checksum in snapshots. |
+
+### AOF Settings
+
+```toml
+[persistence.aof]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `fsync` | string | `"everysec"` | Fsync policy: `"always"`, `"everysec"`, `"no"`. |
+| `rewrite_min_size` | string | `"64mb"` | Minimum AOF size before rewrite. |
+| `rewrite_percentage` | integer | `100` | Trigger rewrite when AOF grows by this percentage. |
+
+Example:
+
+```toml
+[persistence]
+enabled = true
+data_dir = "/var/lib/frogdb"
+mode = "hybrid"
+
+[persistence.snapshot]
+interval = "10m"
+compression = true
+
+[persistence.aof]
+fsync = "everysec"
+```
+
+## Memory Section
+
+Memory management settings.
+
+```toml
+[memory]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `maxmemory` | string | `"0"` | Maximum memory limit. 0 = unlimited. Supports units: `kb`, `mb`, `gb`. |
+| `maxmemory_policy` | string | `"noeviction"` | Eviction policy when maxmemory is reached. |
+| `maxmemory_samples` | integer | `5` | Number of keys to sample for LRU/LFU eviction. |
+
+### Eviction Policies
+
+| Policy | Description |
+|--------|-------------|
+| `noeviction` | Return error when memory limit reached. |
+| `allkeys-lru` | Evict least recently used keys. |
+| `allkeys-lfu` | Evict least frequently used keys. |
+| `allkeys-random` | Evict random keys. |
+| `volatile-lru` | Evict LRU keys with TTL set. |
+| `volatile-lfu` | Evict LFU keys with TTL set. |
+| `volatile-random` | Evict random keys with TTL set. |
+| `volatile-ttl` | Evict keys with shortest TTL. |
+
+Example:
+
+```toml
+[memory]
+maxmemory = "4gb"
+maxmemory_policy = "allkeys-lru"
+maxmemory_samples = 10
+```
+
+## Replication Section
+
+Primary-replica replication settings.
+
+```toml
+[replication]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `role` | string | `"primary"` | Node role: `"primary"` or `"replica"`. |
+| `primary_host` | string | `""` | Primary host (for replicas). |
+| `primary_port` | integer | `6379` | Primary port (for replicas). |
+| `primary_auth` | string | `""` | Password for primary authentication. |
+| `replica_read_only` | boolean | `true` | Make replica read-only. |
+| `replica_serve_stale_data` | boolean | `true` | Serve data while syncing with primary. |
+| `repl_backlog_size` | string | `"1mb"` | Replication backlog size. |
+| `repl_timeout` | integer | `60` | Replication timeout in seconds. |
+
+Example:
+
+```toml
+[replication]
+role = "replica"
+primary_host = "primary.example.com"
+primary_port = 6379
+replica_read_only = true
+```
+
+## Cluster Section
+
+Cluster mode settings.
+
+```toml
+[cluster]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable cluster mode. |
+| `node_id` | string | `""` | Unique node identifier. Auto-generated if empty. |
+| `announce_ip` | string | `""` | IP address to announce to cluster. |
+| `announce_port` | integer | `0` | Port to announce. 0 = use server port. |
+| `cluster_port` | integer | `16379` | Port for cluster bus communication. |
+| `node_timeout` | integer | `15000` | Cluster node timeout in milliseconds. |
+| `replica_validity_factor` | integer | `10` | Factor for replica validity check. |
+| `migration_barrier` | integer | `1` | Minimum replicas before slot migration. |
+| `require_full_coverage` | boolean | `true` | Require all slots covered to accept writes. |
+
+Example:
+
+```toml
+[cluster]
+enabled = true
+node_id = "node1"
+announce_ip = "192.168.1.10"
+cluster_port = 16379
+node_timeout = 15000
+```
+
+## Auth Section
+
+Authentication settings.
+
+```toml
+[auth]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `requirepass` | string | `""` | Password required for connections. Empty = no auth. |
+
+Example:
+
+```toml
+[auth]
+requirepass = "your-secure-password"
+```
+
+## Logging Section
+
+Logging configuration.
+
+```toml
+[logging]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `level` | string | `"info"` | Log level: `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`. |
+| `format` | string | `"text"` | Log format: `"text"` or `"json"`. |
+| `file` | string | `""` | Log file path. Empty = stdout. |
+
+Example:
+
+```toml
+[logging]
+level = "info"
+format = "json"
+file = "/var/log/frogdb/frogdb.log"
+```
+
+## Metrics Section
+
+Observability settings.
+
+```toml
+[metrics]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `prometheus_enabled` | boolean | `false` | Enable Prometheus metrics endpoint. |
+| `prometheus_port` | integer | `9121` | Port for Prometheus metrics. |
+
+Example:
+
+```toml
+[metrics]
+prometheus_enabled = true
+prometheus_port = 9121
+```
+
+## Slow Log Section
+
+Slow query logging.
+
+```toml
+[slowlog]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `log_slower_than` | integer | `10000` | Log queries slower than N microseconds. -1 = disabled. |
+| `max_len` | integer | `128` | Maximum number of entries in slow log. |
+
+Example:
+
+```toml
+[slowlog]
+log_slower_than = 10000
+max_len = 256
+```
+
+## Complete Example
+
+```toml
+# Production configuration
+
+[server]
+bind = "0.0.0.0"
+port = 6379
+max_clients = 10000
+timeout = 0
+
+[server.tls]
+enabled = true
+cert = "/etc/frogdb/tls/server.crt"
+key = "/etc/frogdb/tls/server.key"
+
+[persistence]
+enabled = true
+data_dir = "/var/lib/frogdb"
+mode = "hybrid"
+
+[persistence.snapshot]
+interval = "5m"
+compression = true
+
+[persistence.aof]
+fsync = "everysec"
+
+[memory]
+maxmemory = "8gb"
+maxmemory_policy = "allkeys-lru"
+
+[auth]
+requirepass = "your-secure-password"
+
+[logging]
+level = "info"
+format = "json"
+
+[metrics]
+prometheus_enabled = true
+prometheus_port = 9121
+
+[slowlog]
+log_slower_than = 10000
+max_len = 256
+```
+
+## See Also
+
+- [Configuration Guide](/getting-started/configuration/) — Getting started with configuration
+- [CLI Reference](/reference/cli/) — Command-line options
+- [Deployment](/operations/deployment/) — Production deployment

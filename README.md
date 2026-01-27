@@ -16,6 +16,15 @@ Operationally it supports Prometheus as well as OpenTelemetry metrics, tracing, 
 
 To manage FrogDB in cluster mode you can use a Kubernetes operator, TKTK.
 
+## Documentation
+
+For user and operator documentation, visit the [FrogDB Documentation Site](./docs-site/) or run locally:
+
+```bash
+just docs-install  # Install dependencies
+just docs-dev      # Start development server at localhost:4321
+```
+
 ## Goals
 
 - _Correctness_: clear guarantees about consistency and failure modes that are verified using

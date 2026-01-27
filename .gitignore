@@ -30,7 +30,10 @@ onyx/.env
 
 # bun
 node_modules/
-dist/
+
+# Documentation site build output
+docs-site/dist/
+docs-site/.astro/
 
 # RocksDB data directories (created during testing/development)
 frogdb-data/

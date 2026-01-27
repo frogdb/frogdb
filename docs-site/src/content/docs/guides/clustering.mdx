@@ -1,0 +1,303 @@
+---
+title: Clustering
+description: Distributed FrogDB with automatic sharding and failover
+---
+
+FrogDB clustering provides horizontal scaling through automatic data sharding across multiple nodes.
+
+## Overview
+
+FrogDB uses hash slot-based sharding, similar to Redis Cluster:
+
+- **16384 hash slots** distributed across nodes
+- **Automatic key routing** via CRC16 hash
+- **Leader election** for each slot range
+- **Automatic failover** when nodes fail
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    FrogDB Cluster                            │
+├──────────────────┬──────────────────┬───────────────────────┤
+│     Node 1       │     Node 2       │       Node 3          │
+│  Slots 0-5460    │  Slots 5461-10922│   Slots 10923-16383   │
+└──────────────────┴──────────────────┴───────────────────────┘
+```
+
+## Cluster Setup
+
+### Minimum Requirements
+
+- At least 3 primary nodes (for quorum)
+- Recommended: 6 nodes (3 primaries + 3 replicas)
+
+### Node Configuration
+
+Configure each node for cluster mode:
+
+```toml
+# node1.toml
+[server]
+bind = "0.0.0.0"
+port = 6379
+
+[cluster]
+enabled = true
+node_id = "node1"
+announce_ip = "192.168.1.10"
+announce_port = 6379
+cluster_port = 16379
+
+# Initial cluster members
+nodes = [
+  "192.168.1.10:6379",
+  "192.168.1.11:6379",
+  "192.168.1.12:6379"
+]
+
+[persistence]
+enabled = true
+data_dir = "/var/lib/frogdb"
+```
+
+### Start the Cluster
+
+Start each node:
+
+```bash
+# On each node
+frogdb-server --config node1.toml
+```
+
+### Initialize Cluster
+
+Once all nodes are running, create the cluster:
+
+```bash
+# From any node
+frogdb-cli --cluster create \
+  192.168.1.10:6379 \
+  192.168.1.11:6379 \
+  192.168.1.12:6379 \
+  --replicas 0
+```
+
+With replicas:
+
+```bash
+frogdb-cli --cluster create \
+  192.168.1.10:6379 \
+  192.168.1.11:6379 \
+  192.168.1.12:6379 \
+  192.168.1.20:6379 \
+  192.168.1.21:6379 \
+  192.168.1.22:6379 \
+  --replicas 1
+```
+
+## Hash Slots
+
+Keys are assigned to slots using CRC16:
+
+```
+slot = CRC16(key) mod 16384
+```
+
+Check which slot a key belongs to:
+
+```redis
+CLUSTER KEYSLOT mykey
+# (integer) 5617
+```
+
+### Hash Tags
+
+Force related keys to the same slot using hash tags:
+
+```redis
+SET {user:1}:profile "..."
+SET {user:1}:settings "..."
+SET {user:1}:sessions "..."
+
+# All keys hash to the same slot based on {user:1}
+```
+
+This enables multi-key operations on related data:
+
+```redis
+MGET {user:1}:profile {user:1}:settings
+```
+
+## Client Connection
+
+### Cluster-Aware Clients
+
+Use a cluster-aware Redis client:
+
+```python
+from redis.cluster import RedisCluster
+
+rc = RedisCluster(
+    host='192.168.1.10',
+    port=6379,
+    decode_responses=True
+)
+
+rc.set('key', 'value')  # Automatically routes to correct node
+```
+
+```javascript
+const Redis = require('ioredis');
+
+const cluster = new Redis.Cluster([
+  { host: '192.168.1.10', port: 6379 },
+  { host: '192.168.1.11', port: 6379 },
+  { host: '192.168.1.12', port: 6379 }
+]);
+```
+
+### MOVED and ASK Redirects
+
+When a key is on a different node, you'll receive a redirect:
+
+```redis
+GET somekey
+# (error) MOVED 5617 192.168.1.11:6379
+```
+
+Cluster-aware clients handle redirects automatically.
+
+## Cluster Management
+
+### View Cluster State
+
+```redis
+CLUSTER INFO
+# cluster_state:ok
+# cluster_slots_assigned:16384
+# cluster_slots_ok:16384
+# cluster_known_nodes:6
+# cluster_size:3
+
+CLUSTER NODES
+# node1 192.168.1.10:6379 master - 0-5460
+# node2 192.168.1.11:6379 master - 5461-10922
+# node3 192.168.1.12:6379 master - 10923-16383
+```
+
+### Add a Node
+
+```bash
+# Add new node to cluster
+frogdb-cli --cluster add-node 192.168.1.13:6379 192.168.1.10:6379
+
+# Rebalance slots
+frogdb-cli --cluster rebalance 192.168.1.10:6379
+```
+
+### Remove a Node
+
+```bash
+# First, reshard slots away from the node
+frogdb-cli --cluster reshard 192.168.1.10:6379 \
+  --from node4-id \
+  --to node1-id \
+  --slots 4096
+
+# Then remove the empty node
+frogdb-cli --cluster del-node 192.168.1.10:6379 node4-id
+```
+
+### Rebalance Slots
+
+Redistribute slots evenly:
+
+```bash
+frogdb-cli --cluster rebalance 192.168.1.10:6379 --use-empty-masters
+```
+
+## Failover
+
+### Automatic Failover
+
+When a primary fails:
+
+1. Replicas detect the failure
+2. Replicas initiate election
+3. One replica is promoted to primary
+4. Cluster updates slot assignments
+
+### Manual Failover
+
+Graceful failover (e.g., for maintenance):
+
+```redis
+# On replica node
+CLUSTER FAILOVER
+```
+
+Force failover when primary is unreachable:
+
+```redis
+CLUSTER FAILOVER FORCE
+```
+
+## Cluster Limitations
+
+### Cross-Slot Operations
+
+Multi-key commands require all keys in the same slot:
+
+```redis
+# Works - same hash tag
+MSET {user}:a 1 {user}:b 2
+
+# Fails - different slots
+MSET user:a 1 user:b 2
+# (error) CROSSSLOT Keys in request don't hash to the same slot
+```
+
+### Lua Scripts
+
+Scripts must use hash tags:
+
+```lua
+-- Good: all keys use same hash tag
+local a = redis.call('GET', KEYS[1])  -- {user:1}:balance
+local b = redis.call('GET', KEYS[2])  -- {user:1}:pending
+```
+
+### Transactions
+
+`MULTI`/`EXEC` only work within a single slot:
+
+```redis
+MULTI
+SET {order:123}:status "paid"
+INCR {order:123}:updates
+EXEC
+```
+
+## Monitoring
+
+```redis
+# Cluster health
+CLUSTER INFO
+
+# Node status
+CLUSTER NODES
+
+# Slot distribution
+CLUSTER SLOTS
+```
+
+Key metrics to monitor:
+
+- `cluster_state` — Should be `ok`
+- `cluster_slots_ok` — Should equal `cluster_slots_assigned`
+- Failed node detection and failover time
+
+## Next Steps
+
+- [Deployment](/operations/deployment/) — Production deployment patterns
+- [Monitoring](/operations/monitoring/) — Cluster monitoring
+- [Troubleshooting](/operations/troubleshooting/) — Common cluster issues
