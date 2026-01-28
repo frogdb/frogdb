@@ -9,7 +9,414 @@
 //! - FLUSHDB/FLUSHALL - Flush databases
 
 use bytes::Bytes;
+use frogdb_core::{KeyType, ScatterOp, ShardMessage};
 use frogdb_protocol::Response;
+use tokio::sync::oneshot;
+use tracing::warn;
+
+use crate::connection::{next_txid, ConnectionHandler};
+
+impl ConnectionHandler {
+    /// Handle SCAN command - scan keys across all shards with cursor.
+    pub(crate) async fn handle_scan(&self, args: &[Bytes]) -> Response {
+        use crate::commands::scan::cursor;
+
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'scan' command");
+        }
+
+        // Parse cursor
+        let cursor_str = match std::str::from_utf8(&args[0]) {
+            Ok(s) => s,
+            Err(_) => return Response::error("ERR invalid cursor"),
+        };
+        let encoded_cursor: u64 = match cursor_str.parse() {
+            Ok(c) => c,
+            Err(_) => return Response::error("ERR invalid cursor"),
+        };
+
+        // Decode cursor to get shard_id and position
+        let (shard_id, position) = cursor::decode(encoded_cursor);
+
+        // Parse optional arguments
+        let mut pattern: Option<Bytes> = None;
+        let mut count: usize = 10;
+        let mut key_type: Option<KeyType> = None;
+
+        let mut i = 1;
+        while i < args.len() {
+            let opt = args[i].to_ascii_uppercase();
+            match opt.as_slice() {
+                b"MATCH" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Response::error("ERR syntax error");
+                    }
+                    pattern = Some(args[i].clone());
+                }
+                b"COUNT" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Response::error("ERR syntax error");
+                    }
+                    count = match std::str::from_utf8(&args[i])
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                    {
+                        Some(c) => c,
+                        None => return Response::error("ERR value is not an integer or out of range"),
+                    };
+                }
+                b"TYPE" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Response::error("ERR syntax error");
+                    }
+                    let type_str = args[i].to_ascii_lowercase();
+                    key_type = match type_str.as_slice() {
+                        b"string" => Some(KeyType::String),
+                        b"list" => Some(KeyType::List),
+                        b"set" => Some(KeyType::Set),
+                        b"zset" => Some(KeyType::SortedSet),
+                        b"hash" => Some(KeyType::Hash),
+                        b"stream" => Some(KeyType::Stream),
+                        _ => return Response::error(format!(
+                            "ERR unknown type: {}",
+                            String::from_utf8_lossy(&type_str)
+                        )),
+                    };
+                }
+                _ => return Response::error("ERR syntax error"),
+            }
+            i += 1;
+        }
+
+        // If shard_id is beyond our shards, we're done
+        if shard_id as usize >= self.num_shards {
+            return Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"0")),
+                Response::Array(vec![]),
+            ]);
+        }
+
+        // Iterate through shards, collecting keys
+        let mut all_keys = Vec::new();
+        let mut next_shard = shard_id as usize;
+        let mut next_position = position;
+
+        while all_keys.len() < count && next_shard < self.num_shards {
+            // Send scan request to current shard
+            let (response_tx, response_rx) = oneshot::channel();
+            let remaining = count - all_keys.len();
+
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::Scan {
+                    cursor: next_position,
+                    count: remaining,
+                    pattern: pattern.clone(),
+                    key_type,
+                },
+                conn_id: self.state.id,
+                response_tx,
+            };
+
+            if self.shard_senders[next_shard].send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+
+            match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
+                Ok(Ok(partial)) => {
+                    // Extract cursor and keys from response
+                    let mut shard_next_cursor = 0u64;
+                    for (key, response) in partial.results {
+                        if key.as_ref() == b"__cursor__" {
+                            if let Response::Integer(c) = response {
+                                shard_next_cursor = c as u64;
+                            }
+                        } else {
+                            all_keys.push(key);
+                        }
+                    }
+
+                    if shard_next_cursor == 0 {
+                        // Shard exhausted, move to next shard
+                        next_shard += 1;
+                        next_position = 0;
+                    } else {
+                        // More keys in this shard
+                        next_position = shard_next_cursor;
+                        break; // We have a valid cursor, stop
+                    }
+                }
+                Ok(Err(_)) => return Response::error("ERR shard dropped request"),
+                Err(_) => return Response::error("ERR scan timeout"),
+            }
+        }
+
+        // Encode next cursor
+        let final_cursor = if next_shard >= self.num_shards {
+            0 // Done
+        } else {
+            cursor::encode(next_shard as u16, next_position)
+        };
+
+        // Build response
+        let key_responses: Vec<Response> = all_keys.into_iter().map(Response::bulk).collect();
+
+        Response::Array(vec![
+            Response::bulk(Bytes::from(final_cursor.to_string())),
+            Response::Array(key_responses),
+        ])
+    }
+
+    /// Handle KEYS command - scatter-gather across all shards.
+    pub(crate) async fn handle_keys(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'keys' command");
+        }
+
+        let pattern = args[0].clone();
+
+        // Scatter to all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::Keys { pattern: pattern.clone() },
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        // Gather all keys
+        let mut all_keys = Vec::new();
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    for (key, _) in partial.results {
+                        all_keys.push(key);
+                    }
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped KEYS request");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "KEYS timeout");
+                    return Response::error("ERR keys timeout");
+                }
+            }
+        }
+
+        // Sort keys for consistency
+        all_keys.sort();
+
+        Response::Array(all_keys.into_iter().map(Response::bulk).collect())
+    }
+
+    /// Handle DBSIZE command - sum key counts from all shards.
+    pub(crate) async fn handle_dbsize(&self) -> Response {
+        // Scatter to all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::DbSize,
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        // Sum counts
+        let mut total: i64 = 0;
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    for (_, response) in partial.results {
+                        if let Response::Integer(count) = response {
+                            total += count;
+                        }
+                    }
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped DBSIZE request");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "DBSIZE timeout");
+                    return Response::error("ERR dbsize timeout");
+                }
+            }
+        }
+
+        Response::Integer(total)
+    }
+
+    /// Handle RANDOMKEY command - return a random key using weighted shard selection.
+    pub(crate) async fn handle_randomkey(&self) -> Response {
+        use rand::Rng;
+
+        // Phase 1: Get key counts from all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::DbSize,
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        // Collect key counts per shard
+        let mut shard_counts: Vec<(usize, i64)> = Vec::with_capacity(self.num_shards);
+        let mut total_keys: i64 = 0;
+
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    for (_, response) in partial.results {
+                        if let Response::Integer(count) = response {
+                            shard_counts.push((shard_id, count));
+                            total_keys += count;
+                        }
+                    }
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped DBSIZE request for RANDOMKEY");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "DBSIZE timeout for RANDOMKEY");
+                    return Response::error("ERR timeout");
+                }
+            }
+        }
+
+        // If database is empty, return nil
+        if total_keys == 0 {
+            return Response::null();
+        }
+
+        // Phase 2: Select shard probabilistically (weighted by key count)
+        let selected_shard = {
+            let mut rng = rand::thread_rng();
+            let selection = rng.gen_range(0..total_keys);
+            let mut cumulative: i64 = 0;
+            let mut selected: usize = 0;
+
+            for (shard_id, count) in &shard_counts {
+                cumulative += count;
+                if selection < cumulative {
+                    selected = *shard_id;
+                    break;
+                }
+            }
+            selected
+        };
+
+        // Phase 3: Request random key from selected shard
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::ScatterRequest {
+            request_id: next_txid(),
+            keys: vec![],
+            operation: ScatterOp::RandomKey,
+            conn_id: self.state.id,
+            response_tx,
+        };
+
+        if self.shard_senders[selected_shard].send(msg).await.is_err() {
+            return Response::error("ERR shard unavailable");
+        }
+
+        match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
+            Ok(Ok(partial)) => {
+                // Return the random key (or null if shard is now empty)
+                if let Some((_, response)) = partial.results.into_iter().next() {
+                    return response;
+                }
+                Response::null()
+            }
+            Ok(Err(_)) => {
+                warn!(selected_shard, "Shard dropped RANDOMKEY request");
+                Response::error("ERR shard dropped request")
+            }
+            Err(_) => {
+                warn!(selected_shard, "RANDOMKEY timeout");
+                Response::error("ERR timeout")
+            }
+        }
+    }
+
+    /// Handle FLUSHDB command - clear all shards.
+    pub(crate) async fn handle_flushdb(&self, args: &[Bytes]) -> Response {
+        // Parse optional ASYNC/SYNC argument (we only support SYNC for now)
+        if !args.is_empty() {
+            let mode = args[0].to_ascii_uppercase();
+            if mode.as_slice() != b"ASYNC" && mode.as_slice() != b"SYNC" {
+                return Response::error("ERR syntax error");
+            }
+        }
+
+        // Broadcast to all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::FlushDb,
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        // Wait for all to complete
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped FLUSHDB request");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "FLUSHDB timeout");
+                    return Response::error("ERR flushdb timeout");
+                }
+            }
+        }
+
+        Response::ok()
+    }
+
+    /// Handle FLUSHALL command - same as FLUSHDB (single database).
+    pub(crate) async fn handle_flushall(&self, args: &[Bytes]) -> Response {
+        self.handle_flushdb(args).await
+    }
+}
 
 /// Handler for scatter-gather commands.
 #[derive(Clone)]
