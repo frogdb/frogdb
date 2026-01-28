@@ -10,7 +10,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     extract_hash_tag, shard_for_key, slot_for_key, Arity, Command, CommandContext, CommandError,
-    CommandFlags, ExecutionStrategy, MergeStrategy, Value,
+    CommandFlags, ExecutionStrategy, MergeStrategy, ServerWideOp, Value,
 };
 use frogdb_protocol::Response;
 
@@ -745,6 +745,10 @@ impl Command for RandomkeyCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::READONLY | CommandFlags::RANDOM
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::RandomKey)
     }
 
     fn execute(

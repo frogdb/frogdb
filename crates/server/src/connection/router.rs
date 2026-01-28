@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use frogdb_core::{ConnectionLevelOp, ExecutionStrategy, MergeStrategy};
+use frogdb_core::{ConnectionLevelOp, ExecutionStrategy, MergeStrategy, ServerWideOp};
 
 /// Result of routing a command.
 ///
@@ -42,6 +42,12 @@ pub enum RouteResult {
     Blocking {
         /// Default timeout (None = block forever).
         default_timeout: Option<Duration>,
+    },
+
+    /// Server-wide command that needs to execute across all shards.
+    ServerWide {
+        /// The server-wide operation to perform.
+        op: ServerWideOp,
     },
 }
 
@@ -169,6 +175,7 @@ impl CommandRouter {
             },
             ExecutionStrategy::RaftConsensus => RouteResult::RaftConsensus,
             ExecutionStrategy::AsyncExternal => RouteResult::AsyncExternal,
+            ExecutionStrategy::ServerWide(op) => RouteResult::ServerWide { op: op.clone() },
         }
     }
 
@@ -210,77 +217,9 @@ impl CommandRouter {
         }
     }
 
-    /// Determine the connection-level handler for a command by name.
-    ///
-    /// This is used for commands that need special routing logic based on
-    /// their name rather than their declared execution strategy.
-    pub fn handler_for_command(cmd_name: &str) -> Option<ConnectionLevelHandler> {
-        match cmd_name {
-            // Authentication
-            "AUTH" => Some(ConnectionLevelHandler::Auth),
-            "HELLO" => Some(ConnectionLevelHandler::Hello),
-
-            // ACL
-            "ACL" => Some(ConnectionLevelHandler::Acl),
-
-            // Pub/Sub
-            "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" | "PUBLISH" | "PUBSUB" => {
-                Some(ConnectionLevelHandler::PubSub)
-            }
-
-            // Sharded Pub/Sub
-            "SSUBSCRIBE" | "SUNSUBSCRIBE" | "SPUBLISH" => {
-                Some(ConnectionLevelHandler::ShardedPubSub)
-            }
-
-            // Transactions
-            "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" => {
-                Some(ConnectionLevelHandler::Transaction)
-            }
-
-            // Scripting
-            "EVAL" | "EVALSHA" | "SCRIPT" | "EVALSHA_RO" | "EVAL_RO" => {
-                Some(ConnectionLevelHandler::Scripting)
-            }
-
-            // Functions
-            "FCALL" | "FCALL_RO" | "FUNCTION" => Some(ConnectionLevelHandler::Function),
-
-            // Client commands
-            "CLIENT" => Some(ConnectionLevelHandler::Client),
-
-            // Config commands
-            "CONFIG" => Some(ConnectionLevelHandler::Config),
-
-            // Info
-            "INFO" => Some(ConnectionLevelHandler::Info),
-
-            // Debug
-            "DEBUG" => Some(ConnectionLevelHandler::Debug),
-
-            // Slowlog
-            "SLOWLOG" => Some(ConnectionLevelHandler::Slowlog),
-
-            // Memory
-            "MEMORY" => Some(ConnectionLevelHandler::Memory),
-
-            // Latency
-            "LATENCY" => Some(ConnectionLevelHandler::Latency),
-
-            // Status (custom FrogDB command)
-            "STATUS" => Some(ConnectionLevelHandler::Status),
-
-            // Connection state
-            "RESET" | "SELECT" | "QUIT" | "PING" | "ECHO" | "COMMAND" => {
-                Some(ConnectionLevelHandler::ConnectionState)
-            }
-
-            // Cluster commands
-            "CLUSTER" | "READONLY" | "READWRITE" => Some(ConnectionLevelHandler::Cluster),
-
-            _ => None,
-        }
-    }
+    // Note: handler_for_command() has been removed.
+    // Connection-level dispatch is now driven by execution_strategy() declarations.
+    // See ConnectionHandler::derive_connection_handler() in connection.rs.
 }
 
 #[cfg(test)]
@@ -328,16 +267,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_handler_for_command() {
-        assert_eq!(
-            CommandRouter::handler_for_command("AUTH"),
-            Some(ConnectionLevelHandler::Auth)
-        );
-        assert_eq!(
-            CommandRouter::handler_for_command("SUBSCRIBE"),
-            Some(ConnectionLevelHandler::PubSub)
-        );
-        assert_eq!(CommandRouter::handler_for_command("GET"), None);
-    }
+    // Note: test_handler_for_command has been removed because handler_for_command()
+    // has been replaced by derive_connection_handler() in ConnectionHandler.
+    // The connection-level dispatch is now driven by execution_strategy() declarations.
 }
