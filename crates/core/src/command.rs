@@ -50,6 +50,29 @@ pub enum ExecutionStrategy {
     /// Async external: performs async I/O outside the normal shard path.
     /// Used for MIGRATE, DEBUG SLEEP, and similar commands.
     AsyncExternal,
+
+    /// Server-wide: command needs to execute across all shards and merge results.
+    /// Used for commands like SCAN, KEYS, DBSIZE, RANDOMKEY, FLUSHDB, FLUSHALL.
+    ServerWide(ServerWideOp),
+}
+
+/// Operations that execute across all shards (server-wide commands).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerWideOp {
+    /// SCAN: iterate keys across all shards with cursor-based pagination.
+    Scan,
+    /// KEYS: pattern match keys across all shards.
+    Keys,
+    /// DBSIZE: count keys across all shards and sum results.
+    DbSize,
+    /// RANDOMKEY: pick a random key from any shard.
+    RandomKey,
+    /// FLUSHDB: flush all keys in the database.
+    FlushDb,
+    /// FLUSHALL: flush all databases (same as FLUSHDB for single-db).
+    FlushAll,
+    /// SHUTDOWN: gracefully shutdown the server.
+    Shutdown,
 }
 
 impl Default for ExecutionStrategy {

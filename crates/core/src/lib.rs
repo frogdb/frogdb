@@ -39,7 +39,7 @@ pub mod metrics;
 pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
     CommandMetadata, ConnectionLevelOp, ExecutionStrategy, MergeStrategy, QuorumChecker,
-    ReplicationContextRef, get_or_create,
+    ReplicationContextRef, ServerWideOp, get_or_create,
 };
 pub use store::ValueType;
 pub use error::{CommandError, FrogDbError, RespError};

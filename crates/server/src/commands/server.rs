@@ -10,6 +10,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, MergeStrategy,
+    ServerWideOp,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -221,6 +222,10 @@ impl Command for ShutdownCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::Shutdown)
     }
 
     fn execute(
