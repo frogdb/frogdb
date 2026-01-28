@@ -284,6 +284,29 @@ impl MetricsRecorder for PrometheusRecorder {
 unsafe impl Send for PrometheusRecorder {}
 unsafe impl Sync for PrometheusRecorder {}
 
+// Implement MetricsProvider trait for integration with frogdb-debug
+impl frogdb_debug::MetricsProvider for PrometheusRecorder {
+    fn encode(&self) -> String {
+        self.encode()
+    }
+
+    fn get_counter_value(&self, name: &str) -> Option<f64> {
+        self.get_counter_value(name)
+    }
+
+    fn get_gauge_value(&self, name: &str) -> Option<f64> {
+        self.get_gauge_value(name)
+    }
+
+    fn get_histogram_quantiles(&self, name: &str) -> Option<(f64, f64, f64)> {
+        self.get_histogram_quantiles(name)
+    }
+
+    fn record_gauge(&self, name: &str, value: f64, labels: &[(&str, &str)]) {
+        MetricsRecorder::record_gauge(self, name, value, labels)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

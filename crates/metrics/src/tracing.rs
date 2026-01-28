@@ -267,6 +267,21 @@ impl OtelTracer {
     }
 }
 
+// Implement TraceProvider trait for integration with frogdb-debug bundle generation
+impl frogdb_debug::TraceProvider for OtelTracer {
+    fn get_recent_traces(&self, count: usize) -> Vec<frogdb_debug::TraceEntryJson> {
+        self.get_recent_traces(count)
+            .into_iter()
+            .map(|entry| frogdb_debug::TraceEntryJson {
+                trace_id: entry.trace_id,
+                timestamp_ms: entry.timestamp_ms,
+                command: entry.command,
+                sampled: entry.sampled,
+            })
+            .collect()
+    }
+}
+
 /// A span representing a single request lifecycle.
 pub struct RequestSpan {
     context: Option<Context>,
