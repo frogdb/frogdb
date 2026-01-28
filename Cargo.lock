@@ -1349,6 +1349,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-debug"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-core",
+ "http-body-util",
+ "hyper",
+ "mime_guess",
+ "parking_lot",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "zip",
+]
+
+[[package]]
 name = "frogdb-macros"
 version = "0.1.0"
 dependencies = [
@@ -1364,6 +1383,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "frogdb-core",
+ "frogdb-debug",
  "frogdb-metrics",
  "frogdb-metrics-derive",
  "frogdb-protocol",
@@ -1372,7 +1392,6 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "mime_guess",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -1380,7 +1399,6 @@ dependencies = [
  "prometheus",
  "redis-protocol",
  "reqwest",
- "rust-embed",
  "serde",
  "serde_json",
  "sysinfo",
@@ -1426,6 +1444,7 @@ dependencies = [
  "crc16",
  "figment",
  "frogdb-core",
+ "frogdb-debug",
  "frogdb-macros",
  "frogdb-metrics",
  "frogdb-protocol",
