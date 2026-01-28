@@ -5,6 +5,7 @@
 //! - [`auth`] - Authentication (AUTH, HELLO, ACL)
 //! - [`pubsub`] - Pub/Sub response helpers
 //! - [`scripting`] - Scripting (EVAL, EVALSHA, SCRIPT, FCALL, FUNCTION)
+//! - [`transaction`] - Transaction (MULTI, EXEC, DISCARD, WATCH, UNWATCH)
 //! - [`admin`] - Administrative (CLIENT, CONFIG, DEBUG, MEMORY, LATENCY)
 //! - [`persistence`] - Persistence (BGSAVE, MIGRATE, DUMP/RESTORE)
 //! - [`scatter`] - Scatter-gather (SCAN, KEYS, DBSIZE, RANDOMKEY)
@@ -23,6 +24,7 @@ pub mod pubsub;
 pub mod scatter;
 pub mod scripting;
 pub mod slowlog;
+pub mod transaction;
 
 // Re-export commonly used types
 pub use admin::AdminHandler;
