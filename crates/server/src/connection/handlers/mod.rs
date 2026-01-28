@@ -14,10 +14,15 @@
 
 pub mod admin;
 pub mod auth;
+pub mod client;
+pub mod config;
+pub mod latency;
+pub mod memory;
 pub mod persistence;
 pub mod pubsub;
 pub mod scatter;
 pub mod scripting;
+pub mod slowlog;
 
 // Re-export commonly used types
 pub use admin::AdminHandler;
