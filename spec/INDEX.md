@@ -382,6 +382,7 @@ These sources document how similar systems handle edge cases and can be consulte
 | [CONNECTION.md](CONNECTION.md) | Connection lifecycle, rate limiting |
 | [COMMANDS.md](COMMANDS.md) | Command index |
 | [EXECUTION.md](EXECUTION.md) | Command trait, arity, flags, type checking |
+| [REQUEST_FLOWS.md](REQUEST_FLOWS.md) | Mermaid flow diagrams for all request routing paths |
 | [GLOSSARY.md](GLOSSARY.md) | Term definitions and abbreviations |
 | [types/](types/) | Data type implementations and commands |
 | [DEBUGGING.md](DEBUGGING.md) | Debugging tools, dtrace/eBPF, developer debugging |
