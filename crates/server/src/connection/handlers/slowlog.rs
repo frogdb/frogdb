@@ -1,4 +1,4 @@
-//! SLOWLOG command handlers.
+//! SLOWLOG command handlers and slow query logging.
 //!
 //! This module handles SLOWLOG subcommands:
 //! - SLOWLOG GET - Get recent slow queries
@@ -6,14 +6,14 @@
 //! - SLOWLOG RESET - Clear all slow query logs
 //! - SLOWLOG HELP - Show help text
 //!
-//! Note: The `maybe_log_slow_query` helper function remains in the main
-//! connection module as it's used by the run() loop.
+//! It also provides the `maybe_log_slow_query` helper used by the run() loop
+//! to record slow commands.
 //!
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
-use frogdb_core::ShardMessage;
-use frogdb_protocol::Response;
+use frogdb_core::{CommandFlags, ShardMessage, SlowLog};
+use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 
 use crate::connection::ConnectionHandler;
@@ -158,5 +158,60 @@ impl ConnectionHandler {
             Response::bulk(Bytes::from_static(b"    Print this help.")),
         ];
         Response::Array(help)
+    }
+
+    /// Log a slow query to the appropriate shard if threshold is exceeded.
+    pub(crate) async fn maybe_log_slow_query(&self, cmd: &ParsedCommand, elapsed_us: u64) {
+        // Check threshold setting
+        let threshold = self.config_manager.slowlog_log_slower_than();
+
+        // -1 means disabled
+        if threshold < 0 {
+            return;
+        }
+
+        // Check if elapsed time exceeds threshold (0 means log all)
+        if threshold > 0 && elapsed_us < threshold as u64 {
+            return;
+        }
+
+        // Check if command has SKIP_SLOWLOG flag
+        let cmd_name = cmd.name_uppercase();
+        let cmd_name_str = String::from_utf8_lossy(&cmd_name);
+        if let Some(handler) = self.registry.get(&cmd_name_str) {
+            if handler.flags().contains(CommandFlags::SKIP_SLOWLOG) {
+                return;
+            }
+        }
+
+        // Prepare command args for logging (including command name)
+        let mut command_args = vec![cmd.name.clone()];
+        command_args.extend(cmd.args.iter().cloned());
+
+        // Truncate args according to max_arg_len setting
+        let max_arg_len = self.config_manager.slowlog_max_arg_len();
+        let truncated_args = SlowLog::truncate_args(&command_args, max_arg_len);
+
+        // Get client info
+        let client_addr = self.state.addr.to_string();
+        let client_name = self
+            .state
+            .name
+            .as_ref()
+            .map(|n| String::from_utf8_lossy(n).to_string())
+            .unwrap_or_default();
+
+        // Send to shard 0 (or we could distribute based on some logic)
+        // Using shard 0 is simplest and matches Redis behavior
+        if let Some(sender) = self.shard_senders.first() {
+            let _ = sender
+                .send(ShardMessage::SlowlogAdd {
+                    duration_us: elapsed_us,
+                    command: truncated_args,
+                    client_addr,
+                    client_name,
+                })
+                .await;
+        }
     }
 }

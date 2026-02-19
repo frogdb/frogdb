@@ -217,9 +217,6 @@ impl CommandRouter {
         }
     }
 
-    // Note: handler_for_command() has been removed.
-    // Connection-level dispatch is now driven by execution_strategy() declarations.
-    // See ConnectionHandler::derive_connection_handler() in connection.rs.
 }
 
 #[cfg(test)]
@@ -267,7 +264,4 @@ mod tests {
         ));
     }
 
-    // Note: test_handler_for_command has been removed because handler_for_command()
-    // has been replaced by derive_connection_handler() in ConnectionHandler.
-    // The connection-level dispatch is now driven by execution_strategy() declarations.
 }
