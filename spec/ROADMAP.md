@@ -168,6 +168,7 @@ See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for detailed profiling infrastructure, 
 **Subsections:**
 
 - Profiling Infrastructure
+- Async Task Profiling
 - Quick Wins
 - Memory Optimizations
 - I/O Optimizations

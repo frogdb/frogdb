@@ -43,6 +43,21 @@ redis-benchmark -h 127.0.0.1 -p 6379 -n 100000 -c 50 -t get,set
 cargo flamegraph --profile profiling --bin frogdb-server
 ```
 
+**Async Task Profiling:**
+
+For profiling tokio task-level performance, use `tokio-metrics` and `tracing` spans to measure per-task busy/idle/scheduled timing and identify latency bottlenecks:
+
+| Tool | Crate | Use Case |
+|------|-------|----------|
+| tokio-metrics | `tokio-metrics` | Per-task busy/idle/scheduled timing via `TaskMonitor` |
+| tracing spans | `tracing` | Span-based latency analysis at task/operation granularity |
+| tracing-timing | `tracing-timing` | Latency histograms derived from tracing spans |
+
+- [ ] Add `tokio-metrics` `TaskMonitor` instrumentation for key task types (connection handler, shard operations, WAL writes)
+- [ ] Add `tracing` span instrumentation for critical request paths
+- [ ] Integrate `tracing-timing` for per-operation latency histograms
+
+> **Research concept:** For causal profiling adapted to async runtimes, see [TOKIO_CAUSAL_PROFILER.md](TOKIO_CAUSAL_PROFILER.md).
 - [ ] Add `[profile.profiling]` build profile to `Cargo.toml`
 - [ ] Add `scan.rs` benchmark - SCAN with 10K, 100K, 1M keys
 - [ ] Add `large_values.rs` benchmark - GET/SET with 1KB, 10KB, 100KB values
