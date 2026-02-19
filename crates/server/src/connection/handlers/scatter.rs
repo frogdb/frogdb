@@ -416,6 +416,16 @@ impl ConnectionHandler {
     pub(crate) async fn handle_flushall(&self, args: &[Bytes]) -> Response {
         self.handle_flushdb(args).await
     }
+
+    /// Handle INFO command - gather info from all shards.
+    pub(crate) async fn handle_info(&self, args: &[Bytes]) -> Response {
+        // Execute on local shard (INFO mostly returns static data or aggregate stats)
+        let cmd = frogdb_protocol::ParsedCommand {
+            name: Bytes::from_static(b"INFO"),
+            args: args.to_vec(),
+        };
+        self.execute_on_shard(self.shard_id, &cmd).await
+    }
 }
 
 /// Handler for scatter-gather commands.

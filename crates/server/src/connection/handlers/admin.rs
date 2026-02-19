@@ -8,6 +8,7 @@
 //! - LATENCY - Latency monitoring
 //! - SLOWLOG - Slow query log
 //! - INFO - Server information
+//! - SHUTDOWN - Server shutdown stub
 
 use std::sync::Arc;
 
@@ -15,6 +16,7 @@ use bytes::Bytes;
 use frogdb_core::{ClientRegistry, PauseMode};
 use frogdb_protocol::Response;
 
+use crate::connection::ConnectionHandler;
 use crate::runtime_config::ConfigManager;
 
 /// Handler for administrative commands.
@@ -367,5 +369,14 @@ impl AdminHandler {
             "    Show this help.",
         ];
         Response::Array(help.into_iter().map(|s| Response::bulk(s)).collect())
+    }
+}
+
+impl ConnectionHandler {
+    /// Handle SHUTDOWN command.
+    pub(crate) async fn handle_shutdown(&self, _args: &[Bytes]) -> Response {
+        // Note: Actual shutdown requires signaling the main server
+        // For now, we just return an error suggesting manual shutdown
+        Response::error("ERR SHUTDOWN is not supported in this mode. Use Ctrl+C to stop the server.")
     }
 }
