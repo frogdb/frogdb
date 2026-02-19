@@ -52,10 +52,14 @@ For profiling tokio task-level performance, use `tokio-metrics` and `tracing` sp
 | tokio-metrics | `tokio-metrics` | Per-task busy/idle/scheduled timing via `TaskMonitor` |
 | tracing spans | `tracing` | Span-based latency analysis at task/operation granularity |
 | tracing-timing | `tracing-timing` | Latency histograms derived from tracing spans |
+| tracing-flame | `tracing-flame` | Async-aware flamegraphs — captures await/idle time, not just CPU |
+| tracing-tracy | `tracing-tracy` | Real-time interactive profiling via Tracy with nanosecond precision |
 
 - [ ] Add `tokio-metrics` `TaskMonitor` instrumentation for key task types (connection handler, shard operations, WAL writes)
 - [ ] Add `tracing` span instrumentation for critical request paths
 - [ ] Integrate `tracing-timing` for per-operation latency histograms
+- [ ] Add `tracing-flame` `FlameLayer` for async-aware flamegraph generation during profiling
+- [ ] Evaluate `tracing-tracy` for interactive real-time profiling during development
 
 > **Research concept:** For causal profiling adapted to async runtimes, see [TOKIO_CAUSAL_PROFILER.md](TOKIO_CAUSAL_PROFILER.md).
 - [ ] Add `[profile.profiling]` build profile to `Cargo.toml`

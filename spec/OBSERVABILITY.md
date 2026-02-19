@@ -54,6 +54,8 @@ max_files = 5
 compress = true
 ```
 
+> **Implementation note:** File output with rotation requires `tracing-appender` for non-blocking writes. The current implementation supports stdout/stderr via `tracing-subscriber`'s `fmt` layer; file output is specified but not yet implemented.
+
 ### Structured Fields
 
 All log entries include:
@@ -188,10 +190,17 @@ Following [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/spe
 ### Crates
 
 ```toml
-opentelemetry = "0.21"
-opentelemetry-otlp = "0.14"
-tracing-opentelemetry = "0.22"
+# Core (already in use)
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["metrics", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["metrics", "grpc-tonic"] }
+
+# Recommended additions
+tracing-appender = "0.2"      # Non-blocking file output + rotation
+tracing-error = "0.2"         # SpanTrace captures for error diagnostics
 ```
+
+> **Note:** FrogDB uses a custom `OtelTracer` (in `crates/metrics/src/tracing.rs`) rather than the `tracing-opentelemetry` layer. This is deliberate — it provides precise control over which spans are exported (Request, Shard, Store, ScatterGather) rather than exporting every tracing span.
 
 ---
 
