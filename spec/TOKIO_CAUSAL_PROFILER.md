@@ -184,3 +184,4 @@ When a task enters the target span, the profiler must signal all worker threads.
 - **tracing** — [Tokio tracing guide](https://tokio.rs/tokio/topics/tracing) for span-based instrumentation
 - **Community discussion** — [Thoughts about profiling Rust/Tokio applications](https://users.rust-lang.org/t/thoughts-about-profiling-rust-tokio-applications/120069)
 - **Async profiling in practice** — [Async Rust in Practice: Performance, Pitfalls, Profiling](https://www.scylladb.com/2022/01/12/async-rust-in-practice-performance-pitfalls-profiling/)
+- **tracing-coz** — [Implementation](https://github.com/GregBowyer/tracing-coz) (abandoned, 2019). Translates tracing spans to `coz::begin!`/`coz::end!` and events to `coz::progress!`, but is a thin shim — coz still profiles at the OS thread level, so the M:N scheduling problem remains unsolved. Cannot compose with other tracing layers (implements raw `Subscriber`, not `Layer`).
