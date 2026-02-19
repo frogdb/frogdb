@@ -15,8 +15,11 @@
 
 pub mod admin;
 pub mod auth;
+pub mod blocking;
 pub mod client;
+pub mod cluster;
 pub mod config;
+pub mod debug;
 pub mod latency;
 pub mod memory;
 pub mod persistence;
@@ -24,12 +27,11 @@ pub mod pubsub;
 pub mod scatter;
 pub mod scripting;
 pub mod slowlog;
+pub mod status;
 pub mod transaction;
 
 // Re-export commonly used types
 pub use admin::AdminHandler;
-pub use auth::{AuthHandler, HelloResult};
-pub use persistence::PersistenceHandler;
 pub use scatter::ScatterHandler;
 
 use frogdb_protocol::Response;
