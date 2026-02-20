@@ -8,13 +8,12 @@
 //! - `commands`: Replication-related command implementations (REPLICAOF, PSYNC, etc.)
 //! - `executor`: Replica command executor for applying replicated commands
 
-pub mod commands;
 pub mod executor;
 pub mod fullsync;
 pub mod primary;
 pub mod replica;
 
-pub use commands::*;
+pub use crate::commands::replication::*;
 pub use executor::{consume_frames, ReplicaCommandExecutor, ReplicationError};
 pub use fullsync::FullSyncState;
 pub use primary::PrimaryReplicationHandler;
