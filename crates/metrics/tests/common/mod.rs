@@ -23,6 +23,7 @@ pub struct TestServer {
     handle: JoinHandle<()>,
     #[allow(dead_code)]
     temp_dir: TempDir,
+    client: reqwest::Client,
 }
 
 impl TestServer {
@@ -68,12 +69,15 @@ impl TestServer {
         // Wait for server to be ready
         tokio::time::sleep(Duration::from_millis(100)).await;
 
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+
         TestServer {
             addr,
             metrics_addr,
             shutdown_tx,
             handle,
             temp_dir,
+            client,
         }
     }
 
@@ -89,9 +93,16 @@ impl TestServer {
         format!("http://{}{}", self.metrics_addr, path)
     }
 
+    /// Get the shared HTTP client (configured with no_proxy to avoid macOS sandbox panics).
+    pub fn client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
     /// Fetch metrics as raw Prometheus text format.
     pub async fn fetch_metrics(&self) -> String {
-        reqwest::get(self.metrics_url("/metrics"))
+        self.client
+            .get(self.metrics_url("/metrics"))
+            .send()
             .await
             .unwrap()
             .text()

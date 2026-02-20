@@ -20,7 +20,7 @@ async fn test_metrics_endpoint_returns_frogdb_metrics() {
     let server = TestServer::start().await;
     let url = server.metrics_url("/metrics");
 
-    let resp = reqwest::get(&url).await.unwrap();
+    let resp = server.client().get(&url).send().await.unwrap();
     assert!(resp.status().is_success());
 
     let body = resp.text().await.unwrap();
@@ -81,7 +81,7 @@ async fn test_health_liveness() {
     let server = TestServer::start().await;
     let url = server.metrics_url("/health/live");
 
-    let resp = reqwest::get(&url).await.unwrap();
+    let resp = server.client().get(&url).send().await.unwrap();
     assert_eq!(resp.status().as_u16(), 200, "Liveness endpoint should return 200");
 
     server.shutdown().await;
@@ -92,7 +92,7 @@ async fn test_health_readiness() {
     let server = TestServer::start().await;
     let url = server.metrics_url("/health/ready");
 
-    let resp = reqwest::get(&url).await.unwrap();
+    let resp = server.client().get(&url).send().await.unwrap();
     assert_eq!(resp.status().as_u16(), 200, "Readiness endpoint should return 200");
 
     server.shutdown().await;
@@ -193,7 +193,7 @@ async fn test_memory_used_metric() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let url = server.metrics_url("/metrics");
-    let resp = reqwest::get(&url).await.unwrap();
+    let resp = server.client().get(&url).send().await.unwrap();
     let body = resp.text().await.unwrap();
 
     assert!(
@@ -224,7 +224,7 @@ async fn test_shard_metrics() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let url = server.metrics_url("/metrics");
-    let resp = reqwest::get(&url).await.unwrap();
+    let resp = server.client().get(&url).send().await.unwrap();
     let body = resp.text().await.unwrap();
 
     assert!(
@@ -271,7 +271,7 @@ async fn test_error_metrics_recorded() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let url = server.metrics_url("/metrics");
-    let resp = reqwest::get(&url).await.unwrap();
+    let resp = server.client().get(&url).send().await.unwrap();
     let body = resp.text().await.unwrap();
 
     // Note: Error metrics may or may not be present depending on implementation
