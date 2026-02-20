@@ -6,9 +6,9 @@
 use bytes::Bytes;
 use frogdb_core::{
     cluster::{ClusterCommand, NodeInfo, NodeRole, SlotRange},
-    KeyAccessType, StreamId,
+    CommandFlags, KeyAccessType, StreamId,
 };
-use frogdb_protocol::{CommandFlags, ParsedCommand, RaftClusterOp};
+use frogdb_protocol::{ParsedCommand, RaftClusterOp};
 
 /// Determine key access type from command flags.
 pub(crate) fn key_access_type_for_flags(flags: CommandFlags) -> KeyAccessType {
