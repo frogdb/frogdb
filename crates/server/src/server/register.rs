@@ -1,21 +1,19 @@
 use frogdb_core::CommandRegistry;
 
-use super::basic_commands;
-
 /// Register all built-in commands.
 pub fn register_commands(registry: &mut CommandRegistry) {
     // Connection commands
-    registry.register(basic_commands::PingCommand);
-    registry.register(basic_commands::EchoCommand);
-    registry.register(basic_commands::QuitCommand);
-    registry.register(basic_commands::CommandCommand);
+    registry.register(crate::commands::basic::PingCommand);
+    registry.register(crate::commands::basic::EchoCommand);
+    registry.register(crate::commands::basic::QuitCommand);
+    registry.register(crate::commands::basic::CommandCommand);
     registry.register(crate::commands::HelloCommand);
 
     // String commands (basic)
-    registry.register(basic_commands::GetCommand);
-    registry.register(basic_commands::SetCommand);
-    registry.register(basic_commands::DelCommand);
-    registry.register(basic_commands::ExistsCommand);
+    registry.register(crate::commands::basic::GetCommand);
+    registry.register(crate::commands::basic::SetCommand);
+    registry.register(crate::commands::basic::DelCommand);
+    registry.register(crate::commands::basic::ExistsCommand);
 
     // String commands (extended)
     registry.register(crate::commands::string::SetnxCommand);

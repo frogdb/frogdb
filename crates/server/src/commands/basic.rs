@@ -5,6 +5,8 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
+use super::utils::parse_u64;
+
 /// PING command.
 pub struct PingCommand;
 
@@ -388,14 +390,6 @@ impl Command for SetCommand {
             vec![&args[0]]
         }
     }
-}
-
-/// Parse a string as u64.
-fn parse_u64(arg: &[u8]) -> Result<u64, CommandError> {
-    std::str::from_utf8(arg)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CommandError::NotInteger)
 }
 
 /// DEL command.
