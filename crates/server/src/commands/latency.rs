@@ -34,10 +34,7 @@ impl Command for LatencyCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::ADMIN
-            | CommandFlags::NOSCRIPT
-            | CommandFlags::LOADING
-            | CommandFlags::STALE
+        CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

@@ -8,9 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use frogdb_core::{
-    ClientHandle, ClientRegistry, MetricsRecorder, SharedFunctionRegistry, ShardMessage,
-    persistence::SnapshotCoordinator, AclManager, CommandRegistry,
-    ClusterNetworkFactory, ClusterRaft, ClusterState, ReplicationTrackerImpl,
+    persistence::SnapshotCoordinator, AclManager, ClientHandle, ClientRegistry,
+    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry, MetricsRecorder,
+    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
 };
 use frogdb_metrics::{HotShardConfig, LatencyBandTracker, MemoryDiagConfig, SharedTracer};
 use tokio::sync::mpsc;
@@ -183,7 +183,9 @@ impl ConnectionHandlerBuilder {
         shard_id: usize,
         client_handle: ClientHandle,
     ) -> ConnectionHandler {
-        let admin = self.admin.expect("admin dependencies must be set via with_admin()");
+        let admin = self
+            .admin
+            .expect("admin dependencies must be set via with_admin()");
         let config = self.config.expect("config must be set via with_config()");
 
         ConnectionHandler::from_deps(
@@ -234,7 +236,12 @@ pub fn connection_builder(
     metrics_recorder: Arc<dyn MetricsRecorder>,
     acl_manager: Arc<AclManager>,
 ) -> ConnectionHandlerBuilder {
-    ConnectionHandlerBuilder::with_core_parts(registry, shard_senders, metrics_recorder, acl_manager)
+    ConnectionHandlerBuilder::with_core_parts(
+        registry,
+        shard_senders,
+        metrics_recorder,
+        acl_manager,
+    )
 }
 
 /// Convenience function to create a simple standalone ConnectionConfig.

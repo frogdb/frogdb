@@ -63,11 +63,7 @@ impl Command for JsonSetCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
         let value = parse_json_value(&args[2])?;
@@ -115,9 +111,10 @@ impl Command for JsonSetCommand {
             }
 
             // Parse and validate the value
-            let json_bytes = serde_json::to_vec(&value).map_err(|e| CommandError::InvalidArgument {
-                message: format!("invalid JSON: {}", e),
-            })?;
+            let json_bytes =
+                serde_json::to_vec(&value).map_err(|e| CommandError::InvalidArgument {
+                    message: format!("invalid JSON: {}", e),
+                })?;
             let json = JsonValue::parse_with_limits(&json_bytes, &limits)
                 .map_err(json_error_to_command_error)?;
             ctx.store.set(key.clone(), Value::Json(json));
@@ -178,11 +175,7 @@ impl Command for JsonGetCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         // Parse options and paths first
@@ -320,11 +313,7 @@ impl Command for JsonDelCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
@@ -380,11 +369,7 @@ impl Command for JsonMgetCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Last argument is the path
         let path = String::from_utf8_lossy(&args[args.len() - 1]).to_string();
         let keys = &args[..args.len() - 1];
@@ -394,17 +379,15 @@ impl Command for JsonMgetCommand {
         for key in keys {
             let result = match ctx.store.get(key) {
                 Some(value) => match value.as_json() {
-                    Some(json) => {
-                        match json.get(&path) {
-                            Ok(values) if !values.is_empty() => {
-                                let arr: Vec<JsonData> = values.into_iter().cloned().collect();
-                                let json_str = serde_json::to_string(&JsonData::Array(arr))
-                                    .unwrap_or_default();
-                                Response::bulk(Bytes::from(json_str))
-                            }
-                            _ => Response::null(),
+                    Some(json) => match json.get(&path) {
+                        Ok(values) if !values.is_empty() => {
+                            let arr: Vec<JsonData> = values.into_iter().cloned().collect();
+                            let json_str =
+                                serde_json::to_string(&JsonData::Array(arr)).unwrap_or_default();
+                            Response::bulk(Bytes::from(json_str))
                         }
-                    }
+                        _ => Response::null(),
+                    },
                     None => Response::null(), // Wrong type, return null
                 },
                 None => Response::null(),
@@ -443,11 +426,7 @@ impl Command for JsonTypeCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
@@ -503,11 +482,7 @@ impl Command for JsonNumIncrByCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
         let incr = parse_f64(&args[2])?;
@@ -577,11 +552,7 @@ impl Command for JsonNumMultByCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
         let mult = parse_f64(&args[2])?;
@@ -651,19 +622,12 @@ impl Command for JsonStrAppendCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         // Parse path and value - if 3 args: key path value, if 2 args: key value (path = $)
         let (path, value_str) = if args.len() == 3 {
-            (
-                String::from_utf8_lossy(&args[1]).to_string(),
-                &args[2],
-            )
+            (String::from_utf8_lossy(&args[1]).to_string(), &args[2])
         } else {
             ("$".to_string(), &args[1])
         };
@@ -735,11 +699,7 @@ impl Command for JsonStrLenCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
@@ -802,11 +762,7 @@ impl Command for JsonArrAppendCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
 
@@ -872,11 +828,7 @@ impl Command for JsonArrIndexCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
         let value = parse_json_value(&args[2])?;
@@ -906,10 +858,8 @@ impl Command for JsonArrIndexCommand {
         if results.len() == 1 {
             Ok(Response::Integer(results[0]))
         } else {
-            let responses: Vec<Response> = results
-                .iter()
-                .map(|&idx| Response::Integer(idx))
-                .collect();
+            let responses: Vec<Response> =
+                results.iter().map(|&idx| Response::Integer(idx)).collect();
             Ok(Response::Array(responses))
         }
     }
@@ -942,11 +892,7 @@ impl Command for JsonArrInsertCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
         let index = parse_i64(&args[2])?;
@@ -1013,11 +959,7 @@ impl Command for JsonArrLenCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
@@ -1080,11 +1022,7 @@ impl Command for JsonArrPopCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = parse_path(args.get(1));
         let index = if args.len() > 2 {
@@ -1161,11 +1099,7 @@ impl Command for JsonArrTrimCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
         let start = parse_i64(&args[2])?;
@@ -1227,11 +1161,7 @@ impl Command for JsonObjKeysCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
@@ -1306,11 +1236,7 @@ impl Command for JsonObjLenCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
@@ -1373,11 +1299,7 @@ impl Command for JsonClearCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
@@ -1426,11 +1348,7 @@ impl Command for JsonToggleCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
@@ -1488,11 +1406,7 @@ impl Command for JsonMergeCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let path = String::from_utf8_lossy(&args[1]).to_string();
         let patch = parse_json_value(&args[2])?;

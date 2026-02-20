@@ -128,15 +128,11 @@ fn bench_hash_hget(c: &mut Criterion) {
         let field = Bytes::from(format!("field:{}", hash_size / 2));
 
         group.throughput(Throughput::Elements(1));
-        group.bench_with_input(
-            BenchmarkId::new("fields", hash_size),
-            &hash_size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(hash.get(&field));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("fields", hash_size), &hash_size, |b, _| {
+            b.iter(|| {
+                black_box(hash.get(&field));
+            });
+        });
     }
 
     group.finish();
@@ -152,16 +148,12 @@ fn bench_hash_hgetall(c: &mut Criterion) {
         }
 
         group.throughput(Throughput::Elements(hash_size as u64));
-        group.bench_with_input(
-            BenchmarkId::new("fields", hash_size),
-            &hash_size,
-            |b, _| {
-                b.iter(|| {
-                    let result: Vec<_> = hash.iter().collect();
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("fields", hash_size), &hash_size, |b, _| {
+            b.iter(|| {
+                let result: Vec<_> = hash.iter().collect();
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -317,16 +309,12 @@ fn bench_set_smembers(c: &mut Criterion) {
         }
 
         group.throughput(Throughput::Elements(set_size as u64));
-        group.bench_with_input(
-            BenchmarkId::new("members", set_size),
-            &set_size,
-            |b, _| {
-                b.iter(|| {
-                    let result: Vec<_> = set.members().collect();
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("members", set_size), &set_size, |b, _| {
+            b.iter(|| {
+                let result: Vec<_> = set.members().collect();
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -346,15 +334,11 @@ fn bench_set_sinter(c: &mut Criterion) {
         }
 
         group.throughput(Throughput::Elements(set_size as u64 / 2));
-        group.bench_with_input(
-            BenchmarkId::new("set_size", set_size),
-            &set_size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(set1.intersection([&set2].into_iter()));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("set_size", set_size), &set_size, |b, _| {
+            b.iter(|| {
+                black_box(set1.intersection([&set2].into_iter()));
+            });
+        });
     }
 
     group.finish();
@@ -371,15 +355,11 @@ fn bench_set_sismember(c: &mut Criterion) {
         let member = Bytes::from(format!("member:{}", set_size / 2));
 
         group.throughput(Throughput::Elements(1));
-        group.bench_with_input(
-            BenchmarkId::new("set_size", set_size),
-            &set_size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(set.contains(&member));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("set_size", set_size), &set_size, |b, _| {
+            b.iter(|| {
+                black_box(set.contains(&member));
+            });
+        });
     }
 
     group.finish();
@@ -515,7 +495,7 @@ fn bench_zset_zrangebyscore(c: &mut Criterion) {
             &zset_size,
             |b, _| {
                 b.iter(|| {
-                    black_box(zset.range_by_score(&min, &max, false, None));
+                    black_box(zset.range_by_score(&min, &max, 0, None));
                 });
             },
         );

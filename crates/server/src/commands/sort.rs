@@ -4,7 +4,9 @@
 //! SORT can optionally store the result, while SORT_RO is read-only.
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, Arity, Command, CommandContext, CommandError, CommandFlags, Value};
+use frogdb_core::{
+    shard_for_key, Arity, Command, CommandContext, CommandError, CommandFlags, Value,
+};
 use frogdb_protocol::Response;
 
 use super::utils::{parse_f64, parse_i64};
@@ -130,9 +132,7 @@ fn resolve_pattern(ctx: &CommandContext, pattern: &[u8], element: &[u8]) -> Opti
     let star_pos = pattern.iter().position(|&b| b == b'*')?;
 
     // Check for hash field access with `->`
-    let arrow_pos = pattern
-        .windows(2)
-        .position(|w| w == b"->");
+    let arrow_pos = pattern.windows(2).position(|w| w == b"->");
 
     if let Some(arrow_idx) = arrow_pos {
         // Hash field pattern: prefix_*->field
@@ -255,10 +255,7 @@ impl SortKey {
 }
 
 /// Execute the core SORT logic.
-fn execute_sort(
-    ctx: &mut CommandContext,
-    opts: &SortOptions,
-) -> Result<Response, CommandError> {
+fn execute_sort(ctx: &mut CommandContext, opts: &SortOptions) -> Result<Response, CommandError> {
     // Extract elements from source key
     let elements = match extract_elements(ctx, &opts.key)? {
         Some(elems) => elems,
@@ -360,7 +357,10 @@ fn execute_sort(
         // Return array
         // Note: When GET patterns return nil (missing keys), Redis returns null bulk strings
         let response: Vec<Response> = if opts.get_patterns.is_empty() {
-            sorted.into_iter().map(|b| Response::Bulk(Some(b))).collect()
+            sorted
+                .into_iter()
+                .map(|b| Response::Bulk(Some(b)))
+                .collect()
         } else {
             let mut responses = Vec::new();
             for elem in &sorted {
@@ -400,11 +400,7 @@ impl Command for SortCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let opts = SortOptions::parse(args, true)?;
         execute_sort(ctx, &opts)
     }
@@ -457,11 +453,7 @@ impl Command for SortRoCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let opts = SortOptions::parse(args, false)?;
         execute_sort(ctx, &opts)
     }
@@ -478,9 +470,9 @@ impl Command for SortRoCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use frogdb_core::HashMapStore;
     use frogdb_protocol::ProtocolVersion;
+    use std::sync::Arc;
 
     fn create_test_context() -> CommandContext<'static> {
         let store = Box::leak(Box::new(HashMapStore::new()));
@@ -500,9 +492,7 @@ mod tests {
         ctx.store.set(Bytes::from("mylist"), Value::List(list));
 
         let cmd = SortCommand;
-        let result = cmd
-            .execute(&mut ctx, &[Bytes::from("mylist")])
-            .unwrap();
+        let result = cmd.execute(&mut ctx, &[Bytes::from("mylist")]).unwrap();
 
         if let Response::Array(items) = result {
             assert_eq!(items.len(), 3);
@@ -753,11 +743,7 @@ mod tests {
         let result = cmd
             .execute(
                 &mut ctx,
-                &[
-                    Bytes::from("mylist"),
-                    Bytes::from("GET"),
-                    Bytes::from("#"),
-                ],
+                &[Bytes::from("mylist"), Bytes::from("GET"), Bytes::from("#")],
             )
             .unwrap();
 
@@ -861,9 +847,7 @@ mod tests {
         ctx.store.set(Bytes::from("myset"), Value::Set(set));
 
         let cmd = SortCommand;
-        let result = cmd
-            .execute(&mut ctx, &[Bytes::from("myset")])
-            .unwrap();
+        let result = cmd.execute(&mut ctx, &[Bytes::from("myset")]).unwrap();
 
         if let Response::Array(items) = result {
             assert_eq!(items.len(), 3);
@@ -887,9 +871,7 @@ mod tests {
 
         // SORT should sort by element value, not by score
         let cmd = SortCommand;
-        let result = cmd
-            .execute(&mut ctx, &[Bytes::from("myzset")])
-            .unwrap();
+        let result = cmd.execute(&mut ctx, &[Bytes::from("myzset")]).unwrap();
 
         if let Response::Array(items) = result {
             assert_eq!(items.len(), 3);
@@ -905,7 +887,8 @@ mod tests {
     fn test_sort_wrong_type() {
         let mut ctx = create_test_context();
 
-        ctx.store.set(Bytes::from("mystring"), Value::string("hello"));
+        ctx.store
+            .set(Bytes::from("mystring"), Value::string("hello"));
 
         let cmd = SortCommand;
         let result = cmd.execute(&mut ctx, &[Bytes::from("mystring")]);
@@ -969,9 +952,7 @@ mod tests {
         ctx.store.set(Bytes::from("mylist"), Value::List(list));
 
         let cmd = SortCommand;
-        let result = cmd
-            .execute(&mut ctx, &[Bytes::from("mylist")])
-            .unwrap();
+        let result = cmd.execute(&mut ctx, &[Bytes::from("mylist")]).unwrap();
 
         assert_eq!(result, Response::Array(vec![]));
     }

@@ -35,7 +35,9 @@ pub mod frame;
 pub mod state;
 pub mod tracker;
 
-pub use frame::{ReplicationFrame, ReplicationFrameCodec, FRAME_MAGIC, FRAME_VERSION, serialize_command_to_resp};
+pub use frame::{
+    serialize_command_to_resp, ReplicationFrame, ReplicationFrameCodec, FRAME_MAGIC, FRAME_VERSION,
+};
 pub use state::ReplicationState;
 pub use tracker::{ReplicaInfo, ReplicationTrackerImpl};
 

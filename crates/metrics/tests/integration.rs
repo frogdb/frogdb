@@ -34,10 +34,7 @@ async fn test_metrics_endpoint_returns_frogdb_metrics() {
         body.contains("frogdb_uptime_seconds"),
         "Should contain uptime metric"
     );
-    assert!(
-        body.contains("frogdb_info"),
-        "Should contain info metric"
-    );
+    assert!(body.contains("frogdb_info"), "Should contain info metric");
 
     server.shutdown().await;
 }
@@ -82,7 +79,11 @@ async fn test_health_liveness() {
     let url = server.metrics_url("/health/live");
 
     let resp = server.client().get(&url).send().await.unwrap();
-    assert_eq!(resp.status().as_u16(), 200, "Liveness endpoint should return 200");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "Liveness endpoint should return 200"
+    );
 
     server.shutdown().await;
 }
@@ -93,7 +94,11 @@ async fn test_health_readiness() {
     let url = server.metrics_url("/health/ready");
 
     let resp = server.client().get(&url).send().await.unwrap();
-    assert_eq!(resp.status().as_u16(), 200, "Readiness endpoint should return 200");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "Readiness endpoint should return 200"
+    );
 
     server.shutdown().await;
 }
@@ -139,8 +144,11 @@ async fn test_command_metrics_recorded() {
     );
 
     // Verify histogram has recorded durations
-    let set_hist_count =
-        get_histogram_count(&after, "frogdb_commands_duration_seconds", &[("command", "SET")]);
+    let set_hist_count = get_histogram_count(
+        &after,
+        "frogdb_commands_duration_seconds",
+        &[("command", "SET")],
+    );
     assert!(
         set_hist_count >= 1,
         "Should have at least 1 SET command duration recorded"

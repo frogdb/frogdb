@@ -206,7 +206,9 @@ mod tests {
         let rule = DownsampleRule::new(Bytes::from("dest:key"), 60000, Aggregation::Avg);
         manager.add_rule(Bytes::from("source:key"), rule).unwrap();
 
-        manager.remove_rule(&Bytes::from("source:key"), &Bytes::from("dest:key")).unwrap();
+        manager
+            .remove_rule(&Bytes::from("source:key"), &Bytes::from("dest:key"))
+            .unwrap();
 
         let rules = manager.get_rules(&Bytes::from("source:key"));
         assert!(rules.is_empty());

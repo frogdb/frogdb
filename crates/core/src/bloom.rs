@@ -194,7 +194,8 @@ impl BloomFilterValue {
             // Tighter error rate for newer layers to maintain overall rate
             let layer_count = self.layers.len() as f64;
             let new_error_rate = self.error_rate * 0.5f64.powf(layer_count);
-            self.layers.push(BloomLayer::new(new_capacity, new_error_rate));
+            self.layers
+                .push(BloomLayer::new(new_capacity, new_error_rate));
             self.layers.len() - 1
         };
 
@@ -244,8 +245,7 @@ impl BloomFilterValue {
 
     /// Calculate memory size.
     pub fn memory_size(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.layers.iter().map(|l| l.memory_size()).sum::<usize>()
+        std::mem::size_of::<Self>() + self.layers.iter().map(|l| l.memory_size()).sum::<usize>()
     }
 }
 

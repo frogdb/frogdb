@@ -4,8 +4,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Aggregation, Arity, Command, CommandContext, CommandError, CommandFlags,
-    DuplicatePolicy, TimeSeriesValue, Value,
+    Aggregation, Arity, Command, CommandContext, CommandError, CommandFlags, DuplicatePolicy,
+    TimeSeriesValue, Value,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -151,14 +151,16 @@ impl Command for TsCreateCommand {
                             message: "DUPLICATE_POLICY requires a value".to_string(),
                         });
                     }
-                    let policy_str = std::str::from_utf8(&args[i])
-                        .map_err(|_| CommandError::InvalidArgument {
+                    let policy_str = std::str::from_utf8(&args[i]).map_err(|_| {
+                        CommandError::InvalidArgument {
                             message: "Invalid duplicate policy".to_string(),
-                        })?;
-                    duplicate_policy = DuplicatePolicy::parse(policy_str)
-                        .ok_or_else(|| CommandError::InvalidArgument {
+                        }
+                    })?;
+                    duplicate_policy = DuplicatePolicy::parse(policy_str).ok_or_else(|| {
+                        CommandError::InvalidArgument {
                             message: format!("Unknown duplicate policy: {}", policy_str),
-                        })?;
+                        }
+                    })?;
                 }
                 "LABELS" => {
                     i += 1;
@@ -262,14 +264,16 @@ impl Command for TsAlterCommand {
                             message: "DUPLICATE_POLICY requires a value".to_string(),
                         });
                     }
-                    let policy_str = std::str::from_utf8(&args[i])
-                        .map_err(|_| CommandError::InvalidArgument {
+                    let policy_str = std::str::from_utf8(&args[i]).map_err(|_| {
+                        CommandError::InvalidArgument {
                             message: "Invalid duplicate policy".to_string(),
-                        })?;
-                    let policy = DuplicatePolicy::parse(policy_str)
-                        .ok_or_else(|| CommandError::InvalidArgument {
+                        }
+                    })?;
+                    let policy = DuplicatePolicy::parse(policy_str).ok_or_else(|| {
+                        CommandError::InvalidArgument {
                             message: format!("Unknown duplicate policy: {}", policy_str),
-                        })?;
+                        }
+                    })?;
                     ts.set_duplicate_policy(policy);
                 }
                 "LABELS" => {
@@ -366,14 +370,16 @@ impl Command for TsAddCommand {
                             message: "ON_DUPLICATE requires a value".to_string(),
                         });
                     }
-                    let policy_str = std::str::from_utf8(&args[i])
-                        .map_err(|_| CommandError::InvalidArgument {
+                    let policy_str = std::str::from_utf8(&args[i]).map_err(|_| {
+                        CommandError::InvalidArgument {
                             message: "Invalid on_duplicate policy".to_string(),
-                        })?;
-                    on_duplicate = Some(DuplicatePolicy::parse(policy_str)
-                        .ok_or_else(|| CommandError::InvalidArgument {
+                        }
+                    })?;
+                    on_duplicate = Some(DuplicatePolicy::parse(policy_str).ok_or_else(|| {
+                        CommandError::InvalidArgument {
                             message: format!("Unknown on_duplicate policy: {}", policy_str),
-                        })?);
+                        }
+                    })?);
                 }
                 "LABELS" => {
                     i += 1;
@@ -427,9 +433,10 @@ impl Command for TsAddCommand {
                     chunk_size,
                     labels,
                 );
-                ts.add(timestamp, value).map_err(|e| CommandError::InvalidArgument {
-                    message: format!("TSDB: {:?}", e),
-                })?;
+                ts.add(timestamp, value)
+                    .map_err(|e| CommandError::InvalidArgument {
+                        message: format!("TSDB: {:?}", e),
+                    })?;
                 ctx.store.set(key.clone(), Value::TimeSeries(ts));
                 Ok(Response::Integer(timestamp))
             }
@@ -492,19 +499,17 @@ impl Command for TsMaddCommand {
             };
 
             match ctx.store.get_mut(key) {
-                Some(value_ref) => {
-                    match value_ref.as_timeseries_mut() {
-                        Some(ts) => {
-                            match ts.add(timestamp, value) {
-                                Ok(ts_val) => results.push(Response::Integer(ts_val)),
-                                Err(e) => results.push(Response::Error(Bytes::from(format!("TSDB: {:?}", e)))),
-                            }
+                Some(value_ref) => match value_ref.as_timeseries_mut() {
+                    Some(ts) => match ts.add(timestamp, value) {
+                        Ok(ts_val) => results.push(Response::Integer(ts_val)),
+                        Err(e) => {
+                            results.push(Response::Error(Bytes::from(format!("TSDB: {:?}", e))))
                         }
-                        None => {
-                            results.push(Response::Error(Bytes::from("WRONGTYPE")));
-                        }
+                    },
+                    None => {
+                        results.push(Response::Error(Bytes::from("WRONGTYPE")));
                     }
-                }
+                },
                 None => {
                     // Auto-create
                     let mut ts = TimeSeriesValue::new();
@@ -513,7 +518,9 @@ impl Command for TsMaddCommand {
                             ctx.store.set(key.clone(), Value::TimeSeries(ts));
                             results.push(Response::Integer(ts_val));
                         }
-                        Err(e) => results.push(Response::Error(Bytes::from(format!("TSDB: {:?}", e)))),
+                        Err(e) => {
+                            results.push(Response::Error(Bytes::from(format!("TSDB: {:?}", e))))
+                        }
                     }
                 }
             }
@@ -660,9 +667,11 @@ fn execute_incrby(
             let ts = value_ref
                 .as_timeseries_mut()
                 .ok_or(CommandError::WrongType)?;
-            let _new_val = ts.incrby(timestamp, delta).map_err(|e| CommandError::InvalidArgument {
-                message: format!("TSDB: {:?}", e),
-            })?;
+            let _new_val =
+                ts.incrby(timestamp, delta)
+                    .map_err(|e| CommandError::InvalidArgument {
+                        message: format!("TSDB: {:?}", e),
+                    })?;
             Ok(Response::Integer(timestamp))
         }
         None => {
@@ -673,9 +682,10 @@ fn execute_incrby(
                 chunk_size,
                 labels,
             );
-            ts.add(timestamp, delta).map_err(|e| CommandError::InvalidArgument {
-                message: format!("TSDB: {:?}", e),
-            })?;
+            ts.add(timestamp, delta)
+                .map_err(|e| CommandError::InvalidArgument {
+                    message: format!("TSDB: {:?}", e),
+                })?;
             ctx.store.set(key.clone(), Value::TimeSeries(ts));
             Ok(Response::Integer(timestamp))
         }
@@ -921,13 +931,14 @@ fn execute_range(
                         message: "AGGREGATION requires type and bucket duration".to_string(),
                     });
                 }
-                let agg_str = std::str::from_utf8(&args[i])
-                    .map_err(|_| CommandError::InvalidArgument {
+                let agg_str =
+                    std::str::from_utf8(&args[i]).map_err(|_| CommandError::InvalidArgument {
                         message: "Invalid aggregation type".to_string(),
                     })?;
-                let agg = Aggregation::parse(agg_str).ok_or_else(|| CommandError::InvalidArgument {
-                    message: format!("Unknown aggregation type: {}", agg_str),
-                })?;
+                let agg =
+                    Aggregation::parse(agg_str).ok_or_else(|| CommandError::InvalidArgument {
+                        message: format!("Unknown aggregation type: {}", agg_str),
+                    })?;
                 i += 1;
                 let bucket: i64 = parse_int(&args[i], "bucket duration")?;
                 aggregation = Some((agg, bucket));

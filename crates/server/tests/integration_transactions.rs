@@ -123,7 +123,9 @@ async fn test_nested_multi() {
 
     // Try to start another transaction
     let response = client.command(&["MULTI"]).await;
-    assert!(matches!(response, Response::Error(e) if e.starts_with(b"ERR MULTI calls can not be nested")));
+    assert!(
+        matches!(response, Response::Error(e) if e.starts_with(b"ERR MULTI calls can not be nested"))
+    );
 
     // Discard to clean up
     client.command(&["DISCARD"]).await;
@@ -182,14 +184,18 @@ async fn test_watch_exec_abort() {
     assert_eq!(response, Response::Simple(Bytes::from("OK")));
 
     // Client 2 modifies the key
-    client2.command(&["SET", "watched_key", "modified_by_client2"]).await;
+    client2
+        .command(&["SET", "watched_key", "modified_by_client2"])
+        .await;
 
     // Client 1 starts transaction
     let response = client1.command(&["MULTI"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("OK")));
 
     // Queue commands
-    let response = client1.command(&["SET", "watched_key", "modified_by_client1"]).await;
+    let response = client1
+        .command(&["SET", "watched_key", "modified_by_client1"])
+        .await;
     assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
 
     // Execute (should fail/abort because the watched key was modified)
@@ -198,7 +204,10 @@ async fn test_watch_exec_abort() {
 
     // Verify value is still what client2 set (client1's transaction was aborted)
     let response = client1.command(&["GET", "watched_key"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("modified_by_client2"))));
+    assert_eq!(
+        response,
+        Response::Bulk(Some(Bytes::from("modified_by_client2")))
+    );
 
     server.shutdown().await;
 }
@@ -214,7 +223,9 @@ async fn test_watch_inside_multi_error() {
 
     // Try to WATCH inside MULTI (should error)
     let response = client.command(&["WATCH", "somekey"]).await;
-    assert!(matches!(response, Response::Error(e) if e.starts_with(b"ERR WATCH inside MULTI is not allowed")));
+    assert!(
+        matches!(response, Response::Error(e) if e.starts_with(b"ERR WATCH inside MULTI is not allowed"))
+    );
 
     // Discard to clean up
     client.command(&["DISCARD"]).await;
@@ -326,7 +337,9 @@ async fn test_transaction_syntax_error_aborts() {
 
     // Queue a command with wrong number of arguments (syntax error)
     let response = client.command(&["GET"]).await; // GET requires 1 argument
-    assert!(matches!(response, Response::Error(e) if e.starts_with(b"ERR wrong number of arguments")));
+    assert!(
+        matches!(response, Response::Error(e) if e.starts_with(b"ERR wrong number of arguments"))
+    );
 
     // Execute - should abort due to syntax error during queuing
     let response = client.command(&["EXEC"]).await;

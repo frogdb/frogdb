@@ -2,7 +2,10 @@ use bytes::Bytes;
 use frogdb_protocol::Response;
 
 /// Format XREAD response for a single stream.
-pub(crate) fn format_xread_response(key: &Bytes, entries: &[crate::types::StreamEntry]) -> Response {
+pub(crate) fn format_xread_response(
+    key: &Bytes,
+    entries: &[crate::types::StreamEntry],
+) -> Response {
     let entry_responses: Vec<Response> = entries
         .iter()
         .map(|entry| {

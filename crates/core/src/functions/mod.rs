@@ -26,7 +26,9 @@ pub use function::{FunctionFlags, RegisteredFunction};
 pub use library::FunctionLibrary;
 pub use loader::{load_library, validate_library};
 pub use parser::{parse_shebang, CapturedRegistration, ParsedLibrary, ShebangInfo};
-pub use persistence::{dump_libraries, load_from_file, restore_libraries, save_to_file, RestorePolicy};
+pub use persistence::{
+    dump_libraries, load_from_file, restore_libraries, save_to_file, RestorePolicy,
+};
 pub use registry::{
     new_shared_registry, FunctionRegistry, FunctionStats, RunningFunctionInfo,
     SharedFunctionRegistry,

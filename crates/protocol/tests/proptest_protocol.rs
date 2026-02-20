@@ -31,23 +31,16 @@ fn arb_frame() -> impl Strategy<Value = BytesFrame> {
     ];
 
     leaf.prop_recursive(
-        4,   // depth
-        64,  // max nodes
-        10,  // items per collection
-        |inner| {
-            prop::collection::vec(inner, 0..10)
-                .prop_map(BytesFrame::Array)
-        },
+        4,  // depth
+        64, // max nodes
+        10, // items per collection
+        |inner| prop::collection::vec(inner, 0..10).prop_map(BytesFrame::Array),
     )
 }
 
 /// Generate a command-like frame (array of bulk strings).
 fn arb_command_frame() -> impl Strategy<Value = BytesFrame> {
-    prop::collection::vec(
-        prop::collection::vec(any::<u8>(), 0..100),
-        0..20,
-    )
-    .prop_map(|args| {
+    prop::collection::vec(prop::collection::vec(any::<u8>(), 0..100), 0..20).prop_map(|args| {
         BytesFrame::Array(
             args.into_iter()
                 .map(|a| BytesFrame::BulkString(Bytes::from(a)))

@@ -190,9 +190,9 @@ impl FullSyncMetadata {
 
         let replication_id = parts[2].to_string();
 
-        let replication_offset: u64 = parts[3]
-            .parse()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid replication_offset"))?;
+        let replication_offset: u64 = parts[3].parse().map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "invalid replication_offset")
+        })?;
 
         Ok(Self {
             rdb_size,
@@ -359,9 +359,9 @@ mod tests {
         let checksum = calculate_bytes_checksum(data);
 
         // SHA256 of "hello world"
-        let expected = hex::decode(
-            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-        ).unwrap();
+        let expected =
+            hex::decode("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")
+                .unwrap();
 
         assert_eq!(checksum.as_slice(), expected.as_slice());
     }
@@ -385,9 +385,9 @@ mod tests {
         let checksum = calculate_file_checksum(&path).await.unwrap();
 
         // SHA256 of "hello world"
-        let expected = hex::decode(
-            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-        ).unwrap();
+        let expected =
+            hex::decode("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")
+                .unwrap();
 
         assert_eq!(checksum.as_slice(), expected.as_slice());
     }

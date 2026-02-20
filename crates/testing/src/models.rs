@@ -323,17 +323,11 @@ impl Model for KVModel {
                     return None;
                 }
 
-                let num_cmds: usize = String::from_utf8_lossy(&args[0])
-                    .parse()
-                    .unwrap_or(0);
+                let num_cmds: usize = String::from_utf8_lossy(&args[0]).parse().unwrap_or(0);
                 if num_cmds == 0 {
                     // Empty transaction returns empty array
                     let is_empty = result.map_or(true, |r| r.is_empty() || r.as_ref() == b"");
-                    return if is_empty {
-                        Some(state.clone())
-                    } else {
-                        None
-                    };
+                    return if is_empty { Some(state.clone()) } else { None };
                 }
 
                 // Parse commands from args
@@ -349,9 +343,8 @@ impl Model for KVModel {
                     if idx >= args.len() {
                         return None;
                     }
-                    let cmd_num_args: usize = String::from_utf8_lossy(&args[idx])
-                        .parse()
-                        .unwrap_or(0);
+                    let cmd_num_args: usize =
+                        String::from_utf8_lossy(&args[idx]).parse().unwrap_or(0);
                     idx += 1;
 
                     let mut cmd_args = Vec::new();
@@ -457,14 +450,17 @@ mod tests {
         let state = RegisterState::default();
 
         // Write should succeed
-        let new_state =
-            RegisterModel::step(&state, "write", &[Bytes::from("value")], Some(&Bytes::from("OK")))
-                .unwrap();
+        let new_state = RegisterModel::step(
+            &state,
+            "write",
+            &[Bytes::from("value")],
+            Some(&Bytes::from("OK")),
+        )
+        .unwrap();
         assert_eq!(new_state.value, Some(Bytes::from("value")));
 
         // Read should return the written value
-        let result =
-            RegisterModel::step(&new_state, "read", &[], Some(&Bytes::from("value")));
+        let result = RegisterModel::step(&new_state, "read", &[], Some(&Bytes::from("value")));
         assert!(result.is_some());
 
         // Read with wrong value should fail
@@ -509,7 +505,10 @@ mod tests {
             Some(&Bytes::from("OK")),
         )
         .unwrap();
-        assert_eq!(new_state.store.get(&Bytes::from("key")), Some(&Bytes::from("value")));
+        assert_eq!(
+            new_state.store.get(&Bytes::from("key")),
+            Some(&Bytes::from("value"))
+        );
 
         // Read key
         let result = KVModel::step(
@@ -542,8 +541,14 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(new_state.store.get(&Bytes::from("k1")), Some(&Bytes::from("v1")));
-        assert_eq!(new_state.store.get(&Bytes::from("k2")), Some(&Bytes::from("v2")));
+        assert_eq!(
+            new_state.store.get(&Bytes::from("k1")),
+            Some(&Bytes::from("v1"))
+        );
+        assert_eq!(
+            new_state.store.get(&Bytes::from("k2")),
+            Some(&Bytes::from("v2"))
+        );
     }
 
     #[test]
@@ -624,17 +629,17 @@ mod tests {
             &state,
             "exec",
             &[
-                Bytes::from("3"),        // num_cmds
-                Bytes::from("set"),      // cmd1_name
-                Bytes::from("2"),        // cmd1_num_args
-                Bytes::from("counter"),  // cmd1_arg1
-                Bytes::from("0"),        // cmd1_arg2
-                Bytes::from("incr"),     // cmd2_name
-                Bytes::from("1"),        // cmd2_num_args
-                Bytes::from("counter"),  // cmd2_arg1
-                Bytes::from("incr"),     // cmd3_name
-                Bytes::from("1"),        // cmd3_num_args
-                Bytes::from("counter"),  // cmd3_arg1
+                Bytes::from("3"),       // num_cmds
+                Bytes::from("set"),     // cmd1_name
+                Bytes::from("2"),       // cmd1_num_args
+                Bytes::from("counter"), // cmd1_arg1
+                Bytes::from("0"),       // cmd1_arg2
+                Bytes::from("incr"),    // cmd2_name
+                Bytes::from("1"),       // cmd2_num_args
+                Bytes::from("counter"), // cmd2_arg1
+                Bytes::from("incr"),    // cmd3_name
+                Bytes::from("1"),       // cmd3_num_args
+                Bytes::from("counter"), // cmd3_arg1
             ],
             Some(&Bytes::from("OK|1|2")), // SET returns OK, first INCR returns 1, second INCR returns 2
         )
@@ -655,14 +660,14 @@ mod tests {
             &state,
             "exec",
             &[
-                Bytes::from("2"),    // num_cmds
-                Bytes::from("set"),  // cmd1_name
-                Bytes::from("2"),    // cmd1_num_args
-                Bytes::from("key"),  // cmd1_arg1
-                Bytes::from("val"),  // cmd1_arg2
-                Bytes::from("get"),  // cmd2_name
-                Bytes::from("1"),    // cmd2_num_args
-                Bytes::from("key"),  // cmd2_arg1
+                Bytes::from("2"),   // num_cmds
+                Bytes::from("set"), // cmd1_name
+                Bytes::from("2"),   // cmd1_num_args
+                Bytes::from("key"), // cmd1_arg1
+                Bytes::from("val"), // cmd1_arg2
+                Bytes::from("get"), // cmd2_name
+                Bytes::from("1"),   // cmd2_num_args
+                Bytes::from("key"), // cmd2_arg1
             ],
             Some(&Bytes::from("OK|val")), // SET returns OK, GET returns val
         )

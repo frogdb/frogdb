@@ -318,7 +318,8 @@ impl Store for HashMapStore {
 
         if let Some(entry) = self.data.get_mut(key) {
             entry.metadata.expires_at = Some(expires_at);
-            self.expiry_index.set(Bytes::copy_from_slice(key), expires_at);
+            self.expiry_index
+                .set(Bytes::copy_from_slice(key), expires_at);
             true
         } else {
             false

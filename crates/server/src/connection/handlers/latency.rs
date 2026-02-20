@@ -49,7 +49,9 @@ impl ConnectionHandler {
     /// Handle LATENCY BANDS [RESET] - show or reset latency band statistics.
     fn handle_latency_bands(&self, args: &[Bytes]) -> Response {
         let Some(tracker) = &self.band_tracker else {
-            return Response::error("ERR latency bands not enabled. Set latency_bands.enabled = true in config.");
+            return Response::error(
+                "ERR latency bands not enabled. Set latency_bands.enabled = true in config.",
+            );
         };
 
         // Handle RESET subcommand
@@ -154,9 +156,7 @@ impl ConnectionHandler {
                 b"    Show SLO latency band statistics, or reset counters.",
             )),
             Response::bulk(Bytes::from_static(b"DOCTOR")),
-            Response::bulk(Bytes::from_static(
-                b"    Return latency diagnostic report.",
-            )),
+            Response::bulk(Bytes::from_static(b"    Return latency diagnostic report.")),
             Response::bulk(Bytes::from_static(b"GRAPH <event>")),
             Response::bulk(Bytes::from_static(
                 b"    Return an ASCII art graph of latency for the event.",

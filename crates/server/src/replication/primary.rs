@@ -8,14 +8,14 @@
 
 use bytes::{Bytes, BytesMut};
 use frogdb_core::{
-    ReplicationBroadcaster, ReplicationFrame, ReplicationState, ReplicationTracker,
-    ReplicationTrackerImpl, RocksStore, replication::tracker::ReplicaState, serialize_command_to_resp,
+    replication::tracker::ReplicaState, serialize_command_to_resp, ReplicationBroadcaster,
+    ReplicationFrame, ReplicationState, ReplicationTracker, ReplicationTrackerImpl, RocksStore,
 };
 use sha2::Digest;
-use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::fs;
@@ -202,11 +202,10 @@ impl PrimaryReplicationHandler {
             // Create checkpoint in blocking task (Checkpoint is !Send)
             let rocks_clone = rocks.clone();
             let path_clone = checkpoint_path.clone();
-            let checkpoint_result = tokio::task::spawn_blocking(move || {
-                rocks_clone.create_checkpoint(&path_clone)
-            })
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            let checkpoint_result =
+                tokio::task::spawn_blocking(move || rocks_clone.create_checkpoint(&path_clone))
+                    .await
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
             if let Err(e) = checkpoint_result {
                 tracing::error!(error = %e, "Failed to create checkpoint for FULLRESYNC");
@@ -214,13 +213,15 @@ impl PrimaryReplicationHandler {
                 self.send_minimal_rdb(&mut stream).await?;
             } else {
                 // Stream checkpoint files to replica
-                let stream_result = self.stream_checkpoint(
-                    &mut stream,
-                    &checkpoint_path,
-                    replica_id,
-                    &replication_id,
-                    current_offset,
-                ).await;
+                let stream_result = self
+                    .stream_checkpoint(
+                        &mut stream,
+                        &checkpoint_path,
+                        replica_id,
+                        &replication_id,
+                        current_offset,
+                    )
+                    .await;
 
                 // Clean up checkpoint directory regardless of success/failure
                 if let Err(e) = fs::remove_dir_all(&checkpoint_path).await {
@@ -282,7 +283,8 @@ impl PrimaryReplicationHandler {
             let path = entry.path();
             if path.is_file() {
                 let metadata = fs::metadata(&path).await?;
-                let file_name = path.file_name()
+                let file_name = path
+                    .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "unknown".to_string());
                 let file_size = metadata.len();
@@ -307,15 +309,21 @@ impl PrimaryReplicationHandler {
         // Send FrogDB checkpoint header (distinguishes from minimal RDB)
         // Format: $FROGDB_CHECKPOINT\r\n<file_count>\r\n
         stream.write_all(b"$FROGDB_CHECKPOINT\r\n").await?;
-        stream.write_all(format!("{}\r\n", files.len()).as_bytes()).await?;
+        stream
+            .write_all(format!("{}\r\n", files.len()).as_bytes())
+            .await?;
 
         // Stream each file
         for (file_name, file_size, file_path) in &files {
             // Send filename
-            stream.write_all(format!("${}\r\n{}\r\n", file_name.len(), file_name).as_bytes()).await?;
+            stream
+                .write_all(format!("${}\r\n{}\r\n", file_name.len(), file_name).as_bytes())
+                .await?;
 
             // Send file size
-            stream.write_all(format!("${}\r\n", file_size).as_bytes()).await?;
+            stream
+                .write_all(format!("${}\r\n", file_size).as_bytes())
+                .await?;
 
             // Stream file contents
             let bytes_written = stream_file_to_writer(file_path, stream, Some(&sync_state)).await?;
@@ -348,7 +356,9 @@ impl PrimaryReplicationHandler {
             replication_offset,
         };
         let metadata_bytes = metadata.to_bytes();
-        stream.write_all(format!("${}\r\n", metadata_bytes.len()).as_bytes()).await?;
+        stream
+            .write_all(format!("${}\r\n", metadata_bytes.len()).as_bytes())
+            .await?;
         stream.write_all(&metadata_bytes).await?;
         stream.write_all(b"\r\n").await?;
 

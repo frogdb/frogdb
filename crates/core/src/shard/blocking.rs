@@ -177,37 +177,53 @@ impl ShardWorker {
             let response = match &entry.op {
                 BlockingOp::BLPop => {
                     // Pop from left and return [key, value]
-                    if let Some(value) = self.store.get_mut(key).and_then(|v| v.as_list_mut()).and_then(|l| l.pop_front()) {
+                    if let Some(value) = self
+                        .store
+                        .get_mut(key)
+                        .and_then(|v| v.as_list_mut())
+                        .and_then(|l| l.pop_front())
+                    {
                         // Clean up empty list
                         self.cleanup_empty_list(key);
                         self.increment_version();
-                        Response::Array(vec![
-                            Response::bulk(key.clone()),
-                            Response::bulk(value),
-                        ])
+                        Response::Array(vec![Response::bulk(key.clone()), Response::bulk(value)])
                     } else {
                         continue; // List became empty, try next waiter
                     }
                 }
                 BlockingOp::BRPop => {
                     // Pop from right and return [key, value]
-                    if let Some(value) = self.store.get_mut(key).and_then(|v| v.as_list_mut()).and_then(|l| l.pop_back()) {
+                    if let Some(value) = self
+                        .store
+                        .get_mut(key)
+                        .and_then(|v| v.as_list_mut())
+                        .and_then(|l| l.pop_back())
+                    {
                         // Clean up empty list
                         self.cleanup_empty_list(key);
                         self.increment_version();
-                        Response::Array(vec![
-                            Response::bulk(key.clone()),
-                            Response::bulk(value),
-                        ])
+                        Response::Array(vec![Response::bulk(key.clone()), Response::bulk(value)])
                     } else {
                         continue;
                     }
                 }
-                BlockingOp::BLMove { dest, src_dir, dest_dir } => {
+                BlockingOp::BLMove {
+                    dest,
+                    src_dir,
+                    dest_dir,
+                } => {
                     // Pop from source direction
                     let value = match src_dir {
-                        Direction::Left => self.store.get_mut(key).and_then(|v| v.as_list_mut()).and_then(|l| l.pop_front()),
-                        Direction::Right => self.store.get_mut(key).and_then(|v| v.as_list_mut()).and_then(|l| l.pop_back()),
+                        Direction::Left => self
+                            .store
+                            .get_mut(key)
+                            .and_then(|v| v.as_list_mut())
+                            .and_then(|l| l.pop_front()),
+                        Direction::Right => self
+                            .store
+                            .get_mut(key)
+                            .and_then(|v| v.as_list_mut())
+                            .and_then(|l| l.pop_back()),
                     };
 
                     if let Some(value) = value {
@@ -220,7 +236,9 @@ impl ShardWorker {
                             self.store.set(dest.clone(), crate::types::Value::list());
                         }
 
-                        if let Some(dest_list) = self.store.get_mut(dest).and_then(|v| v.as_list_mut()) {
+                        if let Some(dest_list) =
+                            self.store.get_mut(dest).and_then(|v| v.as_list_mut())
+                        {
                             match dest_dir {
                                 Direction::Left => dest_list.push_front(value.clone()),
                                 Direction::Right => dest_list.push_back(value.clone()),
@@ -256,10 +274,7 @@ impl ShardWorker {
                     self.cleanup_empty_list(key);
 
                     self.increment_version();
-                    Response::Array(vec![
-                        Response::bulk(key.clone()),
-                        Response::Array(elements),
-                    ])
+                    Response::Array(vec![Response::bulk(key.clone()), Response::Array(elements)])
                 }
                 _ => continue, // Not a list operation
             };
@@ -313,7 +328,8 @@ impl ShardWorker {
             let response = match &entry.op {
                 BlockingOp::BZPopMin => {
                     // Pop minimum element
-                    if let Some(zset) = self.store.get_mut(key).and_then(|v| v.as_sorted_set_mut()) {
+                    if let Some(zset) = self.store.get_mut(key).and_then(|v| v.as_sorted_set_mut())
+                    {
                         let popped = zset.pop_min(1);
                         let is_empty = zset.is_empty();
                         if let Some((member, score)) = popped.into_iter().next() {
@@ -336,7 +352,8 @@ impl ShardWorker {
                 }
                 BlockingOp::BZPopMax => {
                     // Pop maximum element
-                    if let Some(zset) = self.store.get_mut(key).and_then(|v| v.as_sorted_set_mut()) {
+                    if let Some(zset) = self.store.get_mut(key).and_then(|v| v.as_sorted_set_mut())
+                    {
                         let popped = zset.pop_max(1);
                         let is_empty = zset.is_empty();
                         if let Some((member, score)) = popped.into_iter().next() {
@@ -359,7 +376,8 @@ impl ShardWorker {
                 }
                 BlockingOp::BZMPop { min, count } => {
                     let mut elements = Vec::new();
-                    if let Some(zset) = self.store.get_mut(key).and_then(|v| v.as_sorted_set_mut()) {
+                    if let Some(zset) = self.store.get_mut(key).and_then(|v| v.as_sorted_set_mut())
+                    {
                         let popped = if *min {
                             zset.pop_min(*count)
                         } else {
@@ -381,10 +399,7 @@ impl ShardWorker {
                     self.cleanup_empty_zset(key);
 
                     self.increment_version();
-                    Response::Array(vec![
-                        Response::bulk(key.clone()),
-                        Response::Array(elements),
-                    ])
+                    Response::Array(vec![Response::bulk(key.clone()), Response::Array(elements)])
                 }
                 _ => continue, // Not a zset operation
             };
@@ -516,7 +531,6 @@ impl ShardWorker {
         noack: bool,
         count: Option<usize>,
     ) -> Option<Vec<crate::types::StreamEntry>> {
-
         let stream = self.store.get_mut(key)?.as_stream_mut()?;
         let group = stream.get_group_mut(group_name)?;
 

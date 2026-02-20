@@ -257,14 +257,10 @@ impl std::str::FromStr for SlotRange {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClusterCommand {
     /// Add a node to the cluster.
-    AddNode {
-        node: NodeInfo,
-    },
+    AddNode { node: NodeInfo },
 
     /// Remove a node from the cluster.
-    RemoveNode {
-        node_id: NodeId,
-    },
+    RemoveNode { node_id: NodeId },
 
     /// Assign slots to a node.
     AssignSlots {
@@ -289,14 +285,10 @@ pub enum ClusterCommand {
     IncrementEpoch,
 
     /// Mark a node as failed.
-    MarkNodeFailed {
-        node_id: NodeId,
-    },
+    MarkNodeFailed { node_id: NodeId },
 
     /// Mark a node as recovered.
-    MarkNodeRecovered {
-        node_id: NodeId,
-    },
+    MarkNodeRecovered { node_id: NodeId },
 
     /// Begin slot migration (marks slot as migrating).
     BeginSlotMigration {
@@ -313,9 +305,7 @@ pub enum ClusterCommand {
     },
 
     /// Cancel slot migration.
-    CancelSlotMigration {
-        slot: u16,
-    },
+    CancelSlotMigration { slot: u16 },
 }
 
 /// Response from applying a cluster command.
@@ -501,10 +491,7 @@ impl ClusterSnapshot {
 
     /// Get all primary nodes.
     pub fn get_primaries(&self) -> Vec<&NodeInfo> {
-        self.nodes
-            .values()
-            .filter(|n| n.is_primary())
-            .collect()
+        self.nodes.values().filter(|n| n.is_primary()).collect()
     }
 
     /// Get replicas for a primary node.
@@ -555,7 +542,10 @@ mod tests {
 
     #[test]
     fn test_slot_range_parse() {
-        assert_eq!("0-100".parse::<SlotRange>().unwrap(), SlotRange::new(0, 100));
+        assert_eq!(
+            "0-100".parse::<SlotRange>().unwrap(),
+            SlotRange::new(0, 100)
+        );
         assert_eq!("42".parse::<SlotRange>().unwrap(), SlotRange::single(42));
         assert!("invalid".parse::<SlotRange>().is_err());
         assert!("100-50".parse::<SlotRange>().is_err()); // start > end

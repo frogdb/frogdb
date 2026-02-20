@@ -168,18 +168,18 @@ impl LabelIndex {
     /// Query keys matching a single filter.
     fn query_single(&self, filter: &LabelFilter) -> HashSet<Bytes> {
         match filter {
-            LabelFilter::Equals(label, value) => {
-                self.index
-                    .get(label)
-                    .and_then(|values| values.get(value))
-                    .cloned()
-                    .unwrap_or_default()
-            }
+            LabelFilter::Equals(label, value) => self
+                .index
+                .get(label)
+                .and_then(|values| values.get(value))
+                .cloned()
+                .unwrap_or_default(),
 
             LabelFilter::NotEquals(label, value) => {
                 // All keys that have this label but not with this value
                 let all_keys: HashSet<Bytes> = self.key_labels.keys().cloned().collect();
-                let matching = self.index
+                let matching = self
+                    .index
                     .get(label)
                     .and_then(|values| values.get(value))
                     .cloned()
@@ -192,7 +192,10 @@ impl LabelIndex {
                 self.index
                     .get(label)
                     .map(|values| {
-                        values.values().flat_map(|keys| keys.iter().cloned()).collect()
+                        values
+                            .values()
+                            .flat_map(|keys| keys.iter().cloned())
+                            .collect()
                     })
                     .unwrap_or_default()
             }
@@ -200,10 +203,14 @@ impl LabelIndex {
             LabelFilter::NotExists(label) => {
                 // All keys that don't have this label
                 let all_keys: HashSet<Bytes> = self.key_labels.keys().cloned().collect();
-                let has_label: HashSet<Bytes> = self.index
+                let has_label: HashSet<Bytes> = self
+                    .index
                     .get(label)
                     .map(|values| {
-                        values.values().flat_map(|keys| keys.iter().cloned()).collect()
+                        values
+                            .values()
+                            .flat_map(|keys| keys.iter().cloned())
+                            .collect()
                     })
                     .unwrap_or_default();
                 all_keys.difference(&has_label).cloned().collect()
@@ -272,13 +279,19 @@ mod tests {
     #[test]
     fn test_parse_filter_equals() {
         let filter = LabelFilter::parse("location=kitchen").unwrap();
-        assert_eq!(filter, LabelFilter::Equals("location".to_string(), "kitchen".to_string()));
+        assert_eq!(
+            filter,
+            LabelFilter::Equals("location".to_string(), "kitchen".to_string())
+        );
     }
 
     #[test]
     fn test_parse_filter_not_equals() {
         let filter = LabelFilter::parse("location!=kitchen").unwrap();
-        assert_eq!(filter, LabelFilter::NotEquals("location".to_string(), "kitchen".to_string()));
+        assert_eq!(
+            filter,
+            LabelFilter::NotEquals("location".to_string(), "kitchen".to_string())
+        );
     }
 
     #[test]
@@ -296,19 +309,25 @@ mod tests {
     #[test]
     fn test_parse_filter_in() {
         let filter = LabelFilter::parse("location=(kitchen,bedroom)").unwrap();
-        assert_eq!(filter, LabelFilter::In(
-            "location".to_string(),
-            vec!["kitchen".to_string(), "bedroom".to_string()]
-        ));
+        assert_eq!(
+            filter,
+            LabelFilter::In(
+                "location".to_string(),
+                vec!["kitchen".to_string(), "bedroom".to_string()]
+            )
+        );
     }
 
     #[test]
     fn test_parse_filter_not_in() {
         let filter = LabelFilter::parse("location!=(kitchen,bedroom)").unwrap();
-        assert_eq!(filter, LabelFilter::NotIn(
-            "location".to_string(),
-            vec!["kitchen".to_string(), "bedroom".to_string()]
-        ));
+        assert_eq!(
+            filter,
+            LabelFilter::NotIn(
+                "location".to_string(),
+                vec!["kitchen".to_string(), "bedroom".to_string()]
+            )
+        );
     }
 
     #[test]
@@ -317,19 +336,31 @@ mod tests {
 
         index.add(
             Bytes::from("temp:kitchen"),
-            &[("location".to_string(), "kitchen".to_string()), ("type".to_string(), "temp".to_string())],
+            &[
+                ("location".to_string(), "kitchen".to_string()),
+                ("type".to_string(), "temp".to_string()),
+            ],
         );
         index.add(
             Bytes::from("temp:bedroom"),
-            &[("location".to_string(), "bedroom".to_string()), ("type".to_string(), "temp".to_string())],
+            &[
+                ("location".to_string(), "bedroom".to_string()),
+                ("type".to_string(), "temp".to_string()),
+            ],
         );
         index.add(
             Bytes::from("humidity:kitchen"),
-            &[("location".to_string(), "kitchen".to_string()), ("type".to_string(), "humidity".to_string())],
+            &[
+                ("location".to_string(), "kitchen".to_string()),
+                ("type".to_string(), "humidity".to_string()),
+            ],
         );
 
         // Query by location
-        let result = index.query(&[LabelFilter::Equals("location".to_string(), "kitchen".to_string())]);
+        let result = index.query(&[LabelFilter::Equals(
+            "location".to_string(),
+            "kitchen".to_string(),
+        )]);
         assert_eq!(result.len(), 2);
         assert!(result.contains(&Bytes::from("temp:kitchen")));
         assert!(result.contains(&Bytes::from("humidity:kitchen")));
@@ -367,7 +398,10 @@ mod tests {
         index.remove(b"key1");
         assert_eq!(index.len(), 1);
 
-        let result = index.query(&[LabelFilter::Equals("label".to_string(), "value".to_string())]);
+        let result = index.query(&[LabelFilter::Equals(
+            "label".to_string(),
+            "value".to_string(),
+        )]);
         assert_eq!(result.len(), 1);
         assert!(result.contains(&Bytes::from("key2")));
     }
@@ -376,11 +410,23 @@ mod tests {
     fn test_query_not_equals() {
         let mut index = LabelIndex::new();
 
-        index.add(Bytes::from("a"), &[("color".to_string(), "red".to_string())]);
-        index.add(Bytes::from("b"), &[("color".to_string(), "blue".to_string())]);
-        index.add(Bytes::from("c"), &[("color".to_string(), "red".to_string())]);
+        index.add(
+            Bytes::from("a"),
+            &[("color".to_string(), "red".to_string())],
+        );
+        index.add(
+            Bytes::from("b"),
+            &[("color".to_string(), "blue".to_string())],
+        );
+        index.add(
+            Bytes::from("c"),
+            &[("color".to_string(), "red".to_string())],
+        );
 
-        let result = index.query(&[LabelFilter::NotEquals("color".to_string(), "red".to_string())]);
+        let result = index.query(&[LabelFilter::NotEquals(
+            "color".to_string(),
+            "red".to_string(),
+        )]);
         assert_eq!(result.len(), 1);
         assert!(result.contains(&Bytes::from("b")));
     }
@@ -389,8 +435,14 @@ mod tests {
     fn test_query_exists() {
         let mut index = LabelIndex::new();
 
-        index.add(Bytes::from("a"), &[("color".to_string(), "red".to_string())]);
-        index.add(Bytes::from("b"), &[("size".to_string(), "large".to_string())]);
+        index.add(
+            Bytes::from("a"),
+            &[("color".to_string(), "red".to_string())],
+        );
+        index.add(
+            Bytes::from("b"),
+            &[("size".to_string(), "large".to_string())],
+        );
 
         let result = index.query(&[LabelFilter::Exists("color".to_string())]);
         assert_eq!(result.len(), 1);
@@ -401,8 +453,14 @@ mod tests {
     fn test_query_not_exists() {
         let mut index = LabelIndex::new();
 
-        index.add(Bytes::from("a"), &[("color".to_string(), "red".to_string())]);
-        index.add(Bytes::from("b"), &[("size".to_string(), "large".to_string())]);
+        index.add(
+            Bytes::from("a"),
+            &[("color".to_string(), "red".to_string())],
+        );
+        index.add(
+            Bytes::from("b"),
+            &[("size".to_string(), "large".to_string())],
+        );
 
         let result = index.query(&[LabelFilter::NotExists("color".to_string())]);
         assert_eq!(result.len(), 1);
@@ -413,9 +471,18 @@ mod tests {
     fn test_query_in() {
         let mut index = LabelIndex::new();
 
-        index.add(Bytes::from("a"), &[("color".to_string(), "red".to_string())]);
-        index.add(Bytes::from("b"), &[("color".to_string(), "blue".to_string())]);
-        index.add(Bytes::from("c"), &[("color".to_string(), "green".to_string())]);
+        index.add(
+            Bytes::from("a"),
+            &[("color".to_string(), "red".to_string())],
+        );
+        index.add(
+            Bytes::from("b"),
+            &[("color".to_string(), "blue".to_string())],
+        );
+        index.add(
+            Bytes::from("c"),
+            &[("color".to_string(), "green".to_string())],
+        );
 
         let result = index.query(&[LabelFilter::In(
             "color".to_string(),
@@ -430,13 +497,19 @@ mod tests {
     fn test_update_labels() {
         let mut index = LabelIndex::new();
 
-        index.add(Bytes::from("key"), &[("color".to_string(), "red".to_string())]);
+        index.add(
+            Bytes::from("key"),
+            &[("color".to_string(), "red".to_string())],
+        );
 
         let result = index.query(&[LabelFilter::Equals("color".to_string(), "red".to_string())]);
         assert!(result.contains(&Bytes::from("key")));
 
         // Update to new labels
-        index.update(Bytes::from("key"), &[("color".to_string(), "blue".to_string())]);
+        index.update(
+            Bytes::from("key"),
+            &[("color".to_string(), "blue".to_string())],
+        );
 
         let result = index.query(&[LabelFilter::Equals("color".to_string(), "red".to_string())]);
         assert!(result.is_empty());
@@ -460,13 +533,17 @@ mod tests {
     fn test_label_names_and_values() {
         let mut index = LabelIndex::new();
 
-        index.add(Bytes::from("a"), &[
-            ("color".to_string(), "red".to_string()),
-            ("size".to_string(), "large".to_string()),
-        ]);
-        index.add(Bytes::from("b"), &[
-            ("color".to_string(), "blue".to_string()),
-        ]);
+        index.add(
+            Bytes::from("a"),
+            &[
+                ("color".to_string(), "red".to_string()),
+                ("size".to_string(), "large".to_string()),
+            ],
+        );
+        index.add(
+            Bytes::from("b"),
+            &[("color".to_string(), "blue".to_string())],
+        );
 
         let names = index.label_names();
         assert!(names.contains(&"color"));

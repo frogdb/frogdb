@@ -20,9 +20,12 @@ use crate::connection::ConnectionHandler;
 impl ConnectionHandler {
     /// Check if a command is a blocking command.
     pub(crate) fn is_blocking_command(&self, cmd_name: &str) -> bool {
-        self.registry
-            .get_entry(cmd_name)
-            .is_some_and(|entry| matches!(entry.execution_strategy(), ExecutionStrategy::Blocking { .. }))
+        self.registry.get_entry(cmd_name).is_some_and(|entry| {
+            matches!(
+                entry.execution_strategy(),
+                ExecutionStrategy::Blocking { .. }
+            )
+        })
     }
 
     /// Check if a command is allowed in pub/sub mode.
@@ -103,7 +106,7 @@ impl ConnectionHandler {
             if let Some(cmd_info) = self.registry.get(cmd_name) {
                 if cmd_info.flags().contains(CommandFlags::ADMIN) {
                     return Some(Response::error(
-                        "NOADMIN Admin commands are disabled on this port. Use the admin port."
+                        "NOADMIN Admin commands are disabled on this port. Use the admin port.",
                     ));
                 }
             }
@@ -121,7 +124,9 @@ impl ConnectionHandler {
                 } else {
                     cmd_name.to_lowercase()
                 };
-                self.acl_manager.log().log_command_denied(&user.username, &client_info, &log_cmd);
+                self.acl_manager
+                    .log()
+                    .log_command_denied(&user.username, &client_info, &log_cmd);
                 warn!(
                     conn_id = self.state.id,
                     username = %user.username,
@@ -156,10 +161,7 @@ impl ConnectionHandler {
     /// Connection-level and admin commands that don't operate on specific keys are exempt.
     pub(crate) fn is_cluster_exempt(&self, cmd_name: &str) -> bool {
         // Certain commands are always exempt
-        if matches!(
-            cmd_name,
-            "CLUSTER" | "PING" | "COMMAND" | "TIME" | "DEBUG"
-        ) {
+        if matches!(cmd_name, "CLUSTER" | "PING" | "COMMAND" | "TIME" | "DEBUG") {
             return true;
         }
         // Connection-level commands and scatter-gather commands are exempt

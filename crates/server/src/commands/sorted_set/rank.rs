@@ -21,11 +21,7 @@ impl Command for ZrankCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let member = &args[1];
 
@@ -63,11 +59,7 @@ impl Command for ZrevrankCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let member = &args[1];
 

@@ -150,9 +150,7 @@ impl ScatterGatherStrategy for MSetStrategy {
 // =============================================================================
 
 /// Helper to merge results by summing integers.
-fn merge_sum_integers(
-    shard_results: &HashMap<usize, HashMap<Bytes, Response>>,
-) -> Response {
+fn merge_sum_integers(shard_results: &HashMap<usize, HashMap<Bytes, Response>>) -> Response {
     let total: i64 = shard_results
         .values()
         .flat_map(|m| m.values())

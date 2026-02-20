@@ -158,7 +158,9 @@ impl ClusterState {
                     return Err(ClusterError::NodeNotFound(node_id));
                 }
                 // Remove slot assignments for this node
-                inner.slot_assignment.retain(|_, &mut owner| owner != node_id);
+                inner
+                    .slot_assignment
+                    .retain(|_, &mut owner| owner != node_id);
                 inner.nodes.remove(&node_id);
                 tracing::info!(node_id, "Removed node from cluster");
                 Ok(ClusterResponse::Ok)
@@ -173,7 +175,10 @@ impl ClusterState {
                     for slot in range.iter() {
                         if let Some(&existing_owner) = inner.slot_assignment.get(&slot) {
                             if existing_owner != node_id {
-                                return Err(ClusterError::SlotAlreadyAssigned(slot, existing_owner));
+                                return Err(ClusterError::SlotAlreadyAssigned(
+                                    slot,
+                                    existing_owner,
+                                ));
                             }
                         }
                     }
@@ -304,13 +309,14 @@ impl ClusterState {
                 source_node,
                 target_node,
             } => {
-                let migration = inner
-                    .migrations
-                    .get(&slot)
-                    .ok_or(ClusterError::InvalidOperation(format!(
-                        "no migration in progress for slot {}",
-                        slot
-                    )))?;
+                let migration =
+                    inner
+                        .migrations
+                        .get(&slot)
+                        .ok_or(ClusterError::InvalidOperation(format!(
+                            "no migration in progress for slot {}",
+                            slot
+                        )))?;
 
                 if migration.source_node != source_node || migration.target_node != target_node {
                     return Err(ClusterError::InvalidOperation(
@@ -369,8 +375,13 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
 
     async fn applied_state(
         &mut self,
-    ) -> Result<(Option<LogId<NodeId>>, StoredMembership<NodeId, openraft::BasicNode>), StorageError<NodeId>>
-    {
+    ) -> Result<
+        (
+            Option<LogId<NodeId>>,
+            StoredMembership<NodeId, openraft::BasicNode>,
+        ),
+        StorageError<NodeId>,
+    > {
         let inner = self.state.inner.read();
         Ok((inner.last_applied_log, inner.last_membership.clone()))
     }
@@ -415,7 +426,9 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
         }
     }
 
-    async fn begin_receiving_snapshot(&mut self) -> Result<Box<Cursor<Vec<u8>>>, StorageError<NodeId>> {
+    async fn begin_receiving_snapshot(
+        &mut self,
+    ) -> Result<Box<Cursor<Vec<u8>>>, StorageError<NodeId>> {
         Ok(Box::new(Cursor::new(Vec::new())))
     }
 
@@ -538,7 +551,9 @@ mod tests {
         let state = ClusterState::new();
         let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
 
-        state.apply_command(ClusterCommand::AddNode { node: node.clone() }).unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node.clone() })
+            .unwrap();
         let result = state.apply_command(ClusterCommand::AddNode { node });
 
         assert!(matches!(result, Err(ClusterError::NodeAlreadyExists(1))));
@@ -548,7 +563,9 @@ mod tests {
     fn test_assign_slots() {
         let state = ClusterState::new();
         let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
-        state.apply_command(ClusterCommand::AddNode { node }).unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
 
         let result = state.apply_command(ClusterCommand::AssignSlots {
             node_id: 1,
@@ -564,13 +581,19 @@ mod tests {
     fn test_remove_node_clears_slots() {
         let state = ClusterState::new();
         let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
-        state.apply_command(ClusterCommand::AddNode { node }).unwrap();
-        state.apply_command(ClusterCommand::AssignSlots {
-            node_id: 1,
-            slots: vec![SlotRange::new(0, 100)],
-        }).unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 100)],
+            })
+            .unwrap();
 
-        state.apply_command(ClusterCommand::RemoveNode { node_id: 1 }).unwrap();
+        state
+            .apply_command(ClusterCommand::RemoveNode { node_id: 1 })
+            .unwrap();
 
         assert_eq!(state.get_slot_owner(50), None);
         assert!(state.get_node(1).is_none());
@@ -581,14 +604,20 @@ mod tests {
         let state = ClusterState::new();
         let primary = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
         let replica = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
-        state.apply_command(ClusterCommand::AddNode { node: primary }).unwrap();
-        state.apply_command(ClusterCommand::AddNode { node: replica }).unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: primary })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: replica })
+            .unwrap();
 
-        state.apply_command(ClusterCommand::SetRole {
-            node_id: 2,
-            role: NodeRole::Replica,
-            primary_id: Some(1),
-        }).unwrap();
+        state
+            .apply_command(ClusterCommand::SetRole {
+                node_id: 2,
+                role: NodeRole::Replica,
+                primary_id: Some(1),
+            })
+            .unwrap();
 
         let node = state.get_node(2).unwrap();
         assert!(node.is_replica());
@@ -612,19 +641,27 @@ mod tests {
         let state = ClusterState::new();
         let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
         let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
-        state.apply_command(ClusterCommand::AddNode { node: node1 }).unwrap();
-        state.apply_command(ClusterCommand::AddNode { node: node2 }).unwrap();
-        state.apply_command(ClusterCommand::AssignSlots {
-            node_id: 1,
-            slots: vec![SlotRange::single(42)],
-        }).unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::single(42)],
+            })
+            .unwrap();
 
         // Begin migration
-        state.apply_command(ClusterCommand::BeginSlotMigration {
-            slot: 42,
-            source_node: 1,
-            target_node: 2,
-        }).unwrap();
+        state
+            .apply_command(ClusterCommand::BeginSlotMigration {
+                slot: 42,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
 
         assert!(state.is_slot_migrating(42));
         let migration = state.get_slot_migration(42).unwrap();
@@ -632,11 +669,13 @@ mod tests {
         assert_eq!(migration.target_node, 2);
 
         // Complete migration
-        state.apply_command(ClusterCommand::CompleteSlotMigration {
-            slot: 42,
-            source_node: 1,
-            target_node: 2,
-        }).unwrap();
+        state
+            .apply_command(ClusterCommand::CompleteSlotMigration {
+                slot: 42,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
 
         assert!(!state.is_slot_migrating(42));
         assert_eq!(state.get_slot_owner(42), Some(2));

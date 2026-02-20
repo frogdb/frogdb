@@ -251,7 +251,9 @@ impl ShardWorker {
     /// Delete a key for eviction (updates metrics and pool).
     fn delete_for_eviction(&mut self, key: &[u8]) -> bool {
         // Get memory size before deletion for metrics
-        let memory_freed = self.store.get_metadata(key)
+        let memory_freed = self
+            .store
+            .get_metadata(key)
             .map(|m| m.memory_size)
             .unwrap_or(0);
 

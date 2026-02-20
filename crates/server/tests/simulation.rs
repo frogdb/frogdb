@@ -157,10 +157,7 @@ fn test_simple_set_get() {
 #[case::scatter_delay_100ms(100, 0)]
 #[case::single_shard_delay_50ms(0, 50)]
 #[case::both_delays_50ms(50, 50)]
-fn test_mset_mget_basic(
-    #[case] scatter_delay_ms: u64,
-    #[case] single_shard_delay_ms: u64,
-) {
+fn test_mset_mget_basic(#[case] scatter_delay_ms: u64, #[case] single_shard_delay_ms: u64) {
     let chaos = ChaosConfig {
         scatter_inter_send_delay_ms: scatter_delay_ms,
         single_shard_delay_ms,
@@ -519,7 +516,10 @@ fn test_sharded_mset_mget_distribution_full_matrix(
         ]);
         stream.write_all(&cmd).await?;
         let n = stream.read(&mut buf).await?;
-        assert!(matches!(parse_simple_response(&buf[..n]), OperationResult::Ok));
+        assert!(matches!(
+            parse_simple_response(&buf[..n]),
+            OperationResult::Ok
+        ));
 
         let cmd = encode_command(&[b"MGET", b"key1", b"key2", b"key3", b"key4"]);
         stream.write_all(&cmd).await?;
@@ -1000,7 +1000,10 @@ fn test_partition_heal_recovery() {
             stream.write_all(&cmd).await?;
             let n = stream.read(&mut buf).await?;
             let response = parse_simple_response(&buf[..n]);
-            results_clone.lock().unwrap().push(("set1", matches!(response, OperationResult::Ok)));
+            results_clone
+                .lock()
+                .unwrap()
+                .push(("set1", matches!(response, OperationResult::Ok)));
         }
 
         // Small delay to ensure any partition would take effect
@@ -1017,7 +1020,10 @@ fn test_partition_heal_recovery() {
             let response = parse_simple_response(&buf[..n]);
             match response {
                 OperationResult::String(v) => {
-                    results_clone.lock().unwrap().push(("get", v.as_ref() == b"value1"));
+                    results_clone
+                        .lock()
+                        .unwrap()
+                        .push(("get", v.as_ref() == b"value1"));
                 }
                 _ => {
                     results_clone.lock().unwrap().push(("get", false));
@@ -1033,7 +1039,10 @@ fn test_partition_heal_recovery() {
     let results = results.lock().unwrap();
     assert_eq!(results.len(), 2, "Should have recorded 2 operations");
     assert!(results[0].1, "First SET should succeed");
-    assert!(results[1].1, "GET after reconnect should return correct value");
+    assert!(
+        results[1].1,
+        "GET after reconnect should return correct value"
+    );
 }
 
 #[test]
@@ -1203,9 +1212,7 @@ fn test_sharded_server_with_latency() {
         let mut buf = vec![0u8; 4096];
 
         // MSET across multiple shards
-        let cmd = encode_command(&[
-            b"MSET", b"a", b"1", b"b", b"2", b"c", b"3", b"d", b"4",
-        ]);
+        let cmd = encode_command(&[b"MSET", b"a", b"1", b"b", b"2", b"c", b"3", b"d", b"4"]);
         stream.write_all(&cmd).await?;
         let n = stream.read(&mut buf).await?;
         assert!(matches!(
@@ -1263,7 +1270,10 @@ fn test_mset_full_atomicity() {
         stream.write_all(&cmd).await?;
         let n = stream.read(&mut buf).await?;
         let response = parse_simple_response(&buf[..n]);
-        assert!(matches!(response, OperationResult::Ok), "MSET should succeed");
+        assert!(
+            matches!(response, OperationResult::Ok),
+            "MSET should succeed"
+        );
 
         Ok(())
     });
@@ -1450,10 +1460,7 @@ fn test_mset_linearizable() {
         // Verify both keys have same value (either both 1 or both 2)
         match (&result_a, &result_b) {
             (OperationResult::String(a), OperationResult::String(b)) => {
-                assert_eq!(
-                    a, b,
-                    "Keys should have same value due to MSET atomicity"
-                );
+                assert_eq!(a, b, "Keys should have same value due to MSET atomicity");
                 assert!(
                     a.as_ref() == b"1" || a.as_ref() == b"2",
                     "Value should be 1 or 2"
@@ -1517,7 +1524,10 @@ fn test_mset_full_atomicity_sharded(
         stream.write_all(&cmd).await?;
         let n = stream.read(&mut buf).await?;
         let response = parse_simple_response(&buf[..n]);
-        assert!(matches!(response, OperationResult::Ok), "MSET should succeed");
+        assert!(
+            matches!(response, OperationResult::Ok),
+            "MSET should succeed"
+        );
 
         Ok(())
     });
@@ -1555,7 +1565,10 @@ fn test_mset_full_atomicity_sharded(
                 // Exactly one nil and one value = partial visibility
                 if nil_count == 1 && value_count == 1 {
                     *partial_clone.lock().unwrap() = true;
-                    results_clone.lock().unwrap().push(format!("PARTIAL: {}", response_str));
+                    results_clone
+                        .lock()
+                        .unwrap()
+                        .push(format!("PARTIAL: {}", response_str));
                 }
             }
 
@@ -1616,7 +1629,10 @@ fn test_transaction_atomicity_no_partial_visibility() {
         let cmd = encode_command(&[b"SET", b"counter", b"2"]);
         stream.write_all(&cmd).await?;
         let n = stream.read(&mut buf).await?;
-        assert!(matches!(parse_simple_response(&buf[..n]), OperationResult::Ok));
+        assert!(matches!(
+            parse_simple_response(&buf[..n]),
+            OperationResult::Ok
+        ));
 
         Ok(())
     });
@@ -1749,16 +1765,8 @@ fn test_transaction_isolation_concurrent_writes() {
     // Verify final state is consistent (both 1 or both 2)
     let state = final_state.lock().unwrap();
     if let Some((a, b)) = state.as_ref() {
-        assert_eq!(
-            a, b,
-            "Final state should be consistent: a={}, b={}",
-            a, b
-        );
-        assert!(
-            a == "1" || a == "2",
-            "Value should be 1 or 2, got: {}",
-            a
-        );
+        assert_eq!(a, b, "Final state should be consistent: a={}, b={}", a, b);
+        assert!(a == "1" || a == "2", "Value should be 1 or 2, got: {}", a);
     }
 }
 
@@ -1778,13 +1786,13 @@ fn test_transaction_read_own_writes() {
         &state,
         "exec",
         &[
-            Bytes::from("2"),    // num_cmds
-            Bytes::from("set"),  // cmd1
-            Bytes::from("2"),    // cmd1 num_args
+            Bytes::from("2"),   // num_cmds
+            Bytes::from("set"), // cmd1
+            Bytes::from("2"),   // cmd1 num_args
             Bytes::from("key"),
             Bytes::from("val"),
-            Bytes::from("get"),  // cmd2
-            Bytes::from("1"),    // cmd2 num_args
+            Bytes::from("get"), // cmd2
+            Bytes::from("1"),   // cmd2 num_args
             Bytes::from("key"),
         ],
         Some(&Bytes::from("OK|val")),
@@ -1889,7 +1897,8 @@ fn test_lua_script_atomicity() {
         tokio::time::sleep(Duration::from_millis(10)).await;
 
         // Lua script that sets two keys atomically (using hash tags for same shard)
-        let script = b"redis.call('SET', KEYS[1], '1'); redis.call('SET', KEYS[2], '1'); return 'OK'";
+        let script =
+            b"redis.call('SET', KEYS[1], '1'); redis.call('SET', KEYS[2], '1'); return 'OK'";
         let cmd = encode_command(&[b"EVAL", script, b"2", b"{atomic}a", b"{atomic}b"]);
         stream.write_all(&cmd).await?;
         let n = stream.read(&mut buf).await?;

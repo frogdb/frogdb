@@ -179,11 +179,21 @@ impl HotShardCollector {
             .collect();
 
         // Sort by ops_per_sec descending
-        shards.sort_by(|a, b| b.ops_per_sec.partial_cmp(&a.ops_per_sec).unwrap_or(std::cmp::Ordering::Equal));
+        shards.sort_by(|a, b| {
+            b.ops_per_sec
+                .partial_cmp(&a.ops_per_sec)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Count hot and warm shards
-        let hot_count = shards.iter().filter(|s| s.status == ShardStatus::Hot).count();
-        let warm_count = shards.iter().filter(|s| s.status == ShardStatus::Warm).count();
+        let hot_count = shards
+            .iter()
+            .filter(|s| s.status == ShardStatus::Hot)
+            .count();
+        let warm_count = shards
+            .iter()
+            .filter(|s| s.status == ShardStatus::Warm)
+            .count();
 
         // Generate recommendations
         let recommendations = self.generate_recommendations(&shards, imbalance_ratio, expected_pct);
@@ -278,9 +288,8 @@ impl HotShardCollector {
 
         // Check for multiple hot shards
         if hot_shards.len() > 1 {
-            recommendations.push(
-                "Consider reviewing key naming patterns for better distribution".to_string(),
-            );
+            recommendations
+                .push("Consider reviewing key naming patterns for better distribution".to_string());
         }
 
         recommendations
@@ -339,17 +348,9 @@ pub fn format_hotshards_report(report: &HotShardReport) -> String {
 
 /// Format hot shard info for INFO hotshards output.
 pub fn format_hotshards_info(report: &HotShardReport) -> String {
-    let hottest_shard = report
-        .shards
-        .first()
-        .map(|s| s.shard_id)
-        .unwrap_or(0);
+    let hottest_shard = report.shards.first().map(|s| s.shard_id).unwrap_or(0);
 
-    let max_ops_sec = report
-        .shards
-        .first()
-        .map(|s| s.ops_per_sec)
-        .unwrap_or(0.0);
+    let max_ops_sec = report.shards.first().map(|s| s.ops_per_sec).unwrap_or(0.0);
 
     let avg_ops_sec = if !report.shards.is_empty() {
         report.total_ops_sec / report.shards.len() as f64
@@ -391,7 +392,11 @@ impl std::fmt::Display for HotShardReport {
 impl frogdb_core::HotShardReport for HotShardReport {}
 
 impl frogdb_core::HotShardDetector for HotShardCollector {
-    fn collect(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Arc<dyn frogdb_core::HotShardReport>> + Send + '_>> {
+    fn collect(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Arc<dyn frogdb_core::HotShardReport>> + Send + '_>,
+    > {
         Box::pin(async move {
             // Use default period from config
             let report = self.collect(None).await;

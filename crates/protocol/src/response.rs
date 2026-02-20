@@ -97,10 +97,7 @@ pub enum WireResponse {
     BlobError(Bytes),
 
     /// Verbatim string (=<len>\r\n<fmt>:<data>\r\n)
-    VerbatimString {
-        format: [u8; 3],
-        data: Bytes,
-    },
+    VerbatimString { format: [u8; 3], data: Bytes },
 
     /// Map (%<count>\r\n<key><value>...)
     Map(Vec<(WireResponse, WireResponse)>),
@@ -163,9 +160,9 @@ impl WireResponse {
     pub fn to_resp2_frame(self) -> Resp2BytesFrame {
         match self {
             WireResponse::Simple(s) => Resp2BytesFrame::SimpleString(s),
-            WireResponse::Error(e) => {
-                Resp2BytesFrame::Error(Str::from_inner(e).expect("error messages must be valid UTF-8"))
-            }
+            WireResponse::Error(e) => Resp2BytesFrame::Error(
+                Str::from_inner(e).expect("error messages must be valid UTF-8"),
+            ),
             WireResponse::Integer(i) => Resp2BytesFrame::Integer(i),
             WireResponse::Bulk(Some(b)) => Resp2BytesFrame::BulkString(b),
             WireResponse::Bulk(None) => Resp2BytesFrame::Null,
@@ -179,7 +176,10 @@ impl WireResponse {
             WireResponse::BlobError(e) => {
                 // Convert blob error to simple error (truncate if needed)
                 let msg = String::from_utf8_lossy(&e);
-                Resp2BytesFrame::Error(Str::from_inner(Bytes::from(msg.into_owned())).expect("error must be valid UTF-8"))
+                Resp2BytesFrame::Error(
+                    Str::from_inner(Bytes::from(msg.into_owned()))
+                        .expect("error must be valid UTF-8"),
+                )
             }
             WireResponse::VerbatimString { data, .. } => {
                 // Strip format prefix, return as bulk string
@@ -516,10 +516,7 @@ pub enum Response {
     BlobError(Bytes),
 
     /// Verbatim string (=<len>\r\n<fmt>:<data>\r\n)
-    VerbatimString {
-        format: [u8; 3],
-        data: Bytes,
-    },
+    VerbatimString { format: [u8; 3], data: Bytes },
 
     /// Map (%<count>\r\n<key><value>...)
     Map(Vec<(Response, Response)>),
@@ -598,7 +595,8 @@ impl Response {
             Response::Integer(i) => Ok(WireResponse::Integer(i)),
             Response::Bulk(b) => Ok(WireResponse::Bulk(b)),
             Response::Array(items) => {
-                let wire_items: Result<Vec<_>, _> = items.into_iter().map(|r| r.into_wire()).collect();
+                let wire_items: Result<Vec<_>, _> =
+                    items.into_iter().map(|r| r.into_wire()).collect();
                 Ok(WireResponse::Array(wire_items?))
             }
             Response::Null => Ok(WireResponse::Null),
@@ -616,12 +614,16 @@ impl Response {
                 Ok(WireResponse::Map(wire_pairs?))
             }
             Response::Set(items) => {
-                let wire_items: Result<Vec<_>, _> = items.into_iter().map(|r| r.into_wire()).collect();
+                let wire_items: Result<Vec<_>, _> =
+                    items.into_iter().map(|r| r.into_wire()).collect();
                 Ok(WireResponse::Set(wire_items?))
             }
-            Response::Attribute(inner) => Ok(WireResponse::Attribute(Box::new((*inner).into_wire()?))),
+            Response::Attribute(inner) => {
+                Ok(WireResponse::Attribute(Box::new((*inner).into_wire()?)))
+            }
             Response::Push(items) => {
-                let wire_items: Result<Vec<_>, _> = items.into_iter().map(|r| r.into_wire()).collect();
+                let wire_items: Result<Vec<_>, _> =
+                    items.into_iter().map(|r| r.into_wire()).collect();
                 Ok(WireResponse::Push(wire_items?))
             }
             Response::BigNumber(n) => Ok(WireResponse::BigNumber(n)),
@@ -890,11 +892,17 @@ mod tests {
                 // Map with 2 pairs should flatten to 4 elements
                 assert_eq!(items.len(), 4);
                 // Check first key
-                assert!(matches!(&items[0], Resp2BytesFrame::BulkString(b) if b.as_ref() == b"field1"));
+                assert!(
+                    matches!(&items[0], Resp2BytesFrame::BulkString(b) if b.as_ref() == b"field1")
+                );
                 // Check first value
-                assert!(matches!(&items[1], Resp2BytesFrame::BulkString(b) if b.as_ref() == b"value1"));
+                assert!(
+                    matches!(&items[1], Resp2BytesFrame::BulkString(b) if b.as_ref() == b"value1")
+                );
                 // Check second key
-                assert!(matches!(&items[2], Resp2BytesFrame::BulkString(b) if b.as_ref() == b"field2"));
+                assert!(
+                    matches!(&items[2], Resp2BytesFrame::BulkString(b) if b.as_ref() == b"field2")
+                );
                 // Check second value (integer)
                 assert!(matches!(&items[3], Resp2BytesFrame::Integer(42)));
             }
@@ -1143,7 +1151,10 @@ mod tests {
         ];
 
         for resp in cases {
-            assert!(resp.into_wire().is_ok(), "Expected Ok for wire-serializable type");
+            assert!(
+                resp.into_wire().is_ok(),
+                "Expected Ok for wire-serializable type"
+            );
         }
     }
 
@@ -1157,9 +1168,7 @@ mod tests {
         ]);
         assert!(array.into_wire().is_ok());
 
-        let map = Response::Map(vec![
-            (Response::bulk("key"), Response::Integer(42)),
-        ]);
+        let map = Response::Map(vec![(Response::bulk("key"), Response::Integer(42))]);
         assert!(map.into_wire().is_ok());
     }
 
@@ -1233,17 +1242,17 @@ mod tests {
             keys: vec![],
             timeout: 0.0,
             op: BlockingOp::BLPop,
-        }.is_internal());
+        }
+        .is_internal());
 
         assert!(Response::RaftNeeded {
             op: RaftClusterOp::IncrementEpoch,
             register_node: None,
             unregister_node: None,
-        }.is_internal());
+        }
+        .is_internal());
 
-        assert!(Response::MigrateNeeded {
-            args: vec![],
-        }.is_internal());
+        assert!(Response::MigrateNeeded { args: vec![] }.is_internal());
     }
 
     #[test]
@@ -1274,10 +1283,8 @@ mod tests {
         let frame = wire.to_resp2_frame();
         assert!(matches!(frame, Resp2BytesFrame::Integer(42)));
 
-        let wire_array = WireResponse::Array(vec![
-            WireResponse::Integer(1),
-            WireResponse::bulk("two"),
-        ]);
+        let wire_array =
+            WireResponse::Array(vec![WireResponse::Integer(1), WireResponse::bulk("two")]);
         let frame = wire_array.to_resp2_frame();
         match frame {
             Resp2BytesFrame::Array(items) => {
@@ -1312,9 +1319,7 @@ mod tests {
         let original = Response::Array(vec![
             Response::Integer(1),
             Response::bulk("two"),
-            Response::Map(vec![
-                (Response::bulk("key"), Response::Boolean(true)),
-            ]),
+            Response::Map(vec![(Response::bulk("key"), Response::Boolean(true))]),
         ]);
         let wire = original.clone().into_wire().unwrap();
         let back = Response::from_wire(wire);

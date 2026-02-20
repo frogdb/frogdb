@@ -95,7 +95,10 @@ impl KeyLockState {
     /// Panics if not write-locked (in debug mode).
     pub fn write_unlock(&self) {
         let prev = self.state.swap(0, Ordering::Release);
-        debug_assert_eq!(prev, WRITE_LOCKED, "write_unlock called on non-write-locked state");
+        debug_assert_eq!(
+            prev, WRITE_LOCKED,
+            "write_unlock called on non-write-locked state"
+        );
     }
 
     /// Check if the lock is currently held (read or write).

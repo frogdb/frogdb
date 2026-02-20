@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::test_server::{is_error, is_ok, get_error_message, TestServer, TestServerConfig};
+use common::test_server::{get_error_message, is_error, is_ok, TestServer, TestServerConfig};
 
 // ============================================================================
 // Admin port enabled - blocking tests
@@ -20,9 +20,16 @@ async fn test_admin_port_blocks_debug_on_regular_port() {
 
     // DEBUG SLEEP should fail on regular port when admin port is enabled
     let response = client.command(&["DEBUG", "SLEEP", "0"]).await;
-    assert!(is_error(&response), "DEBUG should be blocked on regular port");
+    assert!(
+        is_error(&response),
+        "DEBUG should be blocked on regular port"
+    );
     let err = get_error_message(&response).expect("should have error message");
-    assert!(err.contains("NOADMIN"), "Error should mention NOADMIN: {}", err);
+    assert!(
+        err.contains("NOADMIN"),
+        "Error should mention NOADMIN: {}",
+        err
+    );
 
     server.shutdown().await;
 }
@@ -36,9 +43,16 @@ async fn test_admin_port_blocks_config_set_on_regular_port() {
     let response = client
         .command(&["CONFIG", "SET", "slowlog-log-slower-than", "100"])
         .await;
-    assert!(is_error(&response), "CONFIG SET should be blocked on regular port");
+    assert!(
+        is_error(&response),
+        "CONFIG SET should be blocked on regular port"
+    );
     let err = get_error_message(&response).expect("should have error message");
-    assert!(err.contains("NOADMIN"), "Error should mention NOADMIN: {}", err);
+    assert!(
+        err.contains("NOADMIN"),
+        "Error should mention NOADMIN: {}",
+        err
+    );
 
     server.shutdown().await;
 }
@@ -50,9 +64,16 @@ async fn test_admin_port_blocks_shutdown_on_regular_port() {
 
     // SHUTDOWN should fail on regular port when admin port is enabled
     let response = client.command(&["SHUTDOWN", "NOSAVE"]).await;
-    assert!(is_error(&response), "SHUTDOWN should be blocked on regular port");
+    assert!(
+        is_error(&response),
+        "SHUTDOWN should be blocked on regular port"
+    );
     let err = get_error_message(&response).expect("should have error message");
-    assert!(err.contains("NOADMIN"), "Error should mention NOADMIN: {}", err);
+    assert!(
+        err.contains("NOADMIN"),
+        "Error should mention NOADMIN: {}",
+        err
+    );
 
     server.shutdown().await;
 }
@@ -93,7 +114,11 @@ async fn test_admin_port_allows_debug_on_admin_port() {
 
     // DEBUG SLEEP should work on admin port
     let response = admin_client.command(&["DEBUG", "SLEEP", "0"]).await;
-    assert!(is_ok(&response), "DEBUG SLEEP should work on admin port: {:?}", response);
+    assert!(
+        is_ok(&response),
+        "DEBUG SLEEP should work on admin port: {:?}",
+        response
+    );
 
     server.shutdown().await;
 }
@@ -107,7 +132,11 @@ async fn test_admin_port_allows_config_set_on_admin_port() {
     let response = admin_client
         .command(&["CONFIG", "SET", "slowlog-log-slower-than", "100"])
         .await;
-    assert!(is_ok(&response), "CONFIG SET should work on admin port: {:?}", response);
+    assert!(
+        is_ok(&response),
+        "CONFIG SET should work on admin port: {:?}",
+        response
+    );
 
     server.shutdown().await;
 }
@@ -118,7 +147,9 @@ async fn test_admin_port_allows_regular_commands_on_admin_port() {
     let mut admin_client = server.connect_admin().await;
 
     // Regular commands should also work on admin port
-    let response = admin_client.command(&["SET", "admin_key", "admin_value"]).await;
+    let response = admin_client
+        .command(&["SET", "admin_key", "admin_value"])
+        .await;
     assert!(is_ok(&response), "SET should work on admin port");
 
     let response = admin_client.command(&["GET", "admin_key"]).await;
@@ -144,7 +175,11 @@ async fn test_admin_disabled_allows_debug_on_regular_port() {
 
     // DEBUG SLEEP should work on regular port when admin is disabled
     let response = client.command(&["DEBUG", "SLEEP", "0"]).await;
-    assert!(is_ok(&response), "DEBUG SLEEP should work when admin disabled: {:?}", response);
+    assert!(
+        is_ok(&response),
+        "DEBUG SLEEP should work when admin disabled: {:?}",
+        response
+    );
 
     server.shutdown().await;
 }
@@ -159,7 +194,11 @@ async fn test_admin_disabled_allows_config_set_on_regular_port() {
     let response = client
         .command(&["CONFIG", "SET", "slowlog-log-slower-than", "100"])
         .await;
-    assert!(is_ok(&response), "CONFIG SET should work when admin disabled: {:?}", response);
+    assert!(
+        is_ok(&response),
+        "CONFIG SET should work when admin disabled: {:?}",
+        response
+    );
 
     server.shutdown().await;
 }
@@ -170,7 +209,10 @@ async fn test_admin_disabled_has_no_admin_port() {
     let server = TestServer::start_standalone().await;
 
     // Should not have admin port
-    assert!(!server.has_admin_port(), "Should not have admin port when disabled");
+    assert!(
+        !server.has_admin_port(),
+        "Should not have admin port when disabled"
+    );
 
     server.shutdown().await;
 }
@@ -186,7 +228,9 @@ async fn test_admin_port_data_shared_between_ports() {
     let mut admin_client = server.connect_admin().await;
 
     // Set data via regular port
-    let response = regular_client.command(&["SET", "shared_key", "from_regular"]).await;
+    let response = regular_client
+        .command(&["SET", "shared_key", "from_regular"])
+        .await;
     assert!(is_ok(&response));
 
     // Read via admin port
@@ -199,7 +243,9 @@ async fn test_admin_port_data_shared_between_ports() {
     }
 
     // Set data via admin port
-    let response = admin_client.command(&["SET", "admin_shared", "from_admin"]).await;
+    let response = admin_client
+        .command(&["SET", "admin_shared", "from_admin"])
+        .await;
     assert!(is_ok(&response));
 
     // Read via regular port

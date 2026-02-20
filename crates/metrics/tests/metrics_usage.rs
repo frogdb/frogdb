@@ -23,13 +23,7 @@ fn all_metrics_are_used() {
     for metric in ALL_METRICS {
         // Search for the metric name in the crates directory
         let output = Command::new("grep")
-            .args([
-                "-r",
-                "-l",
-                "--include=*.rs",
-                metric.name,
-                "crates/",
-            ])
+            .args(["-r", "-l", "--include=*.rs", metric.name, "crates/"])
             .current_dir(env!("CARGO_MANIFEST_DIR").to_owned() + "/../..")
             .output()
             .expect("Failed to execute grep");
@@ -40,8 +34,8 @@ fn all_metrics_are_used() {
         let usage_count = files
             .lines()
             .filter(|f| {
-                !f.contains("definitions.rs")
-                    && !f.contains("metrics/src/lib.rs")  // metric_names module
+                !f.contains("definitions.rs") && !f.contains("metrics/src/lib.rs")
+                // metric_names module
             })
             .count();
 
@@ -65,7 +59,11 @@ fn metrics_registry_is_populated() {
     use frogdb_metrics::METRICS_COUNT;
 
     // We should have a reasonable number of metrics defined
-    assert!(METRICS_COUNT > 40, "Expected at least 40 metrics, found {}", METRICS_COUNT);
+    assert!(
+        METRICS_COUNT > 40,
+        "Expected at least 40 metrics, found {}",
+        METRICS_COUNT
+    );
     assert_eq!(ALL_METRICS.len(), METRICS_COUNT);
 
     // Each metric should have a non-empty name and valid type
@@ -125,7 +123,8 @@ fn all_metrics_have_help_text() {
 fn list_all_metrics() {
     println!("\n=== FrogDB Metrics ({} total) ===\n", ALL_METRICS.len());
 
-    let mut by_category: std::collections::BTreeMap<&str, Vec<_>> = std::collections::BTreeMap::new();
+    let mut by_category: std::collections::BTreeMap<&str, Vec<_>> =
+        std::collections::BTreeMap::new();
     for metric in ALL_METRICS {
         by_category
             .entry(metric.category())

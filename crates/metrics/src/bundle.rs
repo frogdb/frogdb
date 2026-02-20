@@ -580,7 +580,8 @@ impl BundleGenerator {
     ) -> std::io::Result<Vec<u8>> {
         let mut buffer = Cursor::new(Vec::new());
         let mut zip = ZipWriter::new(&mut buffer);
-        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         let now = SystemTime::now();
         let timestamp_unix = now

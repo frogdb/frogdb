@@ -2,11 +2,14 @@
 
 #[cfg(test)]
 mod integration {
+    use crate::bloom::BloomFilterValue;
     use crate::noop::NoopMetricsRecorder;
     use crate::persistence::*;
     use crate::store::Store;
-    use crate::bloom::BloomFilterValue;
-    use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec, StreamValue, Value};
+    use crate::types::{
+        HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec,
+        StreamValue, Value,
+    };
     use bytes::Bytes;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -24,7 +27,10 @@ mod integration {
                 b"string_int".to_vec(),
                 Value::String(crate::types::StringValue::from_integer(12345)),
             ),
-            (b"string_neg".to_vec(), Value::String(crate::types::StringValue::from_integer(-999))),
+            (
+                b"string_neg".to_vec(),
+                Value::String(crate::types::StringValue::from_integer(-999)),
+            ),
         ];
 
         // Add a sorted set
@@ -182,7 +188,12 @@ mod integration {
                 let key = format!("key_{}", i);
                 let shard_id = i % 2;
                 let value = stores[shard_id].0.get(key.as_bytes());
-                assert!(value.is_some(), "Key {} not found in shard {}", key, shard_id);
+                assert!(
+                    value.is_some(),
+                    "Key {} not found in shard {}",
+                    key,
+                    shard_id
+                );
 
                 let expected = format!("value_{}", i);
                 assert_eq!(
@@ -232,7 +243,9 @@ mod integration {
 
         // Test with binary data containing null bytes
         let binary_data: Vec<u8> = (0..=255).collect();
-        let value = Value::String(crate::types::StringValue::new(Bytes::from(binary_data.clone())));
+        let value = Value::String(crate::types::StringValue::new(Bytes::from(
+            binary_data.clone(),
+        )));
         let metadata = KeyMetadata::new(256);
 
         rocks
@@ -341,7 +354,10 @@ mod integration {
         // Field with binary data including null bytes
         let binary_field: Vec<u8> = (0..=255).collect();
         let binary_value: Vec<u8> = (0..=255).rev().collect();
-        hash.set(Bytes::from(binary_field.clone()), Bytes::from(binary_value.clone()));
+        hash.set(
+            Bytes::from(binary_field.clone()),
+            Bytes::from(binary_value.clone()),
+        );
 
         let value = Value::Hash(hash);
         let metadata = KeyMetadata::new(value.memory_size());
@@ -354,7 +370,10 @@ mod integration {
         let (recovered, _) = deserialize(&data).unwrap();
 
         let hash = recovered.as_hash().unwrap();
-        assert_eq!(hash.get(&binary_field[..]), Some(&Bytes::from(binary_value)));
+        assert_eq!(
+            hash.get(&binary_field[..]),
+            Some(&Bytes::from(binary_value))
+        );
     }
 
     // ========================================================================
@@ -538,7 +557,11 @@ mod integration {
             hash.set(Bytes::from("f1"), Bytes::from("v1"));
             let hash_value = Value::Hash(hash);
             rocks
-                .put(0, b"hash_key", &serialize(&hash_value, &KeyMetadata::new(hash_value.memory_size())))
+                .put(
+                    0,
+                    b"hash_key",
+                    &serialize(&hash_value, &KeyMetadata::new(hash_value.memory_size())),
+                )
                 .unwrap();
 
             // List
@@ -547,7 +570,11 @@ mod integration {
             list.push_back(Bytes::from("b"));
             let list_value = Value::List(list);
             rocks
-                .put(1, b"list_key", &serialize(&list_value, &KeyMetadata::new(list_value.memory_size())))
+                .put(
+                    1,
+                    b"list_key",
+                    &serialize(&list_value, &KeyMetadata::new(list_value.memory_size())),
+                )
                 .unwrap();
 
             // Set
@@ -556,7 +583,11 @@ mod integration {
             set.add(Bytes::from("y"));
             let set_value = Value::Set(set);
             rocks
-                .put(1, b"set_key", &serialize(&set_value, &KeyMetadata::new(set_value.memory_size())))
+                .put(
+                    1,
+                    b"set_key",
+                    &serialize(&set_value, &KeyMetadata::new(set_value.memory_size())),
+                )
                 .unwrap();
 
             // Sorted set
@@ -564,7 +595,11 @@ mod integration {
             zset.add(Bytes::from("alice"), 100.0);
             let zset_value = Value::SortedSet(zset);
             rocks
-                .put(0, b"zset_key", &serialize(&zset_value, &KeyMetadata::new(zset_value.memory_size())))
+                .put(
+                    0,
+                    b"zset_key",
+                    &serialize(&zset_value, &KeyMetadata::new(zset_value.memory_size())),
+                )
                 .unwrap();
 
             rocks.flush().unwrap();
@@ -682,7 +717,12 @@ mod integration {
 
         // Add entry with many fields
         let fields: Vec<(Bytes, Bytes)> = (0..20)
-            .map(|i| (Bytes::from(format!("field{}", i)), Bytes::from(format!("value{}", i))))
+            .map(|i| {
+                (
+                    Bytes::from(format!("field{}", i)),
+                    Bytes::from(format!("value{}", i)),
+                )
+            })
             .collect();
         stream
             .add(StreamIdSpec::Explicit(StreamId::new(1000, 0)), fields)
@@ -705,8 +745,14 @@ mod integration {
         assert_eq!(entry.fields.len(), 20);
 
         // Verify some fields
-        assert!(entry.fields.iter().any(|(k, v)| k.as_ref() == b"field0" && v.as_ref() == b"value0"));
-        assert!(entry.fields.iter().any(|(k, v)| k.as_ref() == b"field19" && v.as_ref() == b"value19"));
+        assert!(entry
+            .fields
+            .iter()
+            .any(|(k, v)| k.as_ref() == b"field0" && v.as_ref() == b"value0"));
+        assert!(entry
+            .fields
+            .iter()
+            .any(|(k, v)| k.as_ref() == b"field19" && v.as_ref() == b"value19"));
     }
 
     #[test]

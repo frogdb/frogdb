@@ -16,14 +16,22 @@ use std::time::Instant;
 // Re-export traits and noop implementations from the traits module
 // for backward compatibility
 pub use crate::traits::{
-    // WAL
-    WalWriter, WalOperation, NoopWalWriter,
-    // Replication
-    ReplicationConfig, ReplicationTracker, NoopReplicationTracker,
     // Metrics
-    MetricsRecorder, NoopMetricsRecorder,
+    MetricsRecorder,
+    NoopMetricsRecorder,
+    NoopReplicationTracker,
+    NoopSpan,
+    NoopTracer,
+    NoopWalWriter,
+    // Replication
+    ReplicationConfig,
+    ReplicationTracker,
+    Span,
     // Tracing
-    Tracer, Span, NoopTracer, NoopSpan,
+    Tracer,
+    WalOperation,
+    // WAL
+    WalWriter,
 };
 
 // ============================================================================
@@ -113,7 +121,12 @@ impl ExpiryIndex {
         }
 
         let mut rng = rand::thread_rng();
-        self.by_key.keys().choose_multiple(&mut rng, n).into_iter().cloned().collect()
+        self.by_key
+            .keys()
+            .choose_multiple(&mut rng, n)
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     /// Number of keys with expiry set.

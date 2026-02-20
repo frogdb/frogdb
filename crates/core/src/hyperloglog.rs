@@ -146,16 +146,12 @@ impl HyperLogLogValue {
     /// Get a register value by index.
     pub fn get_register(&self, index: u16) -> u8 {
         match &self.encoding {
-            HllEncoding::Sparse(pairs) => {
-                pairs
-                    .iter()
-                    .find(|(i, _)| *i == index)
-                    .map(|(_, v)| *v)
-                    .unwrap_or(0)
-            }
-            HllEncoding::Dense(registers) => {
-                dense_get_register(registers, index as usize)
-            }
+            HllEncoding::Sparse(pairs) => pairs
+                .iter()
+                .find(|(i, _)| *i == index)
+                .map(|(_, v)| *v)
+                .unwrap_or(0),
+            HllEncoding::Dense(registers) => dense_get_register(registers, index as usize),
         }
     }
 
@@ -411,8 +407,7 @@ fn dense_set_register(registers: &mut [u8; HLL_DENSE_SIZE], index: usize, value:
         let high_mask = (1 << high_bits) - 1;
 
         registers[byte_pos] = (registers[byte_pos] & low_mask) | (value << bit_pos);
-        registers[byte_pos + 1] =
-            (registers[byte_pos + 1] & !high_mask) | (value >> (8 - bit_pos));
+        registers[byte_pos + 1] = (registers[byte_pos + 1] & !high_mask) | (value >> (8 - bit_pos));
     }
 }
 

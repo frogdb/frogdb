@@ -92,24 +92,24 @@ impl PrometheusRecorder {
 
         // Default buckets optimized for command latency (microseconds to seconds)
         let buckets = vec![
-            0.000_01,  // 10µs
-            0.000_05,  // 50µs
-            0.000_1,   // 100µs
-            0.000_25,  // 250µs
-            0.000_5,   // 500µs
-            0.001,     // 1ms
-            0.002_5,   // 2.5ms
-            0.005,     // 5ms
-            0.01,      // 10ms
-            0.025,     // 25ms
-            0.05,      // 50ms
-            0.1,       // 100ms
-            0.25,      // 250ms
-            0.5,       // 500ms
-            1.0,       // 1s
-            2.5,       // 2.5s
-            5.0,       // 5s
-            10.0,      // 10s
+            0.000_01, // 10µs
+            0.000_05, // 50µs
+            0.000_1,  // 100µs
+            0.000_25, // 250µs
+            0.000_5,  // 500µs
+            0.001,    // 1ms
+            0.002_5,  // 2.5ms
+            0.005,    // 5ms
+            0.01,     // 10ms
+            0.025,    // 25ms
+            0.05,     // 50ms
+            0.1,      // 100ms
+            0.25,     // 250ms
+            0.5,      // 500ms
+            1.0,      // 1s
+            2.5,      // 2.5s
+            5.0,      // 5s
+            10.0,     // 10s
         ];
 
         let opts = HistogramOpts::new(name, name).buckets(buckets);

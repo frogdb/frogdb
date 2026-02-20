@@ -23,11 +23,7 @@ impl Command for ZaddCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         // Parse options using shared utility
@@ -169,11 +165,7 @@ impl Command for ZremCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         let zset = match ctx.store.get_mut(key) {
@@ -218,11 +210,7 @@ impl Command for ZscoreCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let member = &args[1];
 
@@ -266,11 +254,7 @@ impl Command for ZmscoreCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let is_resp3 = ctx.protocol_version.is_resp3();
 
@@ -322,11 +306,7 @@ impl Command for ZcardCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         match ctx.store.get(key) {
@@ -360,11 +340,7 @@ impl Command for ZincrbyCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let increment = parse_f64(&args[1])?;
         let member = args[2].clone();

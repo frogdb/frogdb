@@ -68,7 +68,11 @@ impl ShardWorker {
     }
 
     /// Scan for big keys (keys larger than threshold_bytes).
-    pub(crate) fn scan_big_keys(&self, threshold_bytes: usize, max_keys: usize) -> BigKeysScanResponse {
+    pub(crate) fn scan_big_keys(
+        &self,
+        threshold_bytes: usize,
+        max_keys: usize,
+    ) -> BigKeysScanResponse {
         let all_keys = self.store.all_keys();
         let keys_scanned = all_keys.len();
         let mut big_keys = Vec::new();

@@ -26,9 +26,7 @@ async fn test_xread_non_blocking() {
     }
 
     // Non-blocking XREAD should return immediately
-    let response = client
-        .command(&["XREAD", "STREAMS", "mystream", "0"])
-        .await;
+    let response = client.command(&["XREAD", "STREAMS", "mystream", "0"]).await;
     match response {
         Response::Array(streams) => {
             assert_eq!(streams.len(), 1, "Should have one stream result");
@@ -37,9 +35,7 @@ async fn test_xread_non_blocking() {
     }
 
     // Non-blocking XREAD with no data should return null
-    let response = client
-        .command(&["XREAD", "STREAMS", "mystream", "$"])
-        .await;
+    let response = client.command(&["XREAD", "STREAMS", "mystream", "$"]).await;
     match response {
         Response::Bulk(None) => {} // null response expected
         _ => panic!("Expected null for XREAD with $, got {:?}", response),
@@ -118,13 +114,14 @@ async fn test_xread_block_satisfied_by_xadd() {
             assert_eq!(streams.len(), 1, "Should have one stream result");
             // Check inner structure
             if let Response::Array(ref stream_data) = streams[0] {
-                assert_eq!(stream_data.len(), 2, "Stream result should have key and entries");
+                assert_eq!(
+                    stream_data.len(),
+                    2,
+                    "Stream result should have key and entries"
+                );
             }
         }
-        _ => panic!(
-            "Expected array for satisfied XREAD, got {:?}",
-            response
-        ),
+        _ => panic!("Expected array for satisfied XREAD, got {:?}", response),
     }
 
     server.shutdown().await;
@@ -381,9 +378,7 @@ async fn test_xreadgroup_block_with_noack() {
     }
 
     // With NOACK, the entry should not be in the pending list
-    let pending = client2
-        .command(&["XPENDING", "mystream", "mygroup"])
-        .await;
+    let pending = client2.command(&["XPENDING", "mystream", "mygroup"]).await;
     match pending {
         Response::Array(ref items) => {
             if let Response::Integer(count) = &items[0] {

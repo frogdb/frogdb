@@ -160,8 +160,11 @@ async fn test_ts_create() {
     // Verify metrics - 3 TS.CREATE commands total
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "TS.CREATE")], 3.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "TS.CREATE")],
+        3.0,
+    );
 
     server.shutdown().await;
 }
@@ -218,15 +221,7 @@ async fn test_ts_add_auto_create() {
 
     // Add to non-existent key should auto-create
     let response = client
-        .command(&[
-            "TS.ADD",
-            "newkey",
-            "1000",
-            "42.0",
-            "LABELS",
-            "type",
-            "test",
-        ])
+        .command(&["TS.ADD", "newkey", "1000", "42.0", "LABELS", "type", "test"])
         .await;
     assert_eq!(response, Response::Integer(1000));
 
@@ -277,9 +272,7 @@ async fn test_ts_range() {
     let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
 
     // Query range
-    let response = client
-        .command(&["TS.RANGE", "temp", "1000", "1500"])
-        .await;
+    let response = client.command(&["TS.RANGE", "temp", "1000", "1500"]).await;
     match response {
         Response::Array(arr) => {
             assert_eq!(arr.len(), 6); // 1000, 1100, 1200, 1300, 1400, 1500
@@ -310,8 +303,11 @@ async fn test_ts_range() {
     // Verify metrics - 3 TS.RANGE commands
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "TS.RANGE")], 3.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "TS.RANGE")],
+        3.0,
+    );
 
     server.shutdown().await;
 }
@@ -364,7 +360,15 @@ async fn test_ts_range_with_aggregation() {
 
     // Aggregate with AVG in 500ms buckets
     let response = client
-        .command(&["TS.RANGE", "temp", "1000", "2000", "AGGREGATION", "AVG", "500"])
+        .command(&[
+            "TS.RANGE",
+            "temp",
+            "1000",
+            "2000",
+            "AGGREGATION",
+            "AVG",
+            "500",
+        ])
         .await;
     match response {
         Response::Array(arr) => {
@@ -439,8 +443,11 @@ async fn test_ts_madd() {
     // Verify metrics - 1 TS.MADD command
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "TS.MADD")], 1.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "TS.MADD")],
+        1.0,
+    );
 
     server.shutdown().await;
 }
@@ -558,9 +565,7 @@ async fn test_ts_alter() {
 
     // Alter labels
     let response = client
-        .command(&[
-            "TS.ALTER", "temp", "LABELS", "newlabel", "newvalue",
-        ])
+        .command(&["TS.ALTER", "temp", "LABELS", "newlabel", "newvalue"])
         .await;
     assert_eq!(response, Response::ok());
 
@@ -666,15 +671,7 @@ async fn test_ts_filter_by_value() {
 
     // Filter by value
     let response = client
-        .command(&[
-            "TS.RANGE",
-            "temp",
-            "-",
-            "+",
-            "FILTER_BY_VALUE",
-            "30",
-            "60",
-        ])
+        .command(&["TS.RANGE", "temp", "-", "+", "FILTER_BY_VALUE", "30", "60"])
         .await;
     match response {
         Response::Array(arr) => {

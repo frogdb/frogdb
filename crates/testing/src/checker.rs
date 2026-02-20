@@ -134,12 +134,7 @@ impl<M: Model> Checker<M> {
             let result = op.result.clone();
 
             // Try applying this operation to the model
-            if let Some(new_state) = M::step(
-                &self.state,
-                &function,
-                &args,
-                result.as_ref(),
-            ) {
+            if let Some(new_state) = M::step(&self.state, &function, &args, result.as_ref()) {
                 // Save state for backtracking
                 let old_state = self.state.clone();
 
@@ -296,12 +291,7 @@ impl<M: Model> BoundedChecker<M> {
             let args = op.args.clone();
             let result = op.result.clone();
 
-            if let Some(new_state) = M::step(
-                &self.inner.state,
-                &function,
-                &args,
-                result.as_ref(),
-            ) {
+            if let Some(new_state) = M::step(&self.inner.state, &function, &args, result.as_ref()) {
                 let old_state = self.inner.state.clone();
 
                 self.inner.state = new_state;

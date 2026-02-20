@@ -93,44 +93,34 @@ pub fn aggregate(samples: &[(i64, f64)], agg: Aggregation) -> Option<f64> {
             let sum: f64 = samples.iter().map(|(_, v)| v).sum();
             Some(sum / samples.len() as f64)
         }
-        Aggregation::Sum => {
-            Some(samples.iter().map(|(_, v)| v).sum())
-        }
-        Aggregation::Min => {
-            samples.iter().map(|(_, v)| *v).min_by(|a, b| a.partial_cmp(b).unwrap())
-        }
-        Aggregation::Max => {
-            samples.iter().map(|(_, v)| *v).max_by(|a, b| a.partial_cmp(b).unwrap())
-        }
+        Aggregation::Sum => Some(samples.iter().map(|(_, v)| v).sum()),
+        Aggregation::Min => samples
+            .iter()
+            .map(|(_, v)| *v)
+            .min_by(|a, b| a.partial_cmp(b).unwrap()),
+        Aggregation::Max => samples
+            .iter()
+            .map(|(_, v)| *v)
+            .max_by(|a, b| a.partial_cmp(b).unwrap()),
         Aggregation::Range => {
-            let min = samples.iter().map(|(_, v)| *v).min_by(|a, b| a.partial_cmp(b).unwrap())?;
-            let max = samples.iter().map(|(_, v)| *v).max_by(|a, b| a.partial_cmp(b).unwrap())?;
+            let min = samples
+                .iter()
+                .map(|(_, v)| *v)
+                .min_by(|a, b| a.partial_cmp(b).unwrap())?;
+            let max = samples
+                .iter()
+                .map(|(_, v)| *v)
+                .max_by(|a, b| a.partial_cmp(b).unwrap())?;
             Some(max - min)
         }
-        Aggregation::Count => {
-            Some(samples.len() as f64)
-        }
-        Aggregation::First => {
-            samples.first().map(|(_, v)| *v)
-        }
-        Aggregation::Last => {
-            samples.last().map(|(_, v)| *v)
-        }
-        Aggregation::StdP => {
-            compute_std_dev(samples, true)
-        }
-        Aggregation::StdS => {
-            compute_std_dev(samples, false)
-        }
-        Aggregation::VarP => {
-            compute_variance(samples, true)
-        }
-        Aggregation::VarS => {
-            compute_variance(samples, false)
-        }
-        Aggregation::Twa => {
-            compute_twa(samples)
-        }
+        Aggregation::Count => Some(samples.len() as f64),
+        Aggregation::First => samples.first().map(|(_, v)| *v),
+        Aggregation::Last => samples.last().map(|(_, v)| *v),
+        Aggregation::StdP => compute_std_dev(samples, true),
+        Aggregation::StdS => compute_std_dev(samples, false),
+        Aggregation::VarP => compute_variance(samples, true),
+        Aggregation::VarS => compute_variance(samples, false),
+        Aggregation::Twa => compute_twa(samples),
     }
 }
 
@@ -290,8 +280,14 @@ mod tests {
         // Values: 2, 4, 4, 4, 5, 5, 7, 9
         // Mean = 5, Variance = 4
         let samples: Vec<(i64, f64)> = vec![
-            (1, 2.0), (2, 4.0), (3, 4.0), (4, 4.0),
-            (5, 5.0), (6, 5.0), (7, 7.0), (8, 9.0),
+            (1, 2.0),
+            (2, 4.0),
+            (3, 4.0),
+            (4, 4.0),
+            (5, 5.0),
+            (6, 5.0),
+            (7, 7.0),
+            (8, 9.0),
         ];
         let var = aggregate(&samples, Aggregation::VarP).unwrap();
         assert!((var - 4.0).abs() < 0.0001);
@@ -302,8 +298,14 @@ mod tests {
         // Values: 2, 4, 4, 4, 5, 5, 7, 9
         // Mean = 5, Sample Variance = 4.571...
         let samples: Vec<(i64, f64)> = vec![
-            (1, 2.0), (2, 4.0), (3, 4.0), (4, 4.0),
-            (5, 5.0), (6, 5.0), (7, 7.0), (8, 9.0),
+            (1, 2.0),
+            (2, 4.0),
+            (3, 4.0),
+            (4, 4.0),
+            (5, 5.0),
+            (6, 5.0),
+            (7, 7.0),
+            (8, 9.0),
         ];
         let var = aggregate(&samples, Aggregation::VarS).unwrap();
         assert!((var - 4.571428571).abs() < 0.0001);
@@ -312,8 +314,14 @@ mod tests {
     #[test]
     fn test_std_dev() {
         let samples: Vec<(i64, f64)> = vec![
-            (1, 2.0), (2, 4.0), (3, 4.0), (4, 4.0),
-            (5, 5.0), (6, 5.0), (7, 7.0), (8, 9.0),
+            (1, 2.0),
+            (2, 4.0),
+            (3, 4.0),
+            (4, 4.0),
+            (5, 5.0),
+            (6, 5.0),
+            (7, 7.0),
+            (8, 9.0),
         ];
         let std_p = aggregate(&samples, Aggregation::StdP).unwrap();
         assert!((std_p - 2.0).abs() < 0.0001); // sqrt(4) = 2

@@ -311,6 +311,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::function::FcallCommand);
     registry.register(crate::commands::function::FcallRoCommand);
 
+    // Debug (connection-level dispatch for TRACING, VLL, BUNDLE; shard-level for OBJECT, SET)
+    registry.register(crate::commands::generic::DebugCommand);
+
     // Generic/Keys
     registry.register(crate::commands::generic::CopyCommand);
     registry.register(crate::commands::generic::RandomkeyCommand);

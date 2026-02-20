@@ -32,22 +32,23 @@ pub fn is_write_command(cmd: &str) -> bool {
     match cmd.to_uppercase().as_str() {
         // String writes
         "SET" | "SETNX" | "SETEX" | "PSETEX" | "MSET" | "MSETNX" | "APPEND" | "SETRANGE"
-        | "INCR" | "DECR" | "INCRBY" | "DECRBY" | "INCRBYFLOAT" | "GETSET" | "GETDEL"
-        | "GETEX" => true,
+        | "INCR" | "DECR" | "INCRBY" | "DECRBY" | "INCRBYFLOAT" | "GETSET" | "GETDEL" | "GETEX" => {
+            true
+        }
         // Key operations
         "DEL" | "UNLINK" | "RENAME" | "RENAMENX" | "EXPIRE" | "EXPIREAT" | "PEXPIRE"
         | "PEXPIREAT" | "PERSIST" | "COPY" | "MOVE" | "RESTORE" => true,
         // List writes
-        "LPUSH" | "RPUSH" | "LPUSHX" | "RPUSHX" | "LPOP" | "RPOP" | "LSET" | "LINSERT"
-        | "LREM" | "LTRIM" | "LMOVE" | "LMPOP" | "RPOPLPUSH" => true,
+        "LPUSH" | "RPUSH" | "LPUSHX" | "RPUSHX" | "LPOP" | "RPOP" | "LSET" | "LINSERT" | "LREM"
+        | "LTRIM" | "LMOVE" | "LMPOP" | "RPOPLPUSH" => true,
         // Set writes
         "SADD" | "SREM" | "SPOP" | "SMOVE" | "SUNIONSTORE" | "SINTERSTORE" | "SDIFFSTORE" => true,
         // Hash writes
         "HSET" | "HSETNX" | "HMSET" | "HDEL" | "HINCRBY" | "HINCRBYFLOAT" => true,
         // Sorted set writes
         "ZADD" | "ZREM" | "ZINCRBY" | "ZPOPMIN" | "ZPOPMAX" | "ZMPOP" | "ZUNIONSTORE"
-        | "ZINTERSTORE" | "ZDIFFSTORE" | "ZRANGESTORE" | "ZREMRANGEBYRANK"
-        | "ZREMRANGEBYSCORE" | "ZREMRANGEBYLEX" => true,
+        | "ZINTERSTORE" | "ZDIFFSTORE" | "ZRANGESTORE" | "ZREMRANGEBYRANK" | "ZREMRANGEBYSCORE"
+        | "ZREMRANGEBYLEX" => true,
         _ => false,
     }
 }
@@ -240,9 +241,7 @@ pub fn extract_keys_from_command(cmd: &str, args: &[Bytes]) -> Vec<Bytes> {
         "MGET" => args[1..].to_vec(),
 
         // MSET - every other arg starting at position 1 is a key
-        "MSET" | "MSETNX" => {
-            args[1..].chunks(2).map(|chunk| chunk[0].clone()).collect()
-        }
+        "MSET" | "MSETNX" => args[1..].chunks(2).map(|chunk| chunk[0].clone()).collect(),
 
         // RENAME - two keys
         "RENAME" | "RENAMENX" | "COPY" => {
@@ -305,10 +304,7 @@ mod tests {
 
     #[test]
     fn test_validate_key_access() {
-        let declared = vec![
-            Bytes::from_static(b"key1"),
-            Bytes::from_static(b"key2"),
-        ];
+        let declared = vec![Bytes::from_static(b"key1"), Bytes::from_static(b"key2")];
 
         assert!(validate_key_access(b"key1", &declared).is_ok());
         assert!(validate_key_access(b"key2", &declared).is_ok());
@@ -317,10 +313,7 @@ mod tests {
 
     #[test]
     fn test_extract_keys_get() {
-        let args = vec![
-            Bytes::from_static(b"GET"),
-            Bytes::from_static(b"mykey"),
-        ];
+        let args = vec![Bytes::from_static(b"GET"), Bytes::from_static(b"mykey")];
         let keys = extract_keys_from_command("GET", &args);
         assert_eq!(keys, vec![Bytes::from_static(b"mykey")]);
     }
@@ -335,10 +328,10 @@ mod tests {
             Bytes::from_static(b"value2"),
         ];
         let keys = extract_keys_from_command("MSET", &args);
-        assert_eq!(keys, vec![
-            Bytes::from_static(b"key1"),
-            Bytes::from_static(b"key2"),
-        ]);
+        assert_eq!(
+            keys,
+            vec![Bytes::from_static(b"key1"), Bytes::from_static(b"key2"),]
+        );
     }
 
     #[test]
@@ -349,9 +342,9 @@ mod tests {
             Bytes::from_static(b"new"),
         ];
         let keys = extract_keys_from_command("RENAME", &args);
-        assert_eq!(keys, vec![
-            Bytes::from_static(b"old"),
-            Bytes::from_static(b"new"),
-        ]);
+        assert_eq!(
+            keys,
+            vec![Bytes::from_static(b"old"), Bytes::from_static(b"new"),]
+        );
     }
 }

@@ -371,9 +371,9 @@ impl WalWriter for RocksWalWriter {
                 if let Ok(rt) = rt {
                     rt.block_on(async {
                         let mut state = self.pending_batch.lock().await;
-                        let _ = self
-                            .rocks
-                            .batch_put(&mut state.batch, self.shard_id, key, &serialized);
+                        let _ =
+                            self.rocks
+                                .batch_put(&mut state.batch, self.shard_id, key, &serialized);
                         state.size += key.len() + serialized.len() + 32;
                         state.ops_count += 1;
                         let _ = self.maybe_flush_locked(&mut state).await;
@@ -396,9 +396,9 @@ impl WalWriter for RocksWalWriter {
                 if let Ok(rt) = rt {
                     rt.block_on(async {
                         let mut state = self.pending_batch.lock().await;
-                        let _ = self
-                            .rocks
-                            .batch_put(&mut state.batch, self.shard_id, key, &serialized);
+                        let _ =
+                            self.rocks
+                                .batch_put(&mut state.batch, self.shard_id, key, &serialized);
                         state.size += key.len() + serialized.len() + 32;
                         state.ops_count += 1;
                         let _ = self.maybe_flush_locked(&mut state).await;
@@ -413,7 +413,9 @@ impl WalWriter for RocksWalWriter {
                 if let Ok(rt) = rt {
                     rt.block_on(async {
                         let mut state = self.pending_batch.lock().await;
-                        let _ = self.rocks.batch_delete(&mut state.batch, self.shard_id, key);
+                        let _ = self
+                            .rocks
+                            .batch_delete(&mut state.batch, self.shard_id, key);
                         state.size += key.len() + 32;
                         state.ops_count += 1;
                         let _ = self.maybe_flush_locked(&mut state).await;

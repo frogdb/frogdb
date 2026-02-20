@@ -64,7 +64,9 @@ impl ConnectionHandler {
                         .and_then(|s| s.parse().ok())
                     {
                         Some(c) => c,
-                        None => return Response::error("ERR value is not an integer or out of range"),
+                        None => {
+                            return Response::error("ERR value is not an integer or out of range")
+                        }
                     };
                 }
                 b"TYPE" => {
@@ -80,10 +82,12 @@ impl ConnectionHandler {
                         b"zset" => Some(KeyType::SortedSet),
                         b"hash" => Some(KeyType::Hash),
                         b"stream" => Some(KeyType::Stream),
-                        _ => return Response::error(format!(
-                            "ERR unknown type: {}",
-                            String::from_utf8_lossy(&type_str)
-                        )),
+                        _ => {
+                            return Response::error(format!(
+                                "ERR unknown type: {}",
+                                String::from_utf8_lossy(&type_str)
+                            ))
+                        }
                     };
                 }
                 _ => return Response::error("ERR syntax error"),
@@ -186,7 +190,9 @@ impl ConnectionHandler {
             let msg = ShardMessage::ScatterRequest {
                 request_id: next_txid(),
                 keys: vec![],
-                operation: ScatterOp::Keys { pattern: pattern.clone() },
+                operation: ScatterOp::Keys {
+                    pattern: pattern.clone(),
+                },
                 conn_id: self.state.id,
                 response_tx,
             };
@@ -482,11 +488,7 @@ impl ScatterHandler {
 
     /// Merge KEYS results from multiple shards.
     pub fn merge_keys_results(&self, results: Vec<Vec<Bytes>>) -> Response {
-        let keys: Vec<Response> = results
-            .into_iter()
-            .flatten()
-            .map(Response::bulk)
-            .collect();
+        let keys: Vec<Response> = results.into_iter().flatten().map(Response::bulk).collect();
 
         Response::Array(keys)
     }

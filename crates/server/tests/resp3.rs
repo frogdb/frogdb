@@ -262,8 +262,11 @@ async fn test_hello_upgrade_to_resp3() {
     // Verify metrics - HELLO command was tracked
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "HELLO")], 1.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "HELLO")],
+        1.0,
+    );
 
     server.shutdown().await;
 }
@@ -297,7 +300,11 @@ async fn test_hello_noproto() {
     match response {
         Resp2Frame::Error(e) => {
             let msg = e.to_string();
-            assert!(msg.contains("NOPROTO"), "Expected NOPROTO error, got: {}", msg);
+            assert!(
+                msg.contains("NOPROTO"),
+                "Expected NOPROTO error, got: {}",
+                msg
+            );
         }
         _ => panic!("Expected Error response for HELLO 4, got {:?}", response),
     }
@@ -337,7 +344,9 @@ async fn test_hello_auth_success() {
     let mut client = server.connect_resp3().await;
 
     // HELLO 3 AUTH default testpass
-    let response = client.command(&["HELLO", "3", "AUTH", "default", "testpass"]).await;
+    let response = client
+        .command(&["HELLO", "3", "AUTH", "default", "testpass"])
+        .await;
     match response {
         Resp3Frame::Map { data, .. } => {
             // Should contain "server" key after successful auth
@@ -346,7 +355,10 @@ async fn test_hello_auth_success() {
             });
             assert!(has_server, "Successful auth should return server info");
         }
-        _ => panic!("Expected Map response for successful HELLO AUTH, got {:?}", response),
+        _ => panic!(
+            "Expected Map response for successful HELLO AUTH, got {:?}",
+            response
+        ),
     }
 
     server.shutdown().await;
@@ -358,7 +370,9 @@ async fn test_hello_auth_failure() {
     let mut client = server.connect_resp3().await;
 
     // HELLO 3 AUTH default wrongpassword
-    let response = client.command(&["HELLO", "3", "AUTH", "default", "wrongpassword"]).await;
+    let response = client
+        .command(&["HELLO", "3", "AUTH", "default", "wrongpassword"])
+        .await;
     match response {
         Resp3Frame::SimpleError { data, .. } => {
             let msg = data.to_string();
@@ -392,7 +406,10 @@ async fn test_hello_setname() {
                 _ => panic!("Expected BlobString for CLIENT GETNAME, got {:?}", info),
             }
         }
-        _ => panic!("Expected Map response for HELLO SETNAME, got {:?}", response),
+        _ => panic!(
+            "Expected Map response for HELLO SETNAME, got {:?}",
+            response
+        ),
     }
 
     server.shutdown().await;
@@ -411,7 +428,9 @@ async fn test_hgetall_resp3_returns_map() {
     client.command(&["HELLO", "3"]).await;
 
     // Set up some hash data
-    client.command(&["HSET", "myhash", "field1", "value1", "field2", "value2"]).await;
+    client
+        .command(&["HSET", "myhash", "field1", "value1", "field2", "value2"])
+        .await;
 
     // Get baseline metrics (after setup)
     let before = MetricsSnapshot::fetch(server.metrics_addr).await;
@@ -422,14 +441,20 @@ async fn test_hgetall_resp3_returns_map() {
         Resp3Frame::Map { data, .. } => {
             assert_eq!(data.len(), 2, "Expected 2 fields in map");
         }
-        _ => panic!("Expected Map response for HGETALL in RESP3, got {:?}", response),
+        _ => panic!(
+            "Expected Map response for HGETALL in RESP3, got {:?}",
+            response
+        ),
     }
 
     // Verify metrics - HGETALL was tracked
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let after = MetricsSnapshot::fetch(server.metrics_addr).await;
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "HGETALL")], 1.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "HGETALL")],
+        1.0,
+    );
 
     server.shutdown().await;
 }
@@ -440,7 +465,9 @@ async fn test_hgetall_resp2_returns_array() {
     let mut client = server.connect_resp2().await;
 
     // Set up some hash data
-    client.command(&["HSET", "myhash", "field1", "value1", "field2", "value2"]).await;
+    client
+        .command(&["HSET", "myhash", "field1", "value1", "field2", "value2"])
+        .await;
 
     // Get baseline metrics (after setup)
     let before = MetricsSnapshot::fetch(server.metrics_addr).await;
@@ -452,14 +479,20 @@ async fn test_hgetall_resp2_returns_array() {
             // 2 fields = 4 items (key, value, key, value)
             assert_eq!(items.len(), 4, "Expected 4 items in flattened array");
         }
-        _ => panic!("Expected Array response for HGETALL in RESP2, got {:?}", response),
+        _ => panic!(
+            "Expected Array response for HGETALL in RESP2, got {:?}",
+            response
+        ),
     }
 
     // Verify metrics - HGETALL was tracked
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let after = MetricsSnapshot::fetch(server.metrics_addr).await;
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "HGETALL")], 1.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "HGETALL")],
+        1.0,
+    );
 
     server.shutdown().await;
 }
@@ -484,14 +517,20 @@ async fn test_smembers_resp3_returns_set() {
         Resp3Frame::Set { data, .. } => {
             assert_eq!(data.len(), 3, "Expected 3 members in set");
         }
-        _ => panic!("Expected Set response for SMEMBERS in RESP3, got {:?}", response),
+        _ => panic!(
+            "Expected Set response for SMEMBERS in RESP3, got {:?}",
+            response
+        ),
     }
 
     // Verify metrics - SMEMBERS was tracked
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let after = MetricsSnapshot::fetch(server.metrics_addr).await;
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "SMEMBERS")], 1.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "SMEMBERS")],
+        1.0,
+    );
 
     server.shutdown().await;
 }
@@ -511,9 +550,16 @@ async fn test_zscore_resp3_returns_double() {
     let response = client.command(&["ZSCORE", "myzset", "pi"]).await;
     match response {
         Resp3Frame::Double { data, .. } => {
-            assert!((data - 3.14159).abs() < 1e-10, "Expected score ~3.14159, got {}", data);
+            assert!(
+                (data - 3.14159).abs() < 1e-10,
+                "Expected score ~3.14159, got {}",
+                data
+            );
         }
-        _ => panic!("Expected Double response for ZSCORE in RESP3, got {:?}", response),
+        _ => panic!(
+            "Expected Double response for ZSCORE in RESP3, got {:?}",
+            response
+        ),
     }
 
     server.shutdown().await;
@@ -533,7 +579,10 @@ async fn test_incrbyfloat_resp3_double() {
         Resp3Frame::Double { data, .. } => {
             assert!((data - 3.14).abs() < 1e-10, "Expected 3.14, got {}", data);
         }
-        _ => panic!("Expected Double response for INCRBYFLOAT in RESP3, got {:?}", response),
+        _ => panic!(
+            "Expected Double response for INCRBYFLOAT in RESP3, got {:?}",
+            response
+        ),
     }
 
     server.shutdown().await;
@@ -555,7 +604,9 @@ async fn test_pubsub_message_resp3_push() {
     // Publisher
     let mut publisher = server.connect_resp2().await;
     tokio::time::sleep(Duration::from_millis(50)).await;
-    publisher.command(&["PUBLISH", "test-channel", "hello"]).await;
+    publisher
+        .command(&["PUBLISH", "test-channel", "hello"])
+        .await;
 
     // Read the message on subscriber
     if let Some(response) = subscriber.read_message(Duration::from_secs(2)).await {
@@ -567,7 +618,10 @@ async fn test_pubsub_message_resp3_push() {
                     assert_eq!(msg_type.as_ref(), b"message");
                 }
             }
-            _ => panic!("Expected Push response for pub/sub message in RESP3, got {:?}", response),
+            _ => panic!(
+                "Expected Push response for pub/sub message in RESP3, got {:?}",
+                response
+            ),
         }
     } else {
         panic!("No message received");
@@ -587,7 +641,9 @@ async fn test_pubsub_message_resp2_array() {
     // Publisher
     let mut publisher = server.connect_resp2().await;
     tokio::time::sleep(Duration::from_millis(50)).await;
-    publisher.command(&["PUBLISH", "test-channel", "hello"]).await;
+    publisher
+        .command(&["PUBLISH", "test-channel", "hello"])
+        .await;
 
     // Read the subscribe confirmation first, then the message
     // (subscribe returns a confirmation, then messages come as push)
@@ -681,7 +737,10 @@ async fn test_resp2_after_server_restart() {
             Resp2Frame::SimpleString(s) => {
                 assert_eq!(s.as_ref(), b"PONG");
             }
-            _ => panic!("Expected SimpleString PONG for new connection, got {:?}", response),
+            _ => panic!(
+                "Expected SimpleString PONG for new connection, got {:?}",
+                response
+            ),
         }
     }
 

@@ -156,9 +156,7 @@ impl SlowLog {
                     let truncated = &arg[..max_arg_len];
                     let remaining = arg.len() - max_arg_len;
                     let mut result = truncated.to_vec();
-                    result.extend_from_slice(
-                        format!("... ({} more bytes)", remaining).as_bytes(),
-                    );
+                    result.extend_from_slice(format!("... ({} more bytes)", remaining).as_bytes());
                     Bytes::from(result)
                 }
             })
@@ -181,7 +179,11 @@ mod tests {
     use super::*;
 
     fn create_test_slowlog(max_len: usize) -> SlowLog {
-        SlowLog::new(max_len, DEFAULT_SLOWLOG_MAX_ARG_LEN, Arc::new(AtomicU64::new(0)))
+        SlowLog::new(
+            max_len,
+            DEFAULT_SLOWLOG_MAX_ARG_LEN,
+            Arc::new(AtomicU64::new(0)),
+        )
     }
 
     #[test]
@@ -232,9 +234,24 @@ mod tests {
     fn test_newest_first_ordering() {
         let mut log = create_test_slowlog(10);
 
-        log.add(100, &[Bytes::from("CMD1")], "addr".to_string(), String::new());
-        log.add(200, &[Bytes::from("CMD2")], "addr".to_string(), String::new());
-        log.add(300, &[Bytes::from("CMD3")], "addr".to_string(), String::new());
+        log.add(
+            100,
+            &[Bytes::from("CMD1")],
+            "addr".to_string(),
+            String::new(),
+        );
+        log.add(
+            200,
+            &[Bytes::from("CMD2")],
+            "addr".to_string(),
+            String::new(),
+        );
+        log.add(
+            300,
+            &[Bytes::from("CMD3")],
+            "addr".to_string(),
+            String::new(),
+        );
 
         let entries = log.get(10);
         assert_eq!(entries[0].duration_us, 300); // Newest
@@ -249,9 +266,24 @@ mod tests {
         let mut log2 = SlowLog::new(10, DEFAULT_SLOWLOG_MAX_ARG_LEN, next_id.clone());
 
         // Add to both logs interleaved
-        log1.add(100, &[Bytes::from("CMD1")], "addr".to_string(), String::new());
-        log2.add(100, &[Bytes::from("CMD2")], "addr".to_string(), String::new());
-        log1.add(100, &[Bytes::from("CMD3")], "addr".to_string(), String::new());
+        log1.add(
+            100,
+            &[Bytes::from("CMD1")],
+            "addr".to_string(),
+            String::new(),
+        );
+        log2.add(
+            100,
+            &[Bytes::from("CMD2")],
+            "addr".to_string(),
+            String::new(),
+        );
+        log1.add(
+            100,
+            &[Bytes::from("CMD3")],
+            "addr".to_string(),
+            String::new(),
+        );
 
         let entries1 = log1.get(10);
         let entries2 = log2.get(10);
@@ -278,8 +310,18 @@ mod tests {
     fn test_reset() {
         let mut log = create_test_slowlog(10);
 
-        log.add(100, &[Bytes::from("CMD1")], "addr".to_string(), String::new());
-        log.add(200, &[Bytes::from("CMD2")], "addr".to_string(), String::new());
+        log.add(
+            100,
+            &[Bytes::from("CMD1")],
+            "addr".to_string(),
+            String::new(),
+        );
+        log.add(
+            200,
+            &[Bytes::from("CMD2")],
+            "addr".to_string(),
+            String::new(),
+        );
 
         assert_eq!(log.len(), 2);
 

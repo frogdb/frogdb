@@ -372,8 +372,7 @@ impl Command for BlmpopCommand {
                     if !list.is_empty() {
                         let mut elements = Vec::new();
 
-                        if let Some(list_mut) =
-                            ctx.store.get_mut(key).and_then(|v| v.as_list_mut())
+                        if let Some(list_mut) = ctx.store.get_mut(key).and_then(|v| v.as_list_mut())
                         {
                             for _ in 0..count {
                                 let elem = match direction {
@@ -459,7 +458,9 @@ impl Command for BzpopminCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 2 {
-            return Err(CommandError::WrongArity { command: "BZPOPMIN" });
+            return Err(CommandError::WrongArity {
+                command: "BZPOPMIN",
+            });
         }
 
         let timeout_bytes = &args[args.len() - 1];
@@ -546,7 +547,9 @@ impl Command for BzpopmaxCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 2 {
-            return Err(CommandError::WrongArity { command: "BZPOPMAX" });
+            return Err(CommandError::WrongArity {
+                command: "BZPOPMAX",
+            });
         }
 
         let timeout_bytes = &args[args.len() - 1];
@@ -775,7 +778,9 @@ impl Command for BrpoplpushCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() != 3 {
-            return Err(CommandError::WrongArity { command: "BRPOPLPUSH" });
+            return Err(CommandError::WrongArity {
+                command: "BRPOPLPUSH",
+            });
         }
 
         let source = &args[0];
@@ -857,11 +862,9 @@ impl Command for BrpoplpushCommand {
 /// Parse a timeout argument (seconds, can be a float, 0 = block forever).
 fn parse_timeout(arg: &[u8]) -> Result<f64, CommandError> {
     let s = std::str::from_utf8(arg).map_err(|_| CommandError::SyntaxError)?;
-    let timeout: f64 = s
-        .parse()
-        .map_err(|_| CommandError::InvalidArgument {
-            message: "timeout is not a float or out of range".to_string(),
-        })?;
+    let timeout: f64 = s.parse().map_err(|_| CommandError::InvalidArgument {
+        message: "timeout is not a float or out of range".to_string(),
+    })?;
     if timeout < 0.0 {
         return Err(CommandError::InvalidArgument {
             message: "timeout is negative".to_string(),

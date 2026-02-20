@@ -137,9 +137,11 @@ impl TimeSeriesValue {
     ) -> Self {
         let total_samples = active_samples.len() as u64
             + chunks.iter().map(|c| c.sample_count() as u64).sum::<u64>();
-        let last_timestamp = active_samples.keys().last().copied().or_else(|| {
-            chunks.last().map(|c| c.end_time())
-        });
+        let last_timestamp = active_samples
+            .keys()
+            .last()
+            .copied()
+            .or_else(|| chunks.last().map(|c| c.end_time()));
 
         Self {
             active_samples,
@@ -301,7 +303,8 @@ impl TimeSeriesValue {
         let mut deleted = 0u64;
 
         // Delete from active samples
-        let keys_to_remove: Vec<i64> = self.active_samples
+        let keys_to_remove: Vec<i64> = self
+            .active_samples
             .range(from..=to)
             .map(|(&k, _)| k)
             .collect();
@@ -317,7 +320,8 @@ impl TimeSeriesValue {
                 new_chunks.push(chunk);
             } else {
                 // Decompress and filter
-                let samples: Vec<(i64, f64)> = chunk.decompress()
+                let samples: Vec<(i64, f64)> = chunk
+                    .decompress()
                     .into_iter()
                     .filter(|&(ts, _)| ts < from || ts > to)
                     .collect();
@@ -345,7 +349,8 @@ impl TimeSeriesValue {
         let cutoff = current_time - self.retention_ms as i64;
 
         // Remove from active samples
-        let keys_to_remove: Vec<i64> = self.active_samples
+        let keys_to_remove: Vec<i64> = self
+            .active_samples
             .range(..cutoff)
             .map(|(&k, _)| k)
             .collect();
@@ -360,13 +365,16 @@ impl TimeSeriesValue {
         for chunk in self.chunks.drain(..) {
             if chunk.end_time() < cutoff {
                 // Entire chunk is too old, remove it
-                self.total_samples = self.total_samples.saturating_sub(chunk.sample_count() as u64);
+                self.total_samples = self
+                    .total_samples
+                    .saturating_sub(chunk.sample_count() as u64);
             } else if chunk.start_time() >= cutoff {
                 // Entire chunk is within retention
                 new_chunks.push(chunk);
             } else {
                 // Chunk partially overlaps, trim it
-                let samples: Vec<(i64, f64)> = chunk.decompress()
+                let samples: Vec<(i64, f64)> = chunk
+                    .decompress()
                     .into_iter()
                     .filter(|&(ts, _)| ts >= cutoff)
                     .collect();
@@ -388,7 +396,8 @@ impl TimeSeriesValue {
             return;
         }
 
-        let samples: Vec<(i64, f64)> = self.active_samples
+        let samples: Vec<(i64, f64)> = self
+            .active_samples
             .iter()
             .map(|(&ts, &val)| (ts, val))
             .collect();
@@ -427,7 +436,8 @@ impl TimeSeriesValue {
 
     /// Get a specific label value.
     pub fn get_label(&self, name: &str) -> Option<&str> {
-        self.labels.iter()
+        self.labels
+            .iter()
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.as_str())
     }
@@ -502,9 +512,7 @@ impl TimeSeriesValue {
     pub fn memory_size(&self) -> usize {
         let active_size = self.active_samples.len() * (8 + 8); // i64 + f64
         let chunks_size: usize = self.chunks.iter().map(|c| c.memory_size()).sum();
-        let labels_size: usize = self.labels.iter()
-            .map(|(k, v)| k.len() + v.len())
-            .sum();
+        let labels_size: usize = self.labels.iter().map(|(k, v)| k.len() + v.len()).sum();
 
         std::mem::size_of::<Self>() + active_size + chunks_size + labels_size
     }

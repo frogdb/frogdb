@@ -322,7 +322,10 @@ mod tests {
     fn test_preset_display() {
         assert_eq!(format!("{}", ChaosPreset::None), "none");
         assert_eq!(format!("{}", ChaosPreset::ScatterDelay(50)), "scatter_50ms");
-        assert_eq!(format!("{}", ChaosPreset::ShardUnavailable), "shard_unavail");
+        assert_eq!(
+            format!("{}", ChaosPreset::ShardUnavailable),
+            "shard_unavail"
+        );
     }
 
     #[test]

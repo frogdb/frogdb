@@ -62,7 +62,9 @@ async fn test_sismember_smismember() {
     assert_eq!(response, Response::Integer(0));
 
     // SMISMEMBER
-    let response = client.command(&["SMISMEMBER", "myset", "a", "c", "b"]).await;
+    let response = client
+        .command(&["SMISMEMBER", "myset", "a", "c", "b"])
+        .await;
     assert_eq!(
         response,
         Response::Array(vec![

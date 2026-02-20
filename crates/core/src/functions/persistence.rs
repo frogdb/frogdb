@@ -110,13 +110,11 @@ pub fn restore_libraries(data: &[u8]) -> Result<Vec<(String, String)>, FunctionE
 
     // Verify checksum
     let checksum_offset = data.len() - 8;
-    let stored_checksum = u64::from_le_bytes(
-        data[checksum_offset..]
-            .try_into()
-            .map_err(|_| FunctionError::SerializationError {
-                message: "Invalid checksum".to_string(),
-            })?,
-    );
+    let stored_checksum = u64::from_le_bytes(data[checksum_offset..].try_into().map_err(|_| {
+        FunctionError::SerializationError {
+            message: "Invalid checksum".to_string(),
+        }
+    })?);
     let computed_checksum = compute_checksum(&data[..checksum_offset]);
     if stored_checksum != computed_checksum {
         return Err(FunctionError::SerializationError {
@@ -230,11 +228,12 @@ fn read_u32_le(data: &[u8], offset: &mut usize) -> Result<u32, FunctionError> {
             message: "Truncated dump".to_string(),
         });
     }
-    let bytes: [u8; 4] = data[*offset..*offset + 4]
-        .try_into()
-        .map_err(|_| FunctionError::SerializationError {
-            message: "Failed to read u32".to_string(),
-        })?;
+    let bytes: [u8; 4] =
+        data[*offset..*offset + 4]
+            .try_into()
+            .map_err(|_| FunctionError::SerializationError {
+                message: "Failed to read u32".to_string(),
+            })?;
     *offset += 4;
     Ok(u32::from_le_bytes(bytes))
 }
@@ -258,14 +257,16 @@ mod tests {
     fn create_test_registry() -> FunctionRegistry {
         let mut registry = FunctionRegistry::new();
 
-        let mut lib1 = FunctionLibrary::new("lib1".to_string(), "#!lua name=lib1\n-- code1".to_string());
+        let mut lib1 =
+            FunctionLibrary::new("lib1".to_string(), "#!lua name=lib1\n-- code1".to_string());
         lib1.add_function(RegisteredFunction::new(
             "func1".to_string(),
             FunctionFlags::empty(),
             None,
         ));
 
-        let mut lib2 = FunctionLibrary::new("lib2".to_string(), "#!lua name=lib2\n-- code2".to_string());
+        let mut lib2 =
+            FunctionLibrary::new("lib2".to_string(), "#!lua name=lib2\n-- code2".to_string());
         lib2.add_function(RegisteredFunction::new(
             "func2".to_string(),
             FunctionFlags::NO_WRITES,
@@ -344,10 +345,22 @@ mod tests {
 
     #[test]
     fn test_restore_policy_parsing() {
-        assert_eq!(RestorePolicy::from_str("APPEND").unwrap(), RestorePolicy::Append);
-        assert_eq!(RestorePolicy::from_str("append").unwrap(), RestorePolicy::Append);
-        assert_eq!(RestorePolicy::from_str("REPLACE").unwrap(), RestorePolicy::Replace);
-        assert_eq!(RestorePolicy::from_str("FLUSH").unwrap(), RestorePolicy::Flush);
+        assert_eq!(
+            RestorePolicy::from_str("APPEND").unwrap(),
+            RestorePolicy::Append
+        );
+        assert_eq!(
+            RestorePolicy::from_str("append").unwrap(),
+            RestorePolicy::Append
+        );
+        assert_eq!(
+            RestorePolicy::from_str("REPLACE").unwrap(),
+            RestorePolicy::Replace
+        );
+        assert_eq!(
+            RestorePolicy::from_str("FLUSH").unwrap(),
+            RestorePolicy::Flush
+        );
         assert!(RestorePolicy::from_str("invalid").is_err());
     }
 

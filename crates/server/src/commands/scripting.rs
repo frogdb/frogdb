@@ -1,8 +1,11 @@
 //! Scripting commands: EVAL, EVALSHA, SCRIPT.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
 use frogdb_core::scripting::{compute_sha, sha_to_hex};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 /// EVAL command - execute a Lua script.
@@ -23,7 +26,15 @@ impl Command for EvalCommand {
         CommandFlags::SCRIPT | CommandFlags::NONDETERMINISTIC
     }
 
-    fn execute(&self, _ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
         // This is a placeholder - actual execution is handled at the connection level
         // because we need to route to the correct shard based on keys
         //
@@ -75,7 +86,15 @@ impl Command for EvalshaCommand {
         CommandFlags::SCRIPT | CommandFlags::NONDETERMINISTIC
     }
 
-    fn execute(&self, _ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
         // Handled by connection handler
         Err(CommandError::Internal {
             message: "EVALSHA should be handled by connection handler".to_string(),
@@ -123,7 +142,15 @@ impl Command for ScriptCommand {
         CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
     }
 
-    fn execute(&self, _ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
         // Handled by connection handler
         Err(CommandError::Internal {
             message: "SCRIPT should be handled by connection handler".to_string(),
@@ -139,16 +166,18 @@ impl Command for ScriptCommand {
 /// Parse EVAL/EVALSHA arguments.
 ///
 /// Returns (numkeys, keys, argv) or an error.
-pub fn parse_eval_args(args: &[Bytes], offset: usize) -> Result<(Vec<Bytes>, Vec<Bytes>), CommandError> {
+pub fn parse_eval_args(
+    args: &[Bytes],
+    offset: usize,
+) -> Result<(Vec<Bytes>, Vec<Bytes>), CommandError> {
     if args.len() < offset + 2 {
         return Err(CommandError::WrongArity { command: "eval" });
     }
 
     // Parse numkeys
-    let numkeys_str = std::str::from_utf8(&args[offset + 1])
-        .map_err(|_| CommandError::NotInteger)?;
-    let numkeys: usize = numkeys_str.parse()
-        .map_err(|_| CommandError::NotInteger)?;
+    let numkeys_str =
+        std::str::from_utf8(&args[offset + 1]).map_err(|_| CommandError::NotInteger)?;
+    let numkeys: usize = numkeys_str.parse().map_err(|_| CommandError::NotInteger)?;
 
     // Check we have enough arguments for keys
     if args.len() < offset + 2 + numkeys {
@@ -176,10 +205,7 @@ mod tests {
 
     #[test]
     fn test_parse_eval_args_simple() {
-        let args = vec![
-            Bytes::from_static(b"return 1"),
-            Bytes::from_static(b"0"),
-        ];
+        let args = vec![Bytes::from_static(b"return 1"), Bytes::from_static(b"0")];
         let (keys, argv) = parse_eval_args(&args, 0).unwrap();
         assert!(keys.is_empty());
         assert!(argv.is_empty());
@@ -243,10 +269,7 @@ mod tests {
         let cmd = EvalCommand;
 
         // No keys
-        let args = vec![
-            Bytes::from_static(b"return 1"),
-            Bytes::from_static(b"0"),
-        ];
+        let args = vec![Bytes::from_static(b"return 1"), Bytes::from_static(b"0")];
         assert!(cmd.keys(&args).is_empty());
 
         // With keys

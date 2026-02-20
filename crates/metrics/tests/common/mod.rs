@@ -3,6 +3,7 @@
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use frogdb_server::{Config, Server};
+use futures::{SinkExt, StreamExt};
 use redis_protocol::codec::Resp2;
 use redis_protocol::resp2::types::BytesFrame;
 use std::net::SocketAddr;
@@ -13,7 +14,6 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::codec::Framed;
-use futures::{SinkExt, StreamExt};
 
 /// Helper struct for managing a test server.
 pub struct TestServer {

@@ -58,11 +58,7 @@ pub trait AclChecker: Send + Sync {
     ) -> PermissionResult;
 
     /// Check if channel access is allowed for the user.
-    fn check_channel_access(
-        &self,
-        user: &AuthenticatedUser,
-        channel: &[u8],
-    ) -> PermissionResult;
+    fn check_channel_access(&self, user: &AuthenticatedUser, channel: &[u8]) -> PermissionResult;
 
     /// Check if authentication is required.
     fn requires_auth(&self) -> bool;
@@ -106,11 +102,7 @@ impl AclChecker for AllowAllChecker {
         PermissionResult::Allowed
     }
 
-    fn check_channel_access(
-        &self,
-        _user: &AuthenticatedUser,
-        _channel: &[u8],
-    ) -> PermissionResult {
+    fn check_channel_access(&self, _user: &AuthenticatedUser, _channel: &[u8]) -> PermissionResult {
         PermissionResult::Allowed
     }
 
@@ -174,11 +166,7 @@ impl AclChecker for FullAclChecker {
         }
     }
 
-    fn check_channel_access(
-        &self,
-        user: &AuthenticatedUser,
-        channel: &[u8],
-    ) -> PermissionResult {
+    fn check_channel_access(&self, user: &AuthenticatedUser, channel: &[u8]) -> PermissionResult {
         if user.check_channel_access(channel) {
             PermissionResult::Allowed
         } else {
@@ -198,7 +186,11 @@ mod tests {
     use crate::acl::user::UserPermissions;
     use std::collections::HashSet;
 
-    fn create_test_user(all_commands: bool, all_keys: bool, all_channels: bool) -> AuthenticatedUser {
+    fn create_test_user(
+        all_commands: bool,
+        all_keys: bool,
+        all_channels: bool,
+    ) -> AuthenticatedUser {
         let perms = UserPermissions {
             allow_all_commands: all_commands,
             allowed_commands: HashSet::new(),
@@ -242,8 +234,12 @@ mod tests {
         let user = create_test_user(false, false, false);
 
         assert!(checker.check_command(&user, "GET", None).is_allowed());
-        assert!(checker.check_key_access(&user, b"any:key", KeyAccessType::Read).is_allowed());
-        assert!(checker.check_channel_access(&user, b"any:channel").is_allowed());
+        assert!(checker
+            .check_key_access(&user, b"any:key", KeyAccessType::Read)
+            .is_allowed());
+        assert!(checker
+            .check_channel_access(&user, b"any:channel")
+            .is_allowed());
         assert!(!checker.requires_auth());
     }
 
@@ -254,8 +250,12 @@ mod tests {
 
         assert!(checker.check_command(&user, "GET", None).is_allowed());
         assert!(checker.check_command(&user, "FLUSHALL", None).is_allowed());
-        assert!(checker.check_key_access(&user, b"any:key", KeyAccessType::ReadWrite).is_allowed());
-        assert!(checker.check_channel_access(&user, b"any:channel").is_allowed());
+        assert!(checker
+            .check_key_access(&user, b"any:key", KeyAccessType::ReadWrite)
+            .is_allowed());
+        assert!(checker
+            .check_channel_access(&user, b"any:channel")
+            .is_allowed());
         assert!(checker.requires_auth());
     }
 
@@ -271,23 +271,36 @@ mod tests {
         // Denied commands
         let result = checker.check_command(&user, "FLUSHALL", None);
         assert!(!result.is_allowed());
-        assert!(matches!(result, PermissionResult::Denied(AclError::NoPermissionCommand { .. })));
+        assert!(matches!(
+            result,
+            PermissionResult::Denied(AclError::NoPermissionCommand { .. })
+        ));
 
         // Allowed keys
-        assert!(checker.check_key_access(&user, b"user:123", KeyAccessType::Read).is_allowed());
+        assert!(checker
+            .check_key_access(&user, b"user:123", KeyAccessType::Read)
+            .is_allowed());
 
         // Denied keys
         let result = checker.check_key_access(&user, b"admin:123", KeyAccessType::Read);
         assert!(!result.is_allowed());
-        assert!(matches!(result, PermissionResult::Denied(AclError::NoPermissionKey)));
+        assert!(matches!(
+            result,
+            PermissionResult::Denied(AclError::NoPermissionKey)
+        ));
 
         // Allowed channels
-        assert!(checker.check_channel_access(&user, b"chat:general").is_allowed());
+        assert!(checker
+            .check_channel_access(&user, b"chat:general")
+            .is_allowed());
 
         // Denied channels
         let result = checker.check_channel_access(&user, b"private:123");
         assert!(!result.is_allowed());
-        assert!(matches!(result, PermissionResult::Denied(AclError::NoPermissionChannel)));
+        assert!(matches!(
+            result,
+            PermissionResult::Denied(AclError::NoPermissionChannel)
+        ));
     }
 
     #[test]

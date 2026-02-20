@@ -377,10 +377,7 @@ impl ClientInfo {
         let age = self.created_at.elapsed().as_secs();
         let idle = self.last_command_at.elapsed().as_secs();
         let addr_str = self.addr.to_string();
-        let laddr_str = self
-            .local_addr
-            .map(|a| a.to_string())
-            .unwrap_or_default();
+        let laddr_str = self.local_addr.map(|a| a.to_string()).unwrap_or_default();
         let name_str = self
             .name
             .as_ref()
@@ -792,7 +789,13 @@ impl ClientRegistry {
     }
 
     /// Update pub/sub subscription counts.
-    pub fn update_subscriptions(&self, id: u64, sub_count: usize, psub_count: usize, ssub_count: usize) {
+    pub fn update_subscriptions(
+        &self,
+        id: u64,
+        sub_count: usize,
+        psub_count: usize,
+        ssub_count: usize,
+    ) {
         let mut clients = self.clients.write().unwrap();
         if let Some(entry) = clients.get_mut(&id) {
             entry.sub_count = sub_count;
@@ -825,7 +828,8 @@ impl ClientRegistry {
     pub fn pause(&self, mode: PauseMode, timeout_ms: u64) {
         let mut pause_state = self.pause_state.write().unwrap();
         pause_state.mode = Some(mode);
-        pause_state.unpause_at = Some(Instant::now() + std::time::Duration::from_millis(timeout_ms));
+        pause_state.unpause_at =
+            Some(Instant::now() + std::time::Duration::from_millis(timeout_ms));
     }
 
     /// Clear pause state.
@@ -1234,10 +1238,7 @@ mod tests {
             total_latency_us: 500,
             bytes_recv: 1000,
             bytes_sent: 2000,
-            command_latencies: vec![
-                ("GET".to_string(), 50),
-                ("SET".to_string(), 150),
-            ],
+            command_latencies: vec![("GET".to_string(), 50), ("SET".to_string(), 150)],
         };
 
         stats.merge_delta(&delta);

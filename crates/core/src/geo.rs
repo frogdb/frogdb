@@ -111,7 +111,8 @@ impl BoundingBox {
     /// Create a bounding box from center point and width/height (in meters).
     pub fn from_box(center: Coordinates, width_m: f64, height_m: f64) -> Self {
         let lat_delta = (height_m / 2.0) / EARTH_RADIUS_M * (180.0 / PI);
-        let lon_delta = (width_m / 2.0) / EARTH_RADIUS_M * (180.0 / PI) / (center.lat * PI / 180.0).cos();
+        let lon_delta =
+            (width_m / 2.0) / EARTH_RADIUS_M * (180.0 / PI) / (center.lat * PI / 180.0).cos();
 
         Self {
             min_lon: (center.lon - lon_delta).max(LON_MIN),
@@ -210,7 +211,8 @@ pub fn haversine_distance(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     let dlat = lat2_rad - lat1_rad;
     let dlon = lon2_rad - lon1_rad;
 
-    let a = (dlat / 2.0).sin().powi(2) + lat1_rad.cos() * lat2_rad.cos() * (dlon / 2.0).sin().powi(2);
+    let a =
+        (dlat / 2.0).sin().powi(2) + lat1_rad.cos() * lat2_rad.cos() * (dlon / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().asin();
 
     EARTH_RADIUS_M * c
@@ -270,12 +272,12 @@ mod tests {
     #[test]
     fn test_geohash_encode_decode_roundtrip() {
         let test_cases = vec![
-            (-122.4194, 37.7749),   // San Francisco
-            (139.6917, 35.6895),    // Tokyo
-            (-0.1276, 51.5074),     // London
-            (0.0, 0.0),             // Origin
-            (-179.0, -80.0),        // Near min corner
-            (179.0, 80.0),          // Near max corner
+            (-122.4194, 37.7749), // San Francisco
+            (139.6917, 35.6895),  // Tokyo
+            (-0.1276, 51.5074),   // London
+            (0.0, 0.0),           // Origin
+            (-179.0, -80.0),      // Near min corner
+            (179.0, 80.0),        // Near max corner
         ];
 
         for (lon, lat) in test_cases {
@@ -287,7 +289,9 @@ mod tests {
             assert!(
                 dist < 1.0,
                 "Roundtrip error too large: {} meters for ({}, {})",
-                dist, lon, lat
+                dist,
+                lon,
+                lat
             );
         }
     }
@@ -307,7 +311,11 @@ mod tests {
     fn test_haversine_distance() {
         // San Francisco to Los Angeles: ~559 km
         let sf_to_la = haversine_distance(-122.4194, 37.7749, -118.2437, 34.0522);
-        assert!((sf_to_la - 559_000.0).abs() < 10_000.0, "SF to LA: {} m", sf_to_la);
+        assert!(
+            (sf_to_la - 559_000.0).abs() < 10_000.0,
+            "SF to LA: {} m",
+            sf_to_la
+        );
 
         // Same point should be 0
         let same = haversine_distance(-122.4194, 37.7749, -122.4194, 37.7749);

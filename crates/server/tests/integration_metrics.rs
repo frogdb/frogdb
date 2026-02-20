@@ -9,7 +9,7 @@ use std::time::Duration;
 async fn test_metrics_endpoint_returns_prometheus_format() {
     let server = TestServer::start_standalone().await;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let response = client
         .get(format!("http://{}/metrics", server.metrics_addr()))
         .send()
@@ -43,7 +43,7 @@ async fn test_metrics_include_command_counters() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Fetch metrics
-    let http_client = reqwest::Client::new();
+    let http_client = reqwest::Client::builder().no_proxy().build().unwrap();
     let response = http_client
         .get(format!("http://{}/metrics", server.metrics_addr()))
         .send()
@@ -65,7 +65,7 @@ async fn test_metrics_include_command_counters() {
 async fn test_health_live_endpoint() {
     let server = TestServer::start_standalone().await;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let response = client
         .get(format!("http://{}/health/live", server.metrics_addr()))
         .send()
@@ -84,7 +84,7 @@ async fn test_health_live_endpoint() {
 async fn test_health_ready_endpoint() {
     let server = TestServer::start_standalone().await;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let response = client
         .get(format!("http://{}/health/ready", server.metrics_addr()))
         .send()
@@ -103,7 +103,7 @@ async fn test_health_ready_endpoint() {
 async fn test_healthz_alias_endpoint() {
     let server = TestServer::start_standalone().await;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let response = client
         .get(format!("http://{}/healthz", server.metrics_addr()))
         .send()
@@ -122,7 +122,7 @@ async fn test_healthz_alias_endpoint() {
 async fn test_readyz_alias_endpoint() {
     let server = TestServer::start_standalone().await;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let response = client
         .get(format!("http://{}/readyz", server.metrics_addr()))
         .send()
@@ -141,7 +141,7 @@ async fn test_readyz_alias_endpoint() {
 async fn test_metrics_404_on_unknown_path() {
     let server = TestServer::start_standalone().await;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let response = client
         .get(format!("http://{}/unknown", server.metrics_addr()))
         .send()

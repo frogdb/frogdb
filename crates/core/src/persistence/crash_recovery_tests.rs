@@ -15,11 +15,11 @@
 //! | DurabilityMode::Periodic(1000) | appendfsync everysec | ~1 second |
 //! | DurabilityMode::Async | appendfsync no        | ~30 seconds   |
 
-use super::test_harness::*;
 use super::recovery::recover_all_shards;
 use super::rocks::{RocksConfig, RocksStore};
 use super::serialization::{deserialize, serialize};
 use super::snapshot::SnapshotMetadataFile;
+use super::test_harness::*;
 use super::wal::{DurabilityMode, WalConfig};
 use crate::noop::NoopMetricsRecorder;
 use crate::store::Store;
@@ -58,7 +58,11 @@ mod durability_mode {
 
         // Reopen and verify ALL N keys are present
         let (stores, stats) = harness.recover();
-        assert_eq!(stats.keys_loaded, n, "All {} keys must survive with sync mode", n);
+        assert_eq!(
+            stats.keys_loaded, n,
+            "All {} keys must survive with sync mode",
+            n
+        );
 
         // Verify each key
         for i in 0..n {
@@ -99,7 +103,10 @@ mod durability_mode {
 
         // Recover and verify
         let (stores, stats) = harness.recover();
-        assert_eq!(stats.keys_loaded, n, "All keys should survive after flush and interval");
+        assert_eq!(
+            stats.keys_loaded, n,
+            "All keys should survive after flush and interval"
+        );
 
         for i in 0..n {
             let key = format!("periodic_key_{:05}", i);
@@ -205,7 +212,10 @@ mod durability_mode {
 
         // Recover - all 20 keys should be present
         let (_stores, stats) = harness.recover();
-        assert_eq!(stats.keys_loaded, 20, "All keys must survive after sync_wal");
+        assert_eq!(
+            stats.keys_loaded, 20,
+            "All keys must survive after sync_wal"
+        );
     }
 }
 
@@ -253,9 +263,7 @@ mod atomicity {
     #[test]
     fn test_writebatch_atomic() {
         let tmp = TempDir::new().unwrap();
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap());
 
         // Create a batch with multiple keys
         let mut batch = WriteBatch::default();
@@ -265,7 +273,9 @@ mod atomicity {
             let value = Value::string(format!("value_for_{}", key));
             let metadata = KeyMetadata::new(value.memory_size());
             let serialized = serialize(&value, &metadata);
-            rocks.batch_put(&mut batch, 0, key.as_bytes(), &serialized).unwrap();
+            rocks
+                .batch_put(&mut batch, 0, key.as_bytes(), &serialized)
+                .unwrap();
         }
 
         // Write batch with sync
@@ -277,9 +287,7 @@ mod atomicity {
         drop(rocks);
 
         // Reopen and recover
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap());
         let (stores, _stats) = recover_all_shards(&rocks).unwrap();
 
         // Count how many keys are present
@@ -304,9 +312,7 @@ mod atomicity {
     #[test]
     fn test_cross_shard_batch() {
         let tmp = TempDir::new().unwrap();
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap());
 
         // Write to multiple shards in one batch
         let mut batch = WriteBatch::default();
@@ -315,7 +321,9 @@ mod atomicity {
             let value = Value::string(format!("shard_{}_value", shard_id));
             let metadata = KeyMetadata::new(value.memory_size());
             let serialized = serialize(&value, &metadata);
-            rocks.batch_put(&mut batch, shard_id, key.as_bytes(), &serialized).unwrap();
+            rocks
+                .batch_put(&mut batch, shard_id, key.as_bytes(), &serialized)
+                .unwrap();
         }
 
         // Sync write
@@ -327,9 +335,7 @@ mod atomicity {
         drop(rocks);
 
         // Reopen
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap());
         let (stores, _stats) = recover_all_shards(&rocks).unwrap();
 
         // All shards should have their key, or none should
@@ -352,9 +358,7 @@ mod atomicity {
     #[test]
     fn test_batch_delete_atomic() {
         let tmp = TempDir::new().unwrap();
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
 
         // First, create some keys
         for i in 0..5 {
@@ -382,9 +386,7 @@ mod atomicity {
         drop(rocks);
 
         // Reopen
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
         let (stores, _stats) = recover_all_shards(&rocks).unwrap();
 
         // Either all keys deleted or none deleted
@@ -434,7 +436,10 @@ mod recovery_correctness {
         assert!(sv.as_string().is_some(), "Should be string type");
 
         // Sorted Set
-        let zs = stores[0].0.get(b"sorted_set_key").expect("sorted_set_key missing");
+        let zs = stores[0]
+            .0
+            .get(b"sorted_set_key")
+            .expect("sorted_set_key missing");
         assert_eq!(zs.as_sorted_set().unwrap().len(), 10);
 
         // Hash
@@ -552,10 +557,7 @@ mod recovery_correctness {
         // Recover
         let (stores, _stats) = harness.recover();
 
-        let zset_value = stores[0]
-            .0
-            .get(b"myzset")
-            .expect("myzset missing");
+        let zset_value = stores[0].0.get(b"myzset").expect("myzset missing");
         let zset = zset_value.as_sorted_set().expect("not a sorted set");
 
         // Verify scores
@@ -565,10 +567,10 @@ mod recovery_correctness {
         assert_eq!(zset.get_score(b"diana"), Some(25.0));
 
         // Verify ordering via rank
-        assert_eq!(zset.rank(b"diana"), Some(0));   // lowest score
+        assert_eq!(zset.rank(b"diana"), Some(0)); // lowest score
         assert_eq!(zset.rank(b"bob"), Some(1));
         assert_eq!(zset.rank(b"charlie"), Some(2));
-        assert_eq!(zset.rank(b"alice"), Some(3));   // highest score
+        assert_eq!(zset.rank(b"alice"), Some(3)); // highest score
 
         // Verify range query works
         let range = zset.range_by_rank(0, -1);
@@ -600,11 +602,8 @@ mod recovery_correctness {
     /// Test 3.6: Multiple shards recover independently.
     #[test]
     fn test_multi_shard_recovery() {
-        let mut harness = CrashTestHarness::with_config(
-            WalConfig::default(),
-            RocksConfig::default(),
-            4,
-        );
+        let mut harness =
+            CrashTestHarness::with_config(WalConfig::default(), RocksConfig::default(), 4);
 
         // Write different amounts to each shard
         for shard_id in 0..4 {
@@ -737,16 +736,16 @@ mod fault_injection {
                 // Use sync write to ensure durability
                 let mut opts = WriteOptions::default();
                 opts.set_sync(true);
-                rocks.put_opt(0, key.as_bytes(), &serialized, &opts).unwrap();
+                rocks
+                    .put_opt(0, key.as_bytes(), &serialized, &opts)
+                    .unwrap();
             }
 
             // Drop WITHOUT flush - simulates unclean shutdown
         }
 
         // Reopen - RocksDB should replay WAL
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
         let (stores, stats) = recover_all_shards(&rocks).unwrap();
 
         // All sync'd keys should be present
@@ -776,15 +775,15 @@ mod fault_injection {
             }
 
             // Write corrupted data (invalid serialization format)
-            rocks.put(0, b"corrupt_key", b"invalid_serialization_data").unwrap();
+            rocks
+                .put(0, b"corrupt_key", b"invalid_serialization_data")
+                .unwrap();
 
             rocks.flush().unwrap();
         }
 
         // Reopen and recover
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
         let (stores, stats) = recover_all_shards(&rocks).unwrap();
 
         // 10 valid keys should be loaded, 1 should fail
@@ -887,9 +886,7 @@ mod stress {
 
         for cycle in 0..5 {
             // Open
-            let rocks = Arc::new(
-                RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap()
-            );
+            let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
 
             // Count existing keys (verify previous cycle's data)
             let (existing_stores, _existing_stats) = recover_all_shards(&rocks).unwrap();
@@ -902,7 +899,9 @@ mod stress {
                 let serialized = serialize(&value, &metadata);
                 let mut opts = WriteOptions::default();
                 opts.set_sync(true);
-                rocks.put_opt(0, key.as_bytes(), &serialized, &opts).unwrap();
+                rocks
+                    .put_opt(0, key.as_bytes(), &serialized, &opts)
+                    .unwrap();
             }
 
             // Drop (crash)
@@ -911,9 +910,7 @@ mod stress {
         }
 
         // Final verification
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
         let (_stores, stats) = recover_all_shards(&rocks).unwrap();
 
         // Should have 5 cycles * 20 keys = 100 keys
@@ -1015,14 +1012,14 @@ mod disk_failure {
                 let serialized = serialize(&value, &metadata);
                 let mut opts = WriteOptions::default();
                 opts.set_sync(true);
-                rocks.put_opt(0, key.as_bytes(), &serialized, &opts).unwrap();
+                rocks
+                    .put_opt(0, key.as_bytes(), &serialized, &opts)
+                    .unwrap();
             }
         }
 
         // Reopen and recover from WAL (no snapshots involved)
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
         let (stores, stats) = recover_all_shards(&rocks).unwrap();
 
         assert_eq!(stats.keys_loaded, 30);
@@ -1170,10 +1167,7 @@ mod edge_cases {
 
         let (stores, _stats) = harness.recover();
 
-        let zset_value = stores[0]
-            .0
-            .get(b"special_zset")
-            .unwrap();
+        let zset_value = stores[0].0.get(b"special_zset").unwrap();
         let zset = zset_value.as_sorted_set().unwrap();
 
         assert_eq!(zset.get_score(b"neg_inf"), Some(f64::NEG_INFINITY));
@@ -1201,12 +1195,7 @@ mod edge_cases {
         let (stores, stats) = harness.recover();
 
         assert_eq!(stats.keys_loaded, 1);
-        assert!(verify_string_value(
-            &stores,
-            0,
-            b"overwrite_key",
-            "updated"
-        ));
+        assert!(verify_string_value(&stores, 0, b"overwrite_key", "updated"));
     }
 
     /// Test 7.6: Immediate expiry recovery.
@@ -1233,9 +1222,7 @@ mod edge_cases {
         std::thread::sleep(Duration::from_millis(10));
 
         // Recover
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
         let (stores, stats) = recover_all_shards(&rocks).unwrap();
 
         // Key should be filtered out
@@ -1255,9 +1242,7 @@ mod async_wal {
     #[tokio::test]
     async fn test_async_wal_writer_recovery() {
         let tmp = TempDir::new().unwrap();
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
         let metrics = Arc::new(NoopMetricsRecorder::new());
 
         let wal_config = WalConfig {
@@ -1266,19 +1251,16 @@ mod async_wal {
             batch_timeout_ms: 10,
         };
 
-        let wal = super::super::wal::RocksWalWriter::new(
-            rocks.clone(),
-            0,
-            wal_config,
-            metrics,
-        );
+        let wal = super::super::wal::RocksWalWriter::new(rocks.clone(), 0, wal_config, metrics);
 
         // Write through WAL
         for i in 0..50 {
             let value = Value::string(format!("wal_value_{}", i));
             let metadata = KeyMetadata::new(value.memory_size());
             let key = format!("wal_key_{}", i);
-            wal.write_set(key.as_bytes(), &value, &metadata).await.unwrap();
+            wal.write_set(key.as_bytes(), &value, &metadata)
+                .await
+                .unwrap();
         }
 
         // Flush
@@ -1289,9 +1271,7 @@ mod async_wal {
         drop(rocks);
 
         // Reopen and recover
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
         let (stores, stats) = recover_all_shards(&rocks).unwrap();
 
         assert_eq!(stats.keys_loaded, 50);
@@ -1302,17 +1282,11 @@ mod async_wal {
     #[tokio::test]
     async fn test_wal_sequence_persistence() {
         let tmp = TempDir::new().unwrap();
-        let rocks = Arc::new(
-            RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap()
-        );
+        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
         let metrics = Arc::new(NoopMetricsRecorder::new());
 
-        let wal = super::super::wal::RocksWalWriter::new(
-            rocks.clone(),
-            0,
-            WalConfig::default(),
-            metrics,
-        );
+        let wal =
+            super::super::wal::RocksWalWriter::new(rocks.clone(), 0, WalConfig::default(), metrics);
 
         // Write some data
         let value = Value::string("test");

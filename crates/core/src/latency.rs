@@ -551,10 +551,22 @@ mod tests {
 
     #[test]
     fn test_latency_event_from_str() {
-        assert_eq!(LatencyEvent::from_str("command"), Some(LatencyEvent::Command));
-        assert_eq!(LatencyEvent::from_str("COMMAND"), Some(LatencyEvent::Command));
-        assert_eq!(LatencyEvent::from_str("expire-cycle"), Some(LatencyEvent::ExpireCycle));
-        assert_eq!(LatencyEvent::from_str("expire_cycle"), Some(LatencyEvent::ExpireCycle));
+        assert_eq!(
+            LatencyEvent::from_str("command"),
+            Some(LatencyEvent::Command)
+        );
+        assert_eq!(
+            LatencyEvent::from_str("COMMAND"),
+            Some(LatencyEvent::Command)
+        );
+        assert_eq!(
+            LatencyEvent::from_str("expire-cycle"),
+            Some(LatencyEvent::ExpireCycle)
+        );
+        assert_eq!(
+            LatencyEvent::from_str("expire_cycle"),
+            Some(LatencyEvent::ExpireCycle)
+        );
         assert_eq!(LatencyEvent::from_str("unknown"), None);
     }
 

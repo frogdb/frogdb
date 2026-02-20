@@ -3,9 +3,9 @@
 //! These tests verify that the PrometheusRecorder correctly records
 //! counters, gauges, and histograms with proper label encoding.
 
-use frogdb_metrics::prometheus_recorder::PrometheusRecorder;
-use frogdb_metrics::metric_names;
 use frogdb_core::MetricsRecorder;
+use frogdb_metrics::metric_names;
+use frogdb_metrics::prometheus_recorder::PrometheusRecorder;
 use std::sync::Arc;
 
 /// Test that counters are correctly recorded and incremented.
@@ -49,9 +49,21 @@ fn test_histogram_recording() {
     let recorder = PrometheusRecorder::new();
 
     // Record some latencies
-    recorder.record_histogram(metric_names::COMMANDS_DURATION, 0.001, &[("command", "GET")]);
-    recorder.record_histogram(metric_names::COMMANDS_DURATION, 0.005, &[("command", "GET")]);
-    recorder.record_histogram(metric_names::COMMANDS_DURATION, 0.010, &[("command", "GET")]);
+    recorder.record_histogram(
+        metric_names::COMMANDS_DURATION,
+        0.001,
+        &[("command", "GET")],
+    );
+    recorder.record_histogram(
+        metric_names::COMMANDS_DURATION,
+        0.005,
+        &[("command", "GET")],
+    );
+    recorder.record_histogram(
+        metric_names::COMMANDS_DURATION,
+        0.010,
+        &[("command", "GET")],
+    );
 
     let output = recorder.encode();
 
@@ -69,23 +81,23 @@ fn test_histogram_bucket_ranges() {
 
     // Record values at different scales
     recorder.record_histogram("test_latency", 0.00001, &[]); // 10μs
-    recorder.record_histogram("test_latency", 0.0001, &[]);  // 100μs
-    recorder.record_histogram("test_latency", 0.001, &[]);   // 1ms
-    recorder.record_histogram("test_latency", 0.01, &[]);    // 10ms
-    recorder.record_histogram("test_latency", 0.1, &[]);     // 100ms
-    recorder.record_histogram("test_latency", 1.0, &[]);     // 1s
-    recorder.record_histogram("test_latency", 10.0, &[]);    // 10s
+    recorder.record_histogram("test_latency", 0.0001, &[]); // 100μs
+    recorder.record_histogram("test_latency", 0.001, &[]); // 1ms
+    recorder.record_histogram("test_latency", 0.01, &[]); // 10ms
+    recorder.record_histogram("test_latency", 0.1, &[]); // 100ms
+    recorder.record_histogram("test_latency", 1.0, &[]); // 1s
+    recorder.record_histogram("test_latency", 10.0, &[]); // 10s
 
     let output = recorder.encode();
 
     // Verify multiple bucket boundaries exist
     assert!(output.contains("le=\"0.00001\"")); // 10μs bucket
-    assert!(output.contains("le=\"0.001\""));   // 1ms bucket
-    assert!(output.contains("le=\"0.01\""));    // 10ms bucket
-    assert!(output.contains("le=\"0.1\""));     // 100ms bucket
-    assert!(output.contains("le=\"1\""));       // 1s bucket
-    assert!(output.contains("le=\"10\""));      // 10s bucket
-    assert!(output.contains("le=\"+Inf\""));    // Infinity bucket
+    assert!(output.contains("le=\"0.001\"")); // 1ms bucket
+    assert!(output.contains("le=\"0.01\"")); // 10ms bucket
+    assert!(output.contains("le=\"0.1\"")); // 100ms bucket
+    assert!(output.contains("le=\"1\"")); // 1s bucket
+    assert!(output.contains("le=\"10\"")); // 10s bucket
+    assert!(output.contains("le=\"+Inf\"")); // Infinity bucket
 }
 
 /// Test that special characters in labels are properly escaped.
@@ -260,7 +272,11 @@ fn test_concurrent_recording() {
             for j in 0..100 {
                 r.increment_counter("concurrent_test", 1, &[("thread", &i.to_string())]);
                 r.record_gauge("concurrent_gauge", j as f64, &[("thread", &i.to_string())]);
-                r.record_histogram("concurrent_histogram", 0.001 * j as f64, &[("thread", &i.to_string())]);
+                r.record_histogram(
+                    "concurrent_histogram",
+                    0.001 * j as f64,
+                    &[("thread", &i.to_string())],
+                );
             }
         }));
     }

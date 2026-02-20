@@ -7,8 +7,8 @@ use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBWithThreadMode, MultiThreaded,
     Options, WriteBatch, WriteOptions, DB,
 };
-use std::sync::Arc as StdArc;
 use std::path::Path;
+use std::sync::Arc as StdArc;
 use std::sync::Arc;
 use thiserror::Error;
 use tracing::{debug, error, info};
@@ -137,7 +137,8 @@ impl RocksStore {
                 &db_opts,
                 path,
                 cf_descriptors,
-            ).map_err(|e| {
+            )
+            .map_err(|e| {
                 error!(path = %path_str, error = %e, "Failed to open RocksDB");
                 RocksError::from(e)
             })?;
@@ -165,9 +166,9 @@ impl RocksStore {
 
             DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(&db_opts, path, cf_descriptors)
                 .map_err(|e| {
-                    error!(path = %path_str, error = %e, "Failed to open RocksDB");
-                    RocksError::from(e)
-                })?
+                error!(path = %path_str, error = %e, "Failed to open RocksDB");
+                RocksError::from(e)
+            })?
         };
 
         info!(path = %path_str, num_shards, "RocksDB opened");
@@ -205,10 +206,12 @@ impl RocksStore {
         write_opts: &WriteOptions,
     ) -> Result<(), RocksError> {
         let cf = self.cf_handle(shard_id)?;
-        self.db.put_cf_opt(&cf, key, value, write_opts).map_err(|e| {
-            error!(shard_id, key_len = key.len(), error = %e, "RocksDB put failed");
-            RocksError::from(e)
-        })?;
+        self.db
+            .put_cf_opt(&cf, key, value, write_opts)
+            .map_err(|e| {
+                error!(shard_id, key_len = key.len(), error = %e, "RocksDB put failed");
+                RocksError::from(e)
+            })?;
         Ok(())
     }
 
@@ -268,7 +271,10 @@ impl RocksStore {
     /// Create a write batch for a shard.
     ///
     /// Returns a WriteBatch and the column family name for use with batch operations.
-    pub fn create_batch_for_shard(&self, shard_id: usize) -> Result<(WriteBatch, String), RocksError> {
+    pub fn create_batch_for_shard(
+        &self,
+        shard_id: usize,
+    ) -> Result<(WriteBatch, String), RocksError> {
         if shard_id >= self.num_shards {
             return Err(RocksError::InvalidShardId(shard_id));
         }
@@ -424,7 +430,10 @@ impl RocksStore {
         if rocksdb_dir.exists() {
             let backup_dir = parent_dir.join(format!(
                 "{}_backup_{}",
-                rocksdb_dir.file_name().and_then(|n| n.to_str()).unwrap_or("db"),
+                rocksdb_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("db"),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())

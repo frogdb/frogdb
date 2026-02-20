@@ -23,7 +23,10 @@ const GENERATED_HEADER: &str = r#"# ============================================
 # ============================================================================="#;
 
 #[derive(Parser, Debug)]
-#[command(name = "workflow-gen", about = "Generate GitHub Actions workflow files")]
+#[command(
+    name = "workflow-gen",
+    about = "Generate GitHub Actions workflow files"
+)]
 struct Args {
     /// Output directory for workflow files
     #[arg(short, long, default_value = ".github/workflows")]

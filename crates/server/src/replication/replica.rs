@@ -238,7 +238,8 @@ impl ReplicaConnection {
         self.read_ok_response().await?;
 
         // Send REPLCONF capa eof psync2
-        let cmd = "*5\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$3\r\neof\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n";
+        let cmd =
+            "*5\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$3\r\neof\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n";
         self.stream.write_all(cmd.as_bytes()).await?;
 
         // Read OK response
@@ -258,7 +259,10 @@ impl ReplicaConnection {
             ("?".to_string(), -1i64)
         } else {
             // Try partial sync
-            (state.replication_id.clone(), state.replication_offset as i64)
+            (
+                state.replication_id.clone(),
+                state.replication_offset as i64,
+            )
         };
 
         drop(state);
@@ -322,13 +326,13 @@ impl ReplicaConnection {
                     line_buf.clear();
                     reader.read_line(&mut line_buf).await?;
                     let file_count: usize = line_buf.trim().parse().map_err(|_| {
-                        io::Error::new(io::ErrorKind::InvalidData, "invalid file count in checkpoint")
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "invalid file count in checkpoint",
+                        )
                     })?;
 
-                    tracing::info!(
-                        file_count = file_count,
-                        "FrogDB checkpoint FULLRESYNC"
-                    );
+                    tracing::info!(file_count = file_count, "FrogDB checkpoint FULLRESYNC");
 
                     Ok(SyncType::FullSyncCheckpoint { file_count })
                 } else {
@@ -389,10 +393,7 @@ impl ReplicaConnection {
         // For now, we just validate the header
 
         if rdb_data.len() >= 9 && &rdb_data[0..5] == b"REDIS" {
-            tracing::info!(
-                size = rdb_data.len(),
-                "RDB data received successfully"
-            );
+            tracing::info!(size = rdb_data.len(), "RDB data received successfully");
         } else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -419,7 +420,10 @@ impl ReplicaConnection {
         // Create checkpoint directory as a sibling to the data directory
         // This is because data_dir IS the RocksDB directory
         let parent_dir = self.data_dir.parent().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "data_dir has no parent directory")
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "data_dir has no parent directory",
+            )
         })?;
         let checkpoint_dir = parent_dir.join("checkpoint_incoming");
         fs::create_dir_all(&checkpoint_dir).await?;
@@ -432,9 +436,10 @@ impl ReplicaConnection {
             // Read filename length: $<len>\r\n
             let mut line = String::new();
             reader.read_line(&mut line).await?;
-            let filename_len: usize = line.trim().trim_start_matches('$').parse().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid filename length")
-            })?;
+            let filename_len: usize =
+                line.trim().trim_start_matches('$').parse().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "invalid filename length")
+                })?;
 
             // Read filename
             let mut filename_buf = vec![0u8; filename_len + 2]; // +2 for \r\n
@@ -444,9 +449,11 @@ impl ReplicaConnection {
             // Read file size: $<size>\r\n
             line.clear();
             reader.read_line(&mut line).await?;
-            let file_size: u64 = line.trim().trim_start_matches('$').parse().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid file size")
-            })?;
+            let file_size: u64 = line
+                .trim()
+                .trim_start_matches('$')
+                .parse()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid file size"))?;
 
             // Receive file contents
             let file_path = checkpoint_dir.join(&filename);
@@ -455,7 +462,8 @@ impl ReplicaConnection {
                 &file_path,
                 file_size,
                 None, // No progress tracking for now
-            ).await?;
+            )
+            .await?;
 
             total_bytes += file_size;
 
@@ -471,9 +479,10 @@ impl ReplicaConnection {
         // Read metadata: $<len>\r\n<metadata>\r\n
         let mut line = String::new();
         reader.read_line(&mut line).await?;
-        let metadata_len: usize = line.trim().trim_start_matches('$').parse().map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidData, "invalid metadata length")
-        })?;
+        let metadata_len: usize =
+            line.trim().trim_start_matches('$').parse().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid metadata length")
+            })?;
 
         let mut metadata_buf = vec![0u8; metadata_len + 2]; // +2 for \r\n
         reader.read_exact(&mut metadata_buf).await?;
@@ -555,7 +564,7 @@ impl ReplicaConnection {
         // On restart, the checkpoint will be loaded via RocksStore::load_staged_checkpoint()
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "checkpoint_received_restart_required"
+            "checkpoint_received_restart_required",
         ));
     }
 

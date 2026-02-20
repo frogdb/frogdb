@@ -232,9 +232,10 @@ impl AclManager {
             message: format!("Cannot create file: {}", e),
         })?;
 
-        file.write_all(content.as_bytes()).map_err(|e| AclError::FileError {
-            message: format!("Cannot write file: {}", e),
-        })?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| AclError::FileError {
+                message: format!("Cannot write file: {}", e),
+            })?;
 
         Ok(())
     }
@@ -294,7 +295,10 @@ impl std::fmt::Debug for AclManager {
         f.debug_struct("AclManager")
             .field("requires_auth", &self.requires_auth)
             .field("aclfile", &self.aclfile)
-            .field("users_count", &self.users.read_or_panic("AclManager::fmt").len())
+            .field(
+                "users_count",
+                &self.users.read_or_panic("AclManager::fmt").len(),
+            )
             .finish()
     }
 }
@@ -352,7 +356,9 @@ mod tests {
         let manager = AclManager::default_manager();
 
         // Create new user
-        manager.set_user("alice", &["on", ">password", "~user:*", "+@read"]).unwrap();
+        manager
+            .set_user("alice", &["on", ">password", "~user:*", "+@read"])
+            .unwrap();
 
         assert!(manager.user_exists("alice"));
 
@@ -391,7 +397,9 @@ mod tests {
         manager.set_user("charlie", &["on"]).unwrap();
 
         // Delete multiple
-        let count = manager.delete_users(&["alice", "bob", "nonexistent"]).unwrap();
+        let count = manager
+            .delete_users(&["alice", "bob", "nonexistent"])
+            .unwrap();
         assert_eq!(count, 2);
         assert!(!manager.user_exists("alice"));
         assert!(!manager.user_exists("bob"));
@@ -474,8 +482,12 @@ mod tests {
         let manager = AclManager::new(config);
 
         // Add some users
-        manager.set_user("alice", &["on", ">password", "~user:*", "+@read"]).unwrap();
-        manager.set_user("bob", &["on", "nopass", "~*", "+@all"]).unwrap();
+        manager
+            .set_user("alice", &["on", ">password", "~user:*", "+@read"])
+            .unwrap();
+        manager
+            .set_user("bob", &["on", "nopass", "~*", "+@all"])
+            .unwrap();
 
         // Save
         manager.save().unwrap();

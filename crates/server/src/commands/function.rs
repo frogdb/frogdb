@@ -1,7 +1,10 @@
 //! FUNCTION and FCALL command implementations.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 /// FUNCTION command - manages function libraries.
@@ -28,6 +31,10 @@ impl Command for FunctionCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::NOSCRIPT
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
     }
 
     fn execute(
@@ -62,6 +69,10 @@ impl Command for FcallCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::SCRIPT | CommandFlags::NOSCRIPT | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
     }
 
     fn execute(
@@ -111,6 +122,10 @@ impl Command for FcallRoCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::SCRIPT | CommandFlags::NOSCRIPT | CommandFlags::READONLY | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
     }
 
     fn execute(

@@ -160,7 +160,8 @@ impl LocalClientStats {
     pub fn record_command(&mut self, cmd_name: &str, latency_us: u64) {
         self.commands_total += 1;
         self.latency_total_us += latency_us;
-        self.command_latencies.push((cmd_name.to_string(), latency_us));
+        self.command_latencies
+            .push((cmd_name.to_string(), latency_us));
     }
 
     /// Add bytes received.

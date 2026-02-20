@@ -301,7 +301,9 @@ mod tests {
         let core = config.to_core_config();
         assert!(matches!(
             core,
-            frogdb_core::ReplicationConfig::Primary { min_replicas_to_write: 2 }
+            frogdb_core::ReplicationConfig::Primary {
+                min_replicas_to_write: 2
+            }
         ));
 
         // Test replica

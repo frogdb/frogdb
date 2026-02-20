@@ -122,7 +122,11 @@ impl ParsedLibrary {
         );
 
         for reg in self.registrations {
-            library.add_function(RegisteredFunction::new(reg.name, reg.flags, reg.description));
+            library.add_function(RegisteredFunction::new(
+                reg.name,
+                reg.flags,
+                reg.description,
+            ));
         }
 
         Ok(library)
@@ -135,14 +139,17 @@ impl ParsedLibrary {
 /// - A table with flag names as keys: `{["no-writes"] = true, ["allow-oom"] = true}`
 /// - An array of flag strings: `{"no-writes", "allow-oom"}`
 #[allow(dead_code)]
-pub fn parse_flags_from_lua_table(flags: &[(String, bool)]) -> Result<FunctionFlags, FunctionError> {
+pub fn parse_flags_from_lua_table(
+    flags: &[(String, bool)],
+) -> Result<FunctionFlags, FunctionError> {
     let flag_names: Vec<String> = flags
         .iter()
         .filter(|(_, v)| *v)
         .map(|(k, _)| k.clone())
         .collect();
 
-    FunctionFlags::from_strings(&flag_names).map_err(|msg| FunctionError::InvalidFlags { message: msg })
+    FunctionFlags::from_strings(&flag_names)
+        .map_err(|msg| FunctionError::InvalidFlags { message: msg })
 }
 
 #[cfg(test)]
@@ -196,7 +203,10 @@ mod tests {
     fn test_parse_shebang_invalid_engine() {
         let code = "#!python name=mylib\ncode";
         let result = parse_shebang(code);
-        assert!(matches!(result, Err(FunctionError::UnsupportedEngine { .. })));
+        assert!(matches!(
+            result,
+            Err(FunctionError::UnsupportedEngine { .. })
+        ));
     }
 
     #[test]

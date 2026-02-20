@@ -50,15 +50,13 @@ pub use builder::{ShardBuilderError, ShardWorkerBuilder};
 pub use connection::NewConnection;
 pub use counters::{HotShardStatsResponse, OperationBucket, OperationCounters};
 pub use helpers::{
-    extract_hash_tag, shard_for_key, slot_for_key, REDIS_CLUSTER_SLOTS,
-    REPLICA_INTERNAL_CONN_ID,
+    extract_hash_tag, shard_for_key, slot_for_key, REDIS_CLUSTER_SLOTS, REPLICA_INTERNAL_CONN_ID,
 };
 pub use message::{ScatterOp, ShardMessage};
 pub use types::{
     BigKeyInfo, BigKeysScanResponse, PartialResult, PendingOp, ShardClusterDeps, ShardConfig,
     ShardCoreDeps, ShardMemoryStats, ShardPersistenceDeps, TransactionQueue, TransactionResult,
-    VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo,
-    WalLagStatsResponse,
+    VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo, WalLagStatsResponse,
 };
 pub use wait_queue::{ShardWaitQueue, WaitEntry};
 pub use worker::ShardWorker;

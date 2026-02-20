@@ -76,11 +76,7 @@ impl ConnectionHandler {
         let entries: Vec<Response> = all_entries
             .into_iter()
             .map(|entry| {
-                let args: Vec<Response> = entry
-                    .command
-                    .into_iter()
-                    .map(Response::bulk)
-                    .collect();
+                let args: Vec<Response> = entry.command.into_iter().map(Response::bulk).collect();
 
                 Response::Array(vec![
                     Response::Integer(entry.id as i64),

@@ -8,10 +8,8 @@
 use bytes::{Bytes, BytesMut};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use frogdb_protocol::Response;
-use redis_protocol::resp2::encode::encode as resp2_encode;
-use redis_protocol::resp2::types::BytesFrame as Resp2BytesFrame;
-use redis_protocol::resp3::encode::complete::encode as resp3_encode;
-use redis_protocol::resp3::types::BytesFrame as Resp3BytesFrame;
+use redis_protocol::resp2::encode::extend_encode as resp2_encode;
+use redis_protocol::resp3::encode::complete::extend_encode as resp3_encode;
 
 // ============================================================================
 // Response Encoding Benchmarks (RESP2)
@@ -202,13 +200,17 @@ fn bench_encode_resp3_double(c: &mut Criterion) {
         let frame = response.to_resp3_frame();
 
         group.throughput(Throughput::Elements(1));
-        group.bench_with_input(BenchmarkId::new("value", format!("{:.5}", value)), &value, |b, _| {
-            let mut buf = BytesMut::with_capacity(32);
-            b.iter(|| {
-                buf.clear();
-                black_box(resp3_encode(&mut buf, &frame)).unwrap();
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("value", format!("{:.5}", value)),
+            &value,
+            |b, _| {
+                let mut buf = BytesMut::with_capacity(32);
+                b.iter(|| {
+                    buf.clear();
+                    black_box(resp3_encode(&mut buf, &frame)).unwrap();
+                });
+            },
+        );
     }
 
     group.finish();
@@ -402,7 +404,13 @@ fn bench_parse_resp2_command(c: &mut Criterion) {
     for i in 0..10 {
         let key = format!("key{}", i);
         let val = format!("val{}", i);
-        mset_cmd.push_str(&format!("${}\r\n{}\r\n${}\r\n{}\r\n", key.len(), key, val.len(), val));
+        mset_cmd.push_str(&format!(
+            "${}\r\n{}\r\n${}\r\n{}\r\n",
+            key.len(),
+            key,
+            val.len(),
+            val
+        ));
     }
     let mset_bytes = Bytes::from(mset_cmd);
     group.bench_function("MSET_10", |b| {

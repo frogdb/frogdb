@@ -41,9 +41,7 @@ pub enum ShardMessage {
     },
 
     /// Get the current shard version (for WATCH).
-    GetVersion {
-        response_tx: oneshot::Sender<u64>,
-    },
+    GetVersion { response_tx: oneshot::Sender<u64> },
 
     /// Execute a transaction atomically.
     ExecTransaction {
@@ -59,7 +57,6 @@ pub enum ShardMessage {
     // =========================================================================
     // Pub/Sub messages
     // =========================================================================
-
     /// Subscribe to broadcast channels.
     Subscribe {
         channels: Vec<Bytes>,
@@ -126,14 +123,11 @@ pub enum ShardMessage {
     },
 
     /// Connection closed - clean up subscriptions.
-    ConnectionClosed {
-        conn_id: ConnId,
-    },
+    ConnectionClosed { conn_id: ConnId },
 
     // =========================================================================
     // Scripting messages
     // =========================================================================
-
     /// Execute a Lua script (EVAL).
     EvalScript {
         /// Script source code.
@@ -197,7 +191,6 @@ pub enum ShardMessage {
     // =========================================================================
     // Function messages
     // =========================================================================
-
     /// Execute a function (FCALL).
     FunctionCall {
         /// Function name.
@@ -219,7 +212,6 @@ pub enum ShardMessage {
     // =========================================================================
     // Blocking commands messages
     // =========================================================================
-
     /// Register a blocking wait for keys.
     BlockWait {
         /// Connection ID of the blocked client.
@@ -243,7 +235,6 @@ pub enum ShardMessage {
     // =========================================================================
     // Slowlog messages
     // =========================================================================
-
     /// Get slow query log entries from this shard.
     SlowlogGet {
         /// Maximum number of entries to return.
@@ -279,7 +270,6 @@ pub enum ShardMessage {
     // =========================================================================
     // Memory messages
     // =========================================================================
-
     /// Get memory usage for a specific key.
     MemoryUsage {
         /// Key to check.
@@ -315,7 +305,6 @@ pub enum ShardMessage {
     // =========================================================================
     // Latency messages
     // =========================================================================
-
     /// Get the latest latency sample for each event type.
     LatencyLatest {
         /// Response channel.
@@ -341,7 +330,6 @@ pub enum ShardMessage {
     // =========================================================================
     // Hot shard messages
     // =========================================================================
-
     /// Get hot shard statistics from this shard.
     HotShardStats {
         /// How many seconds of data to include (1-60).
@@ -361,7 +349,6 @@ pub enum ShardMessage {
     // =========================================================================
     // VLL (Very Lightweight Locking) messages
     // =========================================================================
-
     /// VLL lock request - declare intents and acquire locks.
     VllLockRequest {
         /// Transaction ID for ordering.
@@ -407,7 +394,6 @@ pub enum ShardMessage {
     // =========================================================================
     // Cluster / Raft messages
     // =========================================================================
-
     /// Execute a Raft command asynchronously.
     /// Used by cluster commands (CLUSTER MEET, CLUSTER FORGET, etc.) that need
     /// to call async Raft operations from synchronous command handlers.

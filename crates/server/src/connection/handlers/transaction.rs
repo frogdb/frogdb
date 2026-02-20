@@ -49,11 +49,7 @@ impl ConnectionHandler {
              outcome: &str,
              queued_count: usize,
              start_time: Option<std::time::Instant>| {
-                recorder.increment_counter(
-                    "frogdb_transactions_total",
-                    1,
-                    &[("outcome", outcome)],
-                );
+                recorder.increment_counter("frogdb_transactions_total", 1, &[("outcome", outcome)]);
                 recorder.record_histogram(
                     "frogdb_transactions_queued_commands",
                     queued_count as f64,
@@ -176,11 +172,21 @@ impl ConnectionHandler {
                 Response::null()
             }
             Ok(TransactionResult::Error(e)) => {
-                record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                record_transaction_metrics(
+                    &self.metrics_recorder,
+                    "error",
+                    queued_count,
+                    start_time,
+                );
                 Response::error(e)
             }
             Err(_) => {
-                record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                record_transaction_metrics(
+                    &self.metrics_recorder,
+                    "error",
+                    queued_count,
+                    start_time,
+                );
                 Response::error("ERR shard dropped request")
             }
         }
@@ -193,12 +199,7 @@ impl ConnectionHandler {
         }
 
         // Record transaction metrics
-        let queued_count = self
-            .state
-            .transaction
-            .queue
-            .as_ref()
-            .map_or(0, |q| q.len());
+        let queued_count = self.state.transaction.queue.as_ref().map_or(0, |q| q.len());
         self.metrics_recorder.increment_counter(
             "frogdb_transactions_total",
             1,

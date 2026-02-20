@@ -67,9 +67,7 @@ async fn test_zadd_options() {
     assert_eq!(response, Response::Bulk(Some(Bytes::from("5"))));
 
     // CH - return changed count
-    let response = client
-        .command(&["ZADD", "myzset", "CH", "10", "one"])
-        .await;
+    let response = client.command(&["ZADD", "myzset", "CH", "10", "one"]).await;
     assert_eq!(response, Response::Integer(1));
 
     server.shutdown().await;

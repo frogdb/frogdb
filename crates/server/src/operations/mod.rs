@@ -189,9 +189,7 @@ mod tests {
         ) -> PhaseResult<Self::Output, Self::State, Self::Error> {
             match state {
                 TestState::Start => PhaseResult::Continue(TestState::Middle(42)),
-                TestState::Middle(n) if n > 0 => {
-                    PhaseResult::Continue(TestState::End)
-                }
+                TestState::Middle(n) if n > 0 => PhaseResult::Continue(TestState::End),
                 TestState::Middle(_) => PhaseResult::Failed("negative".to_string()),
                 TestState::End => PhaseResult::Complete("done".to_string()),
             }

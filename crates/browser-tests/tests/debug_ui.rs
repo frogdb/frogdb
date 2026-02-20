@@ -12,13 +12,18 @@ use std::time::Duration;
 use thirtyfour::prelude::*;
 
 /// Expected tab names in the debug UI.
-const EXPECTED_TABS: &[&str] = &["Cluster", "Config", "Metrics", "Slowlog", "Latency", "Bundles"];
+const EXPECTED_TABS: &[&str] = &[
+    "Cluster", "Config", "Metrics", "Slowlog", "Latency", "Bundles",
+];
 
 /// Helper macro to skip test if chromedriver is not available.
 macro_rules! require_chromedriver {
     () => {
         if !chromedriver_available().await {
-            eprintln!("Skipping test: chromedriver not available at {}", common::CHROMEDRIVER_URL);
+            eprintln!(
+                "Skipping test: chromedriver not available at {}",
+                common::CHROMEDRIVER_URL
+            );
             return;
         }
     };
@@ -29,7 +34,9 @@ async fn test_debug_page_loads() {
     require_chromedriver!();
 
     let server = TestServer::start().await;
-    let browser = BrowserSession::new().await.expect("Failed to create browser session");
+    let browser = BrowserSession::new()
+        .await
+        .expect("Failed to create browser session");
 
     // Navigate to the debug page
     browser
@@ -42,7 +49,11 @@ async fn test_debug_page_loads() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Check that the page title or main container exists
-    let title = browser.driver.title().await.expect("Failed to get page title");
+    let title = browser
+        .driver
+        .title()
+        .await
+        .expect("Failed to get page title");
     assert!(
         title.contains("FrogDB") || title.contains("Debug"),
         "Page title should contain 'FrogDB' or 'Debug', got: {}",
@@ -55,7 +66,10 @@ async fn test_debug_page_loads() {
         .find(By::Tag("body"))
         .await
         .expect("Failed to find body element");
-    assert!(body.is_displayed().await.unwrap_or(false), "Body should be displayed");
+    assert!(
+        body.is_displayed().await.unwrap_or(false),
+        "Body should be displayed"
+    );
 
     browser.close().await.expect("Failed to close browser");
     server.shutdown().await;
@@ -66,7 +80,9 @@ async fn test_all_tabs_present() {
     require_chromedriver!();
 
     let server = TestServer::start().await;
-    let browser = BrowserSession::new().await.expect("Failed to create browser session");
+    let browser = BrowserSession::new()
+        .await
+        .expect("Failed to create browser session");
 
     browser
         .driver
@@ -81,7 +97,9 @@ async fn test_all_tabs_present() {
     // Common patterns: role="tab", class containing "tab", or nav buttons
     let tabs = browser
         .driver
-        .find_all(By::Css("[role='tab'], .tab, .nav-tab, button[data-tab], a[data-tab]"))
+        .find_all(By::Css(
+            "[role='tab'], .tab, .nav-tab, button[data-tab], a[data-tab]",
+        ))
         .await
         .unwrap_or_default();
 
@@ -93,7 +111,11 @@ async fn test_all_tabs_present() {
                 "//*[contains(text(), '{}') and (self::button or self::a or self::li or self::div[@role='tab'])]",
                 tab_name
             );
-            let found = browser.driver.find_all(By::XPath(&xpath)).await.unwrap_or_default();
+            let found = browser
+                .driver
+                .find_all(By::XPath(&xpath))
+                .await
+                .unwrap_or_default();
             assert!(
                 !found.is_empty(),
                 "Tab '{}' should be present in the debug UI",
@@ -119,7 +141,9 @@ async fn test_tab_switching() {
     require_chromedriver!();
 
     let server = TestServer::start().await;
-    let browser = BrowserSession::new().await.expect("Failed to create browser session");
+    let browser = BrowserSession::new()
+        .await
+        .expect("Failed to create browser session");
 
     browser
         .driver
@@ -140,7 +164,9 @@ async fn test_tab_switching() {
 
         if let Ok(elements) = browser.driver.find_all(By::XPath(&xpath)).await {
             for element in elements {
-                if element.is_displayed().await.unwrap_or(false) && element.is_enabled().await.unwrap_or(false) {
+                if element.is_displayed().await.unwrap_or(false)
+                    && element.is_enabled().await.unwrap_or(false)
+                {
                     // Click the tab
                     if element.click().await.is_ok() {
                         // Wait for content to update
@@ -148,7 +174,11 @@ async fn test_tab_switching() {
 
                         // Verify the page didn't crash (body still exists)
                         let body = browser.driver.find(By::Tag("body")).await;
-                        assert!(body.is_ok(), "Page should not crash after clicking {} tab", tab_name);
+                        assert!(
+                            body.is_ok(),
+                            "Page should not crash after clicking {} tab",
+                            tab_name
+                        );
                         break;
                     }
                 }
@@ -165,7 +195,9 @@ async fn test_no_javascript_errors() {
     require_chromedriver!();
 
     let server = TestServer::start().await;
-    let browser = BrowserSession::new().await.expect("Failed to create browser session");
+    let browser = BrowserSession::new()
+        .await
+        .expect("Failed to create browser session");
 
     // Inject console error capture before navigating
     browser
@@ -235,7 +267,9 @@ async fn test_charts_container_exists() {
     require_chromedriver!();
 
     let server = TestServer::start().await;
-    let browser = BrowserSession::new().await.expect("Failed to create browser session");
+    let browser = BrowserSession::new()
+        .await
+        .expect("Failed to create browser session");
 
     browser
         .driver
@@ -309,7 +343,9 @@ async fn test_cluster_tab_content() {
     require_chromedriver!();
 
     let server = TestServer::start().await;
-    let browser = BrowserSession::new().await.expect("Failed to create browser session");
+    let browser = BrowserSession::new()
+        .await
+        .expect("Failed to create browser session");
 
     browser
         .driver

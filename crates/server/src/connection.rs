@@ -18,11 +18,11 @@
 mod builder;
 pub mod deps;
 pub(crate) mod dispatch;
+pub(crate) mod guards;
 pub mod handlers;
 pub mod router;
-pub mod state;
-pub(crate) mod guards;
 pub(crate) mod routing;
+pub mod state;
 pub(crate) mod util;
 
 // Re-export dependency groups
@@ -37,7 +37,7 @@ pub use state::{
 };
 
 // Re-export builder
-pub use builder::{ConnectionHandlerBuilder, connection_builder, standalone_config};
+pub use builder::{connection_builder, standalone_config, ConnectionHandlerBuilder};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -46,11 +46,10 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::{Bytes, BytesMut};
 use frogdb_core::{
-    persistence::SnapshotCoordinator,
-    AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
-    CommandFlags, CommandRegistry, MetricsRecorder, PauseMode, PubSubMessage, PubSubSender,
-    ReplicationTrackerImpl, SharedFunctionRegistry,
-    ShardMessage,
+    persistence::SnapshotCoordinator, AclManager, ClientHandle, ClientRegistry,
+    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandFlags, CommandRegistry,
+    MetricsRecorder, PauseMode, PubSubMessage, PubSubSender, ReplicationTrackerImpl, ShardMessage,
+    SharedFunctionRegistry,
 };
 use frogdb_metrics::SharedTracer;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
@@ -70,9 +69,8 @@ pub use crate::server::next_txid;
 
 // Re-export utility functions used by handler submodules and internally
 pub(crate) use util::{
-    convert_blocking_op, convert_raft_cluster_op, estimate_command_size,
-    estimate_resp2_frame_size, extract_subcommand, format_timestamp_iso,
-    key_access_type_for_flags,
+    convert_blocking_op, convert_raft_cluster_op, estimate_command_size, estimate_resp2_frame_size,
+    extract_subcommand, format_timestamp_iso, key_access_type_for_flags,
 };
 
 /// Connection handler that processes client commands.
@@ -365,7 +363,10 @@ impl ConnectionHandler {
     ///
     /// This is the type-safe version that only accepts wire-serializable responses.
     /// Use this when you have already extracted a WireResponse from a Response.
-    async fn send_wire_response(&mut self, response: frogdb_protocol::WireResponse) -> std::io::Result<()> {
+    async fn send_wire_response(
+        &mut self,
+        response: frogdb_protocol::WireResponse,
+    ) -> std::io::Result<()> {
         match self.state.protocol_version {
             ProtocolVersion::Resp2 => {
                 // Use RESP2 encoding via the Framed codec
@@ -373,10 +374,7 @@ impl ConnectionHandler {
                 // Estimate frame size for stats tracking
                 let frame_size = estimate_resp2_frame_size(&frame);
                 self.state.local_stats.add_bytes_sent(frame_size as u64);
-                self.framed
-                    .send(frame)
-                    .await
-                    .map_err(std::io::Error::other)
+                self.framed.send(frame).await.map_err(std::io::Error::other)
             }
             ProtocolVersion::Resp3 => {
                 // Manually encode RESP3 and write to socket
@@ -579,12 +577,10 @@ impl ConnectionHandler {
                 // In turmoil mode, we'd need to handle this differently.
                 #[cfg(not(feature = "turmoil"))]
                 {
-                    if let Err(e) = handler.handle_psync(
-                        stream,
-                        self.state.addr,
-                        &replication_id,
-                        offset,
-                    ).await {
+                    if let Err(e) = handler
+                        .handle_psync(stream, self.state.addr, &replication_id, offset)
+                        .await
+                    {
                         warn!(
                             conn_id = self.state.id,
                             error = %e,
@@ -612,7 +608,10 @@ impl ConnectionHandler {
             }
 
             // Don't run normal cleanup - replication handler has the connection
-            debug!(conn_id = self.state.id, "Connection handler finished (PSYNC handoff)");
+            debug!(
+                conn_id = self.state.id,
+                "Connection handler finished (PSYNC handoff)"
+            );
             return Ok(());
         }
 
@@ -631,18 +630,22 @@ impl ConnectionHandler {
         // Notify if we had any subscriptions
         if self.state.pubsub.in_pubsub_mode() {
             for sender in self.shard_senders.iter() {
-                let _ = sender.send(ShardMessage::ConnectionClosed {
-                    conn_id: self.state.id,
-                }).await;
+                let _ = sender
+                    .send(ShardMessage::ConnectionClosed {
+                        conn_id: self.state.id,
+                    })
+                    .await;
             }
         }
 
         // Unregister any blocking waits
         if let Some(ref blocked) = self.state.blocked {
             if let Some(sender) = self.shard_senders.get(blocked.shard_id) {
-                let _ = sender.send(ShardMessage::UnregisterWait {
-                    conn_id: self.state.id,
-                }).await;
+                let _ = sender
+                    .send(ShardMessage::UnregisterWait {
+                        conn_id: self.state.id,
+                    })
+                    .await;
             }
         }
     }
@@ -686,7 +689,6 @@ impl ConnectionHandler {
 
         None
     }
-
 
     /// Periodically sync local stats to the registry.
     /// Syncs every STATS_SYNC_INTERVAL_COMMANDS commands or STATS_SYNC_INTERVAL_MS milliseconds.

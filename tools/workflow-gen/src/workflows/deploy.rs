@@ -204,7 +204,10 @@ fn terraform_job() -> Job {
                         "role-to-assume".to_string(),
                         "${{ secrets.AWS_ROLE_ARN }}".to_string(),
                     );
-                    m.insert("aws-region".to_string(), "${{ vars.AWS_REGION }}".to_string());
+                    m.insert(
+                        "aws-region".to_string(),
+                        "${{ vars.AWS_REGION }}".to_string(),
+                    );
                     m
                 }),
             },

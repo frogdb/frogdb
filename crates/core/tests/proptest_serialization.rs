@@ -390,6 +390,9 @@ mod edge_case_tests {
         let metadata = KeyMetadata::new(val.memory_size());
         let serialized = serialize(&val, &metadata);
         let (deserialized, _): (Value, KeyMetadata) = deserialize(&serialized).unwrap();
-        assert_eq!(deserialized.as_string().unwrap().as_bytes().as_ref(), &binary[..]);
+        assert_eq!(
+            deserialized.as_string().unwrap().as_bytes().as_ref(),
+            &binary[..]
+        );
     }
 }

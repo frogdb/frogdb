@@ -18,7 +18,6 @@ use frogdb_protocol::Response;
 
 use super::utils::{get_or_create_list, parse_i64, parse_usize};
 
-
 // ============================================================================
 // LPUSH - Push elements to front of list
 // ============================================================================
@@ -38,11 +37,7 @@ impl Command for LpushCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let list = get_or_create_list(ctx, key)?;
 
@@ -82,11 +77,7 @@ impl Command for RpushCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let list = get_or_create_list(ctx, key)?;
 
@@ -125,11 +116,7 @@ impl Command for LpushxCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         // Check if key exists
@@ -179,11 +166,7 @@ impl Command for RpushxCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         // Check if key exists
@@ -233,11 +216,7 @@ impl Command for LpopCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         let count = if args.len() > 1 {
@@ -324,11 +303,7 @@ impl Command for RpopCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         let count = if args.len() > 1 {
@@ -415,11 +390,7 @@ impl Command for LlenCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         match ctx.store.get(key) {
@@ -462,11 +433,7 @@ impl Command for LrangeCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let start = parse_i64(&args[1])?;
         let stop = parse_i64(&args[2])?;
@@ -513,11 +480,7 @@ impl Command for LindexCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let index = parse_i64(&args[1])?;
 
@@ -564,11 +527,7 @@ impl Command for LsetCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let index = parse_i64(&args[1])?;
         let element = args[2].clone();
@@ -626,11 +585,7 @@ impl Command for LinsertCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let position = args[1].to_ascii_uppercase();
         let pivot = &args[2];
@@ -685,11 +640,7 @@ impl Command for LremCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let count = parse_i64(&args[1])?;
         let element = &args[2];
@@ -743,11 +694,7 @@ impl Command for LtrimCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let start = parse_i64(&args[1])?;
         let stop = parse_i64(&args[2])?;
@@ -801,11 +748,7 @@ impl Command for LposCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let element = &args[1];
 
@@ -914,11 +857,7 @@ impl Command for LmoveCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let source = &args[0];
         let dest = &args[1];
         let wherefrom = args[2].to_ascii_uppercase();
@@ -1010,11 +949,7 @@ impl Command for LmpopCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let numkeys = parse_usize(&args[0])?;
 
         if numkeys == 0 {

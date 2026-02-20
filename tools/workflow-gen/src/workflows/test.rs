@@ -9,11 +9,9 @@ use crate::helpers::{
 /// Creates the test workflow.
 pub fn test_workflow() -> Workflow {
     Workflow::new("Test")
-        .on(
-            Event::default()
-                .push(Push::default().add_branch("main"))
-                .pull_request(PullRequest::default().add_branch("main")),
-        )
+        .on(Event::default()
+            .push(Push::default().add_branch("main"))
+            .pull_request(PullRequest::default().add_branch("main")))
         .add_env(("CARGO_TERM_COLOR", "always"))
         .add_job("lint", lint_job())
         .add_job("unit-tests", unit_tests_job())
@@ -30,13 +28,9 @@ fn lint_job() -> Job {
         .runs_on("ubuntu-latest")
         .add_step(checkout())
         .add_step(rust_toolchain_with_components(&["rustfmt", "clippy"]))
+        .add_step(Step::new("Check formatting").run("cargo fmt --all -- --check"))
         .add_step(
-            Step::new("Check formatting")
-                .run("cargo fmt --all -- --check"),
-        )
-        .add_step(
-            Step::new("Run clippy")
-                .run("cargo clippy --all-targets --all-features -- -D warnings"),
+            Step::new("Run clippy").run("cargo clippy --all-targets --all-features -- -D warnings"),
         )
 }
 
@@ -84,8 +78,7 @@ fn helm_gen_check_job() -> Job {
         .add_step(rust_toolchain())
         .add_step(cargo_cache("helm"))
         .add_step(
-            Step::new("Check Helm files are up to date")
-                .run("cargo run -p helm-gen -- --check"),
+            Step::new("Check Helm files are up to date").run("cargo run -p helm-gen -- --check"),
         )
 }
 

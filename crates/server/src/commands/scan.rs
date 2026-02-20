@@ -62,16 +62,14 @@ impl Command for ScanCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Parse cursor
         let mut parser = ArgParser::new(args);
-        let cursor: u64 = parser.next_parsed().map_err(|_| CommandError::InvalidArgument {
-            message: "invalid cursor".to_string(),
-        })?;
+        let cursor: u64 = parser
+            .next_parsed()
+            .map_err(|_| CommandError::InvalidArgument {
+                message: "invalid cursor".to_string(),
+            })?;
 
         // Parse optional arguments [MATCH pattern] [COUNT count] [TYPE type]
         let mut pattern: Option<&[u8]> = None;
@@ -134,11 +132,7 @@ impl Command for KeysCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let pattern = &args[0];
 
         // Get all keys from local store and filter by pattern

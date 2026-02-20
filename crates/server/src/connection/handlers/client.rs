@@ -398,9 +398,7 @@ impl ConnectionHandler {
                 b"WRITE" => PauseMode::Write,
                 b"ALL" => PauseMode::All,
                 _ => {
-                    return Response::error(
-                        "ERR pause mode must be either WRITE or ALL",
-                    );
+                    return Response::error("ERR pause mode must be either WRITE or ALL");
                 }
             }
         } else {
@@ -430,17 +428,23 @@ impl ConnectionHandler {
             b"LIB-NAME" => {
                 // Validate: no spaces or newlines allowed
                 if value.iter().any(|&b| b == b' ' || b == b'\n' || b == b'\r') {
-                    return Response::error("ERR lib-name cannot contain spaces, newlines or special characters");
+                    return Response::error(
+                        "ERR lib-name cannot contain spaces, newlines or special characters",
+                    );
                 }
-                self.client_registry.update_lib_info(self.state.id, Some(value.clone()), None);
+                self.client_registry
+                    .update_lib_info(self.state.id, Some(value.clone()), None);
                 Response::ok()
             }
             b"LIB-VER" => {
                 // Validate: no spaces or newlines allowed
                 if value.iter().any(|&b| b == b' ' || b == b'\n' || b == b'\r') {
-                    return Response::error("ERR lib-ver cannot contain spaces, newlines or special characters");
+                    return Response::error(
+                        "ERR lib-ver cannot contain spaces, newlines or special characters",
+                    );
                 }
-                self.client_registry.update_lib_info(self.state.id, None, Some(value.clone()));
+                self.client_registry
+                    .update_lib_info(self.state.id, None, Some(value.clone()));
                 Response::ok()
             }
             _ => Response::error(format!(
@@ -541,9 +545,7 @@ impl ConnectionHandler {
                 // Tracking not yet implemented, accept but ignore
                 Response::ok()
             }
-            _ => {
-                Response::error("ERR argument must be 'YES' or 'NO'")
-            }
+            _ => Response::error("ERR argument must be 'YES' or 'NO'"),
         }
     }
 
@@ -568,9 +570,7 @@ impl ConnectionHandler {
                 self.state.skip_next_reply = true;
                 Response::ok()
             }
-            _ => {
-                Response::error("ERR argument must be 'ON', 'OFF' or 'SKIP'")
-            }
+            _ => Response::error("ERR argument must be 'ON', 'OFF' or 'SKIP'"),
         }
     }
 
@@ -594,9 +594,7 @@ impl ConnectionHandler {
                 b"TIMEOUT" => UnblockMode::Timeout,
                 b"ERROR" => UnblockMode::Error,
                 _ => {
-                    return Response::error(
-                        "ERR unblock mode must be either TIMEOUT or ERROR",
-                    );
+                    return Response::error("ERR unblock mode must be either TIMEOUT or ERROR");
                 }
             }
         } else {
@@ -627,10 +625,7 @@ impl ConnectionHandler {
             match client_id_str.parse::<u64>() {
                 Ok(client_id) => return self.format_single_client_stats(client_id),
                 Err(_) => {
-                    return Response::error(format!(
-                        "ERR Invalid client ID: {}",
-                        client_id_str
-                    ));
+                    return Response::error(format!("ERR Invalid client ID: {}", client_id_str));
                 }
             }
         }
@@ -671,37 +666,65 @@ impl ConnectionHandler {
     /// Handle CLIENT HELP - show help.
     fn handle_client_help(&self) -> Response {
         let help = vec![
-            Response::bulk(Bytes::from_static(b"CLIENT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:")),
+            Response::bulk(Bytes::from_static(
+                b"CLIENT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+            )),
             Response::bulk(Bytes::from_static(b"CACHING <YES|NO>")),
-            Response::bulk(Bytes::from_static(b"    Control client-side caching for the current connection.")),
+            Response::bulk(Bytes::from_static(
+                b"    Control client-side caching for the current connection.",
+            )),
             Response::bulk(Bytes::from_static(b"GETNAME")),
-            Response::bulk(Bytes::from_static(b"    Return the name of the current connection.")),
+            Response::bulk(Bytes::from_static(
+                b"    Return the name of the current connection.",
+            )),
             Response::bulk(Bytes::from_static(b"GETREDIR")),
-            Response::bulk(Bytes::from_static(b"    Return the client tracking redirection ID (-1 if not tracking).")),
+            Response::bulk(Bytes::from_static(
+                b"    Return the client tracking redirection ID (-1 if not tracking).",
+            )),
             Response::bulk(Bytes::from_static(b"ID")),
-            Response::bulk(Bytes::from_static(b"    Return the ID of the current connection.")),
+            Response::bulk(Bytes::from_static(
+                b"    Return the ID of the current connection.",
+            )),
             Response::bulk(Bytes::from_static(b"INFO")),
-            Response::bulk(Bytes::from_static(b"    Return information about the current connection.")),
-            Response::bulk(Bytes::from_static(b"KILL <ip:port>|<filter> [value] ... [<filter> [value] ...]")),
+            Response::bulk(Bytes::from_static(
+                b"    Return information about the current connection.",
+            )),
+            Response::bulk(Bytes::from_static(
+                b"KILL <ip:port>|<filter> [value] ... [<filter> [value] ...]",
+            )),
             Response::bulk(Bytes::from_static(b"    Kill connection(s).")),
-            Response::bulk(Bytes::from_static(b"LIST [TYPE <normal|master|replica|pubsub>]")),
-            Response::bulk(Bytes::from_static(b"    Return information about client connections.")),
+            Response::bulk(Bytes::from_static(
+                b"LIST [TYPE <normal|master|replica|pubsub>]",
+            )),
+            Response::bulk(Bytes::from_static(
+                b"    Return information about client connections.",
+            )),
             Response::bulk(Bytes::from_static(b"NO-EVICT <ON|OFF>")),
             Response::bulk(Bytes::from_static(b"    Protect client from eviction.")),
             Response::bulk(Bytes::from_static(b"NO-TOUCH <ON|OFF>")),
-            Response::bulk(Bytes::from_static(b"    Don't update LRU time on key access.")),
+            Response::bulk(Bytes::from_static(
+                b"    Don't update LRU time on key access.",
+            )),
             Response::bulk(Bytes::from_static(b"PAUSE <timeout> [WRITE|ALL]")),
-            Response::bulk(Bytes::from_static(b"    Suspend clients for specified time.")),
+            Response::bulk(Bytes::from_static(
+                b"    Suspend clients for specified time.",
+            )),
             Response::bulk(Bytes::from_static(b"REPLY <ON|OFF|SKIP>")),
             Response::bulk(Bytes::from_static(b"    Control server replies.")),
             Response::bulk(Bytes::from_static(b"SETINFO <LIB-NAME|LIB-VER> <value>")),
             Response::bulk(Bytes::from_static(b"    Set client library info.")),
             Response::bulk(Bytes::from_static(b"SETNAME <name>")),
-            Response::bulk(Bytes::from_static(b"    Set the name of the current connection.")),
+            Response::bulk(Bytes::from_static(
+                b"    Set the name of the current connection.",
+            )),
             Response::bulk(Bytes::from_static(b"STATS [ID <client-id>]")),
-            Response::bulk(Bytes::from_static(b"    Return per-client command statistics.")),
+            Response::bulk(Bytes::from_static(
+                b"    Return per-client command statistics.",
+            )),
             Response::bulk(Bytes::from_static(b"TRACKINGINFO")),
-            Response::bulk(Bytes::from_static(b"    Return tracking state for the current connection.")),
+            Response::bulk(Bytes::from_static(
+                b"    Return tracking state for the current connection.",
+            )),
             Response::bulk(Bytes::from_static(b"UNBLOCK <client-id> [TIMEOUT|ERROR]")),
             Response::bulk(Bytes::from_static(b"    Unblock a blocked client.")),
             Response::bulk(Bytes::from_static(b"UNPAUSE")),

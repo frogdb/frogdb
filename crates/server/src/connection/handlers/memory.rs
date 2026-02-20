@@ -61,9 +61,7 @@ impl ConnectionHandler {
                 b"MEMORY <subcommand> [<arg> ...]. Subcommands are:",
             )),
             Response::bulk(Bytes::from_static(b"DOCTOR")),
-            Response::bulk(Bytes::from_static(
-                b"    Return memory problems reports.",
-            )),
+            Response::bulk(Bytes::from_static(b"    Return memory problems reports.")),
             Response::bulk(Bytes::from_static(b"HELP")),
             Response::bulk(Bytes::from_static(b"    Print this help.")),
             Response::bulk(Bytes::from_static(b"MALLOC-SIZE <size>")),
@@ -89,7 +87,9 @@ impl ConnectionHandler {
     /// Handle MEMORY MALLOC-SIZE <size> - get allocator usable size (stub).
     fn handle_memory_malloc_size(&self, args: &[Bytes]) -> Response {
         if args.is_empty() {
-            return Response::error("ERR wrong number of arguments for 'memory|malloc-size' command");
+            return Response::error(
+                "ERR wrong number of arguments for 'memory|malloc-size' command",
+            );
         }
 
         // Parse the size argument
@@ -150,7 +150,10 @@ impl ConnectionHandler {
             Response::Integer(total_data_memory as i64),
             Response::bulk(Bytes::from_static(b"dataset.percentage")),
             Response::bulk(Bytes::from(if total_data_memory > 0 && total_limit > 0 {
-                format!("{:.2}", (total_data_memory as f64 / total_limit as f64) * 100.0)
+                format!(
+                    "{:.2}",
+                    (total_data_memory as f64 / total_limit as f64) * 100.0
+                )
             } else {
                 "0.00".to_string()
             })),
@@ -182,9 +185,7 @@ impl ConnectionHandler {
         }
 
         let key = &args[0];
-        let samples = if args.len() >= 3
-            && args[1].eq_ignore_ascii_case(b"SAMPLES")
-        {
+        let samples = if args.len() >= 3 && args[1].eq_ignore_ascii_case(b"SAMPLES") {
             match String::from_utf8_lossy(&args[2]).parse::<usize>() {
                 Ok(n) => Some(n),
                 Err(_) => return Response::error("ERR value is not an integer or out of range"),

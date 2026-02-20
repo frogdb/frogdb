@@ -178,11 +178,7 @@ async fn test_slowlog_get_count_limit() {
     // Get only 5 entries
     let response = client.command(&["SLOWLOG", "GET", "5"]).await;
     let entries = unwrap_array(response);
-    assert_eq!(
-        entries.len(),
-        5,
-        "Expected exactly 5 entries when count=5"
-    );
+    assert_eq!(entries.len(), 5, "Expected exactly 5 entries when count=5");
 
     server.shutdown().await;
 }
@@ -336,7 +332,9 @@ async fn test_bgsave_then_lastsave() {
     let mut client = server.connect().await;
 
     // First, write some data
-    client.command(&["SET", "snapshot_test_key", "test_value"]).await;
+    client
+        .command(&["SET", "snapshot_test_key", "test_value"])
+        .await;
 
     // Trigger BGSAVE
     let response = client.command(&["BGSAVE"]).await;
@@ -575,10 +573,7 @@ async fn test_memory_doctor_big_keys() {
         text.contains("=== Big Keys"),
         "Report should contain Big Keys section when big keys exist"
     );
-    assert!(
-        text.contains("bigkey1"),
-        "Report should list the big key"
-    );
+    assert!(text.contains("bigkey1"), "Report should list the big key");
     assert!(
         text.contains("big key(s) found"),
         "Report should indicate big keys were found in issues section"
@@ -939,7 +934,9 @@ async fn test_config_set_eviction_params() {
     assert_ok(&response);
 
     // Verify the value
-    let response = client.command(&["CONFIG", "GET", "maxmemory-samples"]).await;
+    let response = client
+        .command(&["CONFIG", "GET", "maxmemory-samples"])
+        .await;
     let items = unwrap_array(response);
     match &items[1] {
         Response::Bulk(Some(b)) => {
@@ -970,9 +967,7 @@ async fn test_config_set_immutable_param() {
     let mut client = server.connect().await;
 
     // Try to set an immutable parameter
-    let response = client
-        .command(&["CONFIG", "SET", "bind", "0.0.0.0"])
-        .await;
+    let response = client.command(&["CONFIG", "SET", "bind", "0.0.0.0"]).await;
     match response {
         Response::Error(e) => {
             let err_str = String::from_utf8_lossy(&e);
@@ -985,9 +980,7 @@ async fn test_config_set_immutable_param() {
     }
 
     // Try to set num-shards (also immutable)
-    let response = client
-        .command(&["CONFIG", "SET", "num-shards", "8"])
-        .await;
+    let response = client.command(&["CONFIG", "SET", "num-shards", "8"]).await;
     match response {
         Response::Error(e) => {
             let err_str = String::from_utf8_lossy(&e);
@@ -1059,7 +1052,9 @@ async fn test_debug_hashing_with_hash_tag() {
     let mut client = server.connect().await;
 
     // Keys with hash tags should show the extracted tag
-    let response = client.command(&["DEBUG", "HASHING", "{user}:profile"]).await;
+    let response = client
+        .command(&["DEBUG", "HASHING", "{user}:profile"])
+        .await;
     match response {
         Response::Simple(s) => {
             let text = String::from_utf8_lossy(&s);
@@ -1114,11 +1109,20 @@ async fn test_debug_hashing_same_hash_tag_same_slot() {
         .parse()
         .unwrap();
 
-    assert_eq!(slot1, slot2, "Keys with same hash tag should have same slot");
+    assert_eq!(
+        slot1, slot2,
+        "Keys with same hash tag should have same slot"
+    );
 
     // Both should show the same hash tag
-    assert!(first.contains("hash_tag:user"), "First key should have hash tag 'user'");
-    assert!(second.contains("hash_tag:user"), "Second key should have hash tag 'user'");
+    assert!(
+        first.contains("hash_tag:user"),
+        "First key should have hash tag 'user'"
+    );
+    assert!(
+        second.contains("hash_tag:user"),
+        "Second key should have hash tag 'user'"
+    );
 
     server.shutdown().await;
 }

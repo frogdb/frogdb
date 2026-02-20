@@ -102,7 +102,10 @@ impl ClusterTestNode {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = PathBuf::from(format!("/tmp/claude/frogdb_cluster_test_{}_{}", timestamp, id));
+        let dir = PathBuf::from(format!(
+            "/tmp/claude/frogdb_cluster_test_{}_{}",
+            timestamp, id
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -122,7 +125,10 @@ impl ClusterTestNode {
         let cluster_port = Self::allocate_port();
         let metrics_port = Self::allocate_port();
 
-        let data_dir = config.data_dir.clone().unwrap_or_else(Self::create_temp_dir);
+        let data_dir = config
+            .data_dir
+            .clone()
+            .unwrap_or_else(Self::create_temp_dir);
         let node_id = if config.node_id == 0 {
             Self::generate_node_id_from_port(cluster_port)
         } else {
@@ -141,7 +147,10 @@ impl ClusterTestNode {
         server_config.server.bind = "127.0.0.1".to_string();
         server_config.server.port = client_port;
         server_config.server.num_shards = config.num_shards.unwrap_or(4);
-        server_config.logging.level = config.log_level.clone().unwrap_or_else(|| "warn".to_string());
+        server_config.logging.level = config
+            .log_level
+            .clone()
+            .unwrap_or_else(|| "warn".to_string());
         server_config.persistence.enabled = config.persistence;
         server_config.persistence.data_dir = data_dir.clone();
         server_config.metrics.bind = "127.0.0.1".to_string();
@@ -322,8 +331,7 @@ impl ClusterTestNode {
         // Cluster configuration
         server_config.cluster.enabled = true;
         server_config.cluster.node_id = restart_info.node_id;
-        server_config.cluster.cluster_bus_addr =
-            format!("127.0.0.1:{}", restart_info.cluster_port);
+        server_config.cluster.cluster_bus_addr = format!("127.0.0.1:{}", restart_info.cluster_port);
         server_config.cluster.initial_nodes = restart_info.initial_nodes.clone();
         server_config.cluster.data_dir = cluster_data_dir;
         server_config.cluster.election_timeout_ms = restart_info.config.election_timeout_ms;
@@ -439,8 +447,10 @@ impl ClusterTestHarness {
             server_config.server.bind = "127.0.0.1".to_string();
             server_config.server.port = client_port;
             server_config.server.num_shards = config.num_shards.unwrap_or(4);
-            server_config.logging.level =
-                config.log_level.clone().unwrap_or_else(|| "warn".to_string());
+            server_config.logging.level = config
+                .log_level
+                .clone()
+                .unwrap_or_else(|| "warn".to_string());
             server_config.persistence.enabled = config.persistence;
             server_config.persistence.data_dir = data_dir.clone();
             server_config.metrics.bind = "127.0.0.1".to_string();
@@ -517,11 +527,7 @@ impl ClusterTestHarness {
         }
 
         // Get existing cluster addresses
-        let initial_nodes: Vec<String> = self
-            .nodes
-            .values()
-            .map(|n| n.cluster_addr())
-            .collect();
+        let initial_nodes: Vec<String> = self.nodes.values().map(|n| n.cluster_addr()).collect();
 
         let config = self.base_config.clone();
         let node = ClusterTestNode::start(config, initial_nodes).await;
@@ -611,19 +617,17 @@ impl ClusterTestHarness {
                         last_error = Some(format!("CLUSTER MEET failed: {}", error_msg));
                     }
                     _ => {
-                        last_error = Some(format!(
-                            "Unexpected CLUSTER MEET response: {:?}",
-                            response
-                        ));
+                        last_error =
+                            Some(format!("Unexpected CLUSTER MEET response: {:?}", response));
                     }
                 }
             }
         }
 
         // If we get here, none of the attempts succeeded
-        Err(ClusterError::new(
-            last_error.unwrap_or_else(|| "No existing nodes to send CLUSTER MEET".to_string()),
-        ))
+        Err(ClusterError::new(last_error.unwrap_or_else(|| {
+            "No existing nodes to send CLUSTER MEET".to_string()
+        })))
     }
 
     /// Remove a node from the cluster.

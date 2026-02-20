@@ -32,7 +32,6 @@ pub struct ChaosConfig {
     pub transaction_delay_ms: u64,
 
     // === Failure Injection Fields ===
-
     /// Shard IDs that simulate being unavailable (requests timeout).
     /// When a shard is in this set, scatter-gather operations to it will fail.
     #[serde(default)]

@@ -17,12 +17,14 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy,
-    StreamEntry, StreamId, StreamTrimOptions, StreamTrimStrategy, Value,
+    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, StreamEntry,
+    StreamId, StreamTrimOptions, StreamTrimStrategy, Value,
 };
 use frogdb_protocol::{BlockingOp, Response};
 
-use super::utils::{get_or_create_stream, parse_optional_limit, parse_trim_mode, parse_u64, parse_usize};
+use super::utils::{
+    get_or_create_stream, parse_optional_limit, parse_trim_mode, parse_u64, parse_usize,
+};
 
 /// Format a stream entry as a Response.
 fn entry_to_response(entry: &StreamEntry) -> Response {
@@ -37,7 +39,10 @@ fn entry_to_response(entry: &StreamEntry) -> Response {
 
 /// Parse trimming options from arguments starting at given index.
 /// Returns (trim_options, next_index).
-fn parse_trim_options(args: &[Bytes], mut i: usize) -> Result<(Option<StreamTrimOptions>, usize), CommandError> {
+fn parse_trim_options(
+    args: &[Bytes],
+    mut i: usize,
+) -> Result<(Option<StreamTrimOptions>, usize), CommandError> {
     if i >= args.len() {
         return Ok((None, i));
     }
@@ -127,11 +132,7 @@ impl Command for XaddCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let mut i = 1;
         let mut nomkstream = false;
@@ -224,11 +225,7 @@ impl Command for XlenCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         match ctx.store.get(key) {
@@ -268,11 +265,7 @@ impl Command for XrangeCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let start = StreamId::parse_range_bound(&args[1])?;
         let end = StreamId::parse_range_bound(&args[2])?;
@@ -328,11 +321,7 @@ impl Command for XrevrangeCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         // Note: XREVRANGE has end first, then start
         let end = StreamId::parse_range_bound(&args[1])?;
@@ -389,11 +378,7 @@ impl Command for XdelCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         // Parse IDs
@@ -441,11 +426,7 @@ impl Command for XtrimCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         let (trim_options, _) = parse_trim_options(args, 1)?;
@@ -496,11 +477,7 @@ impl Command for XreadCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let mut i = 0;
         let mut count: Option<usize> = None;
         let mut block_ms: Option<u64> = None;
@@ -662,11 +639,7 @@ impl Command for XgroupCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
             return Err(CommandError::WrongArity { command: "XGROUP" });
         }
@@ -680,11 +653,17 @@ impl Command for XgroupCommand {
             b"SETID" => xgroup_setid(ctx, &args[1..]),
             b"HELP" => {
                 let help = vec![
-                    Response::bulk(Bytes::from_static(b"XGROUP CREATE key group id|$ [MKSTREAM] [ENTRIESREAD n]")),
+                    Response::bulk(Bytes::from_static(
+                        b"XGROUP CREATE key group id|$ [MKSTREAM] [ENTRIESREAD n]",
+                    )),
                     Response::bulk(Bytes::from_static(b"XGROUP DESTROY key group")),
-                    Response::bulk(Bytes::from_static(b"XGROUP CREATECONSUMER key group consumer")),
+                    Response::bulk(Bytes::from_static(
+                        b"XGROUP CREATECONSUMER key group consumer",
+                    )),
                     Response::bulk(Bytes::from_static(b"XGROUP DELCONSUMER key group consumer")),
-                    Response::bulk(Bytes::from_static(b"XGROUP SETID key group id|$ [ENTRIESREAD n]")),
+                    Response::bulk(Bytes::from_static(
+                        b"XGROUP SETID key group id|$ [ENTRIESREAD n]",
+                    )),
                 ];
                 Ok(Response::Array(help))
             }
@@ -710,7 +689,9 @@ impl Command for XgroupCommand {
 fn xgroup_create(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
     // XGROUP CREATE key group id|$ [MKSTREAM] [ENTRIESREAD n]
     if args.len() < 3 {
-        return Err(CommandError::WrongArity { command: "XGROUP|CREATE" });
+        return Err(CommandError::WrongArity {
+            command: "XGROUP|CREATE",
+        });
     }
 
     let key = &args[0];
@@ -765,7 +746,12 @@ fn xgroup_create(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, C
     };
 
     // Create the group
-    let stream = ctx.store.get_mut(key).unwrap().as_stream_mut().ok_or(CommandError::WrongType)?;
+    let stream = ctx
+        .store
+        .get_mut(key)
+        .unwrap()
+        .as_stream_mut()
+        .ok_or(CommandError::WrongType)?;
     stream.create_group(group_name, last_id, entries_read)?;
 
     Ok(Response::ok())
@@ -774,7 +760,9 @@ fn xgroup_create(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, C
 fn xgroup_destroy(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
     // XGROUP DESTROY key group
     if args.len() < 2 {
-        return Err(CommandError::WrongArity { command: "XGROUP|DESTROY" });
+        return Err(CommandError::WrongArity {
+            command: "XGROUP|DESTROY",
+        });
     }
 
     let key = &args[0];
@@ -792,10 +780,15 @@ fn xgroup_destroy(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, 
     }
 }
 
-fn xgroup_createconsumer(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+fn xgroup_createconsumer(
+    ctx: &mut CommandContext,
+    args: &[Bytes],
+) -> Result<Response, CommandError> {
     // XGROUP CREATECONSUMER key group consumer
     if args.len() < 3 {
-        return Err(CommandError::WrongArity { command: "XGROUP|CREATECONSUMER" });
+        return Err(CommandError::WrongArity {
+            command: "XGROUP|CREATECONSUMER",
+        });
     }
 
     let key = &args[0];
@@ -805,7 +798,9 @@ fn xgroup_createconsumer(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Res
     match ctx.store.get_mut(key) {
         Some(value) => {
             let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
-            let group = stream.get_group_mut(group_name).ok_or(CommandError::NoGroup)?;
+            let group = stream
+                .get_group_mut(group_name)
+                .ok_or(CommandError::NoGroup)?;
             let created = group.create_consumer(consumer_name);
             Ok(Response::Integer(if created { 1 } else { 0 }))
         }
@@ -818,7 +813,9 @@ fn xgroup_createconsumer(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Res
 fn xgroup_delconsumer(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
     // XGROUP DELCONSUMER key group consumer
     if args.len() < 3 {
-        return Err(CommandError::WrongArity { command: "XGROUP|DELCONSUMER" });
+        return Err(CommandError::WrongArity {
+            command: "XGROUP|DELCONSUMER",
+        });
     }
 
     let key = &args[0];
@@ -828,7 +825,9 @@ fn xgroup_delconsumer(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Respon
     match ctx.store.get_mut(key) {
         Some(value) => {
             let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
-            let group = stream.get_group_mut(group_name).ok_or(CommandError::NoGroup)?;
+            let group = stream
+                .get_group_mut(group_name)
+                .ok_or(CommandError::NoGroup)?;
             let pending_deleted = group.delete_consumer(consumer_name);
             Ok(Response::Integer(pending_deleted as i64))
         }
@@ -841,7 +840,9 @@ fn xgroup_delconsumer(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Respon
 fn xgroup_setid(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
     // XGROUP SETID key group id|$ [ENTRIESREAD n]
     if args.len() < 3 {
-        return Err(CommandError::WrongArity { command: "XGROUP|SETID" });
+        return Err(CommandError::WrongArity {
+            command: "XGROUP|SETID",
+        });
     }
 
     let key = &args[0];
@@ -908,11 +909,7 @@ impl Command for XreadgroupCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let mut i = 0;
         let mut group_name: Option<Bytes> = None;
         let mut consumer_name: Option<Bytes> = None;
@@ -988,7 +985,9 @@ impl Command for XreadgroupCommand {
         let id_arg = &ids[0];
 
         // Get or check stream
-        let stream = ctx.store.get_mut(key.as_ref())
+        let stream = ctx
+            .store
+            .get_mut(key.as_ref())
             .ok_or_else(|| CommandError::InvalidArgument {
                 message: format!("No such key '{}'", String::from_utf8_lossy(key)),
             })?
@@ -996,7 +995,9 @@ impl Command for XreadgroupCommand {
             .ok_or(CommandError::WrongType)?;
 
         // Get the group
-        let group = stream.get_group_mut(&group_name).ok_or(CommandError::NoGroup)?;
+        let group = stream
+            .get_group_mut(&group_name)
+            .ok_or(CommandError::NoGroup)?;
 
         // Ensure consumer exists
         group.get_or_create_consumer(consumer_name.clone());
@@ -1129,11 +1130,7 @@ impl Command for XackCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let group_name = &args[1];
 
@@ -1147,7 +1144,9 @@ impl Command for XackCommand {
         match ctx.store.get_mut(key) {
             Some(value) => {
                 let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
-                let group = stream.get_group_mut(group_name).ok_or(CommandError::NoGroup)?;
+                let group = stream
+                    .get_group_mut(group_name)
+                    .ok_or(CommandError::NoGroup)?;
                 let acked = group.ack(&ids);
                 Ok(Response::Integer(acked as i64))
             }
@@ -1183,11 +1182,7 @@ impl Command for XpendingCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let group_name = &args[1];
 
@@ -1202,7 +1197,8 @@ impl Command for XpendingCommand {
                     let range = group.pending_range();
 
                     // Count pending per consumer
-                    let mut consumer_counts: std::collections::HashMap<&Bytes, i64> = std::collections::HashMap::new();
+                    let mut consumer_counts: std::collections::HashMap<&Bytes, i64> =
+                        std::collections::HashMap::new();
                     for pe in group.pending.values() {
                         *consumer_counts.entry(&pe.consumer).or_insert(0) += 1;
                     }
@@ -1255,11 +1251,8 @@ impl Command for XpendingCommand {
                     let count = parse_usize(&args[i + 2])?;
                     i += 3;
 
-                    let consumer_filter: Option<&Bytes> = if i < args.len() {
-                        Some(&args[i])
-                    } else {
-                        None
-                    };
+                    let consumer_filter: Option<&Bytes> =
+                        if i < args.len() { Some(&args[i]) } else { None };
 
                     // Collect matching pending entries
                     let results: Vec<Response> = group
@@ -1322,11 +1315,7 @@ impl Command for XclaimCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let group_name = &args[1];
         let consumer_name = args[2].clone();
@@ -1399,7 +1388,9 @@ impl Command for XclaimCommand {
 
         // First pass: determine which IDs should be claimed (read-only)
         let ids_to_claim: Vec<StreamId> = {
-            let value = ctx.store.get(key)
+            let value = ctx
+                .store
+                .get(key)
                 .ok_or_else(|| CommandError::InvalidArgument {
                     message: format!("No such key '{}'", String::from_utf8_lossy(key)),
                 })?;
@@ -1421,7 +1412,9 @@ impl Command for XclaimCommand {
         // Second pass: perform mutations
         {
             let stream = ctx.store.get_mut(key).unwrap().as_stream_mut().unwrap();
-            let group = stream.get_group_mut(group_name).ok_or(CommandError::NoGroup)?;
+            let group = stream
+                .get_group_mut(group_name)
+                .ok_or(CommandError::NoGroup)?;
 
             // Ensure consumer exists
             group.get_or_create_consumer(consumer_name.clone());
@@ -1436,12 +1429,14 @@ impl Command for XclaimCommand {
                 }
 
                 // Update or insert pending entry
-                let pe = group.pending.entry(*id).or_insert_with(|| {
-                    frogdb_core::PendingEntry::new(consumer_name.clone())
-                });
+                let pe = group
+                    .pending
+                    .entry(*id)
+                    .or_insert_with(|| frogdb_core::PendingEntry::new(consumer_name.clone()));
                 pe.consumer = consumer_name.clone();
                 if let Some(idle_ms) = idle {
-                    pe.delivery_time = std::time::Instant::now() - std::time::Duration::from_millis(idle_ms);
+                    pe.delivery_time =
+                        std::time::Instant::now() - std::time::Duration::from_millis(idle_ms);
                 }
                 if let Some(_time_ms) = time {
                     pe.delivery_time = std::time::Instant::now();
@@ -1466,9 +1461,13 @@ impl Command for XclaimCommand {
             let stream = value.as_stream().unwrap();
 
             if justid {
-                ids_to_claim.iter().map(|id| StreamEntry::new(*id, vec![])).collect()
+                ids_to_claim
+                    .iter()
+                    .map(|id| StreamEntry::new(*id, vec![]))
+                    .collect()
             } else {
-                ids_to_claim.iter()
+                ids_to_claim
+                    .iter()
                     .filter_map(|id| stream.get(id))
                     .collect()
             }
@@ -1514,11 +1513,7 @@ impl Command for XautoclaimCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let group_name = &args[1];
         let consumer_name = args[2].clone();
@@ -1554,7 +1549,9 @@ impl Command for XautoclaimCommand {
 
         // First pass: find pending entries to claim (read-only)
         let (to_claim, next_cursor) = {
-            let value = ctx.store.get(key)
+            let value = ctx
+                .store
+                .get(key)
                 .ok_or_else(|| CommandError::InvalidArgument {
                     message: format!("No such key '{}'", String::from_utf8_lossy(key)),
                 })?;
@@ -1572,7 +1569,10 @@ impl Command for XautoclaimCommand {
             let next_cursor = if to_claim.len() < count {
                 StreamId::default()
             } else {
-                to_claim.last().map(|id| StreamId::new(id.ms, id.seq + 1)).unwrap_or_default()
+                to_claim
+                    .last()
+                    .map(|id| StreamId::new(id.ms, id.seq + 1))
+                    .unwrap_or_default()
             };
 
             (to_claim, next_cursor)
@@ -1582,10 +1582,15 @@ impl Command for XautoclaimCommand {
         let existing_ids: std::collections::HashSet<StreamId> = {
             let value = ctx.store.get(key).unwrap();
             let stream = value.as_stream().unwrap();
-            to_claim.iter().filter(|id| stream.contains(id)).copied().collect()
+            to_claim
+                .iter()
+                .filter(|id| stream.contains(id))
+                .copied()
+                .collect()
         };
 
-        let deleted_ids: Vec<StreamId> = to_claim.iter()
+        let deleted_ids: Vec<StreamId> = to_claim
+            .iter()
             .filter(|id| !existing_ids.contains(id))
             .copied()
             .collect();
@@ -1593,7 +1598,9 @@ impl Command for XautoclaimCommand {
         // Third pass: perform mutations
         {
             let stream = ctx.store.get_mut(key).unwrap().as_stream_mut().unwrap();
-            let group = stream.get_group_mut(group_name).ok_or(CommandError::NoGroup)?;
+            let group = stream
+                .get_group_mut(group_name)
+                .ok_or(CommandError::NoGroup)?;
 
             // Ensure consumer exists
             group.get_or_create_consumer(consumer_name.clone());
@@ -1632,13 +1639,16 @@ impl Command for XautoclaimCommand {
             let value = ctx.store.get(key).unwrap();
             let stream = value.as_stream().unwrap();
 
-            to_claim.iter()
+            to_claim
+                .iter()
                 .filter(|id| !deleted_ids.contains(id))
                 .map(|id| {
                     if justid {
                         StreamEntry::new(*id, vec![])
                     } else {
-                        stream.get(id).unwrap_or_else(|| StreamEntry::new(*id, vec![]))
+                        stream
+                            .get(id)
+                            .unwrap_or_else(|| StreamEntry::new(*id, vec![]))
                     }
                 })
                 .collect()
@@ -1693,11 +1703,7 @@ impl Command for XinfoCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
             return Err(CommandError::WrongArity { command: "XINFO" });
         }
@@ -1737,7 +1743,9 @@ impl Command for XinfoCommand {
 fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
     // XINFO STREAM key [FULL [COUNT count]]
     if args.is_empty() {
-        return Err(CommandError::WrongArity { command: "XINFO|STREAM" });
+        return Err(CommandError::WrongArity {
+            command: "XINFO|STREAM",
+        });
     }
 
     let key = &args[0];
@@ -1789,7 +1797,8 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
                 ];
 
                 // Add entries (limited by count)
-                let entries: Vec<Response> = stream.to_vec()
+                let entries: Vec<Response> = stream
+                    .to_vec()
                     .iter()
                     .take(_count)
                     .map(entry_to_response)
@@ -1836,7 +1845,9 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
 fn xinfo_groups(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
     // XINFO GROUPS key
     if args.is_empty() {
-        return Err(CommandError::WrongArity { command: "XINFO|GROUPS" });
+        return Err(CommandError::WrongArity {
+            command: "XINFO|GROUPS",
+        });
     }
 
     let key = &args[0];
@@ -1858,7 +1869,8 @@ fn xinfo_groups(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
                         Response::bulk(Bytes::from_static(b"last-delivered-id")),
                         Response::bulk(Bytes::from(g.last_delivered_id.to_string())),
                         Response::bulk(Bytes::from_static(b"entries-read")),
-                        g.entries_read.map_or(Response::null(), |n| Response::Integer(n as i64)),
+                        g.entries_read
+                            .map_or(Response::null(), |n| Response::Integer(n as i64)),
                         Response::bulk(Bytes::from_static(b"lag")),
                         Response::null(), // Lag calculation not implemented
                     ])
@@ -1876,7 +1888,9 @@ fn xinfo_groups(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
 fn xinfo_consumers(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
     // XINFO CONSUMERS key group
     if args.len() < 2 {
-        return Err(CommandError::WrongArity { command: "XINFO|CONSUMERS" });
+        return Err(CommandError::WrongArity {
+            command: "XINFO|CONSUMERS",
+        });
     }
 
     let key = &args[0];
@@ -1931,11 +1945,7 @@ impl Command for XsetidCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let new_last_id = StreamId::parse(&args[1])?;
 
@@ -1949,7 +1959,9 @@ impl Command for XsetidCommand {
                 // Validate: new ID must be >= current last ID
                 if new_last_id < stream.last_id() {
                     return Err(CommandError::InvalidArgument {
-                        message: "The ID specified in XSETID is smaller than the target stream top item".to_string(),
+                        message:
+                            "The ID specified in XSETID is smaller than the target stream top item"
+                                .to_string(),
                     });
                 }
 

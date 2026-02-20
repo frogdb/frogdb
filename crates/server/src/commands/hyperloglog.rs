@@ -35,9 +35,7 @@ impl Command for PfaddCommand {
         // Get or create the HyperLogLog
         let changed = match ctx.store.get_mut(key) {
             Some(value) => {
-                let hll = value
-                    .as_hyperloglog_mut()
-                    .ok_or(CommandError::WrongType)?;
+                let hll = value.as_hyperloglog_mut().ok_or(CommandError::WrongType)?;
 
                 let mut any_changed = false;
                 for element in elements {
@@ -100,9 +98,7 @@ impl Command for PfcountCommand {
             let key = &args[0];
             match ctx.store.get_mut(key) {
                 Some(value) => {
-                    let hll = value
-                        .as_hyperloglog_mut()
-                        .ok_or(CommandError::WrongType)?;
+                    let hll = value.as_hyperloglog_mut().ok_or(CommandError::WrongType)?;
                     Ok(Response::Integer(hll.count() as i64))
                 }
                 None => Ok(Response::Integer(0)),
@@ -220,9 +216,7 @@ impl Command for PfdebugCommand {
                 let hll = value.as_hyperloglog().ok_or(CommandError::WrongType)?;
 
                 match subcommand.as_str() {
-                    "ENCODING" => {
-                        Ok(Response::bulk(Bytes::from(hll.encoding_str())))
-                    }
+                    "ENCODING" => Ok(Response::bulk(Bytes::from(hll.encoding_str()))),
                     "DECODE" => {
                         // Return non-zero register values
                         let mut results = Vec::new();
@@ -284,7 +278,11 @@ impl Command for PfselftestCommand {
         CommandFlags::READONLY | CommandFlags::ADMIN
     }
 
-    fn execute(&self, _ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
         // Run basic self-tests
 
         // Test 1: Empty HLL has count 0

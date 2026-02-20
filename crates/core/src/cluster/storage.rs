@@ -7,10 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use openraft::storage::{LogFlushed, LogState, RaftLogStorage};
-use openraft::{
-    Entry, LogId, OptionalSend, RaftLogReader, StorageError,
-    Vote,
-};
+use openraft::{Entry, LogId, OptionalSend, RaftLogReader, StorageError, Vote};
 use parking_lot::RwLock;
 use rocksdb::{ColumnFamilyDescriptor, Options, DB};
 use serde::{Deserialize, Serialize};
@@ -142,7 +139,11 @@ impl ClusterStorage {
     }
 
     /// Helper to create a storage IO error.
-    fn io_error(&self, verb: openraft::ErrorVerb, e: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> StorageError<NodeId> {
+    fn io_error(
+        &self,
+        verb: openraft::ErrorVerb,
+        e: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> StorageError<NodeId> {
         StorageError::from_io_error(
             openraft::ErrorSubject::Store,
             verb,
@@ -302,7 +303,11 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
         Ok(())
     }
 
-    async fn append<I>(&mut self, entries: I, callback: LogFlushed<TypeConfig>) -> Result<(), StorageError<NodeId>>
+    async fn append<I>(
+        &mut self,
+        entries: I,
+        callback: LogFlushed<TypeConfig>,
+    ) -> Result<(), StorageError<NodeId>>
     where
         I: IntoIterator<Item = Entry<TypeConfig>> + Send,
     {
@@ -352,10 +357,7 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
 
         self.invalidate_cache_range(log_id.index + 1, None);
 
-        tracing::debug!(
-            index = log_id.index,
-            "Truncated log entries after index"
-        );
+        tracing::debug!(index = log_id.index, "Truncated log entries after index");
 
         Ok(())
     }
@@ -388,10 +390,7 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
 
         self.invalidate_cache_range(0, Some(log_id.index));
 
-        tracing::debug!(
-            index = log_id.index,
-            "Purged log entries up to index"
-        );
+        tracing::debug!(index = log_id.index, "Purged log entries up to index");
 
         Ok(())
     }

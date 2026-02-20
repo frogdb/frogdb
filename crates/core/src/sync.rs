@@ -155,23 +155,13 @@ pub trait RwLockExt<T> {
 
 impl<T> RwLockExt<T> for std::sync::RwLock<T> {
     fn read_or_panic(&self, context: &str) -> RwLockReadGuard<'_, T> {
-        self.read().unwrap_or_else(|e| {
-            panic!(
-                "RwLock poisoned during read in {}: {}",
-                context,
-                e
-            )
-        })
+        self.read()
+            .unwrap_or_else(|e| panic!("RwLock poisoned during read in {}: {}", context, e))
     }
 
     fn write_or_panic(&self, context: &str) -> RwLockWriteGuard<'_, T> {
-        self.write().unwrap_or_else(|e| {
-            panic!(
-                "RwLock poisoned during write in {}: {}",
-                context,
-                e
-            )
-        })
+        self.write()
+            .unwrap_or_else(|e| panic!("RwLock poisoned during write in {}: {}", context, e))
     }
 
     fn try_read_err(&self) -> Result<RwLockReadGuard<'_, T>, LockError> {
@@ -215,13 +205,8 @@ pub trait MutexExt<T> {
 
 impl<T> MutexExt<T> for std::sync::Mutex<T> {
     fn lock_or_panic(&self, context: &str) -> MutexGuard<'_, T> {
-        self.lock().unwrap_or_else(|e| {
-            panic!(
-                "Mutex poisoned during lock in {}: {}",
-                context,
-                e
-            )
-        })
+        self.lock()
+            .unwrap_or_else(|e| panic!("Mutex poisoned during lock in {}: {}", context, e))
     }
 
     fn try_lock_err(&self) -> Result<MutexGuard<'_, T>, LockError> {
@@ -241,9 +226,7 @@ pub fn unwrap_lock<T, G>(result: LockResult<G>, context: &str) -> G
 where
     G: std::ops::Deref<Target = T>,
 {
-    result.unwrap_or_else(|e| {
-        panic!("Lock poisoned in {}: {}", context, e)
-    })
+    result.unwrap_or_else(|e| panic!("Lock poisoned in {}: {}", context, e))
 }
 
 // =============================================================================

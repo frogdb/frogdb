@@ -8,24 +8,28 @@ pub use util::{next_conn_id, next_txid};
 
 use anyhow::Result;
 use frogdb_core::persistence::{
-    recover_all_shards, spawn_periodic_sync, NoopSnapshotCoordinator,
-    RocksConfig, RocksSnapshotCoordinator, RocksStore, SnapshotCoordinator,
+    recover_all_shards, spawn_periodic_sync, NoopSnapshotCoordinator, RocksConfig,
+    RocksSnapshotCoordinator, RocksStore, SnapshotCoordinator,
 };
 use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{
     AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
-    ClusterStateMachine, ClusterStorage, CommandRegistry,
-    MetricsRecorder, NoopBroadcaster, ReplicationTrackerImpl, SharedBroadcaster, ShardMessage,
-    ShardWorker,
+    ClusterStateMachine, ClusterStorage, CommandRegistry, MetricsRecorder, NoopBroadcaster,
+    ReplicationTrackerImpl, ShardMessage, ShardWorker, SharedBroadcaster,
 };
-use frogdb_metrics::{DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo, SharedTracer, StatusCollector, SystemMetricsCollector};
+use frogdb_metrics::{
+    DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo, SharedTracer,
+    StatusCollector, SystemMetricsCollector,
+};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::acceptor::Acceptor;
 use crate::config::{Config, PersistenceConfig};
-use crate::failure_detector::{spawn_failure_detector_task, FailureDetector, FailureDetectorConfig};
+use crate::failure_detector::{
+    spawn_failure_detector_task, FailureDetector, FailureDetectorConfig,
+};
 use crate::latency_test::{self, LatencyTestResult};
 use crate::net::{spawn, tcp_listener_reusable, TcpListener};
 use crate::replication::{
@@ -34,9 +38,8 @@ use crate::replication::{
 use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
 
 use util::{
-    hash_addr_to_node_id, parse_compression, build_wal_config, build_eviction_config,
-    num_cpus, shutdown_signal, PersistenceInitResult,
-    SHARD_CHANNEL_CAPACITY, NEW_CONN_CHANNEL_CAPACITY,
+    build_eviction_config, build_wal_config, hash_addr_to_node_id, num_cpus, parse_compression,
+    shutdown_signal, PersistenceInitResult, NEW_CONN_CHANNEL_CAPACITY, SHARD_CHANNEL_CAPACITY,
 };
 
 /// FrogDB server.
@@ -210,15 +213,14 @@ impl Server {
         info!(num_shards, "Initializing shards");
 
         // Initialize persistence if enabled
-        let (rocks_store, recovered_stores, periodic_sync_handle) =
-            if config.persistence.enabled {
-                let (rocks, stores, sync_handle) =
-                    Self::init_persistence(&config.persistence, num_shards)?;
-                (Some(rocks), Some(stores), sync_handle)
-            } else {
-                info!("Persistence disabled");
-                (None, None, None)
-            };
+        let (rocks_store, recovered_stores, periodic_sync_handle) = if config.persistence.enabled {
+            let (rocks, stores, sync_handle) =
+                Self::init_persistence(&config.persistence, num_shards)?;
+            (Some(rocks), Some(stores), sync_handle)
+        } else {
+            info!("Persistence disabled");
+            (None, None, None)
+        };
 
         // Create snapshot coordinator
         let (snapshot_coordinator, periodic_snapshot_handle): (
@@ -325,70 +327,77 @@ impl Server {
         let mut replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>> = None;
         let mut primary_replication_handler: Option<Arc<PrimaryReplicationHandler>> = None;
 
-        let (replication_broadcaster, replication_tracker): (SharedBroadcaster, Option<Arc<ReplicationTrackerImpl>>) =
-            if config.replication.is_primary() {
-                // Initialize PrimaryReplicationHandler for primary role
-                let state_path = config.persistence.data_dir.join(&config.replication.state_file);
-                let repl_state = frogdb_core::ReplicationState::load_or_create(&state_path)
-                    .map_err(|e| anyhow::anyhow!("Failed to load replication state: {}", e))?;
+        let (replication_broadcaster, replication_tracker): (
+            SharedBroadcaster,
+            Option<Arc<ReplicationTrackerImpl>>,
+        ) = if config.replication.is_primary() {
+            // Initialize PrimaryReplicationHandler for primary role
+            let state_path = config
+                .persistence
+                .data_dir
+                .join(&config.replication.state_file);
+            let repl_state = frogdb_core::ReplicationState::load_or_create(&state_path)
+                .map_err(|e| anyhow::anyhow!("Failed to load replication state: {}", e))?;
 
-                info!(
-                    replication_id = %repl_state.replication_id,
-                    offset = repl_state.replication_offset,
-                    "Initialized primary replication state"
-                );
+            info!(
+                replication_id = %repl_state.replication_id,
+                offset = repl_state.replication_offset,
+                "Initialized primary replication state"
+            );
 
-                let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
-                tracker.set_offset(repl_state.replication_offset);
+            let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
+            tracker.set_offset(repl_state.replication_offset);
 
-                let handler = Arc::new(PrimaryReplicationHandler::new(
-                    repl_state,
-                    tracker.clone(),
-                    rocks_store.clone(),
-                    config.persistence.data_dir.clone(),
-                ));
+            let handler = Arc::new(PrimaryReplicationHandler::new(
+                repl_state,
+                tracker.clone(),
+                rocks_store.clone(),
+                config.persistence.data_dir.clone(),
+            ));
 
-                // Store a reference for PSYNC connection handoff
-                primary_replication_handler = Some(handler.clone());
+            // Store a reference for PSYNC connection handoff
+            primary_replication_handler = Some(handler.clone());
 
-                (handler as SharedBroadcaster, Some(tracker))
-            } else if config.replication.is_replica() {
-                // Initialize ReplicaReplicationHandler for replica role
-                let primary_addr = format!(
-                    "{}:{}",
-                    config.replication.primary_host,
-                    config.replication.primary_port
-                )
-                .parse::<std::net::SocketAddr>()
-                .map_err(|e| anyhow::anyhow!("Invalid primary address: {}", e))?;
+            (handler as SharedBroadcaster, Some(tracker))
+        } else if config.replication.is_replica() {
+            // Initialize ReplicaReplicationHandler for replica role
+            let primary_addr = format!(
+                "{}:{}",
+                config.replication.primary_host, config.replication.primary_port
+            )
+            .parse::<std::net::SocketAddr>()
+            .map_err(|e| anyhow::anyhow!("Invalid primary address: {}", e))?;
 
-                let state_path = config.persistence.data_dir.join(&config.replication.state_file);
-                let repl_state = frogdb_core::ReplicationState::load_or_create(&state_path)
-                    .map_err(|e| anyhow::anyhow!("Failed to load replication state: {}", e))?;
+            let state_path = config
+                .persistence
+                .data_dir
+                .join(&config.replication.state_file);
+            let repl_state = frogdb_core::ReplicationState::load_or_create(&state_path)
+                .map_err(|e| anyhow::anyhow!("Failed to load replication state: {}", e))?;
 
-                info!(
-                    primary = %primary_addr,
-                    replication_id = %repl_state.replication_id,
-                    offset = repl_state.replication_offset,
-                    "Initialized replica replication state"
-                );
+            info!(
+                primary = %primary_addr,
+                replication_id = %repl_state.replication_id,
+                offset = repl_state.replication_offset,
+                "Initialized replica replication state"
+            );
 
-                let (handler, frame_rx) = ReplicaReplicationHandler::new(
-                    primary_addr,
-                    config.server.port,
-                    repl_state,
-                    config.persistence.data_dir.clone(),
-                );
+            let (handler, frame_rx) = ReplicaReplicationHandler::new(
+                primary_addr,
+                config.server.port,
+                repl_state,
+                config.persistence.data_dir.clone(),
+            );
 
-                replica_handler = Some(Arc::new(handler));
-                replica_frame_rx = Some(frame_rx);
+            replica_handler = Some(Arc::new(handler));
+            replica_frame_rx = Some(frame_rx);
 
-                // Replicas use NoopBroadcaster (they don't broadcast to other replicas)
-                (Arc::new(NoopBroadcaster), None)
-            } else {
-                // Standalone mode
-                (Arc::new(NoopBroadcaster), None)
-            };
+            // Replicas use NoopBroadcaster (they don't broadcast to other replicas)
+            (Arc::new(NoopBroadcaster), None)
+        } else {
+            // Standalone mode
+            (Arc::new(NoopBroadcaster), None)
+        };
 
         // Initialize cluster state and Raft if cluster mode is enabled
         // NOTE: This must happen before shard creation so we can pass raft to workers
@@ -482,7 +491,8 @@ impl Server {
             if should_bootstrap && !initial_members.is_empty() {
                 // Check if already initialized (restart case)
                 let metrics = raft.metrics().borrow().clone();
-                let already_initialized = metrics.membership_config.membership().nodes().count() > 0;
+                let already_initialized =
+                    metrics.membership_config.membership().nodes().count() > 0;
 
                 if !already_initialized {
                     info!(
@@ -494,7 +504,10 @@ impl Server {
                         warn!(error = %e, "Raft initialization error (may be already initialized)");
                     }
                 } else {
-                    info!(node_id = node_id, "Raft already initialized, skipping bootstrap");
+                    info!(
+                        node_id = node_id,
+                        "Raft already initialized, skipping bootstrap"
+                    );
                 }
             }
 
@@ -518,11 +531,8 @@ impl Server {
                 .parse()
                 .map_err(|e| anyhow::anyhow!("Invalid bind address: {}", e))?;
             let cluster_bus_addr = config.cluster.cluster_bus_socket_addr();
-            let this_node = frogdb_core::cluster::NodeInfo::new_primary(
-                node_id,
-                client_addr,
-                cluster_bus_addr,
-            );
+            let this_node =
+                frogdb_core::cluster::NodeInfo::new_primary(node_id, client_addr, cluster_bus_addr);
             cluster.add_node(this_node);
             info!(node_id = node_id, "Node added to cluster state");
 
@@ -695,7 +705,8 @@ impl Server {
 
         // Create latency band tracker if enabled
         let band_tracker = if config.latency_bands.enabled {
-            let tracker = frogdb_metrics::LatencyBandTracker::new(config.latency_bands.bands.clone());
+            let tracker =
+                frogdb_metrics::LatencyBandTracker::new(config.latency_bands.bands.clone());
             info!(
                 bands = ?config.latency_bands.bands,
                 "Latency band tracking enabled"
@@ -744,10 +755,7 @@ impl Server {
         coordinator: Arc<dyn SnapshotCoordinator>,
         interval_secs: u64,
     ) -> crate::net::JoinHandle<()> {
-        info!(
-            interval_secs,
-            "Starting periodic snapshot task"
-        );
+        info!(interval_secs, "Starting periodic snapshot task");
 
         spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
@@ -832,9 +840,7 @@ impl Server {
             stores
         } else {
             info!("No existing data found, starting fresh");
-            (0..num_shards)
-                .map(|_| Default::default())
-                .collect()
+            (0..num_shards).map(|_| Default::default()).collect()
         };
 
         // Start periodic sync if using periodic durability mode
@@ -860,8 +866,10 @@ impl Server {
     {
         // Run startup latency test if configured
         if self.config.latency.startup_test {
-            info!("Running startup latency test for {} seconds...",
-                  self.config.latency.startup_test_duration_secs);
+            info!(
+                "Running startup latency test for {} seconds...",
+                self.config.latency.startup_test_duration_secs
+            );
 
             let result = latency_test::run_intrinsic_latency_test(
                 self.config.latency.startup_test_duration_secs,
@@ -1070,7 +1078,7 @@ impl Server {
             self.replication_tracker.clone(),
             self.cluster_state.clone(),
             self.node_id,
-            false,  // is_admin = false for regular port
+            false, // is_admin = false for regular port
             admin_enabled,
             self.config.hotshards.to_collector_config(),
             self.config.memory.to_diag_config(),
@@ -1107,7 +1115,7 @@ impl Server {
                 self.replication_tracker.clone(),
                 self.cluster_state.clone(),
                 self.node_id,
-                true,   // is_admin = true for admin port
+                true, // is_admin = true for admin port
                 admin_enabled,
                 self.config.hotshards.to_collector_config(),
                 self.config.memory.to_diag_config(),
@@ -1237,4 +1245,3 @@ impl Server {
         self.latency_baseline.as_ref()
     }
 }
-

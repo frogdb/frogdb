@@ -6,7 +6,9 @@ use sha2::{Digest, Sha256};
 
 use super::categories::CommandCategory;
 use super::error::AclError;
-use super::permissions::{ChannelPattern, KeyAccessType, KeyPattern, PermissionSet, SubcommandRule};
+use super::permissions::{
+    ChannelPattern, KeyAccessType, KeyPattern, PermissionSet, SubcommandRule,
+};
 use super::user::User;
 
 /// Hash a password string using SHA256.
@@ -172,7 +174,9 @@ impl AclRule {
 
         // Channel pattern rules
         if let Some(pattern) = rule.strip_prefix('&') {
-            return Ok(AclRule::AddChannelPattern(ChannelPattern::new(pattern.to_string())));
+            return Ok(AclRule::AddChannelPattern(ChannelPattern::new(
+                pattern.to_string(),
+            )));
         }
 
         // Selector syntax: (rules)
@@ -359,19 +363,31 @@ impl AclRule {
             AclRule::NoCommands => {
                 user.root_permissions.commands.reset();
             }
-            AclRule::AllowSubcommand { command, subcommand } => {
-                user.root_permissions.commands.subcommand_rules.push(SubcommandRule {
-                    command: command.clone(),
-                    subcommand: subcommand.clone(),
-                    allowed: true,
-                });
+            AclRule::AllowSubcommand {
+                command,
+                subcommand,
+            } => {
+                user.root_permissions
+                    .commands
+                    .subcommand_rules
+                    .push(SubcommandRule {
+                        command: command.clone(),
+                        subcommand: subcommand.clone(),
+                        allowed: true,
+                    });
             }
-            AclRule::DenySubcommand { command, subcommand } => {
-                user.root_permissions.commands.subcommand_rules.push(SubcommandRule {
-                    command: command.clone(),
-                    subcommand: subcommand.clone(),
-                    allowed: false,
-                });
+            AclRule::DenySubcommand {
+                command,
+                subcommand,
+            } => {
+                user.root_permissions
+                    .commands
+                    .subcommand_rules
+                    .push(SubcommandRule {
+                        command: command.clone(),
+                        subcommand: subcommand.clone(),
+                        allowed: false,
+                    });
             }
             AclRule::AddSelector(perm_set) => {
                 user.selectors.push(perm_set.clone());
@@ -643,10 +659,14 @@ mod tests {
         assert!(matches!(result, Ok(AclRule::AddKeyPattern(p)) if p.pattern == "user:*"));
 
         let result = AclRule::parse("%R~data:*");
-        assert!(matches!(result, Ok(AclRule::AddKeyPattern(p)) if p.access_type == KeyAccessType::Read));
+        assert!(
+            matches!(result, Ok(AclRule::AddKeyPattern(p)) if p.access_type == KeyAccessType::Read)
+        );
 
         let result = AclRule::parse("%W~logs:*");
-        assert!(matches!(result, Ok(AclRule::AddKeyPattern(p)) if p.access_type == KeyAccessType::Write));
+        assert!(
+            matches!(result, Ok(AclRule::AddKeyPattern(p)) if p.access_type == KeyAccessType::Write)
+        );
     }
 
     #[test]
@@ -715,8 +735,16 @@ mod tests {
         assert!(user.verify_password(&hash_password("password")));
         assert!(!user.root_permissions.all_keys);
         assert_eq!(user.root_permissions.key_patterns.len(), 1);
-        assert!(user.root_permissions.commands.allowed_categories.contains(&CommandCategory::Read));
-        assert!(user.root_permissions.commands.denied_categories.contains(&CommandCategory::Write));
+        assert!(user
+            .root_permissions
+            .commands
+            .allowed_categories
+            .contains(&CommandCategory::Read));
+        assert!(user
+            .root_permissions
+            .commands
+            .denied_categories
+            .contains(&CommandCategory::Write));
     }
 
     #[test]
@@ -726,7 +754,10 @@ mod tests {
         assert_eq!(rules.len(), 4);
         assert_eq!(rules[0], AclRule::On);
         assert_eq!(rules[1], AclRule::NoPass);
-        assert_eq!(rules[2], AclRule::AddKeyPattern(KeyPattern::new("*".to_string())));
+        assert_eq!(
+            rules[2],
+            AclRule::AddKeyPattern(KeyPattern::new("*".to_string()))
+        );
         assert_eq!(rules[3], AclRule::AllCommands);
 
         // Empty line
@@ -825,8 +856,14 @@ mod tests {
 
     #[test]
     fn test_parse_clearselectors() {
-        assert_eq!(AclRule::parse("clearselectors"), Ok(AclRule::ClearSelectors));
-        assert_eq!(AclRule::parse("CLEARSELECTORS"), Ok(AclRule::ClearSelectors));
+        assert_eq!(
+            AclRule::parse("clearselectors"),
+            Ok(AclRule::ClearSelectors)
+        );
+        assert_eq!(
+            AclRule::parse("CLEARSELECTORS"),
+            Ok(AclRule::ClearSelectors)
+        );
     }
 
     #[test]
@@ -836,17 +873,25 @@ mod tests {
         AclRule::AllowSubcommand {
             command: "config".to_string(),
             subcommand: "get".to_string(),
-        }.apply(&mut user);
+        }
+        .apply(&mut user);
 
         assert_eq!(user.root_permissions.commands.subcommand_rules.len(), 1);
-        assert_eq!(user.root_permissions.commands.subcommand_rules[0].command, "config");
-        assert_eq!(user.root_permissions.commands.subcommand_rules[0].subcommand, "get");
+        assert_eq!(
+            user.root_permissions.commands.subcommand_rules[0].command,
+            "config"
+        );
+        assert_eq!(
+            user.root_permissions.commands.subcommand_rules[0].subcommand,
+            "get"
+        );
         assert!(user.root_permissions.commands.subcommand_rules[0].allowed);
 
         AclRule::DenySubcommand {
             command: "config".to_string(),
             subcommand: "set".to_string(),
-        }.apply(&mut user);
+        }
+        .apply(&mut user);
 
         assert_eq!(user.root_permissions.commands.subcommand_rules.len(), 2);
         assert!(!user.root_permissions.commands.subcommand_rules[1].allowed);

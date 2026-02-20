@@ -323,10 +323,7 @@ impl ShardWorker {
 
         for key in expired {
             if start.elapsed() > budget {
-                tracing::trace!(
-                    shard_id = self.shard_id,
-                    "Active expiry budget exhausted"
-                );
+                tracing::trace!(shard_id = self.shard_id, "Active expiry budget exhausted");
                 break;
             }
 

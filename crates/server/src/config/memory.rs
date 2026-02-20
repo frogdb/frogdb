@@ -179,7 +179,11 @@ mod tests {
         for policy in policies {
             let mut config = MemoryConfig::default();
             config.maxmemory_policy = policy.to_string();
-            assert!(config.validate().is_ok(), "Policy {} should be valid", policy);
+            assert!(
+                config.validate().is_ok(),
+                "Policy {} should be valid",
+                policy
+            );
         }
     }
 }

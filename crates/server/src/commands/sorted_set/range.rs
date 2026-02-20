@@ -25,11 +25,7 @@ impl Command for ZrangeCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         // Parse options
@@ -135,11 +131,7 @@ impl Command for ZrangebyscoreCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let min = parse_score_bound(&args[1])?;
         let max = parse_score_bound(&args[2])?;
@@ -200,11 +192,7 @@ impl Command for ZrevrangebyscoreCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         // Note: For ZREVRANGEBYSCORE, args are max min (reversed from ZRANGEBYSCORE)
         let max = parse_score_bound(&args[1])?;
@@ -266,11 +254,7 @@ impl Command for ZrangebylexCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let min = parse_lex_bound(&args[1])?;
         let max = parse_lex_bound(&args[2])?;
@@ -329,11 +313,7 @@ impl Command for ZrevrangebylexCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         // Note: For ZREVRANGEBYLEX, args are max min (reversed)
         let max = parse_lex_bound(&args[1])?;
