@@ -6,15 +6,16 @@
 //! - Health check endpoints (`/health/live`, `/health/ready`)
 //! - System metrics collection (CPU, memory, uptime)
 //! - Typed metrics with compile-time safety
-//!
-//! Debug and diagnostic functionality (MEMORY DOCTOR, bundles, latency bands)
-//! is provided by the `frogdb-debug` crate and re-exported here for convenience.
 
+pub mod bundle;
 pub mod config;
+pub mod debug;
 pub mod definitions;
 pub mod health;
 pub mod hotshards;
 pub mod labels;
+pub mod latency_bands;
+pub mod memorydiag;
 pub mod otlp;
 pub mod prometheus_recorder;
 pub mod server;
@@ -31,6 +32,7 @@ use std::time::Instant;
 
 pub use config::MetricsConfig;
 pub use config::TracingConfig;
+pub use debug::{DebugState, ServerInfo};
 pub use health::HealthChecker;
 pub use prometheus_recorder::PrometheusRecorder;
 pub use server::MetricsServer;
@@ -40,37 +42,19 @@ pub use hotshards::{
     format_hotshards_info, format_hotshards_report, HotShardCollector, HotShardConfig,
     HotShardReport, ShardStats, ShardStatus,
 };
+pub use memorydiag::{
+    calculate_variance, format_report as format_memory_report, MemoryDiagCollector,
+    MemoryDiagConfig, MemoryDiagReport, MemorySummary, ShardMemoryVariance,
+};
+pub use latency_bands::LatencyBandTracker;
 pub use tracing::{
     create_tracer, OtelTracer, RecentTraceEntry, RequestSpan, ScatterGatherSpan, SharedTracer,
     TracingStatus,
 };
-
-// Re-export debug types from frogdb-debug for backwards compatibility
-pub use frogdb_debug::{
-    // State types
-    DebugState, ServerInfo, ServerInfoJson,
-    // Memory diagnostics
-    calculate_variance, format_memory_report, MemoryDiagCollector, MemoryDiagConfig,
-    MemoryDiagReport, MemorySummary, ShardMemoryVariance,
-    // Latency bands
-    LatencyBandTracker,
-    // Bundle types
+pub use bundle::{
     BundleConfig, BundleGenerator, BundleInfo, BundleManifest, BundleStore, ClusterStateJson,
-    ClusterNodeJson, DiagnosticCollector, DiagnosticData, ShardMemoryJson, SlowlogEntryJson,
-    TraceEntryJson, TraceProvider, NoopTraceProvider,
-    // HTTP routing
-    DebugRouter,
-    // Traits
-    MetricsProvider, SharedMetricsProvider,
+    DiagnosticCollector, DiagnosticData, ShardMemoryJson, SlowlogEntryJson, TraceEntryJson,
 };
-
-// Re-export bundle module for direct access to constants
-pub mod bundle {
-    pub use frogdb_debug::bundle::{
-        DEFAULT_BUNDLE_DIRECTORY, DEFAULT_MAX_BUNDLES, DEFAULT_BUNDLE_TTL_SECS,
-        DEFAULT_MAX_SLOWLOG_ENTRIES, DEFAULT_MAX_TRACE_ENTRIES,
-    };
-}
 
 // Re-export typed metrics system
 pub use definitions::{ALL_METRICS, METRICS_COUNT};
@@ -198,8 +182,7 @@ pub fn create_metrics_recorder(config: &MetricsConfig) -> Arc<dyn MetricsRecorde
     let recorder = PrometheusRecorder::new();
 
     // Record server info gauge
-    MetricsRecorder::record_gauge(
-        &recorder,
+    recorder.record_gauge(
         metric_names::INFO,
         1.0,
         &[("version", env!("CARGO_PKG_VERSION")), ("mode", "standalone")],
