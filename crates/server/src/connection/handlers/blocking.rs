@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, ShardMessage};
+use frogdb_core::{shard_for_key, ReplicationTracker, ShardMessage};
 use frogdb_protocol::Response;
 
 use crate::connection::state::BlockedState;
