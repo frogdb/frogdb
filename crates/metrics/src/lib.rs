@@ -36,7 +36,7 @@ pub use bundle::{
 };
 pub use config::MetricsConfig;
 pub use config::TracingConfig;
-pub use debug::{DebugState, ServerInfo};
+pub use debug::{ConfigEntry, DebugState, ServerInfo};
 pub use health::HealthChecker;
 pub use hotshards::{
     format_hotshards_info, format_hotshards_report, HotShardCollector, HotShardConfig,

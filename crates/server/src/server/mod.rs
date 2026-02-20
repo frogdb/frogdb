@@ -18,8 +18,8 @@ use frogdb_core::{
     ReplicationTrackerImpl, ShardMessage, ShardWorker, SharedBroadcaster,
 };
 use frogdb_metrics::{
-    DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo, SharedTracer,
-    StatusCollector, SystemMetricsCollector,
+    ConfigEntry, DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo,
+    SharedTracer, StatusCollector, SystemMetricsCollector,
 };
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -918,13 +918,38 @@ impl Server {
             };
 
             // Create debug state for the debug web UI
-            let debug_state = DebugState::new(ServerInfo {
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                start_time,
-                num_shards: self.shard_senders.len(),
-                bind_addr: self.config.server.bind.clone(),
-                port: self.config.server.port,
-            });
+            let config_entries = vec![
+                ConfigEntry {
+                    name: "bind".into(),
+                    value: self.config.server.bind.clone(),
+                },
+                ConfigEntry {
+                    name: "port".into(),
+                    value: self.config.server.port.to_string(),
+                },
+                ConfigEntry {
+                    name: "num_shards".into(),
+                    value: self.shard_senders.len().to_string(),
+                },
+                ConfigEntry {
+                    name: "metrics_bind".into(),
+                    value: self.config.metrics.bind.clone(),
+                },
+                ConfigEntry {
+                    name: "metrics_port".into(),
+                    value: self.config.metrics.port.to_string(),
+                },
+            ];
+            let debug_state = DebugState::new(
+                ServerInfo {
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    start_time,
+                    num_shards: self.shard_senders.len(),
+                    bind_addr: self.config.server.bind.clone(),
+                    port: self.config.server.port,
+                },
+                config_entries,
+            );
 
             // Create status collector for /status/json endpoint
             let status_collector_config = self.config.status.to_collector_config();
