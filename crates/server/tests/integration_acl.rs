@@ -3,6 +3,8 @@
 mod common;
 
 use bytes::Bytes;
+use common::acl_helpers::{create_and_auth_user, start_server_with_admin};
+use common::response_helpers::{assert_error_prefix, assert_ok, extract_bulk_strings, unwrap_array};
 use common::test_server::TestServer;
 use frogdb_protocol::Response;
 
@@ -39,15 +41,15 @@ async fn test_auth_with_requirepass() {
 
     // GET without AUTH should return NOAUTH error
     let response = client.command(&["GET", "foo"]).await;
-    assert!(matches!(response, Response::Error(e) if e.starts_with(b"NOAUTH")));
+    assert_error_prefix(&response, "NOAUTH");
 
     // SET without AUTH should return NOAUTH error
     let response = client.command(&["SET", "foo", "bar"]).await;
-    assert!(matches!(response, Response::Error(e) if e.starts_with(b"NOAUTH")));
+    assert_error_prefix(&response, "NOAUTH");
 
     // AUTH with correct password should work
     let response = client.command(&["AUTH", "testpassword123"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     // After AUTH, PING should still work
     let response = client.command(&["PING"]).await;
@@ -59,7 +61,7 @@ async fn test_auth_with_requirepass() {
 
     // After AUTH, SET should work
     let response = client.command(&["SET", "foo", "bar"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -71,11 +73,11 @@ async fn test_auth_wrong_password() {
 
     // AUTH with wrong password should return WRONGPASS error
     let response = client.command(&["AUTH", "wrongpassword"]).await;
-    assert!(matches!(response, Response::Error(e) if e.starts_with(b"WRONGPASS")));
+    assert_error_prefix(&response, "WRONGPASS");
 
     // Non-exempt commands should still fail after wrong password
     let response = client.command(&["GET", "foo"]).await;
-    assert!(matches!(response, Response::Error(e) if e.starts_with(b"NOAUTH")));
+    assert_error_prefix(&response, "NOAUTH");
 
     // PING is auth-exempt, so it should still work
     let response = client.command(&["PING"]).await;
@@ -86,22 +88,10 @@ async fn test_auth_wrong_password() {
 
 #[tokio::test]
 async fn test_auth_named_user() {
-    let server = TestServer::start_with_security("adminpass").await;
-    let mut client = server.connect().await;
-
-    // First authenticate as default user
-    client.command(&["AUTH", "adminpass"]).await;
+    let (server, mut client) = start_server_with_admin("adminpass").await;
 
     // Create a named user with ACL SETUSER
-    let response = client
-        .command(&["ACL", "SETUSER", "testuser", "on", ">userpass", "+@all", "~*"])
-        .await;
-    assert_eq!(response, Response::ok());
-
-    // Connect with a new client and authenticate as the named user
-    let mut client2 = server.connect().await;
-    let response = client2.command(&["AUTH", "testuser", "userpass"]).await;
-    assert_eq!(response, Response::ok());
+    let mut client2 = create_and_auth_user(&server, &mut client, "testuser", "userpass", &["+@all", "~*"]).await;
 
     // ACL WHOAMI should return the username
     let response = client2.command(&["ACL", "WHOAMI"]).await;
@@ -128,20 +118,10 @@ async fn test_acl_whoami_default() {
 
 #[tokio::test]
 async fn test_acl_whoami_after_auth() {
-    let server = TestServer::start_with_security("adminpass").await;
-    let mut client = server.connect().await;
-
-    // Authenticate as default
-    client.command(&["AUTH", "adminpass"]).await;
+    let (server, mut client) = start_server_with_admin("adminpass").await;
 
     // Create a user
-    client
-        .command(&["ACL", "SETUSER", "myuser", "on", ">mypass", "+@all", "~*"])
-        .await;
-
-    // New connection, authenticate as myuser
-    let mut client2 = server.connect().await;
-    client2.command(&["AUTH", "myuser", "mypass"]).await;
+    let mut client2 = create_and_auth_user(&server, &mut client, "myuser", "mypass", &["+@all", "~*"]).await;
 
     // ACL WHOAMI should return "myuser"
     let response = client2.command(&["ACL", "WHOAMI"]).await;
@@ -163,24 +143,13 @@ async fn test_acl_setuser_basic() {
     let response = client
         .command(&["ACL", "SETUSER", "newuser", "on", ">password123"])
         .await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     // ACL USERS should include the new user
     let response = client.command(&["ACL", "USERS"]).await;
-    match response {
-        Response::Array(arr) => {
-            let usernames: Vec<_> = arr
-                .iter()
-                .filter_map(|r| match r {
-                    Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
-                    _ => None,
-                })
-                .collect();
-            assert!(usernames.contains(&"default".to_string()));
-            assert!(usernames.contains(&"newuser".to_string()));
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let usernames = extract_bulk_strings(&response);
+    assert!(usernames.contains(&"default".to_string()));
+    assert!(usernames.contains(&"newuser".to_string()));
 
     server.shutdown().await;
 }
@@ -197,13 +166,8 @@ async fn test_acl_deluser() {
 
     // Verify user exists
     let response = client.command(&["ACL", "USERS"]).await;
-    match response {
-        Response::Array(arr) => {
-            let has_tempuser = arr.iter().any(|r| matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("tempuser")));
-            assert!(has_tempuser, "tempuser should exist");
-        }
-        _ => panic!("Expected array response"),
-    }
+    let usernames = extract_bulk_strings(&response);
+    assert!(usernames.contains(&"tempuser".to_string()), "tempuser should exist");
 
     // Delete the user
     let response = client.command(&["ACL", "DELUSER", "tempuser"]).await;
@@ -211,13 +175,8 @@ async fn test_acl_deluser() {
 
     // Verify user no longer exists
     let response = client.command(&["ACL", "USERS"]).await;
-    match response {
-        Response::Array(arr) => {
-            let has_tempuser = arr.iter().any(|r| matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("tempuser")));
-            assert!(!has_tempuser, "tempuser should not exist after deletion");
-        }
-        _ => panic!("Expected array response"),
-    }
+    let usernames = extract_bulk_strings(&response);
+    assert!(!usernames.contains(&"tempuser".to_string()), "tempuser should not exist after deletion");
 
     server.shutdown().await;
 }
@@ -249,28 +208,16 @@ async fn test_acl_list() {
 
     // ACL LIST should return array with user rules
     let response = client.command(&["ACL", "LIST"]).await;
-    match response {
-        Response::Array(arr) => {
-            assert!(!arr.is_empty(), "ACL LIST should not be empty");
-            // Should contain at least the default user
-            let rules: Vec<_> = arr
-                .iter()
-                .filter_map(|r| match r {
-                    Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
-                    _ => None,
-                })
-                .collect();
-            assert!(
-                rules.iter().any(|r| r.contains("default")),
-                "Should contain default user"
-            );
-            assert!(
-                rules.iter().any(|r| r.contains("listuser")),
-                "Should contain listuser"
-            );
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let rules = extract_bulk_strings(&response);
+    assert!(!rules.is_empty(), "ACL LIST should not be empty");
+    assert!(
+        rules.iter().any(|r| r.contains("default")),
+        "Should contain default user"
+    );
+    assert!(
+        rules.iter().any(|r| r.contains("listuser")),
+        "Should contain listuser"
+    );
 
     server.shutdown().await;
 }
@@ -287,23 +234,19 @@ async fn test_acl_getuser() {
 
     // ACL GETUSER should return user details
     let response = client.command(&["ACL", "GETUSER", "infouser"]).await;
-    match response {
-        Response::Array(arr) => {
-            // Should be a key-value array with user properties
-            assert!(!arr.is_empty(), "GETUSER should return user info");
-            // Look for expected fields like "flags", "passwords", "commands", "keys"
-            let keys: Vec<_> = arr
-                .iter()
-                .step_by(2)
-                .filter_map(|r| match r {
-                    Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
-                    _ => None,
-                })
-                .collect();
-            assert!(keys.contains(&"flags".to_string()), "Should have flags field");
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let arr = unwrap_array(response);
+    // Should be a key-value array with user properties
+    assert!(!arr.is_empty(), "GETUSER should return user info");
+    // Look for expected fields like "flags", "passwords", "commands", "keys"
+    let keys: Vec<_> = arr
+        .iter()
+        .step_by(2)
+        .filter_map(|r| match r {
+            Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(keys.contains(&"flags".to_string()), "Should have flags field");
 
     // GETUSER for non-existent user should return null
     let response = client.command(&["ACL", "GETUSER", "nonexistent"]).await;
@@ -327,22 +270,11 @@ async fn test_acl_users() {
 
     // ACL USERS should return array of usernames
     let response = client.command(&["ACL", "USERS"]).await;
-    match response {
-        Response::Array(arr) => {
-            assert!(arr.len() >= 3, "Should have at least default, user1, user2");
-            let usernames: Vec<_> = arr
-                .iter()
-                .filter_map(|r| match r {
-                    Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
-                    _ => None,
-                })
-                .collect();
-            assert!(usernames.contains(&"default".to_string()));
-            assert!(usernames.contains(&"user1".to_string()));
-            assert!(usernames.contains(&"user2".to_string()));
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let usernames = extract_bulk_strings(&response);
+    assert!(usernames.len() >= 3, "Should have at least default, user1, user2");
+    assert!(usernames.contains(&"default".to_string()));
+    assert!(usernames.contains(&"user1".to_string()));
+    assert!(usernames.contains(&"user2".to_string()));
 
     server.shutdown().await;
 }
@@ -358,24 +290,13 @@ async fn test_acl_cat_all_categories() {
 
     // ACL CAT without argument returns list of all categories
     let response = client.command(&["ACL", "CAT"]).await;
-    match response {
-        Response::Array(arr) => {
-            assert!(!arr.is_empty(), "ACL CAT should return categories");
-            let categories: Vec<_> = arr
-                .iter()
-                .filter_map(|r| match r {
-                    Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
-                    _ => None,
-                })
-                .collect();
-            // Common categories that should exist
-            assert!(
-                categories.iter().any(|c| c == "read" || c == "write" || c == "admin" || c == "string"),
-                "Should contain common categories like read, write, admin, or string"
-            );
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let categories = extract_bulk_strings(&response);
+    assert!(!categories.is_empty(), "ACL CAT should return categories");
+    // Common categories that should exist
+    assert!(
+        categories.iter().any(|c| c == "read" || c == "write" || c == "admin" || c == "string"),
+        "Should contain common categories like read, write, admin, or string"
+    );
 
     server.shutdown().await;
 }
@@ -387,23 +308,15 @@ async fn test_acl_cat_specific_category() {
 
     // ACL CAT string returns commands in the string category
     let response = client.command(&["ACL", "CAT", "string"]).await;
-    match response {
-        Response::Array(arr) => {
-            let commands: Vec<_> = arr
-                .iter()
-                .filter_map(|r| match r {
-                    Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_lowercase()),
-                    _ => None,
-                })
-                .collect();
-            // String commands should include get, set, etc.
-            assert!(
-                commands.iter().any(|c| c == "get" || c == "set"),
-                "String category should include get or set commands"
-            );
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let commands: Vec<_> = extract_bulk_strings(&response)
+        .iter()
+        .map(|s| s.to_lowercase())
+        .collect();
+    // String commands should include get, set, etc.
+    assert!(
+        commands.iter().any(|c| c == "get" || c == "set"),
+        "String category should include get or set commands"
+    );
 
     server.shutdown().await;
 }
@@ -477,30 +390,22 @@ async fn test_acl_log_auth_failure() {
     // Trigger an auth failure
     let response = client.command(&["AUTH", "wrongpassword"]).await;
     // Verify auth failed
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"WRONGPASS")),
-        "AUTH should fail with WRONGPASS: {:?}",
-        response
-    );
+    assert_error_prefix(&response, "WRONGPASS");
 
     // Authenticate properly to check the log (ACL LOG requires auth)
     let response = client.command(&["AUTH", "secretpass"]).await;
-    assert_eq!(response, Response::ok(), "AUTH with correct password should succeed");
+    assert_ok(&response);
 
     // Check ACL LOG contains entry
     // Note: ACL LOG returns up to 10 entries by default
     let response = client.command(&["ACL", "LOG", "10"]).await;
-    match response {
-        Response::Array(arr) => {
-            // Should have at least one entry for the auth failure
-            // If empty, the implementation may not be logging auth failures
-            if arr.is_empty() {
-                // This is acceptable if the implementation doesn't log auth failures
-                // Just verify the command works
-                println!("Note: ACL LOG is empty - auth failures may not be logged");
-            }
-        }
-        _ => panic!("Expected array response from ACL LOG, got {:?}", response),
+    let arr = unwrap_array(response);
+    // Should have at least one entry for the auth failure
+    // If empty, the implementation may not be logging auth failures
+    if arr.is_empty() {
+        // This is acceptable if the implementation doesn't log auth failures
+        // Just verify the command works
+        println!("Note: ACL LOG is empty - auth failures may not be logged");
     }
 
     server.shutdown().await;
@@ -520,16 +425,12 @@ async fn test_acl_log_reset() {
     // The key here is to test that RESET works, regardless of whether entries exist
     // ACL LOG RESET should always succeed
     let response = client.command(&["ACL", "LOG", "RESET"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     // After reset, log should be empty
     let response = client.command(&["ACL", "LOG"]).await;
-    match response {
-        Response::Array(arr) => {
-            assert!(arr.is_empty(), "ACL LOG should be empty after RESET");
-        }
-        _ => panic!("Expected array response from ACL LOG, got {:?}", response),
-    }
+    let arr = unwrap_array(response);
+    assert!(arr.is_empty(), "ACL LOG should be empty after RESET");
 
     server.shutdown().await;
 }
@@ -545,26 +446,14 @@ async fn test_acl_help() {
 
     // ACL HELP returns array of help strings
     let response = client.command(&["ACL", "HELP"]).await;
-    match response {
-        Response::Array(arr) => {
-            assert!(!arr.is_empty(), "ACL HELP should return help strings");
-            // Check that it mentions ACL commands
-            let help_text: Vec<_> = arr
-                .iter()
-                .filter_map(|r| match r {
-                    Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
-                    _ => None,
-                })
-                .collect();
-            // Should mention at least some ACL subcommands
-            let combined = help_text.join(" ").to_uppercase();
-            assert!(
-                combined.contains("ACL") || combined.contains("SETUSER") || combined.contains("CAT"),
-                "Help should mention ACL commands"
-            );
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let help_text = extract_bulk_strings(&response);
+    assert!(!help_text.is_empty(), "ACL HELP should return help strings");
+    // Should mention at least some ACL subcommands
+    let combined = help_text.join(" ").to_uppercase();
+    assert!(
+        combined.contains("ACL") || combined.contains("SETUSER") || combined.contains("CAT"),
+        "Help should mention ACL commands"
+    );
 
     server.shutdown().await;
 }
@@ -576,22 +465,10 @@ async fn test_acl_help() {
 #[tokio::test]
 async fn test_acl_command_denied_write_category() {
     // User with -@write cannot write
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-
-    // Authenticate as admin (default user)
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create read-only user with +@read -@write
-    let response = admin
-        .command(&["ACL", "SETUSER", "reader", "on", ">pass", "+@read", "-@write", "~*"])
-        .await;
-    assert_eq!(response, Response::ok());
-
-    // Connect as reader
-    let mut reader = server.connect().await;
-    let response = reader.command(&["AUTH", "reader", "pass"]).await;
-    assert_eq!(response, Response::ok());
+    let mut reader = create_and_auth_user(&server, &mut admin, "reader", "pass", &["+@read", "-@write", "~*"]).await;
 
     // GET should work (read command)
     let response = reader.command(&["GET", "key"]).await;
@@ -599,11 +476,7 @@ async fn test_acl_command_denied_write_category() {
 
     // SET should be denied (write command)
     let response = reader.command(&["SET", "key", "val"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "SET should return NOPERM error, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -611,17 +484,10 @@ async fn test_acl_command_denied_write_category() {
 #[tokio::test]
 async fn test_acl_command_denied_individual() {
     // User with +get -set (individual commands)
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with only GET allowed
-    admin
-        .command(&["ACL", "SETUSER", "limited", "on", ">pass", "+get", "~*"])
-        .await;
-
-    let mut limited = server.connect().await;
-    limited.command(&["AUTH", "limited", "pass"]).await;
+    let mut limited = create_and_auth_user(&server, &mut admin, "limited", "pass", &["+get", "~*"]).await;
 
     // GET should work
     let response = limited.command(&["GET", "key"]).await;
@@ -629,19 +495,11 @@ async fn test_acl_command_denied_individual() {
 
     // SET should be denied
     let response = limited.command(&["SET", "key", "val"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "SET should return NOPERM error, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     // DEL should be denied
     let response = limited.command(&["DEL", "key"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "DEL should return NOPERM error, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -649,29 +507,18 @@ async fn test_acl_command_denied_individual() {
 #[tokio::test]
 async fn test_acl_command_denied_dangerous() {
     // User with -@dangerous cannot run DEBUG/FLUSHALL
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with all commands except dangerous
-    admin
-        .command(&["ACL", "SETUSER", "safe", "on", ">pass", "+@all", "-@dangerous", "~*"])
-        .await;
-
-    let mut safe = server.connect().await;
-    safe.command(&["AUTH", "safe", "pass"]).await;
+    let mut safe = create_and_auth_user(&server, &mut admin, "safe", "pass", &["+@all", "-@dangerous", "~*"]).await;
 
     // Normal commands should work
     let response = safe.command(&["SET", "key", "val"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     // FLUSHALL should be denied (dangerous)
     let response = safe.command(&["FLUSHALL"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "FLUSHALL should return NOPERM error, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -679,39 +526,20 @@ async fn test_acl_command_denied_dangerous() {
 #[tokio::test]
 async fn test_acl_nocommands_user() {
     // User with nocommands denied everything
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with no commands (reset to nothing)
-    admin
-        .command(&["ACL", "SETUSER", "nocommands", "on", ">pass", "nocommands", "~*"])
-        .await;
-
-    let mut client = server.connect().await;
-    client.command(&["AUTH", "nocommands", "pass"]).await;
+    let mut client = create_and_auth_user(&server, &mut admin, "nocommands", "pass", &["nocommands", "~*"]).await;
 
     // All commands should be denied
     let response = client.command(&["GET", "key"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "GET should return NOPERM error, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     let response = client.command(&["SET", "key", "val"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "SET should return NOPERM error, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     let response = client.command(&["PING"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "PING should return NOPERM error, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -719,21 +547,14 @@ async fn test_acl_nocommands_user() {
 #[tokio::test]
 async fn test_acl_allcommands_user() {
     // User with +@all can run any command
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with all commands
-    admin
-        .command(&["ACL", "SETUSER", "superuser", "on", ">pass", "+@all", "~*"])
-        .await;
-
-    let mut superuser = server.connect().await;
-    superuser.command(&["AUTH", "superuser", "pass"]).await;
+    let mut superuser = create_and_auth_user(&server, &mut admin, "superuser", "pass", &["+@all", "~*"]).await;
 
     // All basic commands should work
     let response = superuser.command(&["SET", "key", "val"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     let response = superuser.command(&["GET", "key"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("val"))));
@@ -751,21 +572,14 @@ async fn test_acl_allcommands_user() {
 #[tokio::test]
 async fn test_acl_key_pattern_prefix() {
     // User with ~prefix:* can only access matching keys
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with access only to app:* keys
-    admin
-        .command(&["ACL", "SETUSER", "appuser", "on", ">pass", "+@all", "~app:*"])
-        .await;
-
-    let mut appuser = server.connect().await;
-    appuser.command(&["AUTH", "appuser", "pass"]).await;
+    let mut appuser = create_and_auth_user(&server, &mut admin, "appuser", "pass", &["+@all", "~app:*"]).await;
 
     // SET app:foo should work
     let response = appuser.command(&["SET", "app:foo", "bar"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     // GET app:foo should work
     let response = appuser.command(&["GET", "app:foo"]).await;
@@ -773,19 +587,11 @@ async fn test_acl_key_pattern_prefix() {
 
     // SET other:foo should be denied
     let response = appuser.command(&["SET", "other:foo", "bar"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "SET to non-matching key should return NOPERM, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     // GET other:foo should be denied
     let response = appuser.command(&["GET", "other:foo"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "GET from non-matching key should return NOPERM, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -793,20 +599,13 @@ async fn test_acl_key_pattern_prefix() {
 #[tokio::test]
 async fn test_acl_key_pattern_read_only() {
     // User with %R~* (read-only keys)
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Setup: create some data as admin
     admin.command(&["SET", "key", "value"]).await;
 
     // Create user with read-only access to all keys
-    admin
-        .command(&["ACL", "SETUSER", "readonly", "on", ">pass", "+@all", "%R~*"])
-        .await;
-
-    let mut readonly = server.connect().await;
-    readonly.command(&["AUTH", "readonly", "pass"]).await;
+    let mut readonly = create_and_auth_user(&server, &mut admin, "readonly", "pass", &["+@all", "%R~*"]).await;
 
     // GET should work (read)
     let response = readonly.command(&["GET", "key"]).await;
@@ -814,11 +613,7 @@ async fn test_acl_key_pattern_read_only() {
 
     // SET should be denied (write)
     let response = readonly.command(&["SET", "key", "newval"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "SET should return NOPERM (write denied), got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -826,29 +621,18 @@ async fn test_acl_key_pattern_read_only() {
 #[tokio::test]
 async fn test_acl_key_pattern_write_only() {
     // User with %W~* (write-only keys)
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with write-only access to all keys
-    admin
-        .command(&["ACL", "SETUSER", "writeonly", "on", ">pass", "+@all", "%W~*"])
-        .await;
-
-    let mut writeonly = server.connect().await;
-    writeonly.command(&["AUTH", "writeonly", "pass"]).await;
+    let mut writeonly = create_and_auth_user(&server, &mut admin, "writeonly", "pass", &["+@all", "%W~*"]).await;
 
     // SET should work (write)
     let response = writeonly.command(&["SET", "key", "value"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     // GET should be denied (read)
     let response = writeonly.command(&["GET", "key"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "GET should return NOPERM (read denied), got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -856,33 +640,22 @@ async fn test_acl_key_pattern_write_only() {
 #[tokio::test]
 async fn test_acl_key_pattern_multiple() {
     // User with multiple key patterns
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with access to cache:* and session:* keys
-    admin
-        .command(&["ACL", "SETUSER", "multi", "on", ">pass", "+@all", "~cache:*", "~session:*"])
-        .await;
-
-    let mut multi = server.connect().await;
-    multi.command(&["AUTH", "multi", "pass"]).await;
+    let mut multi = create_and_auth_user(&server, &mut admin, "multi", "pass", &["+@all", "~cache:*", "~session:*"]).await;
 
     // Access cache:foo should work
     let response = multi.command(&["SET", "cache:foo", "bar"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     // Access session:bar should work
     let response = multi.command(&["SET", "session:bar", "baz"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     // Access other:foo should be denied
     let response = multi.command(&["SET", "other:foo", "bar"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "SET to non-matching key should return NOPERM, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -890,32 +663,17 @@ async fn test_acl_key_pattern_multiple() {
 #[tokio::test]
 async fn test_acl_no_key_access() {
     // User with resetkeys (no key patterns)
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with commands but no key access
-    admin
-        .command(&["ACL", "SETUSER", "nokeys", "on", ">pass", "+@all", "resetkeys"])
-        .await;
-
-    let mut nokeys = server.connect().await;
-    nokeys.command(&["AUTH", "nokeys", "pass"]).await;
+    let mut nokeys = create_and_auth_user(&server, &mut admin, "nokeys", "pass", &["+@all", "resetkeys"]).await;
 
     // All key operations should be denied
     let response = nokeys.command(&["GET", "anykey"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "GET should return NOPERM (no key access), got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     let response = nokeys.command(&["SET", "anykey", "val"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "SET should return NOPERM (no key access), got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -927,17 +685,10 @@ async fn test_acl_no_key_access() {
 #[tokio::test]
 async fn test_acl_channel_pattern_subscribe() {
     // User with &notifications:* can only subscribe to matching channels
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with channel restriction
-    admin
-        .command(&["ACL", "SETUSER", "subuser", "on", ">pass", "+@all", "~*", "&notifications:*"])
-        .await;
-
-    let mut subuser = server.connect().await;
-    subuser.command(&["AUTH", "subuser", "pass"]).await;
+    let mut subuser = create_and_auth_user(&server, &mut admin, "subuser", "pass", &["+@all", "~*", "&notifications:*"]).await;
 
     // SUBSCRIBE to matching channel should work
     let response = subuser.command(&["SUBSCRIBE", "notifications:alerts"]).await;
@@ -954,11 +705,7 @@ async fn test_acl_channel_pattern_subscribe() {
 
     // SUBSCRIBE to non-matching channel should be denied
     let response = subuser2.command(&["SUBSCRIBE", "secret:data"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "SUBSCRIBE to non-matching channel should return NOPERM, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -966,17 +713,10 @@ async fn test_acl_channel_pattern_subscribe() {
 #[tokio::test]
 async fn test_acl_channel_pattern_publish() {
     // User with &public:* denied PUBLISH to non-matching channels
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with channel restriction
-    admin
-        .command(&["ACL", "SETUSER", "pubuser", "on", ">pass", "+@all", "~*", "&public:*"])
-        .await;
-
-    let mut pubuser = server.connect().await;
-    pubuser.command(&["AUTH", "pubuser", "pass"]).await;
+    let mut pubuser = create_and_auth_user(&server, &mut admin, "pubuser", "pass", &["+@all", "~*", "&public:*"]).await;
 
     // PUBLISH to matching channel should work
     let response = pubuser.command(&["PUBLISH", "public:msg", "hello"]).await;
@@ -988,11 +728,7 @@ async fn test_acl_channel_pattern_publish() {
 
     // PUBLISH to non-matching channel should be denied
     let response = pubuser.command(&["PUBLISH", "private:msg", "hello"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "PUBLISH to non-matching channel should return NOPERM, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -1000,17 +736,10 @@ async fn test_acl_channel_pattern_publish() {
 #[tokio::test]
 async fn test_acl_allchannels() {
     // User with allchannels can access any channel
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with all channels access
-    admin
-        .command(&["ACL", "SETUSER", "allchan", "on", ">pass", "+@all", "~*", "allchannels"])
-        .await;
-
-    let mut allchan = server.connect().await;
-    allchan.command(&["AUTH", "allchan", "pass"]).await;
+    let mut allchan = create_and_auth_user(&server, &mut admin, "allchan", "pass", &["+@all", "~*", "allchannels"]).await;
 
     // PUBLISH to any channel should work
     let response = allchan.command(&["PUBLISH", "any:channel", "hello"]).await;
@@ -1033,33 +762,18 @@ async fn test_acl_allchannels() {
 #[tokio::test]
 async fn test_acl_no_channel_access() {
     // User with resetchannels cannot access any channel
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with no channel access
-    admin
-        .command(&["ACL", "SETUSER", "nochan", "on", ">pass", "+@all", "~*", "resetchannels"])
-        .await;
-
-    let mut nochan = server.connect().await;
-    nochan.command(&["AUTH", "nochan", "pass"]).await;
+    let mut nochan = create_and_auth_user(&server, &mut admin, "nochan", "pass", &["+@all", "~*", "resetchannels"]).await;
 
     // SUBSCRIBE to any channel should be denied
     let response = nochan.command(&["SUBSCRIBE", "any:channel"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "SUBSCRIBE should return NOPERM (no channel access), got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     // PUBLISH to any channel should be denied
     let response = nochan.command(&["PUBLISH", "any:channel", "msg"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "PUBLISH should return NOPERM (no channel access), got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -1071,40 +785,28 @@ async fn test_acl_no_channel_access() {
 #[tokio::test]
 async fn test_acl_log_command_denied() {
     // Command denial logged to ACL LOG
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create a restricted user
-    admin
-        .command(&["ACL", "SETUSER", "limited", "on", ">pass", "+get", "~*"])
-        .await;
+    let mut limited = create_and_auth_user(&server, &mut admin, "limited", "pass", &["+get", "~*"]).await;
 
     // Reset ACL LOG first
     admin.command(&["ACL", "LOG", "RESET"]).await;
-
-    // Connect as limited user and try forbidden command
-    let mut limited = server.connect().await;
-    limited.command(&["AUTH", "limited", "pass"]).await;
     let _ = limited.command(&["SET", "key", "val"]).await; // This should fail and log
 
     // Check ACL LOG
     let response = admin.command(&["ACL", "LOG", "10"]).await;
-    match response {
-        Response::Array(arr) => {
-            // Should have at least one entry for the command denial
-            assert!(!arr.is_empty(), "ACL LOG should have entry for command denial");
-            // The entry should be an array of key-value pairs
-            if let Some(Response::Array(entry)) = arr.first() {
-                // Check that it contains the reason "command"
-                let entry_str = format!("{:?}", entry);
-                assert!(
-                    entry_str.contains("command") || entry_str.contains("not allowed"),
-                    "ACL LOG entry should mention command denial"
-                );
-            }
-        }
-        _ => panic!("Expected array response from ACL LOG"),
+    let arr = unwrap_array(response);
+    // Should have at least one entry for the command denial
+    assert!(!arr.is_empty(), "ACL LOG should have entry for command denial");
+    // The entry should be an array of key-value pairs
+    if let Some(Response::Array(entry)) = arr.first() {
+        // Check that it contains the reason "command"
+        let entry_str = format!("{:?}", entry);
+        assert!(
+            entry_str.contains("command") || entry_str.contains("not allowed"),
+            "ACL LOG entry should mention command denial"
+        );
     }
 
     server.shutdown().await;
@@ -1113,31 +815,21 @@ async fn test_acl_log_command_denied() {
 #[tokio::test]
 async fn test_acl_log_key_denied() {
     // Key denial logged to ACL LOG
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create a user with key restrictions
-    admin
-        .command(&["ACL", "SETUSER", "keyuser", "on", ">pass", "+@all", "~allowed:*"])
-        .await;
+    let mut keyuser = create_and_auth_user(&server, &mut admin, "keyuser", "pass", &["+@all", "~allowed:*"]).await;
 
     // Reset ACL LOG first
     admin.command(&["ACL", "LOG", "RESET"]).await;
 
-    // Connect and try accessing denied key
-    let mut keyuser = server.connect().await;
-    keyuser.command(&["AUTH", "keyuser", "pass"]).await;
+    // Try accessing denied key
     let _ = keyuser.command(&["GET", "denied:key"]).await; // This should fail and log
 
     // Check ACL LOG
     let response = admin.command(&["ACL", "LOG", "10"]).await;
-    match response {
-        Response::Array(arr) => {
-            assert!(!arr.is_empty(), "ACL LOG should have entry for key denial");
-        }
-        _ => panic!("Expected array response from ACL LOG"),
-    }
+    let arr = unwrap_array(response);
+    assert!(!arr.is_empty(), "ACL LOG should have entry for key denial");
 
     server.shutdown().await;
 }
@@ -1145,31 +837,21 @@ async fn test_acl_log_key_denied() {
 #[tokio::test]
 async fn test_acl_log_channel_denied() {
     // Channel denial logged to ACL LOG
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create a user with channel restrictions
-    admin
-        .command(&["ACL", "SETUSER", "chanuser", "on", ">pass", "+@all", "~*", "&allowed:*"])
-        .await;
+    let mut chanuser = create_and_auth_user(&server, &mut admin, "chanuser", "pass", &["+@all", "~*", "&allowed:*"]).await;
 
     // Reset ACL LOG first
     admin.command(&["ACL", "LOG", "RESET"]).await;
 
-    // Connect and try accessing denied channel
-    let mut chanuser = server.connect().await;
-    chanuser.command(&["AUTH", "chanuser", "pass"]).await;
+    // Try accessing denied channel
     let _ = chanuser.command(&["PUBLISH", "denied:channel", "msg"]).await; // This should fail and log
 
     // Check ACL LOG
     let response = admin.command(&["ACL", "LOG", "10"]).await;
-    match response {
-        Response::Array(arr) => {
-            assert!(!arr.is_empty(), "ACL LOG should have entry for channel denial");
-        }
-        _ => panic!("Expected array response from ACL LOG"),
-    }
+    let arr = unwrap_array(response);
+    assert!(!arr.is_empty(), "ACL LOG should have entry for channel denial");
 
     server.shutdown().await;
 }
@@ -1181,9 +863,7 @@ async fn test_acl_log_channel_denied() {
 #[tokio::test]
 async fn test_acl_multiple_passwords() {
     // User with multiple passwords can auth with any
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with multiple passwords
     admin
@@ -1193,20 +873,17 @@ async fn test_acl_multiple_passwords() {
     // AUTH with pass1 should work
     let mut client1 = server.connect().await;
     let response = client1.command(&["AUTH", "multi", "pass1"]).await;
-    assert_eq!(response, Response::ok(), "AUTH with pass1 should succeed");
+    assert_ok(&response);
 
     // AUTH with pass2 should work (new connection)
     let mut client2 = server.connect().await;
     let response = client2.command(&["AUTH", "multi", "pass2"]).await;
-    assert_eq!(response, Response::ok(), "AUTH with pass2 should succeed");
+    assert_ok(&response);
 
     // AUTH with wrong password should fail
     let mut client3 = server.connect().await;
     let response = client3.command(&["AUTH", "multi", "wrong"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"WRONGPASS")),
-        "AUTH with wrong password should fail"
-    );
+    assert_error_prefix(&response, "WRONGPASS");
 
     server.shutdown().await;
 }
@@ -1214,9 +891,7 @@ async fn test_acl_multiple_passwords() {
 #[tokio::test]
 async fn test_acl_add_password() {
     // Adding password doesn't invalidate existing
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with pass1
     admin
@@ -1231,11 +906,11 @@ async fn test_acl_add_password() {
     // Both passwords should work
     let mut client1 = server.connect().await;
     let response = client1.command(&["AUTH", "addpass", "pass1"]).await;
-    assert_eq!(response, Response::ok(), "AUTH with pass1 should still work");
+    assert_ok(&response);
 
     let mut client2 = server.connect().await;
     let response = client2.command(&["AUTH", "addpass", "pass2"]).await;
-    assert_eq!(response, Response::ok(), "AUTH with pass2 should work");
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -1243,9 +918,7 @@ async fn test_acl_add_password() {
 #[tokio::test]
 async fn test_acl_remove_password() {
     // Removing one password leaves others valid
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with two passwords
     admin
@@ -1260,15 +933,12 @@ async fn test_acl_remove_password() {
     // pass2 should still work
     let mut client1 = server.connect().await;
     let response = client1.command(&["AUTH", "rmpass", "pass2"]).await;
-    assert_eq!(response, Response::ok(), "AUTH with pass2 should work");
+    assert_ok(&response);
 
     // pass1 should be rejected
     let mut client2 = server.connect().await;
     let response = client2.command(&["AUTH", "rmpass", "pass1"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"WRONGPASS")),
-        "AUTH with removed pass1 should fail"
-    );
+    assert_error_prefix(&response, "WRONGPASS");
 
     server.shutdown().await;
 }
@@ -1276,9 +946,7 @@ async fn test_acl_remove_password() {
 #[tokio::test]
 async fn test_acl_resetpass() {
     // resetpass clears all passwords
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with multiple passwords
     admin
@@ -1343,17 +1011,7 @@ async fn test_error_wrongpass_format() {
 
     // AUTH with wrong password should return WRONGPASS
     let response = client.command(&["AUTH", "wrongpassword"]).await;
-    match response {
-        Response::Error(e) => {
-            let msg = String::from_utf8_lossy(&e);
-            assert!(
-                msg.starts_with("WRONGPASS"),
-                "Expected 'WRONGPASS ...', got: {}",
-                msg
-            );
-        }
-        _ => panic!("Expected error response, got {:?}", response),
-    }
+    assert_error_prefix(&response, "WRONGPASS");
 
     server.shutdown().await;
 }
@@ -1361,17 +1019,10 @@ async fn test_error_wrongpass_format() {
 #[tokio::test]
 async fn test_error_noperm_command_format() {
     // NOPERM command error format
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create restricted user
-    admin
-        .command(&["ACL", "SETUSER", "limited", "on", ">pass", "+get", "~*"])
-        .await;
-
-    let mut limited = server.connect().await;
-    limited.command(&["AUTH", "limited", "pass"]).await;
+    let mut limited = create_and_auth_user(&server, &mut admin, "limited", "pass", &["+get", "~*"]).await;
 
     // Forbidden command should return NOPERM with command name
     let response = limited.command(&["SET", "key", "val"]).await;
@@ -1393,31 +1044,14 @@ async fn test_error_noperm_command_format() {
 #[tokio::test]
 async fn test_error_noperm_key_format() {
     // NOPERM key error format
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with key restrictions
-    admin
-        .command(&["ACL", "SETUSER", "keyuser", "on", ">pass", "+@all", "~allowed:*"])
-        .await;
-
-    let mut keyuser = server.connect().await;
-    keyuser.command(&["AUTH", "keyuser", "pass"]).await;
+    let mut keyuser = create_and_auth_user(&server, &mut admin, "keyuser", "pass", &["+@all", "~allowed:*"]).await;
 
     // Forbidden key should return NOPERM
     let response = keyuser.command(&["GET", "denied:key"]).await;
-    match response {
-        Response::Error(e) => {
-            let msg = String::from_utf8_lossy(&e);
-            assert!(
-                msg.starts_with("NOPERM"),
-                "Expected 'NOPERM ...', got: {}",
-                msg
-            );
-        }
-        _ => panic!("Expected error response, got {:?}", response),
-    }
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -1425,31 +1059,14 @@ async fn test_error_noperm_key_format() {
 #[tokio::test]
 async fn test_error_noperm_channel_format() {
     // NOPERM channel error format
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with channel restrictions
-    admin
-        .command(&["ACL", "SETUSER", "chanuser", "on", ">pass", "+@all", "~*", "&allowed:*"])
-        .await;
-
-    let mut chanuser = server.connect().await;
-    chanuser.command(&["AUTH", "chanuser", "pass"]).await;
+    let mut chanuser = create_and_auth_user(&server, &mut admin, "chanuser", "pass", &["+@all", "~*", "&allowed:*"]).await;
 
     // Forbidden channel should return NOPERM
     let response = chanuser.command(&["PUBLISH", "denied:channel", "msg"]).await;
-    match response {
-        Response::Error(e) => {
-            let msg = String::from_utf8_lossy(&e);
-            assert!(
-                msg.starts_with("NOPERM"),
-                "Expected 'NOPERM ...', got: {}",
-                msg
-            );
-        }
-        _ => panic!("Expected error response, got {:?}", response),
-    }
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -1466,7 +1083,7 @@ async fn test_auth_exempt_auth() {
 
     // AUTH command itself should work without being authenticated
     let response = client.command(&["AUTH", "testpass"]).await;
-    assert_eq!(response, Response::ok(), "AUTH command should work without prior auth");
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -1479,12 +1096,7 @@ async fn test_auth_exempt_hello() {
 
     // HELLO command should work without being authenticated
     let response = client.command(&["HELLO"]).await;
-    match response {
-        Response::Array(_) => {
-            // Expected - HELLO returns server info
-        }
-        _ => panic!("Expected array response for HELLO, got {:?}", response),
-    }
+    let _ = unwrap_array(response); // Expected - HELLO returns server info
 
     server.shutdown().await;
 }
@@ -1549,22 +1161,14 @@ async fn test_acl_save_no_file() {
 #[tokio::test]
 async fn test_acl_reauth_updates_permissions() {
     // Re-authentication updates permissions
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin = server.connect().await;
-    admin.command(&["AUTH", "admin"]).await;
+    let (server, mut admin) = start_server_with_admin("admin").await;
 
     // Create user with all permissions
-    admin
-        .command(&["ACL", "SETUSER", "dynamic", "on", ">pass", "+@all", "~*"])
-        .await;
-
-    // Connect and authenticate as dynamic user
-    let mut dynamic = server.connect().await;
-    dynamic.command(&["AUTH", "dynamic", "pass"]).await;
+    let mut dynamic = create_and_auth_user(&server, &mut admin, "dynamic", "pass", &["+@all", "~*"]).await;
 
     // SET should work
     let response = dynamic.command(&["SET", "key", "val"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     // Admin changes user permissions to deny write
     admin
@@ -1573,15 +1177,11 @@ async fn test_acl_reauth_updates_permissions() {
 
     // Re-authenticate as dynamic user
     let response = dynamic.command(&["AUTH", "dynamic", "pass"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     // Now SET should fail (after re-authentication, new permissions apply)
     let response = dynamic.command(&["SET", "key", "val2"]).await;
-    assert!(
-        matches!(response, Response::Error(ref e) if e.starts_with(b"NOPERM")),
-        "SET should be denied after re-auth with restricted permissions, got {:?}",
-        response
-    );
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -1593,10 +1193,8 @@ async fn test_acl_reauth_updates_permissions() {
 #[tokio::test]
 async fn test_acl_concurrent_setuser() {
     // Concurrent SETUSER doesn't corrupt state
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin1 = server.connect().await;
+    let (server, mut admin1) = start_server_with_admin("admin").await;
     let mut admin2 = server.connect().await;
-    admin1.command(&["AUTH", "admin"]).await;
     admin2.command(&["AUTH", "admin"]).await;
 
     // Create a user
@@ -1632,25 +1230,10 @@ async fn test_acl_concurrent_setuser() {
 #[tokio::test]
 async fn test_acl_subcommand_rules() {
     // Create a user with +@all but deny CONFIG|SET specifically
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin_client = server.connect().await;
-
-    // Authenticate as admin
-    admin_client.command(&["AUTH", "admin"]).await;
+    let (server, mut admin_client) = start_server_with_admin("admin").await;
 
     // Create user with all commands allowed but CONFIG|SET denied
-    let response = admin_client
-        .command(&[
-            "ACL", "SETUSER", "configreader", "on", ">pass",
-            "~*", "+@all", "-config|set", "-config|rewrite"
-        ])
-        .await;
-    assert_eq!(response, Response::ok());
-
-    // Connect as the new user
-    let mut user_client = server.connect().await;
-    let response = user_client.command(&["AUTH", "configreader", "pass"]).await;
-    assert_eq!(response, Response::ok());
+    let mut user_client = create_and_auth_user(&server, &mut admin_client, "configreader", "pass", &["~*", "+@all", "-config|set", "-config|rewrite"]).await;
 
     // CONFIG GET should work (allowed by +@all, no specific deny)
     let response = user_client.command(&["CONFIG", "GET", "maxclients"]).await;
@@ -1662,31 +1245,11 @@ async fn test_acl_subcommand_rules() {
 
     // CONFIG SET should be denied (specific subcommand deny)
     let response = user_client.command(&["CONFIG", "SET", "maxclients", "1000"]).await;
-    match response {
-        Response::Error(e) => {
-            let err_str = String::from_utf8_lossy(&e);
-            assert!(
-                err_str.contains("NOPERM"),
-                "Expected NOPERM error, got: {}",
-                err_str
-            );
-        }
-        _ => panic!("Expected NOPERM error for CONFIG SET, got {:?}", response),
-    }
+    assert_error_prefix(&response, "NOPERM");
 
     // CONFIG REWRITE should be denied (specific subcommand deny)
     let response = user_client.command(&["CONFIG", "REWRITE"]).await;
-    match response {
-        Response::Error(e) => {
-            let err_str = String::from_utf8_lossy(&e);
-            assert!(
-                err_str.contains("NOPERM"),
-                "Expected NOPERM error, got: {}",
-                err_str
-            );
-        }
-        _ => panic!("Expected NOPERM error for CONFIG REWRITE, got {:?}", response),
-    }
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -1694,24 +1257,10 @@ async fn test_acl_subcommand_rules() {
 #[tokio::test]
 async fn test_acl_subcommand_allow_specific() {
     // Create a user with -config but +config|get allowed
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin_client = server.connect().await;
-
-    // Authenticate as admin
-    admin_client.command(&["AUTH", "admin"]).await;
+    let (server, mut admin_client) = start_server_with_admin("admin").await;
 
     // Create user with config denied but config|get allowed
-    let response = admin_client
-        .command(&[
-            "ACL", "SETUSER", "configget", "on", ">pass",
-            "~*", "+@all", "-config", "+config|get"
-        ])
-        .await;
-    assert_eq!(response, Response::ok());
-
-    // Connect as the new user
-    let mut user_client = server.connect().await;
-    user_client.command(&["AUTH", "configget", "pass"]).await;
+    let mut user_client = create_and_auth_user(&server, &mut admin_client, "configget", "pass", &["~*", "+@all", "-config", "+config|get"]).await;
 
     // CONFIG GET should work (specific subcommand allow overrides command deny)
     let response = user_client.command(&["CONFIG", "GET", "maxclients"]).await;
@@ -1723,17 +1272,7 @@ async fn test_acl_subcommand_allow_specific() {
 
     // CONFIG SET should be denied (no specific allow)
     let response = user_client.command(&["CONFIG", "SET", "maxclients", "1000"]).await;
-    match response {
-        Response::Error(e) => {
-            let err_str = String::from_utf8_lossy(&e);
-            assert!(
-                err_str.contains("NOPERM"),
-                "Expected NOPERM error, got: {}",
-                err_str
-            );
-        }
-        _ => panic!("Expected NOPERM error for CONFIG SET, got {:?}", response),
-    }
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
@@ -1741,30 +1280,16 @@ async fn test_acl_subcommand_allow_specific() {
 #[tokio::test]
 async fn test_acl_selectors() {
     // Create a user with root access to app:* and selector for cache:* read-only
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin_client = server.connect().await;
-
-    // Authenticate as admin
-    admin_client.command(&["AUTH", "admin"]).await;
+    let (server, mut admin_client) = start_server_with_admin("admin").await;
 
     // Create user with:
     // - Root: app:* keys with all commands
     // - Selector: cache:* keys with read-only access
-    let response = admin_client
-        .command(&[
-            "ACL", "SETUSER", "hybrid", "on", ">pass",
-            "~app:*", "+@all", "(~cache:* +@read)"
-        ])
-        .await;
-    assert_eq!(response, Response::ok());
-
-    // Connect as the new user
-    let mut user_client = server.connect().await;
-    user_client.command(&["AUTH", "hybrid", "pass"]).await;
+    let mut user_client = create_and_auth_user(&server, &mut admin_client, "hybrid", "pass", &["~app:*", "+@all", "(~cache:* +@read)"]).await;
 
     // Can write to app:* (root permissions)
     let response = user_client.command(&["SET", "app:key1", "value1"]).await;
-    assert_eq!(response, Response::ok());
+    assert_ok(&response);
 
     // Can read from app:* (root permissions)
     let response = user_client.command(&["GET", "app:key1"]).await;
@@ -1778,42 +1303,18 @@ async fn test_acl_selectors() {
 
     // Cannot write to cache:* (selector only grants read)
     let response = user_client.command(&["SET", "cache:newkey", "value"]).await;
-    match response {
-        Response::Error(e) => {
-            let err_str = String::from_utf8_lossy(&e);
-            assert!(
-                err_str.contains("NOPERM"),
-                "Expected NOPERM error for cache write, got: {}",
-                err_str
-            );
-        }
-        _ => panic!("Expected NOPERM error for cache write, got {:?}", response),
-    }
+    assert_error_prefix(&response, "NOPERM");
 
     // Cannot access data:* (neither root nor selector)
     let response = user_client.command(&["GET", "data:something"]).await;
-    match response {
-        Response::Error(e) => {
-            let err_str = String::from_utf8_lossy(&e);
-            assert!(
-                err_str.contains("NOPERM"),
-                "Expected NOPERM error for data access, got: {}",
-                err_str
-            );
-        }
-        _ => panic!("Expected NOPERM error for data access, got {:?}", response),
-    }
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
 
 #[tokio::test]
 async fn test_acl_clearselectors() {
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin_client = server.connect().await;
-
-    // Authenticate as admin
-    admin_client.command(&["AUTH", "admin"]).await;
+    let (server, mut admin_client) = start_server_with_admin("admin").await;
 
     // Create user with a selector
     admin_client
@@ -1825,19 +1326,15 @@ async fn test_acl_clearselectors() {
 
     // Verify selector exists in GETUSER response
     let response = admin_client.command(&["ACL", "GETUSER", "withsel"]).await;
-    match response {
-        Response::Array(arr) => {
-            // Look for "selectors" field
-            let selectors_idx = arr.iter().position(|r| {
-                matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("selectors"))
-            });
-            if let Some(idx) = selectors_idx {
-                if let Some(Response::Array(selectors)) = arr.get(idx + 1) {
-                    assert!(!selectors.is_empty(), "Should have at least one selector");
-                }
-            }
+    let arr = unwrap_array(response);
+    // Look for "selectors" field
+    let selectors_idx = arr.iter().position(|r| {
+        matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("selectors"))
+    });
+    if let Some(idx) = selectors_idx {
+        if let Some(Response::Array(selectors)) = arr.get(idx + 1) {
+            assert!(!selectors.is_empty(), "Should have at least one selector");
         }
-        _ => panic!("Expected array response for GETUSER"),
     }
 
     // Clear selectors
@@ -1847,18 +1344,14 @@ async fn test_acl_clearselectors() {
 
     // Verify selectors are cleared
     let response = admin_client.command(&["ACL", "GETUSER", "withsel"]).await;
-    match response {
-        Response::Array(arr) => {
-            let selectors_idx = arr.iter().position(|r| {
-                matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("selectors"))
-            });
-            if let Some(idx) = selectors_idx {
-                if let Some(Response::Array(selectors)) = arr.get(idx + 1) {
-                    assert!(selectors.is_empty(), "Selectors should be cleared");
-                }
-            }
+    let arr = unwrap_array(response);
+    let selectors_idx = arr.iter().position(|r| {
+        matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("selectors"))
+    });
+    if let Some(idx) = selectors_idx {
+        if let Some(Response::Array(selectors)) = arr.get(idx + 1) {
+            assert!(selectors.is_empty(), "Selectors should be cleared");
         }
-        _ => panic!("Expected array response for GETUSER"),
     }
 
     server.shutdown().await;
@@ -1866,24 +1359,10 @@ async fn test_acl_clearselectors() {
 
 #[tokio::test]
 async fn test_acl_multiple_selectors() {
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin_client = server.connect().await;
-
-    // Authenticate as admin
-    admin_client.command(&["AUTH", "admin"]).await;
+    let (server, mut admin_client) = start_server_with_admin("admin").await;
 
     // Create user with multiple selectors
-    let response = admin_client
-        .command(&[
-            "ACL", "SETUSER", "multisel", "on", ">pass",
-            "+@all", "(~temp:* +@read)", "(~cache:* +@read)"
-        ])
-        .await;
-    assert_eq!(response, Response::ok());
-
-    // Connect as the new user
-    let mut user_client = server.connect().await;
-    user_client.command(&["AUTH", "multisel", "pass"]).await;
+    let mut user_client = create_and_auth_user(&server, &mut admin_client, "multisel", "pass", &["+@all", "(~temp:* +@read)", "(~cache:* +@read)"]).await;
 
     // Admin sets some keys
     admin_client.command(&["SET", "temp:key1", "temp_value"]).await;
@@ -1899,28 +1378,14 @@ async fn test_acl_multiple_selectors() {
 
     // Cannot read data:* (no matching selector)
     let response = user_client.command(&["GET", "data:key1"]).await;
-    match response {
-        Response::Error(e) => {
-            let err_str = String::from_utf8_lossy(&e);
-            assert!(
-                err_str.contains("NOPERM"),
-                "Expected NOPERM error, got: {}",
-                err_str
-            );
-        }
-        _ => panic!("Expected NOPERM error, got {:?}", response),
-    }
+    assert_error_prefix(&response, "NOPERM");
 
     server.shutdown().await;
 }
 
 #[tokio::test]
 async fn test_acl_acl_list_includes_subcommand_rules() {
-    let server = TestServer::start_with_security("admin").await;
-    let mut admin_client = server.connect().await;
-
-    // Authenticate as admin
-    admin_client.command(&["AUTH", "admin"]).await;
+    let (server, mut admin_client) = start_server_with_admin("admin").await;
 
     // Create user with subcommand rules
     admin_client
@@ -1932,27 +1397,16 @@ async fn test_acl_acl_list_includes_subcommand_rules() {
 
     // ACL LIST should include subcommand rules in the output
     let response = admin_client.command(&["ACL", "LIST"]).await;
-    match response {
-        Response::Array(arr) => {
-            let rules: Vec<_> = arr
-                .iter()
-                .filter_map(|r| match r {
-                    Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
-                    _ => None,
-                })
-                .collect();
+    let rules = extract_bulk_strings(&response);
 
-            let subcmduser_rule = rules.iter().find(|r| r.contains("subcmduser"));
-            assert!(subcmduser_rule.is_some(), "Should have subcmduser in ACL LIST");
-            let rule = subcmduser_rule.unwrap();
-            assert!(
-                rule.contains("-config|set") || rule.contains("+client|info"),
-                "ACL LIST should include subcommand rules: {}",
-                rule
-            );
-        }
-        _ => panic!("Expected array response for ACL LIST"),
-    }
+    let subcmduser_rule = rules.iter().find(|r| r.contains("subcmduser"));
+    assert!(subcmduser_rule.is_some(), "Should have subcmduser in ACL LIST");
+    let rule = subcmduser_rule.unwrap();
+    assert!(
+        rule.contains("-config|set") || rule.contains("+client|info"),
+        "ACL LIST should include subcommand rules: {}",
+        rule
+    );
 
     server.shutdown().await;
 }

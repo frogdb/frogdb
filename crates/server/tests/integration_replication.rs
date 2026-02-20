@@ -16,7 +16,12 @@
 
 mod common;
 
-use common::test_server::{is_error, is_ok, parse_integer, parse_simple_string, TestServer, TestServerConfig};
+use common::replication_helpers::{
+    get_replication_state, parse_info_replication, start_primary_replica_pair,
+    wait_for_replication,
+};
+use common::response_helpers::assert_ok;
+use common::test_server::{is_error, parse_integer, parse_simple_string, TestServer, TestServerConfig};
 use frogdb_protocol::Response;
 use rstest::rstest;
 use std::time::Duration;
@@ -35,7 +40,7 @@ async fn test_replconf_listening_port(#[case] persistence: bool) {
     let server = TestServer::start_primary_with_config(config).await;
 
     let response = server.send("REPLCONF", &["listening-port", "6380"]).await;
-    assert!(is_ok(&response), "REPLCONF listening-port should return OK, got {:?}", response);
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -50,7 +55,7 @@ async fn test_replconf_capa(#[case] persistence: bool) {
     let server = TestServer::start_primary_with_config(config).await;
 
     let response = server.send("REPLCONF", &["capa", "eof", "psync2"]).await;
-    assert!(is_ok(&response), "REPLCONF capa should return OK, got {:?}", response);
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -65,7 +70,7 @@ async fn test_replconf_ack(#[case] persistence: bool) {
     let server = TestServer::start_primary_with_config(config).await;
 
     let response = server.send("REPLCONF", &["ACK", "12345"]).await;
-    assert!(is_ok(&response), "REPLCONF ACK should return OK, got {:?}", response);
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -193,11 +198,7 @@ async fn test_primary_replica_connect(#[case] persistence: bool) {
 async fn test_info_replication_connected(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-    let _replica = TestServer::start_replica_with_config(&primary, config).await;
-
-    // Wait for replication handshake
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, _replica) = start_primary_replica_pair(config).await;
 
     let response = primary.send("INFO", &["replication"]).await;
 
@@ -220,24 +221,14 @@ async fn test_info_replication_connected(#[case] persistence: bool) {
 async fn test_write_propagation(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-    let replica = TestServer::start_replica_with_config(&primary, config).await;
-
-    // Wait for sync to complete
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, replica) = start_primary_replica_pair(config).await;
 
     // Write to primary
     let set_response = primary.send("SET", &["test_key", "test_value"]).await;
-    assert!(is_ok(&set_response), "SET on primary should succeed");
+    assert_ok(&set_response);
 
     // Wait for replication with WAIT (or timeout)
-    let wait_response = primary.send("WAIT", &["1", "5000"]).await;
-    let acked = parse_integer(&wait_response).unwrap_or(0);
-
-    // Give replication more time if WAIT didn't confirm
-    if acked == 0 {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
+    let acked = wait_for_replication(&primary, 5000).await;
 
     // Read from replica
     let get_response = replica.send("GET", &["test_key"]).await;
@@ -297,18 +288,14 @@ async fn test_wait_blocks_until_ack(#[case] persistence: bool) {
 async fn test_multiple_writes(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-    let replica = TestServer::start_replica_with_config(&primary, config).await;
-
-    // Wait for initial sync
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, replica) = start_primary_replica_pair(config).await;
 
     // Write multiple keys
     for i in 0..5 {
         let key = format!("multi_key_{}", i);
         let value = format!("value_{}", i);
         let response = primary.send("SET", &[&key, &value]).await;
-        assert!(is_ok(&response), "SET {} should succeed", key);
+        assert_ok(&response);
     }
 
     // Wait for replication
@@ -343,7 +330,7 @@ async fn test_replicaof_no_one(#[case] persistence: bool) {
 
     // Stop replication on replica
     let response = replica.send("REPLICAOF", &["NO", "ONE"]).await;
-    assert!(is_ok(&response), "REPLICAOF NO ONE should return OK");
+    assert_ok(&response);
 
     // After REPLICAOF NO ONE, the replica should still be operational
     let ping = replica.send("PING", &[]).await;
@@ -364,7 +351,7 @@ async fn test_slaveof_alias(#[case] persistence: bool) {
 
     // SLAVEOF NO ONE should work as an alias
     let response = server.send("SLAVEOF", &["NO", "ONE"]).await;
-    assert!(is_ok(&response), "SLAVEOF NO ONE should return OK");
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -377,17 +364,13 @@ async fn test_slaveof_alias(#[case] persistence: bool) {
 async fn test_large_value_replication(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-    let replica = TestServer::start_replica_with_config(&primary, config).await;
-
-    // Wait for sync
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, replica) = start_primary_replica_pair(config).await;
 
     // Create a large value (1MB)
     let large_value: String = "x".repeat(1024 * 1024);
 
     let response = primary.send("SET", &["large_key", &large_value]).await;
-    assert!(is_ok(&response), "SET large value should succeed");
+    assert_ok(&response);
 
     // Wait for replication
     primary.send("WAIT", &["1", "10000"]).await;
@@ -410,15 +393,15 @@ async fn test_replconf_subcommands() {
 
     // Test ip-address
     let response = server.send("REPLCONF", &["ip-address", "192.168.1.100"]).await;
-    assert!(is_ok(&response), "REPLCONF ip-address should return OK");
+    assert_ok(&response);
 
     // Test GETACK
     let response = server.send("REPLCONF", &["GETACK", "*"]).await;
-    assert!(is_ok(&response), "REPLCONF GETACK should return OK");
+    assert_ok(&response);
 
     // Test with no args (should return OK)
     let response = server.send("REPLCONF", &[]).await;
-    assert!(is_ok(&response), "REPLCONF with no args should return OK");
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -548,7 +531,7 @@ async fn test_multiple_clients_primary() {
     for (i, client) in clients.iter_mut().enumerate() {
         let key = format!("client_{}_key", i);
         let response = client.command(&["SET", &key, "value"]).await;
-        assert!(is_ok(&response), "Client {} SET should succeed", i);
+        assert_ok(&response);
     }
 
     // Verify all keys exist
@@ -579,8 +562,8 @@ async fn test_multiple_primaries() {
     let response1 = primary1.send("SET", &["p1_key", "value1"]).await;
     let response2 = primary2.send("SET", &["p2_key", "value2"]).await;
 
-    assert!(is_ok(&response1));
-    assert!(is_ok(&response2));
+    assert_ok(&response1);
+    assert_ok(&response2);
 
     // Keys should be isolated
     let get1 = primary1.send("GET", &["p2_key"]).await;
@@ -608,7 +591,7 @@ async fn test_different_shard_counts(#[case] num_shards: usize) {
 
     // Basic operations should work regardless of shard count
     let response = server.send("SET", &["shard_test", "value"]).await;
-    assert!(is_ok(&response));
+    assert_ok(&response);
 
     let response = server.send("GET", &["shard_test"]).await;
     if let Response::Bulk(Some(value)) = response {
@@ -647,26 +630,10 @@ async fn test_partial_sync_continue_response(#[case] persistence: bool) {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Get replication info from INFO
-    let info_resp = primary.send("INFO", &["replication"]).await;
-    let (repl_id, offset): (Option<String>, Option<i64>) = if let Response::Bulk(Some(info)) = &info_resp {
-        let info_str = String::from_utf8_lossy(info);
-        let mut id = None;
-        let mut off = None;
-        for line in info_str.lines() {
-            if line.starts_with("master_replid:") {
-                id = Some(line.trim_start_matches("master_replid:").to_string());
-            }
-            if line.starts_with("master_repl_offset:") {
-                off = line.trim_start_matches("master_repl_offset:").parse().ok();
-            }
-        }
-        (id, off)
-    } else {
-        (None, None)
-    };
+    let repl_state = get_replication_state(&primary).await;
 
     // If we got replication info, test PSYNC with valid offset
-    if let (Some(id), Some(offset)) = (repl_id, offset) {
+    if let Some((id, offset)) = repl_state {
         // Create a new connection and attempt PSYNC
         let response = primary.send("PSYNC", &[&id, &offset.to_string()]).await;
 
@@ -687,11 +654,7 @@ async fn test_partial_sync_continue_response(#[case] persistence: bool) {
 async fn test_partial_sync_preserves_ordering(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-    let replica = TestServer::start_replica_with_config(&primary, config).await;
-
-    // Wait for sync
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, replica) = start_primary_replica_pair(config).await;
 
     // Write keys in specific order
     for i in 0..20 {
@@ -783,11 +746,7 @@ async fn test_partial_sync_falls_back_to_full(#[case] persistence: bool) {
 async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-    let replica = TestServer::start_replica_with_config(&primary, config).await;
-
-    // Wait for sync
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, replica) = start_primary_replica_pair(config).await;
 
     // Write data
     for i in 0..3 {
@@ -798,36 +757,26 @@ async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Get primary's replication ID before failover (informational)
-    let info_resp = primary.send("INFO", &["replication"]).await;
-    let _old_repl_id = if let Response::Bulk(Some(info)) = &info_resp {
-        let info_str = String::from_utf8_lossy(info);
-        info_str
-            .lines()
-            .find(|l| l.starts_with("master_replid:"))
-            .map(|l| l.trim_start_matches("master_replid:").to_string())
-    } else {
-        None
-    };
+    let _old_repl_id = get_replication_state(&primary).await.map(|(id, _)| id);
 
     // Promote replica to primary (stop replication)
     let promote_resp = replica.send("REPLICAOF", &["NO", "ONE"]).await;
-    assert!(is_ok(&promote_resp), "REPLICAOF NO ONE should succeed");
+    assert_ok(&promote_resp);
 
     // Check INFO replication on promoted replica
     let new_info = replica.send("INFO", &["replication"]).await;
-    if let Response::Bulk(Some(info)) = &new_info {
-        let info_str = String::from_utf8_lossy(info);
-        // Should now report as master
-        assert!(
-            info_str.contains("role:master"),
-            "Promoted replica should report as master"
-        );
+    let info_map = parse_info_replication(&new_info).unwrap();
+    // Should now report as master
+    assert_eq!(
+        info_map.get("role").map(|s| s.as_str()),
+        Some("master"),
+        "Promoted replica should report as master"
+    );
 
-        // Check for master_replid2 (secondary replication ID)
-        // This would contain the old primary's ID if implemented
-        let has_replid2 = info_str.contains("master_replid2:");
-        eprintln!("Has secondary replication ID (master_replid2): {}", has_replid2);
-    }
+    // Check for master_replid2 (secondary replication ID)
+    // This would contain the old primary's ID if implemented
+    let has_replid2 = info_map.contains_key("master_replid2");
+    eprintln!("Has secondary replication ID (master_replid2): {}", has_replid2);
 
     replica.shutdown().await;
     primary.shutdown().await;
@@ -845,11 +794,7 @@ async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
 async fn test_wal_buffer_capacity(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-    let replica = TestServer::start_replica_with_config(&primary, config).await;
-
-    // Wait for sync
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, replica) = start_primary_replica_pair(config).await;
 
     // Write commands to test buffer behavior
     for i in 0..50 {
@@ -869,21 +814,17 @@ async fn test_wal_buffer_capacity(#[case] persistence: bool) {
 
     // Get replication offset from INFO (informational, may be 0 if not tracked)
     let info = primary.send("INFO", &["replication"]).await;
-    if let Response::Bulk(Some(info_data)) = info {
-        let info_str = String::from_utf8_lossy(&info_data);
-        // Check that replication section exists
-        assert!(
-            info_str.contains("role:master"),
-            "INFO replication should show role:master"
-        );
-        // Note: master_repl_offset may be 0 if offset tracking not yet implemented
-        if let Some(line) = info_str.lines().find(|l| l.starts_with("master_repl_offset:")) {
-            let offset: i64 = line
-                .trim_start_matches("master_repl_offset:")
-                .parse()
-                .unwrap_or(0);
-            eprintln!("Replication offset: {}", offset);
-        }
+    let info_map = parse_info_replication(&info).unwrap();
+    // Check that replication section exists
+    assert_eq!(
+        info_map.get("role").map(|s| s.as_str()),
+        Some("master"),
+        "INFO replication should show role:master"
+    );
+    // Note: master_repl_offset may be 0 if offset tracking not yet implemented
+    if let Some(offset_str) = info_map.get("master_repl_offset") {
+        let offset: i64 = offset_str.parse().unwrap_or(0);
+        eprintln!("Replication offset: {}", offset);
     }
 
     replica.shutdown().await;
@@ -898,11 +839,7 @@ async fn test_wal_buffer_capacity(#[case] persistence: bool) {
 async fn test_replica_reconnect_within_buffer(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-
-    // Start replica and let it sync
-    let replica = TestServer::start_replica_with_config(&primary, config.clone()).await;
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, replica) = start_primary_replica_pair(config.clone()).await;
 
     // Write initial data
     for i in 0..5 {
@@ -949,11 +886,7 @@ async fn test_replica_reconnect_within_buffer(#[case] persistence: bool) {
 async fn test_replica_reconnect_outside_buffer(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-
-    // Start replica and sync
-    let replica = TestServer::start_replica_with_config(&primary, config.clone()).await;
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, replica) = start_primary_replica_pair(config.clone()).await;
 
     // Write data
     primary.send("SET", &["outside_key_1", "value1"]).await;
@@ -1006,11 +939,7 @@ async fn test_replica_reconnect_outside_buffer(#[case] persistence: bool) {
 async fn test_wait_with_disconnected_replica(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-    let replica = TestServer::start_replica_with_config(&primary, config).await;
-
-    // Wait for replication connection to establish
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, replica) = start_primary_replica_pair(config).await;
 
     // Verify replica is connected via INFO
     let info_resp = primary.send("INFO", &["replication"]).await;
@@ -1021,7 +950,7 @@ async fn test_wait_with_disconnected_replica(#[case] persistence: bool) {
 
     // Write data
     let set_resp = primary.send("SET", &["disconnect_test", "value"]).await;
-    assert!(is_ok(&set_resp), "SET should succeed");
+    assert_ok(&set_resp);
 
     // Kill the replica (simulates crash/disconnect)
     replica.shutdown().await;
@@ -1070,11 +999,7 @@ async fn test_wait_with_disconnected_replica(#[case] persistence: bool) {
 async fn test_replica_lag_behavior(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-    let replica = TestServer::start_replica_with_config(&primary, config).await;
-
-    // Wait for sync
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, replica) = start_primary_replica_pair(config).await;
 
     // Write a burst of commands to potentially overflow broadcast channel
     let num_writes = 1000;
@@ -1205,11 +1130,7 @@ async fn test_fullresync_data_integrity(#[case] persistence: bool) {
 async fn test_large_value_replication_stress(#[case] persistence: bool) {
     let config = TestServerConfig { persistence, ..Default::default() };
 
-    let primary = TestServer::start_primary_with_config(config.clone()).await;
-    let replica = TestServer::start_replica_with_config(&primary, config).await;
-
-    // Wait for sync
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let (primary, replica) = start_primary_replica_pair(config).await;
 
     // Write 5 x 1MB values (5MB total)
     let value_size = 1024 * 1024; // 1MB
@@ -1228,7 +1149,7 @@ async fn test_large_value_replication_stress(#[case] persistence: bool) {
     for i in 0..num_keys {
         let key = format!("large_key_{}", i);
         let response = primary.send("SET", &[&key, &large_value]).await;
-        assert!(is_ok(&response), "SET large_key_{} should succeed", i);
+        assert_ok(&response);
     }
 
     let write_time = start.elapsed();

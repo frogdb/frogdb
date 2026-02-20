@@ -5,6 +5,9 @@
 //!
 //! Run with: cargo test -p frogdb-core --features shuttle --test concurrency
 
+mod common;
+
+use common::{assert_all_unique, spawn_collect};
 use serde_json;
 use shuttle::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use shuttle::sync::{Arc, Mutex};
@@ -25,26 +28,8 @@ fn test_conn_id_uniqueness() {
                 NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed)
             }
 
-            let ids = Arc::new(Mutex::new(Vec::new()));
-            let mut handles = vec![];
-
-            // Spawn multiple threads grabbing IDs concurrently
-            for _ in 0..4 {
-                let ids = ids.clone();
-                handles.push(thread::spawn(move || {
-                    let id = next_conn_id();
-                    ids.lock().unwrap().push(id);
-                }));
-            }
-
-            for handle in handles {
-                handle.join().unwrap();
-            }
-
-            // Verify all IDs are unique
-            let ids = ids.lock().unwrap();
-            let unique: HashSet<_> = ids.iter().collect();
-            assert_eq!(ids.len(), unique.len(), "Connection IDs must be unique");
+            let ids = spawn_collect(4, |_| next_conn_id());
+            assert_all_unique(&ids);
         },
         1000,
     );
@@ -110,25 +95,13 @@ fn test_round_robin_assignment() {
             }
 
             let assigner = Arc::new(RoundRobinAssigner::new(4));
-            let assignments = Arc::new(Mutex::new(Vec::new()));
-            let mut handles = vec![];
-
-            for _ in 0..8 {
-                let assigner = assigner.clone();
-                let assignments = assignments.clone();
-                handles.push(thread::spawn(move || {
-                    let shard_id = assigner.assign();
-                    assert!(shard_id < 4, "Shard ID must be within bounds");
-                    assignments.lock().unwrap().push(shard_id);
-                }));
-            }
-
-            for handle in handles {
-                handle.join().unwrap();
-            }
+            let assignments = spawn_collect(8, move |_| {
+                let shard_id = assigner.assign();
+                assert!(shard_id < 4, "Shard ID must be within bounds");
+                shard_id
+            });
 
             // Verify we got 8 assignments
-            let assignments = assignments.lock().unwrap();
             assert_eq!(assignments.len(), 8);
 
             // Each shard should have been assigned to exactly twice
@@ -270,24 +243,8 @@ fn test_conn_id_uniqueness_pct() {
                 NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed)
             }
 
-            let ids = Arc::new(Mutex::new(Vec::new()));
-            let mut handles = vec![];
-
-            for _ in 0..4 {
-                let ids = ids.clone();
-                handles.push(thread::spawn(move || {
-                    let id = next_conn_id();
-                    ids.lock().unwrap().push(id);
-                }));
-            }
-
-            for handle in handles {
-                handle.join().unwrap();
-            }
-
-            let ids = ids.lock().unwrap();
-            let unique: HashSet<_> = ids.iter().collect();
-            assert_eq!(ids.len(), unique.len());
+            let ids = spawn_collect(4, |_| next_conn_id());
+            assert_all_unique(&ids);
         },
         1000,
         3, // PCT depth parameter
@@ -539,8 +496,7 @@ fn test_concurrent_list_pop() {
             assert_eq!(popped.len(), 8, "Should pop all elements");
 
             // Check uniqueness
-            let unique: HashSet<_> = popped.iter().collect();
-            assert_eq!(unique.len(), 8, "All popped elements must be unique");
+            assert_all_unique(&*popped);
         },
         1000,
     );
@@ -671,8 +627,7 @@ fn test_concurrent_spop() {
             assert_eq!(popped.len(), 8, "Should pop all elements");
 
             // Check uniqueness
-            let unique: HashSet<_> = popped.iter().collect();
-            assert_eq!(unique.len(), 8, "All popped elements must be unique");
+            assert_all_unique(&*popped);
         },
         1000,
     );
@@ -1489,14 +1444,8 @@ fn test_getset_atomicity() {
             // Each thread should have gotten a distinct old value
             // (0 for first writer, then 1, 2, 3, or 4 depending on order)
             let results = collected.lock().unwrap();
-            let old_values: HashSet<_> = results.iter().map(|(_, old)| *old).collect();
-
-            // All returned old values should be distinct
-            assert_eq!(
-                old_values.len(),
-                results.len(),
-                "GETSET must return distinct old values"
-            );
+            let old_values: Vec<_> = results.iter().map(|(_, old)| *old).collect();
+            assert_all_unique(&old_values);
         },
         1000,
     );
@@ -1655,12 +1604,7 @@ fn test_snapshot_atomicity_shuttle() {
             // Snapshots are serialized, so multiple can succeed if they don't overlap
             // But all completed epochs should be unique and sequential
             let completed = coord.completed_epochs.lock().unwrap();
-            let unique: HashSet<_> = completed.iter().collect();
-            assert_eq!(
-                completed.len(),
-                unique.len(),
-                "All completed epochs must be unique"
-            );
+            assert_all_unique(&*completed);
         },
         1000,
     );
@@ -2299,8 +2243,8 @@ fn test_concurrent_json_arrpop() {
             assert_eq!(popped.len(), 8, "Should pop all elements");
 
             // Check uniqueness (convert to i64 for comparison)
-            let values: HashSet<i64> = popped.iter().filter_map(|v| v.as_i64()).collect();
-            assert_eq!(values.len(), 8, "All popped elements must be unique");
+            let values: Vec<i64> = popped.iter().filter_map(|v| v.as_i64()).collect();
+            assert_all_unique(&values);
         },
         1000,
     );

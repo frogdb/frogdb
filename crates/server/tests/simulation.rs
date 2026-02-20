@@ -32,12 +32,14 @@
 
 mod common;
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use common::chaos_configs::ChaosPreset;
 use common::sim_harness::{shard_for_key, OperationHistory, OperationResult};
+use common::sim_helpers::{
+    encode_command, parse_simple_response, real_frogdb_server, real_frogdb_server_with_chaos,
+    SERVER_HOST, SERVER_PORT,
+};
 use frogdb_server::config::ChaosConfig;
-use frogdb_server::{Config, Server};
-use frogdb_server::config::{MetricsConfig, PersistenceConfig, ServerConfig};
 use frogdb_testing::{check_linearizability, KVModel};
 use rstest::rstest;
 use std::error::Error;
@@ -47,85 +49,6 @@ use turmoil::net::{TcpListener, TcpStream};
 use turmoil::Builder;
 
 type BoxError = Box<dyn Error + 'static>;
-
-/// Server port for simulations.
-const SERVER_PORT: u16 = 6379;
-
-/// Server host name in simulation.
-const SERVER_HOST: &str = "server";
-
-/// Simple RESP protocol encoder for test commands.
-fn encode_command(parts: &[&[u8]]) -> Bytes {
-    let mut buf = BytesMut::new();
-
-    // Array header
-    buf.extend_from_slice(format!("*{}\r\n", parts.len()).as_bytes());
-
-    // Each part as bulk string
-    for part in parts {
-        buf.extend_from_slice(format!("${}\r\n", part.len()).as_bytes());
-        buf.extend_from_slice(part);
-        buf.extend_from_slice(b"\r\n");
-    }
-
-    buf.freeze()
-}
-
-/// Parse a simple RESP response (simplified for testing).
-fn parse_simple_response(data: &[u8]) -> OperationResult {
-    if data.is_empty() {
-        return OperationResult::Error("Empty response".into());
-    }
-
-    match data[0] {
-        b'+' => {
-            // Simple string
-            let s = String::from_utf8_lossy(&data[1..]).trim_end().to_string();
-            if s == "OK" {
-                OperationResult::Ok
-            } else if s == "PONG" {
-                OperationResult::String(Bytes::from("PONG"))
-            } else {
-                OperationResult::String(Bytes::from(s))
-            }
-        }
-        b'-' => {
-            // Error
-            let s = String::from_utf8_lossy(&data[1..]).trim_end().to_string();
-            OperationResult::Error(s)
-        }
-        b':' => {
-            // Integer
-            let s = String::from_utf8_lossy(&data[1..]).trim_end().to_string();
-            let n = s.parse().unwrap_or(0);
-            OperationResult::Integer(n)
-        }
-        b'$' => {
-            // Bulk string
-            let s = String::from_utf8_lossy(&data[1..]);
-            if s.starts_with("-1") {
-                OperationResult::Nil
-            } else {
-                // Find the actual data after the length
-                if let Some(pos) = s.find("\r\n") {
-                    let after = &data[1 + pos + 2..];
-                    if let Some(end) = after.iter().position(|&b| b == b'\r') {
-                        OperationResult::String(Bytes::copy_from_slice(&after[..end]))
-                    } else {
-                        OperationResult::String(Bytes::copy_from_slice(after))
-                    }
-                } else {
-                    OperationResult::Error("Invalid bulk string".into())
-                }
-            }
-        }
-        b'*' => {
-            // Array - simplified parsing
-            OperationResult::Array(vec![])
-        }
-        _ => OperationResult::Error("Unknown response type".into()),
-    }
-}
 
 /// Echo server for basic connectivity tests (doesn't need real server).
 async fn echo_server() -> Result<(), BoxError> {
@@ -152,79 +75,6 @@ async fn echo_server() -> Result<(), BoxError> {
             }
         });
     }
-}
-
-// =============================================================================
-// Real FrogDB Server Helper
-// =============================================================================
-
-/// Start real FrogDB server for simulation tests.
-///
-/// This runs the actual FrogDB server code under Turmoil's network simulation.
-/// The server runs until the simulation ends (using std::future::pending).
-///
-/// Note: Metrics are disabled in simulation tests because the metrics HTTP server
-/// uses real TCP bindings which are incompatible with Turmoil's simulated network.
-async fn real_frogdb_server(num_shards: usize) -> Result<(), BoxError> {
-    let config = Config {
-        server: ServerConfig {
-            bind: "0.0.0.0".to_string(),
-            port: SERVER_PORT,
-            num_shards,
-            allow_cross_slot_standalone: true, // Enable scatter-gather for MSET/MGET
-            scatter_gather_timeout_ms: 5000,
-        },
-        persistence: PersistenceConfig {
-            enabled: false,
-            ..Default::default()
-        },
-        metrics: MetricsConfig {
-            enabled: false,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    let server = Server::new(config).await?;
-
-    // Run until simulation ends (Turmoil controls lifetime)
-    server.run_until(std::future::pending::<()>()).await?;
-
-    Ok(())
-}
-
-/// Start real FrogDB server with chaos configuration for simulation tests.
-///
-/// Note: Metrics are disabled in simulation tests because the metrics HTTP server
-/// uses real TCP bindings which are incompatible with Turmoil's simulated network.
-async fn real_frogdb_server_with_chaos(num_shards: usize, _chaos: ChaosConfig) -> Result<(), BoxError> {
-    let config = Config {
-        server: ServerConfig {
-            bind: "0.0.0.0".to_string(),
-            port: SERVER_PORT,
-            num_shards,
-            allow_cross_slot_standalone: true, // Enable scatter-gather for MSET/MGET
-            scatter_gather_timeout_ms: 5000,
-        },
-        persistence: PersistenceConfig {
-            enabled: false,
-            ..Default::default()
-        },
-        metrics: MetricsConfig {
-            enabled: false,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    // TODO: Pass chaos config to server when Server::new_with_chaos is implemented
-    // For now, VLL provides atomicity without needing chaos hooks
-    let server = Server::new(config).await?;
-
-    // Run until simulation ends (Turmoil controls lifetime)
-    server.run_until(std::future::pending::<()>()).await?;
-
-    Ok(())
 }
 
 // =============================================================================

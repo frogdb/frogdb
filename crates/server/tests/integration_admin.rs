@@ -2,7 +2,7 @@
 
 mod common;
 
-use bytes::Bytes;
+use common::response_helpers::{assert_ok, unwrap_array, unwrap_bulk, unwrap_integer};
 use common::test_server::TestServer;
 use frogdb_protocol::Response;
 use std::time::Duration;
@@ -18,12 +18,8 @@ async fn test_slowlog_get_empty() {
 
     // Initially the slowlog should be empty
     let response = client.command(&["SLOWLOG", "GET"]).await;
-    match response {
-        Response::Array(entries) => {
-            assert!(entries.is_empty(), "Slowlog should be empty initially");
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let entries = unwrap_array(response);
+    assert!(entries.is_empty(), "Slowlog should be empty initially");
 
     server.shutdown().await;
 }
@@ -47,10 +43,7 @@ async fn test_slowlog_reset() {
 
     // Reset should always succeed
     let response = client.command(&["SLOWLOG", "RESET"]).await;
-    match response {
-        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
-        _ => panic!("Expected OK response, got {:?}", response),
-    }
+    assert_ok(&response);
 
     // After reset, length should be 0
     let response = client.command(&["SLOWLOG", "LEN"]).await;
@@ -65,20 +58,16 @@ async fn test_slowlog_help() {
     let mut client = server.connect().await;
 
     let response = client.command(&["SLOWLOG", "HELP"]).await;
-    match response {
-        Response::Array(items) => {
-            // Should return help text
-            assert!(!items.is_empty(), "Help should not be empty");
-            // First item should mention SLOWLOG
-            if let Some(Response::Bulk(Some(first))) = items.first() {
-                let text = String::from_utf8_lossy(first);
-                assert!(
-                    text.to_uppercase().contains("SLOWLOG"),
-                    "Help should mention SLOWLOG"
-                );
-            }
-        }
-        _ => panic!("Expected array response, got {:?}", response),
+    let items = unwrap_array(response);
+    // Should return help text
+    assert!(!items.is_empty(), "Help should not be empty");
+    // First item should mention SLOWLOG
+    if let Some(Response::Bulk(Some(first))) = items.first() {
+        let text = String::from_utf8_lossy(first);
+        assert!(
+            text.to_uppercase().contains("SLOWLOG"),
+            "Help should mention SLOWLOG"
+        );
     }
 
     server.shutdown().await;
@@ -93,10 +82,7 @@ async fn test_slowlog_threshold_disabled() {
     let response = client
         .command(&["CONFIG", "SET", "slowlog-log-slower-than", "-1"])
         .await;
-    match response {
-        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
-        _ => panic!("Expected OK response, got {:?}", response),
-    }
+    assert_ok(&response);
 
     // Run a command
     let _ = client.command(&["SET", "key1", "value1"]).await;
@@ -117,10 +103,7 @@ async fn test_slowlog_threshold_log_all() {
     let response = client
         .command(&["CONFIG", "SET", "slowlog-log-slower-than", "0"])
         .await;
-    match response {
-        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
-        _ => panic!("Expected OK response, got {:?}", response),
-    }
+    assert_ok(&response);
 
     // Reset slowlog first
     let _ = client.command(&["SLOWLOG", "RESET"]).await;
@@ -132,49 +115,41 @@ async fn test_slowlog_threshold_log_all() {
 
     // Slowlog should have entries now
     let response = client.command(&["SLOWLOG", "LEN"]).await;
-    match response {
-        Response::Integer(len) => {
-            assert!(len >= 3, "Expected at least 3 entries, got {}", len);
-        }
-        _ => panic!("Expected integer response, got {:?}", response),
-    }
+    let len = unwrap_integer(&response);
+    assert!(len >= 3, "Expected at least 3 entries, got {}", len);
 
     // Get entries and verify structure
     let response = client.command(&["SLOWLOG", "GET", "10"]).await;
-    match response {
-        Response::Array(entries) => {
-            assert!(
-                entries.len() >= 3,
-                "Expected at least 3 entries, got {}",
-                entries.len()
-            );
+    let entries = unwrap_array(response);
+    assert!(
+        entries.len() >= 3,
+        "Expected at least 3 entries, got {}",
+        entries.len()
+    );
 
-            // Check structure of first entry
-            if let Response::Array(ref entry) = entries[0] {
-                assert_eq!(entry.len(), 6, "Entry should have 6 fields");
+    // Check structure of first entry
+    if let Response::Array(ref entry) = entries[0] {
+        assert_eq!(entry.len(), 6, "Entry should have 6 fields");
 
-                // Field 0: ID (integer)
-                assert!(matches!(entry[0], Response::Integer(_)));
+        // Field 0: ID (integer)
+        assert!(matches!(entry[0], Response::Integer(_)));
 
-                // Field 1: timestamp (integer)
-                assert!(matches!(entry[1], Response::Integer(_)));
+        // Field 1: timestamp (integer)
+        assert!(matches!(entry[1], Response::Integer(_)));
 
-                // Field 2: duration_us (integer)
-                assert!(matches!(entry[2], Response::Integer(_)));
+        // Field 2: duration_us (integer)
+        assert!(matches!(entry[2], Response::Integer(_)));
 
-                // Field 3: command args (array)
-                assert!(matches!(entry[3], Response::Array(_)));
+        // Field 3: command args (array)
+        assert!(matches!(entry[3], Response::Array(_)));
 
-                // Field 4: client_addr (bulk string)
-                assert!(matches!(entry[4], Response::Bulk(Some(_))));
+        // Field 4: client_addr (bulk string)
+        assert!(matches!(entry[4], Response::Bulk(Some(_))));
 
-                // Field 5: client_name (bulk string)
-                assert!(matches!(entry[5], Response::Bulk(_)));
-            } else {
-                panic!("Expected array entry, got {:?}", entries[0]);
-            }
-        }
-        _ => panic!("Expected array response, got {:?}", response),
+        // Field 5: client_name (bulk string)
+        assert!(matches!(entry[5], Response::Bulk(_)));
+    } else {
+        panic!("Expected array entry, got {:?}", entries[0]);
     }
 
     server.shutdown().await;
@@ -202,16 +177,12 @@ async fn test_slowlog_get_count_limit() {
 
     // Get only 5 entries
     let response = client.command(&["SLOWLOG", "GET", "5"]).await;
-    match response {
-        Response::Array(entries) => {
-            assert_eq!(
-                entries.len(),
-                5,
-                "Expected exactly 5 entries when count=5"
-            );
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let entries = unwrap_array(response);
+    assert_eq!(
+        entries.len(),
+        5,
+        "Expected exactly 5 entries when count=5"
+    );
 
     server.shutdown().await;
 }
@@ -248,18 +219,14 @@ async fn test_slowlog_config_get() {
 
     // Get slowlog configuration
     let response = client.command(&["CONFIG", "GET", "slowlog-*"]).await;
-    match response {
-        Response::Array(items) => {
-            // Should have at least 3 params (log-slower-than, max-len, max-arg-len)
-            // Each param is name, value pair so 6 items minimum
-            assert!(
-                items.len() >= 6,
-                "Expected at least 6 items for slowlog config, got {}",
-                items.len()
-            );
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let items = unwrap_array(response);
+    // Should have at least 3 params (log-slower-than, max-len, max-arg-len)
+    // Each param is name, value pair so 6 items minimum
+    assert!(
+        items.len() >= 6,
+        "Expected at least 6 items for slowlog config, got {}",
+        items.len()
+    );
 
     server.shutdown().await;
 }
@@ -306,17 +273,13 @@ async fn test_slowlog_get_default_count() {
 
     // GET without count should return default (10)
     let response = client.command(&["SLOWLOG", "GET"]).await;
-    match response {
-        Response::Array(entries) => {
-            assert_eq!(
-                entries.len(),
-                10,
-                "Default count should be 10, got {}",
-                entries.len()
-            );
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let entries = unwrap_array(response);
+    assert_eq!(
+        entries.len(),
+        10,
+        "Default count should be 10, got {}",
+        entries.len()
+    );
 
     server.shutdown().await;
 }
@@ -355,18 +318,14 @@ async fn test_lastsave_basic() {
 
     // LASTSAVE should return an integer (Unix timestamp)
     let response = client.command(&["LASTSAVE"]).await;
-    match response {
-        Response::Integer(timestamp) => {
-            // Timestamp should be a reasonable Unix timestamp
-            // Either 0 (no save yet) or a recent timestamp
-            assert!(
-                timestamp >= 0,
-                "LASTSAVE should return non-negative timestamp, got {}",
-                timestamp
-            );
-        }
-        _ => panic!("Expected integer response, got {:?}", response),
-    }
+    let timestamp = unwrap_integer(&response);
+    // Timestamp should be a reasonable Unix timestamp
+    // Either 0 (no save yet) or a recent timestamp
+    assert!(
+        timestamp >= 0,
+        "LASTSAVE should return non-negative timestamp, got {}",
+        timestamp
+    );
 
     server.shutdown().await;
 }
@@ -398,16 +357,12 @@ async fn test_bgsave_then_lastsave() {
 
     // LASTSAVE should now return a recent timestamp
     let response = client.command(&["LASTSAVE"]).await;
-    match response {
-        Response::Integer(timestamp) => {
-            // After BGSAVE, timestamp should be positive (or 0 if save is still in progress)
-            assert!(
-                timestamp >= 0,
-                "LASTSAVE should return valid timestamp after BGSAVE"
-            );
-        }
-        _ => panic!("Expected integer response for LASTSAVE"),
-    }
+    let timestamp = unwrap_integer(&response);
+    // After BGSAVE, timestamp should be positive (or 0 if save is still in progress)
+    assert!(
+        timestamp >= 0,
+        "LASTSAVE should return valid timestamp after BGSAVE"
+    );
 
     server.shutdown().await;
 }
@@ -469,19 +424,15 @@ async fn test_memory_help() {
     let mut client = server.connect().await;
 
     let response = client.command(&["MEMORY", "HELP"]).await;
-    match response {
-        Response::Array(items) => {
-            assert!(!items.is_empty(), "Help should not be empty");
-            // First item should mention MEMORY
-            if let Some(Response::Bulk(Some(first))) = items.first() {
-                let text = String::from_utf8_lossy(first);
-                assert!(
-                    text.to_uppercase().contains("MEMORY"),
-                    "Help should mention MEMORY"
-                );
-            }
-        }
-        _ => panic!("Expected array response, got {:?}", response),
+    let items = unwrap_array(response);
+    assert!(!items.is_empty(), "Help should not be empty");
+    // First item should mention MEMORY
+    if let Some(Response::Bulk(Some(first))) = items.first() {
+        let text = String::from_utf8_lossy(first);
+        assert!(
+            text.to_uppercase().contains("MEMORY"),
+            "Help should mention MEMORY"
+        );
     }
 
     server.shutdown().await;
@@ -513,12 +464,8 @@ async fn test_memory_usage_existing_key() {
 
     // MEMORY USAGE should return a positive integer
     let response = client.command(&["MEMORY", "USAGE", "testkey"]).await;
-    match response {
-        Response::Integer(size) => {
-            assert!(size > 0, "Memory usage should be positive, got {}", size);
-        }
-        _ => panic!("Expected integer response, got {:?}", response),
-    }
+    let size = unwrap_integer(&response);
+    assert!(size > 0, "Memory usage should be positive, got {}", size);
 
     server.shutdown().await;
 }
@@ -535,12 +482,8 @@ async fn test_memory_usage_with_samples() {
     let response = client
         .command(&["MEMORY", "USAGE", "testkey", "SAMPLES", "5"])
         .await;
-    match response {
-        Response::Integer(size) => {
-            assert!(size > 0, "Memory usage should be positive, got {}", size);
-        }
-        _ => panic!("Expected integer response, got {:?}", response),
-    }
+    let size = unwrap_integer(&response);
+    assert!(size > 0, "Memory usage should be positive, got {}", size);
 
     server.shutdown().await;
 }
@@ -552,14 +495,10 @@ async fn test_memory_stats() {
 
     // MEMORY STATS should return an array of key-value pairs
     let response = client.command(&["MEMORY", "STATS"]).await;
-    match response {
-        Response::Array(items) => {
-            assert!(!items.is_empty(), "MEMORY STATS should not be empty");
-            // Should have pairs (key, value)
-            assert!(items.len() % 2 == 0, "Should have even number of items");
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let items = unwrap_array(response);
+    assert!(!items.is_empty(), "MEMORY STATS should not be empty");
+    // Should have pairs (key, value)
+    assert!(items.len() % 2 == 0, "Should have even number of items");
 
     server.shutdown().await;
 }
@@ -571,13 +510,9 @@ async fn test_memory_doctor() {
 
     // MEMORY DOCTOR should return a bulk string report
     let response = client.command(&["MEMORY", "DOCTOR"]).await;
-    match response {
-        Response::Bulk(Some(report)) => {
-            let text = String::from_utf8_lossy(&report);
-            assert!(!text.is_empty(), "Doctor report should not be empty");
-        }
-        _ => panic!("Expected bulk response, got {:?}", response),
-    }
+    let report = unwrap_bulk(&response);
+    let text = String::from_utf8_lossy(report);
+    assert!(!text.is_empty(), "Doctor report should not be empty");
 
     server.shutdown().await;
 }
@@ -593,34 +528,30 @@ async fn test_memory_doctor_enhanced_format() {
 
     // MEMORY DOCTOR should return enhanced report with summary section
     let response = client.command(&["MEMORY", "DOCTOR"]).await;
-    match response {
-        Response::Bulk(Some(report)) => {
-            let text = String::from_utf8_lossy(&report);
+    let report = unwrap_bulk(&response);
+    let text = String::from_utf8_lossy(report);
 
-            // Check for required sections in enhanced format
-            assert!(
-                text.contains("=== Summary ==="),
-                "Report should contain Summary section"
-            );
-            assert!(
-                text.contains("Total keys:"),
-                "Report should show total keys"
-            );
-            assert!(
-                text.contains("Total data memory:"),
-                "Report should show total data memory"
-            );
-            assert!(
-                text.contains("Number of shards:"),
-                "Report should show number of shards"
-            );
-            assert!(
-                text.contains("=== Issues Detected ==="),
-                "Report should contain Issues Detected section"
-            );
-        }
-        _ => panic!("Expected bulk response, got {:?}", response),
-    }
+    // Check for required sections in enhanced format
+    assert!(
+        text.contains("=== Summary ==="),
+        "Report should contain Summary section"
+    );
+    assert!(
+        text.contains("Total keys:"),
+        "Report should show total keys"
+    );
+    assert!(
+        text.contains("Total data memory:"),
+        "Report should show total data memory"
+    );
+    assert!(
+        text.contains("Number of shards:"),
+        "Report should show number of shards"
+    );
+    assert!(
+        text.contains("=== Issues Detected ==="),
+        "Report should contain Issues Detected section"
+    );
 
     server.shutdown().await;
 }
@@ -636,26 +567,22 @@ async fn test_memory_doctor_big_keys() {
 
     // MEMORY DOCTOR should detect the big key
     let response = client.command(&["MEMORY", "DOCTOR"]).await;
-    match response {
-        Response::Bulk(Some(report)) => {
-            let text = String::from_utf8_lossy(&report);
+    let report = unwrap_bulk(&response);
+    let text = String::from_utf8_lossy(report);
 
-            // Should detect big keys
-            assert!(
-                text.contains("=== Big Keys"),
-                "Report should contain Big Keys section when big keys exist"
-            );
-            assert!(
-                text.contains("bigkey1"),
-                "Report should list the big key"
-            );
-            assert!(
-                text.contains("big key(s) found"),
-                "Report should indicate big keys were found in issues section"
-            );
-        }
-        _ => panic!("Expected bulk response, got {:?}", response),
-    }
+    // Should detect big keys
+    assert!(
+        text.contains("=== Big Keys"),
+        "Report should contain Big Keys section when big keys exist"
+    );
+    assert!(
+        text.contains("bigkey1"),
+        "Report should list the big key"
+    );
+    assert!(
+        text.contains("big key(s) found"),
+        "Report should indicate big keys were found in issues section"
+    );
 
     server.shutdown().await;
 }
@@ -669,23 +596,19 @@ async fn test_memory_doctor_no_big_keys() {
     client.command(&["SET", "small_key", "small_value"]).await;
 
     let response = client.command(&["MEMORY", "DOCTOR"]).await;
-    match response {
-        Response::Bulk(Some(report)) => {
-            let text = String::from_utf8_lossy(&report);
+    let report = unwrap_bulk(&response);
+    let text = String::from_utf8_lossy(report);
 
-            // Should not contain Big Keys section when there are no big keys
-            assert!(
-                !text.contains("=== Big Keys"),
-                "Report should not contain Big Keys section when there are no big keys"
-            );
-            // The report should still contain the Issues Detected section
-            assert!(
-                text.contains("=== Issues Detected ==="),
-                "Report should contain Issues Detected section"
-            );
-        }
-        _ => panic!("Expected bulk response, got {:?}", response),
-    }
+    // Should not contain Big Keys section when there are no big keys
+    assert!(
+        !text.contains("=== Big Keys"),
+        "Report should not contain Big Keys section when there are no big keys"
+    );
+    // The report should still contain the Issues Detected section
+    assert!(
+        text.contains("=== Issues Detected ==="),
+        "Report should contain Issues Detected section"
+    );
 
     server.shutdown().await;
 }
@@ -697,12 +620,8 @@ async fn test_memory_malloc_size() {
 
     // MEMORY MALLOC-SIZE should return the input (stub behavior)
     let response = client.command(&["MEMORY", "MALLOC-SIZE", "1024"]).await;
-    match response {
-        Response::Integer(size) => {
-            assert_eq!(size, 1024, "Should return the input size");
-        }
-        _ => panic!("Expected integer response, got {:?}", response),
-    }
+    let size = unwrap_integer(&response);
+    assert_eq!(size, 1024, "Should return the input size");
 
     server.shutdown().await;
 }
@@ -714,10 +633,7 @@ async fn test_memory_purge() {
 
     // MEMORY PURGE should return OK (stub behavior)
     let response = client.command(&["MEMORY", "PURGE"]).await;
-    match response {
-        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
-        _ => panic!("Expected OK response, got {:?}", response),
-    }
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -752,19 +668,15 @@ async fn test_latency_help() {
     let mut client = server.connect().await;
 
     let response = client.command(&["LATENCY", "HELP"]).await;
-    match response {
-        Response::Array(items) => {
-            assert!(!items.is_empty(), "Help should not be empty");
-            // First item should mention LATENCY
-            if let Some(Response::Bulk(Some(first))) = items.first() {
-                let text = String::from_utf8_lossy(first);
-                assert!(
-                    text.to_uppercase().contains("LATENCY"),
-                    "Help should mention LATENCY"
-                );
-            }
-        }
-        _ => panic!("Expected array response, got {:?}", response),
+    let items = unwrap_array(response);
+    assert!(!items.is_empty(), "Help should not be empty");
+    // First item should mention LATENCY
+    if let Some(Response::Bulk(Some(first))) = items.first() {
+        let text = String::from_utf8_lossy(first);
+        assert!(
+            text.to_uppercase().contains("LATENCY"),
+            "Help should mention LATENCY"
+        );
     }
 
     server.shutdown().await;
@@ -777,12 +689,8 @@ async fn test_latency_latest_empty() {
 
     // Initially LATENCY LATEST should return empty or minimal data
     let response = client.command(&["LATENCY", "LATEST"]).await;
-    match response {
-        Response::Array(_) => {
-            // Either empty or with entries - both are valid
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    // Either empty or with entries - both are valid
+    unwrap_array(response);
 
     server.shutdown().await;
 }
@@ -794,10 +702,7 @@ async fn test_latency_reset() {
 
     // LATENCY RESET should return OK
     let response = client.command(&["LATENCY", "RESET"]).await;
-    match response {
-        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
-        _ => panic!("Expected OK response, got {:?}", response),
-    }
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -809,10 +714,7 @@ async fn test_latency_reset_specific_event() {
 
     // LATENCY RESET with specific event
     let response = client.command(&["LATENCY", "RESET", "command"]).await;
-    match response {
-        Response::Simple(s) => assert_eq!(s, Bytes::from("OK")),
-        _ => panic!("Expected OK response, got {:?}", response),
-    }
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -846,12 +748,8 @@ async fn test_latency_history_valid_event() {
 
     // LATENCY HISTORY with valid event should return array
     let response = client.command(&["LATENCY", "HISTORY", "command"]).await;
-    match response {
-        Response::Array(_) => {
-            // Empty or with entries - both are valid
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    // Empty or with entries - both are valid
+    unwrap_array(response);
 
     server.shutdown().await;
 }
@@ -885,17 +783,13 @@ async fn test_latency_graph_valid_event() {
 
     // LATENCY GRAPH with valid event should return bulk string
     let response = client.command(&["LATENCY", "GRAPH", "command"]).await;
-    match response {
-        Response::Bulk(Some(graph)) => {
-            let text = String::from_utf8_lossy(&graph);
-            // Should contain the event name
-            assert!(
-                text.contains("command"),
-                "Graph should mention the event name"
-            );
-        }
-        _ => panic!("Expected bulk response, got {:?}", response),
-    }
+    let graph = unwrap_bulk(&response);
+    let text = String::from_utf8_lossy(graph);
+    // Should contain the event name
+    assert!(
+        text.contains("command"),
+        "Graph should mention the event name"
+    );
 
     server.shutdown().await;
 }
@@ -907,13 +801,9 @@ async fn test_latency_doctor() {
 
     // LATENCY DOCTOR should return a bulk string report
     let response = client.command(&["LATENCY", "DOCTOR"]).await;
-    match response {
-        Response::Bulk(Some(report)) => {
-            let text = String::from_utf8_lossy(&report);
-            assert!(!text.is_empty(), "Doctor report should not be empty");
-        }
-        _ => panic!("Expected bulk response, got {:?}", response),
-    }
+    let report = unwrap_bulk(&response);
+    let text = String::from_utf8_lossy(report);
+    assert!(!text.is_empty(), "Doctor report should not be empty");
 
     server.shutdown().await;
 }
@@ -925,12 +815,8 @@ async fn test_latency_histogram() {
 
     // LATENCY HISTOGRAM should return an array (may be empty)
     let response = client.command(&["LATENCY", "HISTOGRAM"]).await;
-    match response {
-        Response::Array(_) => {
-            // Empty or with data - both are valid
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    // Empty or with data - both are valid
+    unwrap_array(response);
 
     server.shutdown().await;
 }
@@ -978,22 +864,18 @@ async fn test_config_set_maxmemory() {
     let response = client
         .command(&["CONFIG", "SET", "maxmemory", "104857600"])
         .await;
-    assert_eq!(response, Response::ok(), "CONFIG SET should succeed");
+    assert_ok(&response);
 
     // Verify the new value
     let response = client.command(&["CONFIG", "GET", "maxmemory"]).await;
-    match response {
-        Response::Array(items) => {
-            assert_eq!(items.len(), 2, "Should return key-value pair");
-            match &items[1] {
-                Response::Bulk(Some(b)) => {
-                    let value = String::from_utf8_lossy(b);
-                    assert_eq!(value, "104857600", "maxmemory should be updated");
-                }
-                _ => panic!("Expected bulk string value"),
-            }
+    let items = unwrap_array(response);
+    assert_eq!(items.len(), 2, "Should return key-value pair");
+    match &items[1] {
+        Response::Bulk(Some(b)) => {
+            let value = String::from_utf8_lossy(b);
+            assert_eq!(value, "104857600", "maxmemory should be updated");
         }
-        _ => panic!("Expected array response"),
+        _ => panic!("Expected bulk string value"),
     }
 
     // Restore original value
@@ -1013,22 +895,18 @@ async fn test_config_set_maxmemory_policy() {
     let response = client
         .command(&["CONFIG", "SET", "maxmemory-policy", "allkeys-lru"])
         .await;
-    assert_eq!(response, Response::ok(), "CONFIG SET should succeed");
+    assert_ok(&response);
 
     // Verify the new value
     let response = client.command(&["CONFIG", "GET", "maxmemory-policy"]).await;
-    match response {
-        Response::Array(items) => {
-            assert_eq!(items.len(), 2, "Should return key-value pair");
-            match &items[1] {
-                Response::Bulk(Some(b)) => {
-                    let value = String::from_utf8_lossy(b);
-                    assert_eq!(value, "allkeys-lru", "maxmemory-policy should be updated");
-                }
-                _ => panic!("Expected bulk string value"),
-            }
+    let items = unwrap_array(response);
+    assert_eq!(items.len(), 2, "Should return key-value pair");
+    match &items[1] {
+        Response::Bulk(Some(b)) => {
+            let value = String::from_utf8_lossy(b);
+            assert_eq!(value, "allkeys-lru", "maxmemory-policy should be updated");
         }
-        _ => panic!("Expected array response"),
+        _ => panic!("Expected bulk string value"),
     }
 
     // Test invalid policy
@@ -1058,34 +936,30 @@ async fn test_config_set_eviction_params() {
     let response = client
         .command(&["CONFIG", "SET", "maxmemory-samples", "10"])
         .await;
-    assert_eq!(response, Response::ok(), "CONFIG SET maxmemory-samples should succeed");
+    assert_ok(&response);
 
     // Verify the value
     let response = client.command(&["CONFIG", "GET", "maxmemory-samples"]).await;
-    match response {
-        Response::Array(items) => {
-            match &items[1] {
-                Response::Bulk(Some(b)) => {
-                    let value = String::from_utf8_lossy(b);
-                    assert_eq!(value, "10", "maxmemory-samples should be updated");
-                }
-                _ => panic!("Expected bulk string value"),
-            }
+    let items = unwrap_array(response);
+    match &items[1] {
+        Response::Bulk(Some(b)) => {
+            let value = String::from_utf8_lossy(b);
+            assert_eq!(value, "10", "maxmemory-samples should be updated");
         }
-        _ => panic!("Expected array response"),
+        _ => panic!("Expected bulk string value"),
     }
 
     // Test lfu-log-factor
     let response = client
         .command(&["CONFIG", "SET", "lfu-log-factor", "5"])
         .await;
-    assert_eq!(response, Response::ok(), "CONFIG SET lfu-log-factor should succeed");
+    assert_ok(&response);
 
     // Test lfu-decay-time
     let response = client
         .command(&["CONFIG", "SET", "lfu-decay-time", "2"])
         .await;
-    assert_eq!(response, Response::ok(), "CONFIG SET lfu-decay-time should succeed");
+    assert_ok(&response);
 
     server.shutdown().await;
 }
@@ -1165,19 +1039,15 @@ async fn test_debug_hashing_multiple_keys() {
     let response = client
         .command(&["DEBUG", "HASHING", "key1", "key2", "key3"])
         .await;
-    match response {
-        Response::Array(items) => {
-            assert_eq!(items.len(), 3, "Should return 3 items for 3 keys");
+    let items = unwrap_array(response);
+    assert_eq!(items.len(), 3, "Should return 3 items for 3 keys");
 
-            // Check first item
-            if let Response::Bulk(Some(first)) = &items[0] {
-                let text = String::from_utf8_lossy(first);
-                assert!(text.contains("key:key1"), "First item should be key1");
-            } else {
-                panic!("Expected bulk string in array");
-            }
-        }
-        _ => panic!("Expected array response, got {:?}", response),
+    // Check first item
+    if let Response::Bulk(Some(first)) = &items[0] {
+        let text = String::from_utf8_lossy(first);
+        assert!(text.contains("key:key1"), "First item should be key1");
+    } else {
+        panic!("Expected bulk string in array");
     }
 
     server.shutdown().await;
@@ -1214,45 +1084,41 @@ async fn test_debug_hashing_same_hash_tag_same_slot() {
     let response = client
         .command(&["DEBUG", "HASHING", "{user}:profile", "{user}:settings"])
         .await;
-    match response {
-        Response::Array(items) => {
-            assert_eq!(items.len(), 2, "Should return 2 items");
+    let items = unwrap_array(response);
+    assert_eq!(items.len(), 2, "Should return 2 items");
 
-            let first = match &items[0] {
-                Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-                _ => panic!("Expected bulk string"),
-            };
-            let second = match &items[1] {
-                Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-                _ => panic!("Expected bulk string"),
-            };
+    let first = match &items[0] {
+        Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+        _ => panic!("Expected bulk string"),
+    };
+    let second = match &items[1] {
+        Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+        _ => panic!("Expected bulk string"),
+    };
 
-            // Extract slot values from both
-            let slot1: u16 = first
-                .split_whitespace()
-                .find(|s| s.starts_with("slot:"))
-                .unwrap()
-                .strip_prefix("slot:")
-                .unwrap()
-                .parse()
-                .unwrap();
-            let slot2: u16 = second
-                .split_whitespace()
-                .find(|s| s.starts_with("slot:"))
-                .unwrap()
-                .strip_prefix("slot:")
-                .unwrap()
-                .parse()
-                .unwrap();
+    // Extract slot values from both
+    let slot1: u16 = first
+        .split_whitespace()
+        .find(|s| s.starts_with("slot:"))
+        .unwrap()
+        .strip_prefix("slot:")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let slot2: u16 = second
+        .split_whitespace()
+        .find(|s| s.starts_with("slot:"))
+        .unwrap()
+        .strip_prefix("slot:")
+        .unwrap()
+        .parse()
+        .unwrap();
 
-            assert_eq!(slot1, slot2, "Keys with same hash tag should have same slot");
+    assert_eq!(slot1, slot2, "Keys with same hash tag should have same slot");
 
-            // Both should show the same hash tag
-            assert!(first.contains("hash_tag:user"), "First key should have hash tag 'user'");
-            assert!(second.contains("hash_tag:user"), "Second key should have hash tag 'user'");
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    // Both should show the same hash tag
+    assert!(first.contains("hash_tag:user"), "First key should have hash tag 'user'");
+    assert!(second.contains("hash_tag:user"), "Second key should have hash tag 'user'");
 
     server.shutdown().await;
 }
@@ -1312,18 +1178,14 @@ async fn test_debug_tracing_status() {
 
     // DEBUG TRACING STATUS should return a bulk string with configuration
     let response = client.command(&["DEBUG", "TRACING", "STATUS"]).await;
-    match response {
-        Response::Bulk(Some(data)) => {
-            let text = String::from_utf8_lossy(&data);
-            // Should contain expected fields
-            assert!(text.contains("enabled:"), "Should contain enabled field");
-            assert!(
-                text.contains("sampling_rate:") || text.contains("reason:"),
-                "Should contain sampling_rate or reason field"
-            );
-        }
-        _ => panic!("Expected bulk string response, got {:?}", response),
-    }
+    let data = unwrap_bulk(&response);
+    let text = String::from_utf8_lossy(data);
+    // Should contain expected fields
+    assert!(text.contains("enabled:"), "Should contain enabled field");
+    assert!(
+        text.contains("sampling_rate:") || text.contains("reason:"),
+        "Should contain sampling_rate or reason field"
+    );
 
     server.shutdown().await;
 }
@@ -1335,18 +1197,14 @@ async fn test_debug_tracing_status_disabled_tracer() {
 
     // By default, tracing is disabled. Status should indicate this.
     let response = client.command(&["DEBUG", "TRACING", "STATUS"]).await;
-    match response {
-        Response::Bulk(Some(data)) => {
-            let text = String::from_utf8_lossy(&data);
-            // Should indicate tracing is not enabled or tracer not configured
-            assert!(
-                text.contains("enabled:no") || text.contains("reason:tracer not configured"),
-                "Should indicate tracing is disabled, got: {}",
-                text
-            );
-        }
-        _ => panic!("Expected bulk string response, got {:?}", response),
-    }
+    let data = unwrap_bulk(&response);
+    let text = String::from_utf8_lossy(data);
+    // Should indicate tracing is not enabled or tracer not configured
+    assert!(
+        text.contains("enabled:no") || text.contains("reason:tracer not configured"),
+        "Should indicate tracing is disabled, got: {}",
+        text
+    );
 
     server.shutdown().await;
 }
@@ -1358,16 +1216,12 @@ async fn test_debug_tracing_recent_empty() {
 
     // DEBUG TRACING RECENT should return an array (may be empty when tracing is disabled)
     let response = client.command(&["DEBUG", "TRACING", "RECENT"]).await;
-    match response {
-        Response::Array(entries) => {
-            // With tracing disabled, should be empty
-            assert!(
-                entries.is_empty(),
-                "With tracing disabled, RECENT should return empty array"
-            );
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let entries = unwrap_array(response);
+    // With tracing disabled, should be empty
+    assert!(
+        entries.is_empty(),
+        "With tracing disabled, RECENT should return empty array"
+    );
 
     server.shutdown().await;
 }
@@ -1379,17 +1233,13 @@ async fn test_debug_tracing_recent_with_count() {
 
     // DEBUG TRACING RECENT with count argument
     let response = client.command(&["DEBUG", "TRACING", "RECENT", "5"]).await;
-    match response {
-        Response::Array(entries) => {
-            // Should return at most 5 entries (0 when tracing is disabled)
-            assert!(
-                entries.len() <= 5,
-                "Should return at most 5 entries, got {}",
-                entries.len()
-            );
-        }
-        _ => panic!("Expected array response, got {:?}", response),
-    }
+    let entries = unwrap_array(response);
+    // Should return at most 5 entries (0 when tracing is disabled)
+    assert!(
+        entries.len() <= 5,
+        "Should return at most 5 entries, got {}",
+        entries.len()
+    );
 
     server.shutdown().await;
 }
@@ -1448,17 +1298,13 @@ async fn test_debug_vll_empty() {
 
     // DEBUG VLL should work and show empty state
     let response = client.command(&["DEBUG", "VLL"]).await;
-    match response {
-        Response::Bulk(Some(data)) => {
-            let content = String::from_utf8_lossy(&data);
-            assert!(
-                content.contains("VLL queues are empty"),
-                "Expected empty VLL message, got: {}",
-                content
-            );
-        }
-        _ => panic!("Expected bulk response, got {:?}", response),
-    }
+    let data = unwrap_bulk(&response);
+    let content = String::from_utf8_lossy(data);
+    assert!(
+        content.contains("VLL queues are empty"),
+        "Expected empty VLL message, got: {}",
+        content
+    );
 
     server.shutdown().await;
 }
@@ -1470,18 +1316,14 @@ async fn test_debug_vll_specific_shard() {
 
     // DEBUG VLL 0 should work and show shard 0
     let response = client.command(&["DEBUG", "VLL", "0"]).await;
-    match response {
-        Response::Bulk(Some(data)) => {
-            let content = String::from_utf8_lossy(&data);
-            // Either empty message or shard:0 should be present
-            assert!(
-                content.contains("VLL queues are empty") || content.contains("shard:0"),
-                "Expected shard 0 info or empty message, got: {}",
-                content
-            );
-        }
-        _ => panic!("Expected bulk response, got {:?}", response),
-    }
+    let data = unwrap_bulk(&response);
+    let content = String::from_utf8_lossy(data);
+    // Either empty message or shard:0 should be present
+    assert!(
+        content.contains("VLL queues are empty") || content.contains("shard:0"),
+        "Expected shard 0 info or empty message, got: {}",
+        content
+    );
 
     server.shutdown().await;
 }
