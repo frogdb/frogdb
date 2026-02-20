@@ -18,8 +18,7 @@ pub type NodeId = u64;
 pub type ConfigEpoch = u64;
 
 /// openraft type configuration for FrogDB cluster.
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct TypeConfig;
 
 impl openraft::RaftTypeConfig for TypeConfig {

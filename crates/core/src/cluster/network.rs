@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use openraft::error::{
-    InstallSnapshotError, NetworkError, RPCError, RaftError, RemoteError, Unreachable,
+    InstallSnapshotError, NetworkError, RPCError, RaftError, Unreachable,
 };
 use openraft::network::{RPCOption, RaftNetwork, RaftNetworkFactory};
 use openraft::raft::{
@@ -129,7 +129,7 @@ impl RaftNetworkFactory<TypeConfig> for ClusterNetworkFactory {
         });
 
         ClusterNetwork {
-            target,
+            _target: target,
             addr,
             connect_timeout_ms: self.connect_timeout_ms,
             request_timeout_ms: self.request_timeout_ms,
@@ -141,7 +141,7 @@ impl RaftNetworkFactory<TypeConfig> for ClusterNetworkFactory {
 #[derive(Debug, Clone)]
 pub struct ClusterNetwork {
     /// Target node ID.
-    target: NodeId,
+    _target: NodeId,
     /// Target node address.
     addr: SocketAddr,
     /// Connection timeout in milliseconds.
@@ -154,7 +154,7 @@ impl ClusterNetwork {
     /// Create a new network connection.
     pub fn new(target: NodeId, addr: SocketAddr) -> Self {
         Self {
-            target,
+            _target: target,
             addr,
             connect_timeout_ms: 5000,
             request_timeout_ms: 10000,

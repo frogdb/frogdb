@@ -2,15 +2,14 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::io::Cursor;
 use std::ops::RangeBounds;
 use std::path::Path;
 use std::sync::Arc;
 
 use openraft::storage::{LogFlushed, LogState, RaftLogStorage};
 use openraft::{
-    Entry, EntryPayload, LogId, OptionalSend, RaftLogReader, SnapshotMeta, StorageError,
-    StoredMembership, Vote,
+    Entry, LogId, OptionalSend, RaftLogReader, StorageError,
+    Vote,
 };
 use parking_lot::RwLock;
 use rocksdb::{ColumnFamilyDescriptor, Options, DB};
@@ -28,8 +27,6 @@ const KEY_VOTE: &[u8] = b"vote";
 const KEY_COMMITTED: &[u8] = b"committed";
 /// Key for storing the last purged log ID.
 const KEY_LAST_PURGED: &[u8] = b"last_purged";
-/// Key for storing the snapshot metadata.
-const KEY_SNAPSHOT_META: &[u8] = b"snapshot_meta";
 
 /// RocksDB-backed Raft log storage.
 pub struct ClusterStorage {
@@ -73,12 +70,12 @@ impl ClusterStorage {
     }
 
     /// Get the logs column family handle.
-    fn cf_logs(&self) -> Arc<rocksdb::BoundColumnFamily> {
+    fn cf_logs(&self) -> Arc<rocksdb::BoundColumnFamily<'_>> {
         self.db.cf_handle(CF_LOGS).expect("logs CF must exist")
     }
 
     /// Get the metadata column family handle.
-    fn cf_meta(&self) -> Arc<rocksdb::BoundColumnFamily> {
+    fn cf_meta(&self) -> Arc<rocksdb::BoundColumnFamily<'_>> {
         self.db.cf_handle(CF_META).expect("meta CF must exist")
     }
 

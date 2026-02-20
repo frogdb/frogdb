@@ -817,7 +817,10 @@ fn format_float(f: f64) -> String {
 
 impl From<Response> for BytesFrame {
     fn from(response: Response) -> Self {
-        response.to_resp2_frame()
+        response
+            .into_wire()
+            .expect("cannot convert internal action to BytesFrame")
+            .to_resp2_frame()
     }
 }
 
@@ -859,7 +862,7 @@ mod tests {
                 Response::Integer(42),
             ),
         ]);
-        let frame = resp.to_resp3_frame();
+        let frame = resp.into_wire().unwrap().to_resp3_frame();
         match frame {
             Resp3BytesFrame::Map { data, attributes } => {
                 assert_eq!(data.len(), 2);
@@ -881,7 +884,7 @@ mod tests {
                 Response::Integer(42),
             ),
         ]);
-        let frame = resp.to_resp2_frame();
+        let frame = resp.into_wire().unwrap().to_resp2_frame();
         match frame {
             Resp2BytesFrame::Array(items) => {
                 // Map with 2 pairs should flatten to 4 elements
@@ -906,7 +909,7 @@ mod tests {
             Response::Bulk(Some(Bytes::from("member2"))),
             Response::Bulk(Some(Bytes::from("member3"))),
         ]);
-        let frame = resp.to_resp3_frame();
+        let frame = resp.into_wire().unwrap().to_resp3_frame();
         match frame {
             Resp3BytesFrame::Set { data, attributes } => {
                 assert_eq!(data.len(), 3);
@@ -922,7 +925,7 @@ mod tests {
             Response::Bulk(Some(Bytes::from("member1"))),
             Response::Bulk(Some(Bytes::from("member2"))),
         ]);
-        let frame = resp.to_resp2_frame();
+        let frame = resp.into_wire().unwrap().to_resp2_frame();
         match frame {
             Resp2BytesFrame::Array(items) => {
                 assert_eq!(items.len(), 2);
@@ -934,7 +937,7 @@ mod tests {
     #[test]
     fn test_double_to_resp3_frame() {
         let resp = Response::Double(3.14159);
-        let frame = resp.to_resp3_frame();
+        let frame = resp.into_wire().unwrap().to_resp3_frame();
         match frame {
             Resp3BytesFrame::Double { data, attributes } => {
                 assert!((data - 3.14159).abs() < f64::EPSILON);
@@ -947,7 +950,7 @@ mod tests {
     #[test]
     fn test_double_to_resp2_string() {
         let resp = Response::Double(3.14159);
-        let frame = resp.to_resp2_frame();
+        let frame = resp.into_wire().unwrap().to_resp2_frame();
         match frame {
             Resp2BytesFrame::BulkString(data) => {
                 let s = String::from_utf8(data.to_vec()).unwrap();
@@ -963,7 +966,7 @@ mod tests {
     fn test_double_special_values() {
         // Test infinity
         let resp = Response::Double(f64::INFINITY);
-        let frame = resp.to_resp2_frame();
+        let frame = resp.into_wire().unwrap().to_resp2_frame();
         match frame {
             Resp2BytesFrame::BulkString(data) => {
                 assert_eq!(data.as_ref(), b"inf");
@@ -973,7 +976,7 @@ mod tests {
 
         // Test negative infinity
         let resp = Response::Double(f64::NEG_INFINITY);
-        let frame = resp.to_resp2_frame();
+        let frame = resp.into_wire().unwrap().to_resp2_frame();
         match frame {
             Resp2BytesFrame::BulkString(data) => {
                 assert_eq!(data.as_ref(), b"-inf");
@@ -983,7 +986,7 @@ mod tests {
 
         // Test NaN
         let resp = Response::Double(f64::NAN);
-        let frame = resp.to_resp2_frame();
+        let frame = resp.into_wire().unwrap().to_resp2_frame();
         match frame {
             Resp2BytesFrame::BulkString(data) => {
                 assert_eq!(data.as_ref(), b"nan");
@@ -999,7 +1002,7 @@ mod tests {
             Response::Bulk(Some(Bytes::from("channel"))),
             Response::Bulk(Some(Bytes::from("payload"))),
         ]);
-        let frame = resp.to_resp3_frame();
+        let frame = resp.into_wire().unwrap().to_resp3_frame();
         match frame {
             Resp3BytesFrame::Push { data, attributes } => {
                 assert_eq!(data.len(), 3);
@@ -1015,7 +1018,7 @@ mod tests {
             Response::Bulk(Some(Bytes::from("message"))),
             Response::Bulk(Some(Bytes::from("channel"))),
         ]);
-        let frame = resp.to_resp2_frame();
+        let frame = resp.into_wire().unwrap().to_resp2_frame();
         match frame {
             Resp2BytesFrame::Array(items) => {
                 assert_eq!(items.len(), 2);
@@ -1028,7 +1031,7 @@ mod tests {
     fn test_boolean_to_resp3_frame() {
         // Test true
         let resp = Response::Boolean(true);
-        let frame = resp.to_resp3_frame();
+        let frame = resp.into_wire().unwrap().to_resp3_frame();
         match frame {
             Resp3BytesFrame::Boolean { data, attributes } => {
                 assert!(data);
@@ -1039,7 +1042,7 @@ mod tests {
 
         // Test false
         let resp = Response::Boolean(false);
-        let frame = resp.to_resp3_frame();
+        let frame = resp.into_wire().unwrap().to_resp3_frame();
         match frame {
             Resp3BytesFrame::Boolean { data, attributes } => {
                 assert!(!data);
@@ -1053,33 +1056,33 @@ mod tests {
     fn test_boolean_to_resp2_integer() {
         // True becomes 1
         let resp = Response::Boolean(true);
-        let frame = resp.to_resp2_frame();
+        let frame = resp.into_wire().unwrap().to_resp2_frame();
         assert!(matches!(frame, Resp2BytesFrame::Integer(1)));
 
         // False becomes 0
         let resp = Response::Boolean(false);
-        let frame = resp.to_resp2_frame();
+        let frame = resp.into_wire().unwrap().to_resp2_frame();
         assert!(matches!(frame, Resp2BytesFrame::Integer(0)));
     }
 
     #[test]
     fn test_null_to_resp3_frame() {
         let resp = Response::Null;
-        let frame = resp.to_resp3_frame();
+        let frame = resp.into_wire().unwrap().to_resp3_frame();
         assert!(matches!(frame, Resp3BytesFrame::Null));
     }
 
     #[test]
     fn test_null_to_resp2_frame() {
         let resp = Response::Null;
-        let frame = resp.to_resp2_frame();
+        let frame = resp.into_wire().unwrap().to_resp2_frame();
         assert!(matches!(frame, Resp2BytesFrame::Null));
     }
 
     #[test]
     fn test_blob_error_to_resp3_frame() {
         let resp = Response::BlobError(Bytes::from("ERR some long error message"));
-        let frame = resp.to_resp3_frame();
+        let frame = resp.into_wire().unwrap().to_resp3_frame();
         match frame {
             Resp3BytesFrame::BlobError { data, attributes } => {
                 assert_eq!(data.as_ref(), b"ERR some long error message");
@@ -1092,7 +1095,7 @@ mod tests {
     #[test]
     fn test_big_number_to_resp3_frame() {
         let resp = Response::BigNumber(Bytes::from("3492890328409238509324850943850943825024385"));
-        let frame = resp.to_resp3_frame();
+        let frame = resp.into_wire().unwrap().to_resp3_frame();
         match frame {
             Resp3BytesFrame::BigNumber { data, attributes } => {
                 assert_eq!(
@@ -1111,7 +1114,7 @@ mod tests {
             format: *b"txt",
             data: Bytes::from("Some text content"),
         };
-        let frame = resp.to_resp3_frame();
+        let frame = resp.into_wire().unwrap().to_resp3_frame();
         match frame {
             Resp3BytesFrame::VerbatimString {
                 data, attributes, ..
