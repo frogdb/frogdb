@@ -51,8 +51,14 @@ impl ConnectionHandler {
                 let access_type = key_access_type_for_flags(handler.flags());
                 let subcommand = extract_subcommand(&cmd_name_str, &cmd.args);
                 for key in &keys {
-                    if !user.check_command_with_key(&cmd_name_str, subcommand.as_deref(), key, access_type) {
-                        let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                    if !user.check_command_with_key(
+                        &cmd_name_str,
+                        subcommand.as_deref(),
+                        key,
+                        access_type,
+                    ) {
+                        let client_info =
+                            format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
                         let key_str = String::from_utf8_lossy(key);
                         self.acl_manager.log().log_key_denied(
                             &user.username,
@@ -80,9 +86,9 @@ impl ConnectionHandler {
 
         // Multi-key command: check if all keys are on the same shard
         let first_shard = shard_for_key(keys[0], self.num_shards);
-        let all_same_shard = keys[1..].iter().all(|key| {
-            shard_for_key(key, self.num_shards) == first_shard
-        });
+        let all_same_shard = keys[1..]
+            .iter()
+            .all(|key| shard_for_key(key, self.num_shards) == first_shard);
 
         if all_same_shard {
             // All keys on same shard - execute directly
@@ -110,7 +116,8 @@ impl ConnectionHandler {
             "MGET" => Some(ScatterOp::MGet),
             "MSET" => {
                 // Build pairs from args
-                let pairs: Vec<(Bytes, Bytes)> = cmd.args
+                let pairs: Vec<(Bytes, Bytes)> = cmd
+                    .args
                     .chunks(2)
                     .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
                     .collect();
@@ -192,7 +199,11 @@ impl ConnectionHandler {
             response_tx: tx1,
         };
 
-        if self.shard_senders[source_shard].send(copy_request).await.is_err() {
+        if self.shard_senders[source_shard]
+            .send(copy_request)
+            .await
+            .is_err()
+        {
             return Response::error("ERR source shard unavailable");
         }
 
@@ -246,7 +257,11 @@ impl ConnectionHandler {
             response_tx: tx2,
         };
 
-        if self.shard_senders[dest_shard].send(copy_set_request).await.is_err() {
+        if self.shard_senders[dest_shard]
+            .send(copy_set_request)
+            .await
+            .is_err()
+        {
             return Response::error("ERR destination shard unavailable");
         }
 

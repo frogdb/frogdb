@@ -17,11 +17,12 @@
 mod common;
 
 use common::replication_helpers::{
-    get_replication_state, parse_info_replication, start_primary_replica_pair,
-    wait_for_replication,
+    get_replication_state, parse_info_replication, start_primary_replica_pair, wait_for_replication,
 };
 use common::response_helpers::assert_ok;
-use common::test_server::{is_error, parse_integer, parse_simple_string, TestServer, TestServerConfig};
+use common::test_server::{
+    is_error, parse_integer, parse_simple_string, TestServer, TestServerConfig,
+};
 use frogdb_protocol::Response;
 use rstest::rstest;
 use std::time::Duration;
@@ -36,7 +37,10 @@ use std::time::Duration;
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_replconf_listening_port(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
     let server = TestServer::start_primary_with_config(config).await;
 
     let response = server.send("REPLCONF", &["listening-port", "6380"]).await;
@@ -51,7 +55,10 @@ async fn test_replconf_listening_port(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_replconf_capa(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
     let server = TestServer::start_primary_with_config(config).await;
 
     let response = server.send("REPLCONF", &["capa", "eof", "psync2"]).await;
@@ -66,7 +73,10 @@ async fn test_replconf_capa(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_replconf_ack(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
     let server = TestServer::start_primary_with_config(config).await;
 
     let response = server.send("REPLCONF", &["ACK", "12345"]).await;
@@ -81,12 +91,19 @@ async fn test_replconf_ack(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_psync_initial_request(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
     let server = TestServer::start_primary_with_config(config).await;
 
     let response = server.send("PSYNC", &["?", "-1"]).await;
     // The command should not error - it either returns FULLRESYNC or OK
-    assert!(!is_error(&response), "PSYNC ? -1 should not error, got {:?}", response);
+    assert!(
+        !is_error(&response),
+        "PSYNC ? -1 should not error, got {:?}",
+        response
+    );
 
     server.shutdown().await;
 }
@@ -97,7 +114,10 @@ async fn test_psync_initial_request(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_role_command(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
     let server = TestServer::start_primary_with_config(config).await;
 
     let response = server.send("ROLE", &[]).await;
@@ -108,7 +128,12 @@ async fn test_role_command(#[case] persistence: bool) {
 
         // First element should be "master"
         if let Response::Bulk(Some(role)) = &items[0] {
-            assert_eq!(role.as_ref(), b"master", "Expected role 'master', got {:?}", role);
+            assert_eq!(
+                role.as_ref(),
+                b"master",
+                "Expected role 'master', got {:?}",
+                role
+            );
         } else {
             panic!("Expected bulk string for role, got {:?}", items[0]);
         }
@@ -125,14 +150,22 @@ async fn test_role_command(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_wait_no_replicas(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
     let server = TestServer::start_primary_with_config(config).await;
 
     // WAIT 1 0 should return immediately with 0 when there are no replicas
     let response = server.send("WAIT", &["1", "0"]).await;
 
     let count = parse_integer(&response);
-    assert_eq!(count, Some(0), "WAIT with no replicas should return 0, got {:?}", response);
+    assert_eq!(
+        count,
+        Some(0),
+        "WAIT with no replicas should return 0, got {:?}",
+        response
+    );
 
     server.shutdown().await;
 }
@@ -143,7 +176,10 @@ async fn test_wait_no_replicas(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_role_standalone(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
     let server = TestServer::start_standalone_with_config(config).await;
 
     let response = server.send("ROLE", &[]).await;
@@ -152,7 +188,11 @@ async fn test_role_standalone(#[case] persistence: bool) {
     if let Response::Array(items) = &response {
         assert!(!items.is_empty(), "ROLE should return at least one element");
         if let Response::Bulk(Some(role)) = &items[0] {
-            assert_eq!(role.as_ref(), b"master", "Standalone should report as master");
+            assert_eq!(
+                role.as_ref(),
+                b"master",
+                "Standalone should report as master"
+            );
         }
     } else {
         panic!("Expected array from ROLE, got {:?}", response);
@@ -171,7 +211,10 @@ async fn test_role_standalone(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_primary_replica_connect(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let primary = TestServer::start_primary_with_config(config.clone()).await;
     let replica = TestServer::start_replica_with_config(&primary, config).await;
@@ -181,10 +224,16 @@ async fn test_primary_replica_connect(#[case] persistence: bool) {
 
     // Verify both servers are responsive
     let primary_ping = primary.send("PING", &[]).await;
-    assert!(parse_simple_string(&primary_ping) == Some("PONG"), "Primary should respond to PING");
+    assert!(
+        parse_simple_string(&primary_ping) == Some("PONG"),
+        "Primary should respond to PING"
+    );
 
     let replica_ping = replica.send("PING", &[]).await;
-    assert!(parse_simple_string(&replica_ping) == Some("PONG"), "Replica should respond to PING");
+    assert!(
+        parse_simple_string(&replica_ping) == Some("PONG"),
+        "Replica should respond to PING"
+    );
 
     replica.shutdown().await;
     primary.shutdown().await;
@@ -196,7 +245,10 @@ async fn test_primary_replica_connect(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_info_replication_connected(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, _replica) = start_primary_replica_pair(config).await;
 
@@ -206,7 +258,11 @@ async fn test_info_replication_connected(#[case] persistence: bool) {
     if let Response::Bulk(Some(info)) = &response {
         let info_str = String::from_utf8_lossy(info);
         // Primary should report role:master
-        assert!(info_str.contains("role:master"), "Primary should report role:master, got:\n{}", info_str);
+        assert!(
+            info_str.contains("role:master"),
+            "Primary should report role:master, got:\n{}",
+            info_str
+        );
         // Note: connected_slaves count depends on replication handshake completion
     } else {
         panic!("Expected bulk string from INFO, got {:?}", response);
@@ -219,7 +275,10 @@ async fn test_info_replication_connected(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_write_propagation(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, replica) = start_primary_replica_pair(config).await;
 
@@ -237,7 +296,11 @@ async fn test_write_propagation(#[case] persistence: bool) {
     // This test verifies the basic infrastructure works
     match &get_response {
         Response::Bulk(Some(value)) => {
-            assert_eq!(value.as_ref(), b"test_value", "Replica should have replicated value");
+            assert_eq!(
+                value.as_ref(),
+                b"test_value",
+                "Replica should have replicated value"
+            );
         }
         Response::Bulk(None) => {
             // Replication might not be fully connected yet - this is acceptable for now
@@ -258,7 +321,10 @@ async fn test_write_propagation(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_wait_blocks_until_ack(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let primary = TestServer::start_primary_with_config(config.clone()).await;
     let _replica = TestServer::start_replica_with_config(&primary, config).await;
@@ -277,7 +343,10 @@ async fn test_wait_blocks_until_ack(#[case] persistence: bool) {
     let acked = parse_integer(&response).unwrap_or(-1);
     // Either we got an ACK, or we timed out (both are valid test outcomes for now)
     assert!(acked >= 0, "WAIT should return a non-negative integer");
-    assert!(elapsed < Duration::from_secs(5), "WAIT should not take too long");
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "WAIT should not take too long"
+    );
 }
 
 /// Test multiple writes replicate correctly.
@@ -286,7 +355,10 @@ async fn test_wait_blocks_until_ack(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_multiple_writes(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, replica) = start_primary_replica_pair(config).await;
 
@@ -320,7 +392,10 @@ async fn test_multiple_writes(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_replicaof_no_one(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let primary = TestServer::start_primary_with_config(config.clone()).await;
     let replica = TestServer::start_replica_with_config(&primary, config).await;
@@ -346,7 +421,10 @@ async fn test_replicaof_no_one(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_slaveof_alias(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
     let server = TestServer::start_standalone_with_config(config).await;
 
     // SLAVEOF NO ONE should work as an alias
@@ -362,7 +440,10 @@ async fn test_slaveof_alias(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_large_value_replication(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, replica) = start_primary_replica_pair(config).await;
 
@@ -379,7 +460,11 @@ async fn test_large_value_replication(#[case] persistence: bool) {
     // Verify on replica
     let get_response = replica.send("GET", &["large_key"]).await;
     if let Response::Bulk(Some(value)) = get_response {
-        assert_eq!(value.len(), large_value.len(), "Large value should be fully replicated");
+        assert_eq!(
+            value.len(),
+            large_value.len(),
+            "Large value should be fully replicated"
+        );
     }
 
     replica.shutdown().await;
@@ -392,7 +477,9 @@ async fn test_replconf_subcommands() {
     let server = TestServer::start_primary().await;
 
     // Test ip-address
-    let response = server.send("REPLCONF", &["ip-address", "192.168.1.100"]).await;
+    let response = server
+        .send("REPLCONF", &["ip-address", "192.168.1.100"])
+        .await;
     assert_ok(&response);
 
     // Test GETACK
@@ -414,7 +501,10 @@ async fn test_psync_with_replication_id() {
     // PSYNC with a specific replication ID and offset
     let response = server.send("PSYNC", &["abc123", "100"]).await;
     // Should not error (actual behavior depends on implementation)
-    assert!(!is_error(&response), "PSYNC with replication ID should not error");
+    assert!(
+        !is_error(&response),
+        "PSYNC with replication ID should not error"
+    );
 
     server.shutdown().await;
 }
@@ -426,7 +516,10 @@ async fn test_psync_with_replication_id() {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_replica_read_only(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let primary = TestServer::start_primary_with_config(config.clone()).await;
     let replica = TestServer::start_replica_with_config(&primary, config).await;
@@ -443,9 +536,11 @@ async fn test_replica_read_only(#[case] persistence: bool) {
     // We're documenting current behavior here
     if is_error(&response) {
         // This is the expected behavior for a read-only replica
-        let err_msg = String::from_utf8_lossy(
-            if let Response::Error(e) = &response { e } else { b"" }
-        );
+        let err_msg = String::from_utf8_lossy(if let Response::Error(e) = &response {
+            e
+        } else {
+            b""
+        });
         eprintln!("Replica correctly rejected write: {}", err_msg);
     } else {
         // Replica accepting writes - might be intentional or not yet implemented
@@ -471,7 +566,10 @@ async fn test_psync_invalid_args() {
 
     // PSYNC with invalid offset
     let response = server.send("PSYNC", &["?", "not_a_number"]).await;
-    assert!(is_error(&response), "PSYNC with invalid offset should error");
+    assert!(
+        is_error(&response),
+        "PSYNC with invalid offset should error"
+    );
 
     server.shutdown().await;
 }
@@ -487,11 +585,17 @@ async fn test_wait_invalid_args() {
 
     // WAIT with invalid numreplicas
     let response = server.send("WAIT", &["not_a_number", "1000"]).await;
-    assert!(is_error(&response), "WAIT with invalid numreplicas should error");
+    assert!(
+        is_error(&response),
+        "WAIT with invalid numreplicas should error"
+    );
 
     // WAIT with invalid timeout
     let response = server.send("WAIT", &["1", "not_a_number"]).await;
-    assert!(is_error(&response), "WAIT with invalid timeout should error");
+    assert!(
+        is_error(&response),
+        "WAIT with invalid timeout should error"
+    );
 
     server.shutdown().await;
 }
@@ -503,7 +607,10 @@ async fn test_replicaof_invalid_args() {
 
     // REPLICAOF with invalid port
     let response = server.send("REPLICAOF", &["127.0.0.1", "not_a_port"]).await;
-    assert!(is_error(&response), "REPLICAOF with invalid port should error");
+    assert!(
+        is_error(&response),
+        "REPLICAOF with invalid port should error"
+    );
 
     // REPLICAOF with port 0
     let response = server.send("REPLICAOF", &["127.0.0.1", "0"]).await;
@@ -569,8 +676,14 @@ async fn test_multiple_primaries() {
     let get1 = primary1.send("GET", &["p2_key"]).await;
     let get2 = primary2.send("GET", &["p1_key"]).await;
 
-    assert!(matches!(get1, Response::Bulk(None)), "p1 should not have p2's key");
-    assert!(matches!(get2, Response::Bulk(None)), "p2 should not have p1's key");
+    assert!(
+        matches!(get1, Response::Bulk(None)),
+        "p1 should not have p2's key"
+    );
+    assert!(
+        matches!(get2, Response::Bulk(None)),
+        "p2 should not have p1's key"
+    );
 
     primary2.shutdown().await;
     primary1.shutdown().await;
@@ -611,7 +724,10 @@ async fn test_different_shard_counts(#[case] num_shards: usize) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_partial_sync_continue_response(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let primary = TestServer::start_primary_with_config(config.clone()).await;
     let replica = TestServer::start_replica_with_config(&primary, config).await;
@@ -639,7 +755,10 @@ async fn test_partial_sync_continue_response(#[case] persistence: bool) {
 
         // Should get CONTINUE, FULLRESYNC, or OK (implementation may vary)
         // The key is that it should NOT error
-        assert!(!is_error(&response), "PSYNC should not error with valid params");
+        assert!(
+            !is_error(&response),
+            "PSYNC should not error with valid params"
+        );
     }
 
     replica.shutdown().await;
@@ -652,7 +771,10 @@ async fn test_partial_sync_continue_response(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_partial_sync_preserves_ordering(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, replica) = start_primary_replica_pair(config).await;
 
@@ -702,11 +824,16 @@ async fn test_partial_sync_preserves_ordering(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_partial_sync_falls_back_to_full(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
     let primary = TestServer::start_primary_with_config(config).await;
 
     // Try PSYNC with a completely invalid replication ID
-    let response = primary.send("PSYNC", &["invalid_repl_id_12345", "99999"]).await;
+    let response = primary
+        .send("PSYNC", &["invalid_repl_id_12345", "99999"])
+        .await;
 
     // Server should handle this gracefully (FULLRESYNC, OK, or other non-error response)
     // The key is that invalid replication IDs should be handled, not crash
@@ -731,7 +858,10 @@ async fn test_partial_sync_falls_back_to_full(#[case] persistence: bool) {
         }
         _ => {
             // Any non-error response is acceptable
-            assert!(!is_error(&response), "PSYNC should not error on invalid repl ID");
+            assert!(
+                !is_error(&response),
+                "PSYNC should not error on invalid repl ID"
+            );
         }
     }
 
@@ -744,7 +874,10 @@ async fn test_partial_sync_falls_back_to_full(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, replica) = start_primary_replica_pair(config).await;
 
@@ -776,7 +909,10 @@ async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
     // Check for master_replid2 (secondary replication ID)
     // This would contain the old primary's ID if implemented
     let has_replid2 = info_map.contains_key("master_replid2");
-    eprintln!("Has secondary replication ID (master_replid2): {}", has_replid2);
+    eprintln!(
+        "Has secondary replication ID (master_replid2): {}",
+        has_replid2
+    );
 
     replica.shutdown().await;
     primary.shutdown().await;
@@ -792,7 +928,10 @@ async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_wal_buffer_capacity(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, replica) = start_primary_replica_pair(config).await;
 
@@ -837,7 +976,10 @@ async fn test_wal_buffer_capacity(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_replica_reconnect_within_buffer(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, replica) = start_primary_replica_pair(config.clone()).await;
 
@@ -851,7 +993,8 @@ async fn test_replica_reconnect_within_buffer(#[case] persistence: bool) {
 
     // Verify data on replica before shutdown (best effort)
     let initial_resp = replica.send("GET", &["reconnect_key_0"]).await;
-    let _initial_synced = matches!(initial_resp, Response::Bulk(Some(ref v)) if v.as_ref() == b"initial");
+    let _initial_synced =
+        matches!(initial_resp, Response::Bulk(Some(ref v)) if v.as_ref() == b"initial");
 
     // Shutdown replica
     replica.shutdown().await;
@@ -872,7 +1015,10 @@ async fn test_replica_reconnect_within_buffer(#[case] persistence: bool) {
 
     // Verify replica is responsive after reconnect
     let ping_resp = replica2.send("PING", &[]).await;
-    assert!(parse_simple_string(&ping_resp) == Some("PONG"), "Replica should respond after reconnect");
+    assert!(
+        parse_simple_string(&ping_resp) == Some("PONG"),
+        "Replica should respond after reconnect"
+    );
 
     replica2.shutdown().await;
     primary.shutdown().await;
@@ -884,7 +1030,10 @@ async fn test_replica_reconnect_within_buffer(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_replica_reconnect_outside_buffer(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, replica) = start_primary_replica_pair(config.clone()).await;
 
@@ -914,12 +1063,19 @@ async fn test_replica_reconnect_outside_buffer(#[case] persistence: bool) {
 
     // Verify replica is responsive after reconnect
     let ping_resp = replica2.send("PING", &[]).await;
-    assert!(parse_simple_string(&ping_resp) == Some("PONG"), "Replica should respond after reconnect");
+    assert!(
+        parse_simple_string(&ping_resp) == Some("PONG"),
+        "Replica should respond after reconnect"
+    );
 
     // Best effort verification - keys may or may not be present depending on sync status
     let old_resp = replica2.send("GET", &["outside_key_1"]).await;
     if let Response::Bulk(Some(value)) = old_resp {
-        assert_eq!(value.as_ref(), b"value1", "Old key should exist after full resync");
+        assert_eq!(
+            value.as_ref(),
+            b"value1",
+            "Old key should exist after full resync"
+        );
     }
 
     replica2.shutdown().await;
@@ -937,7 +1093,10 @@ async fn test_replica_reconnect_outside_buffer(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_wait_with_disconnected_replica(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, replica) = start_primary_replica_pair(config).await;
 
@@ -982,7 +1141,10 @@ async fn test_wait_with_disconnected_replica(#[case] persistence: bool) {
     );
 
     // WAIT should return 0 since the replica is disconnected
-    assert_eq!(acked, 0, "WAIT should return 0 when replica is disconnected");
+    assert_eq!(
+        acked, 0,
+        "WAIT should return 0 when replica is disconnected"
+    );
 
     primary.shutdown().await;
 }
@@ -997,7 +1159,10 @@ async fn test_wait_with_disconnected_replica(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_replica_lag_behavior(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, replica) = start_primary_replica_pair(config).await;
 
@@ -1052,7 +1217,10 @@ async fn test_replica_lag_behavior(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_fullresync_data_integrity(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let primary = TestServer::start_primary_with_config(config.clone()).await;
 
@@ -1109,9 +1277,14 @@ async fn test_fullresync_data_integrity(#[case] persistence: bool) {
     if verified == num_keys {
         eprintln!("Full resync successfully replicated all pre-existing data");
     } else if verified > 0 {
-        eprintln!("Partial replication of pre-existing data ({}/{})", verified, num_keys);
+        eprintln!(
+            "Partial replication of pre-existing data ({}/{})",
+            verified, num_keys
+        );
     } else {
-        eprintln!("Pre-existing data not yet replicated (full resync may not preserve pre-write data)");
+        eprintln!(
+            "Pre-existing data not yet replicated (full resync may not preserve pre-write data)"
+        );
     }
 
     replica.shutdown().await;
@@ -1128,7 +1301,10 @@ async fn test_fullresync_data_integrity(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_large_value_replication_stress(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let (primary, replica) = start_primary_replica_pair(config).await;
 
@@ -1232,7 +1408,10 @@ async fn test_large_value_replication_stress(#[case] persistence: bool) {
 #[case::with_persistence(true)]
 #[tokio::test]
 async fn test_wal_overflow_triggers_full_resync(#[case] persistence: bool) {
-    let config = TestServerConfig { persistence, ..Default::default() };
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
 
     let primary = TestServer::start_primary_with_config(config.clone()).await;
 
@@ -1257,7 +1436,10 @@ async fn test_wal_overflow_triggers_full_resync(#[case] persistence: bool) {
     // Verify replica has marker key before shutdown
     let marker_check = replica.send("GET", &[marker_key]).await;
     let had_marker_before = matches!(marker_check, Response::Bulk(Some(_)));
-    eprintln!("Replica had marker key before shutdown: {}", had_marker_before);
+    eprintln!(
+        "Replica had marker key before shutdown: {}",
+        had_marker_before
+    );
 
     // Shutdown replica to simulate disconnect
     replica.shutdown().await;
@@ -1291,7 +1473,10 @@ async fn test_wal_overflow_triggers_full_resync(#[case] persistence: bool) {
     let info_resp = primary.send("INFO", &["replication"]).await;
     if let Response::Bulk(Some(info)) = &info_resp {
         let info_str = String::from_utf8_lossy(info);
-        eprintln!("Primary replication info before replica reconnect:\n{}", info_str);
+        eprintln!(
+            "Primary replication info before replica reconnect:\n{}",
+            info_str
+        );
     }
 
     // Restart replica - this should trigger full resync since WAL buffer overflowed
@@ -1370,7 +1555,9 @@ async fn test_wal_overflow_triggers_full_resync(#[case] persistence: bool) {
     if has_post && overflow_found > 0 {
         eprintln!("Replica successfully recovered data after WAL overflow (full or partial resync worked)");
     } else if has_marker {
-        eprintln!("Replica has pre-disconnect data but missing post-overflow data (partial sync issue)");
+        eprintln!(
+            "Replica has pre-disconnect data but missing post-overflow data (partial sync issue)"
+        );
     } else {
         eprintln!("Replica recovery incomplete - full resync may not be fully implemented");
     }
@@ -1408,7 +1595,12 @@ async fn test_wait_during_replica_resync(#[case] persistence: bool) {
 
     // Write lots of initial data to ensure full resync takes time
     for i in 0..500 {
-        primary.send("SET", &[&format!("initial_key_{}", i), &format!("value_{}", i)]).await;
+        primary
+            .send(
+                "SET",
+                &[&format!("initial_key_{}", i), &format!("value_{}", i)],
+            )
+            .await;
     }
 
     // Start first replica and wait for full sync
@@ -1436,7 +1628,9 @@ async fn test_wait_during_replica_resync(#[case] persistence: bool) {
     eprintln!("Writing data to overflow WAL buffer...");
     let overflow_value: String = "x".repeat(200);
     for i in 0..5000 {
-        primary.send("SET", &[&format!("overflow_key_{}", i), &overflow_value]).await;
+        primary
+            .send("SET", &[&format!("overflow_key_{}", i), &overflow_value])
+            .await;
     }
     eprintln!("Finished writing overflow data");
 
@@ -1453,13 +1647,16 @@ async fn test_wait_during_replica_resync(#[case] persistence: bool) {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Write a new key and immediately WAIT
-    primary.send("SET", &["wait_test_key", "wait_test_value"]).await;
+    primary
+        .send("SET", &["wait_test_key", "wait_test_value"])
+        .await;
 
     let wait_start = std::time::Instant::now();
     let wait_result = tokio::time::timeout(
         Duration::from_millis(1000),
-        primary.send("WAIT", &["1", "500"]) // Wait for 1 replica, 500ms timeout
-    ).await;
+        primary.send("WAIT", &["1", "500"]), // Wait for 1 replica, 500ms timeout
+    )
+    .await;
     let wait_elapsed = wait_start.elapsed();
 
     eprintln!("WAIT completed in {:?}", wait_elapsed);
@@ -1575,7 +1772,10 @@ async fn test_fullresync_interrupted_resume(#[case] persistence: bool) {
         let value = format!("while_down_value_{}", i);
         primary.send("SET", &[&key, &value]).await;
     }
-    eprintln!("Wrote {} additional keys while replica was down", num_additional_keys);
+    eprintln!(
+        "Wrote {} additional keys while replica was down",
+        num_additional_keys
+    );
 
     // Restart replica - should trigger new FULLRESYNC
     eprintln!("Starting new replica (should trigger new FULLRESYNC)...");
@@ -1657,7 +1857,9 @@ async fn test_fullresync_interrupted_resume(#[case] persistence: bool) {
     );
 
     // Write and verify a final key to ensure ongoing replication works
-    primary.send("SET", &["post_resync_key", "post_resync_value"]).await;
+    primary
+        .send("SET", &["post_resync_key", "post_resync_value"])
+        .await;
     let _ = primary.send("WAIT", &["1", "5000"]).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 

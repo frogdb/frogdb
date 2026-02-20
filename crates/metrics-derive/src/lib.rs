@@ -7,8 +7,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    braced, bracketed, parse_macro_input, punctuated::Punctuated, DeriveInput, Expr, Ident,
-    LitStr, Token, Type,
+    braced, bracketed, parse_macro_input, punctuated::Punctuated, DeriveInput, Expr, Ident, LitStr,
+    Token, Type,
 };
 
 /// Derive macro for metric label enums.
@@ -47,7 +47,9 @@ pub fn derive_metric_label(input: TokenStream) -> TokenStream {
         let variant_name = &variant.ident;
 
         // Find the #[label = "..."] attribute
-        let label_value = variant.attrs.iter()
+        let label_value = variant
+            .attrs
+            .iter()
             .find_map(|attr| {
                 if attr.path().is_ident("label") {
                     attr.parse_args::<LitStr>().ok()
@@ -152,13 +154,15 @@ impl syn::parse::Parse for MetricsInput {
                     let label_content;
                     bracketed!(label_content in body);
 
-                    let label_list: Punctuated<_, Token![,]> =
-                        label_content.parse_terminated(|input| {
+                    let label_list: Punctuated<_, Token![,]> = label_content.parse_terminated(
+                        |input| {
                             let name: Ident = input.parse()?;
                             let _colon: Token![:] = input.parse()?;
                             let ty: Type = input.parse()?;
                             Ok(LabelDef { name, ty })
-                        }, Token![,])?;
+                        },
+                        Token![,],
+                    )?;
 
                     labels = label_list.into_iter().collect();
                 }
@@ -223,9 +227,12 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
             "gauge" => quote! { crate::typed::MetricType::Gauge },
             "histogram" => quote! { crate::typed::MetricType::Histogram },
             _ => {
-                return syn::Error::new_spanned(metric_type, "Unknown metric type. Use: counter, gauge, histogram")
-                    .to_compile_error()
-                    .into();
+                return syn::Error::new_spanned(
+                    metric_type,
+                    "Unknown metric type. Use: counter, gauge, histogram",
+                )
+                .to_compile_error()
+                .into();
             }
         };
 
@@ -237,11 +244,14 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
         };
 
         // Generate method parameters for labels
-        let label_params: Vec<_> = labels.iter().map(|l| {
-            let name = &l.name;
-            let ty = &l.ty;
-            quote! { #name: #ty }
-        }).collect();
+        let label_params: Vec<_> = labels
+            .iter()
+            .map(|l| {
+                let name = &l.name;
+                let ty = &l.ty;
+                quote! { #name: #ty }
+            })
+            .collect();
 
         // Generate label array construction
         let label_array_items: Vec<_> = labels.iter().map(|l| {
@@ -346,7 +356,7 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
                     }
                 }
             }
-            _ => quote! {}
+            _ => quote! {},
         };
 
         let doc_attr = if let Some(d) = doc {

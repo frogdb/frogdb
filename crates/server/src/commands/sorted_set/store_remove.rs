@@ -26,11 +26,7 @@ impl Command for ZrangestoreCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = args[0].clone();
         let src = &args[1];
 
@@ -158,11 +154,7 @@ impl Command for ZremrangebyrankCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let start = parse_i64(&args[1])?;
         let stop = parse_i64(&args[2])?;
@@ -204,11 +196,7 @@ impl Command for ZremrangebyscoreCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let min = parse_score_bound(&args[1])?;
         let max = parse_score_bound(&args[2])?;
@@ -250,11 +238,7 @@ impl Command for ZremrangebylexCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let min = parse_lex_bound(&args[1])?;
         let max = parse_lex_bound(&args[2])?;

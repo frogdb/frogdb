@@ -245,7 +245,9 @@ impl Value {
     /// Returns None if deserialization fails.
     pub fn deserialize_for_copy(type_str: &[u8], data: &[u8]) -> Option<Self> {
         match type_str {
-            b"string" => Some(Value::String(StringValue::new(Bytes::copy_from_slice(data)))),
+            b"string" => Some(Value::String(StringValue::new(Bytes::copy_from_slice(
+                data,
+            )))),
             b"hash" => {
                 if data.len() < 4 {
                     return None;
@@ -288,8 +290,7 @@ impl Value {
                     return None;
                 }
                 let mut pos = 0;
-                let num_elements =
-                    u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                let num_elements = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
                 pos += 4;
 
                 let mut list = ListValue::new();
@@ -534,9 +535,7 @@ impl StringValue {
     /// Returns the new value or an error if not an integer.
     pub fn increment(&mut self, delta: i64) -> Result<i64, IncrementError> {
         let current = self.as_integer().ok_or(IncrementError::NotInteger)?;
-        let new_val = current
-            .checked_add(delta)
-            .ok_or(IncrementError::Overflow)?;
+        let new_val = current.checked_add(delta).ok_or(IncrementError::Overflow)?;
         self.data = StringData::Integer(new_val);
         Ok(new_val)
     }
@@ -599,7 +598,13 @@ impl StringValue {
     }
 
     /// Find the position of the first bit set to the given value.
-    pub fn bitpos(&self, bit: u8, start: Option<i64>, end: Option<i64>, bit_mode: bool) -> Option<i64> {
+    pub fn bitpos(
+        &self,
+        bit: u8,
+        start: Option<i64>,
+        end: Option<i64>,
+        bit_mode: bool,
+    ) -> Option<i64> {
         let bytes = self.as_bytes();
         crate::bitmap::bitpos(&bytes, bit, start, end, bit_mode)
     }
@@ -1058,9 +1063,11 @@ impl SortedSetValue {
                 };
             }
             // Remove old entry from scores index
-            self.scores.remove(&(OrderedFloat(old_score), member.clone()));
+            self.scores
+                .remove(&(OrderedFloat(old_score), member.clone()));
             // Insert new entry
-            self.scores.insert((OrderedFloat(score), member.clone()), ());
+            self.scores
+                .insert((OrderedFloat(score), member.clone()), ());
             self.members.insert(member, score);
             ZAddResult {
                 added: false,
@@ -1221,9 +1228,10 @@ impl SortedSetValue {
         offset: usize,
         count: Option<usize>,
     ) -> Vec<(Bytes, f64)> {
-        let iter = self.scores.iter().filter(|((score, _), _)| {
-            min.satisfies_min(score.0) && max.satisfies_max(score.0)
-        });
+        let iter = self
+            .scores
+            .iter()
+            .filter(|((score, _), _)| min.satisfies_min(score.0) && max.satisfies_max(score.0));
 
         let iter = iter.skip(offset);
 
@@ -1247,9 +1255,11 @@ impl SortedSetValue {
         offset: usize,
         count: Option<usize>,
     ) -> Vec<(Bytes, f64)> {
-        let iter = self.scores.iter().rev().filter(|((score, _), _)| {
-            min.satisfies_min(score.0) && max.satisfies_max(score.0)
-        });
+        let iter = self
+            .scores
+            .iter()
+            .rev()
+            .filter(|((score, _), _)| min.satisfies_min(score.0) && max.satisfies_max(score.0));
 
         let iter = iter.skip(offset);
 
@@ -1275,9 +1285,10 @@ impl SortedSetValue {
     ) -> Vec<(Bytes, f64)> {
         // For lex range, we iterate in (score, member) order
         // This naturally gives us lexicographic order for same scores
-        let iter = self.scores.iter().filter(|((_, member), _)| {
-            min.satisfies_min(member) && max.satisfies_max(member)
-        });
+        let iter = self
+            .scores
+            .iter()
+            .filter(|((_, member), _)| min.satisfies_min(member) && max.satisfies_max(member));
 
         let iter = iter.skip(offset);
 
@@ -1301,9 +1312,11 @@ impl SortedSetValue {
         offset: usize,
         count: Option<usize>,
     ) -> Vec<(Bytes, f64)> {
-        let iter = self.scores.iter().rev().filter(|((_, member), _)| {
-            min.satisfies_min(member) && max.satisfies_max(member)
-        });
+        let iter = self
+            .scores
+            .iter()
+            .rev()
+            .filter(|((_, member), _)| min.satisfies_min(member) && max.satisfies_max(member));
 
         let iter = iter.skip(offset);
 
@@ -1574,9 +1587,7 @@ impl HashValue {
             0
         };
 
-        let new_val = current
-            .checked_add(delta)
-            .ok_or(IncrementError::Overflow)?;
+        let new_val = current.checked_add(delta).ok_or(IncrementError::Overflow)?;
         self.data.insert(field, Bytes::from(new_val.to_string()));
         Ok(new_val)
     }
@@ -1899,8 +1910,7 @@ impl ListValue {
 
     /// Get an element by index (supports negative indices).
     pub fn get(&self, index: i64) -> Option<&Bytes> {
-        self.normalize_index(index)
-            .and_then(|i| self.data.get(i))
+        self.normalize_index(index).and_then(|i| self.data.get(i))
     }
 
     /// Set an element by index (supports negative indices).
@@ -1979,7 +1989,8 @@ impl ListValue {
         let end = end as usize;
 
         // Keep only elements in range [start, end]
-        let new_data: VecDeque<_> = self.data
+        let new_data: VecDeque<_> = self
+            .data
             .iter()
             .skip(start)
             .take(end - start + 1)
@@ -2335,7 +2346,10 @@ impl std::fmt::Display for StreamIdParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StreamIdParseError::InvalidFormat => {
-                write!(f, "ERR Invalid stream ID specified as stream command argument")
+                write!(
+                    f,
+                    "ERR Invalid stream ID specified as stream command argument"
+                )
             }
         }
     }
@@ -2680,27 +2694,30 @@ impl StreamValue {
 
     /// Get the first entry.
     pub fn first_entry(&self) -> Option<StreamEntry> {
-        self.entries.first_key_value().map(|(id, fields)| {
-            StreamEntry::new(*id, fields.clone())
-        })
+        self.entries
+            .first_key_value()
+            .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
     }
 
     /// Get the last entry.
     pub fn last_entry(&self) -> Option<StreamEntry> {
-        self.entries.last_key_value().map(|(id, fields)| {
-            StreamEntry::new(*id, fields.clone())
-        })
+        self.entries
+            .last_key_value()
+            .map(|(id, fields)| StreamEntry::new(*id, fields.clone()))
     }
 
     /// Add an entry to the stream.
     ///
     /// Returns the ID of the added entry, or an error if the ID is invalid.
-    pub fn add(&mut self, id_spec: StreamIdSpec, fields: Vec<(Bytes, Bytes)>) -> Result<StreamId, StreamAddError> {
+    pub fn add(
+        &mut self,
+        id_spec: StreamIdSpec,
+        fields: Vec<(Bytes, Bytes)>,
+    ) -> Result<StreamId, StreamAddError> {
         let id = match id_spec {
             StreamIdSpec::Auto => StreamId::generate(&self.last_id),
             StreamIdSpec::AutoSeq(ms) => {
-                StreamId::generate_with_ms(ms, &self.last_id)
-                    .ok_or(StreamAddError::IdTooSmall)?
+                StreamId::generate_with_ms(ms, &self.last_id).ok_or(StreamAddError::IdTooSmall)?
             }
             StreamIdSpec::Explicit(id) => {
                 if !id.is_valid_after(&self.last_id) {
@@ -2752,9 +2769,10 @@ impl StreamValue {
         end: StreamRangeBound,
         count: Option<usize>,
     ) -> Vec<StreamEntry> {
-        let iter = self.entries.iter().filter(|(id, _)| {
-            start.satisfies_min(id) && end.satisfies_max(id)
-        });
+        let iter = self
+            .entries
+            .iter()
+            .filter(|(id, _)| start.satisfies_min(id) && end.satisfies_max(id));
 
         let entries: Vec<_> = if let Some(count) = count {
             iter.take(count)
@@ -2776,9 +2794,11 @@ impl StreamValue {
         count: Option<usize>,
     ) -> Vec<StreamEntry> {
         // For reverse range, start and end are swapped (end is the "start" bound)
-        let iter = self.entries.iter().rev().filter(|(id, _)| {
-            end.satisfies_min(id) && start.satisfies_max(id)
-        });
+        let iter = self
+            .entries
+            .iter()
+            .rev()
+            .filter(|(id, _)| end.satisfies_min(id) && start.satisfies_max(id));
 
         let entries: Vec<_> = if let Some(count) = count {
             iter.take(count)
@@ -2794,7 +2814,10 @@ impl StreamValue {
 
     /// Read entries after a given ID (for XREAD).
     pub fn read_after(&self, after: &StreamId, count: Option<usize>) -> Vec<StreamEntry> {
-        let iter = self.entries.range((std::ops::Bound::Excluded(*after), std::ops::Bound::Unbounded));
+        let iter = self.entries.range((
+            std::ops::Bound::Excluded(*after),
+            std::ops::Bound::Unbounded,
+        ));
 
         let entries: Vec<_> = if let Some(count) = count {
             iter.take(count)
@@ -2813,7 +2836,11 @@ impl StreamValue {
     /// Returns the number of entries removed.
     pub fn trim(&mut self, options: StreamTrimOptions) -> usize {
         let mut removed = 0;
-        let limit = if options.limit == 0 { usize::MAX } else { options.limit };
+        let limit = if options.limit == 0 {
+            usize::MAX
+        } else {
+            options.limit
+        };
 
         match options.strategy {
             StreamTrimStrategy::MaxLen(max_len) => {
@@ -2857,7 +2884,12 @@ impl StreamValue {
     /// Create a consumer group.
     ///
     /// Returns an error if the group already exists.
-    pub fn create_group(&mut self, name: Bytes, last_delivered_id: StreamId, entries_read: Option<u64>) -> Result<(), StreamGroupError> {
+    pub fn create_group(
+        &mut self,
+        name: Bytes,
+        last_delivered_id: StreamId,
+        entries_read: Option<u64>,
+    ) -> Result<(), StreamGroupError> {
         if self.groups.contains_key(&name) {
             return Err(StreamGroupError::GroupExists);
         }
@@ -2895,7 +2927,12 @@ impl StreamValue {
     }
 
     /// Set a consumer group's last delivered ID.
-    pub fn set_group_id(&mut self, name: &[u8], id: StreamId, entries_read: Option<u64>) -> Result<(), StreamGroupError> {
+    pub fn set_group_id(
+        &mut self,
+        name: &[u8],
+        id: StreamId,
+        entries_read: Option<u64>,
+    ) -> Result<(), StreamGroupError> {
         let group = self.groups.get_mut(name).ok_or(StreamGroupError::NoGroup)?;
         group.last_delivered_id = id;
         if entries_read.is_some() {
@@ -2906,7 +2943,9 @@ impl StreamValue {
 
     /// Get an entry by ID.
     pub fn get(&self, id: &StreamId) -> Option<StreamEntry> {
-        self.entries.get(id).map(|fields| StreamEntry::new(*id, fields.clone()))
+        self.entries
+            .get(id)
+            .map(|fields| StreamEntry::new(*id, fields.clone()))
     }
 
     /// Check if an entry exists.
@@ -3200,13 +3239,23 @@ mod tests {
         let mut stream = StreamValue::new();
 
         let fields = vec![(Bytes::from("field1"), Bytes::from("value1"))];
-        let id = stream.add(StreamIdSpec::Explicit(StreamId::new(1000, 0)), fields.clone()).unwrap();
+        let id = stream
+            .add(
+                StreamIdSpec::Explicit(StreamId::new(1000, 0)),
+                fields.clone(),
+            )
+            .unwrap();
 
         assert_eq!(id, StreamId::new(1000, 0));
         assert_eq!(stream.len(), 1);
 
         // Add with larger ID
-        let id2 = stream.add(StreamIdSpec::Explicit(StreamId::new(1000, 1)), fields.clone()).unwrap();
+        let id2 = stream
+            .add(
+                StreamIdSpec::Explicit(StreamId::new(1000, 1)),
+                fields.clone(),
+            )
+            .unwrap();
         assert_eq!(id2, StreamId::new(1000, 1));
 
         // Cannot add with smaller ID
@@ -3220,7 +3269,9 @@ mod tests {
 
         for i in 0..5 {
             let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
-            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+            stream
+                .add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields)
+                .unwrap();
         }
 
         // Full range
@@ -3235,7 +3286,7 @@ mod tests {
         let entries = stream.range(
             StreamRangeBound::Inclusive(StreamId::new(1001, 0)),
             StreamRangeBound::Inclusive(StreamId::new(1003, 0)),
-            None
+            None,
         );
         assert_eq!(entries.len(), 3);
     }
@@ -3246,7 +3297,9 @@ mod tests {
 
         for i in 0..5 {
             let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
-            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+            stream
+                .add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields)
+                .unwrap();
         }
 
         let deleted = stream.delete(&[StreamId::new(1001, 0), StreamId::new(1003, 0)]);
@@ -3264,7 +3317,9 @@ mod tests {
 
         for i in 0..10 {
             let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
-            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+            stream
+                .add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields)
+                .unwrap();
         }
 
         let trimmed = stream.trim(StreamTrimOptions {
@@ -3286,7 +3341,9 @@ mod tests {
 
         for i in 0..10 {
             let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
-            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+            stream
+                .add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields)
+                .unwrap();
         }
 
         let trimmed = stream.trim(StreamTrimOptions {
@@ -3307,11 +3364,15 @@ mod tests {
         // Add some entries
         for i in 0..5 {
             let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
-            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+            stream
+                .add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields)
+                .unwrap();
         }
 
         // Create a group
-        stream.create_group(Bytes::from("mygroup"), StreamId::new(0, 0), None).unwrap();
+        stream
+            .create_group(Bytes::from("mygroup"), StreamId::new(0, 0), None)
+            .unwrap();
 
         // Try to create duplicate group
         let result = stream.create_group(Bytes::from("mygroup"), StreamId::new(0, 0), None);
@@ -3334,11 +3395,15 @@ mod tests {
         // Add some entries
         for i in 0..5 {
             let fields = vec![(Bytes::from("field"), Bytes::from(format!("value{}", i)))];
-            stream.add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields).unwrap();
+            stream
+                .add(StreamIdSpec::Explicit(StreamId::new(1000 + i, 0)), fields)
+                .unwrap();
         }
 
         // Create a group and add pending entries
-        stream.create_group(Bytes::from("mygroup"), StreamId::new(0, 0), None).unwrap();
+        stream
+            .create_group(Bytes::from("mygroup"), StreamId::new(0, 0), None)
+            .unwrap();
 
         let group = stream.get_group_mut(b"mygroup").unwrap();
         group.get_or_create_consumer(Bytes::from("consumer1"));
@@ -3388,13 +3453,17 @@ mod tests {
 
         // Add an entry
         let fields = vec![(Bytes::from("field"), Bytes::from("value"))];
-        stream.add(StreamIdSpec::Explicit(StreamId::new(1000, 0)), fields).unwrap();
+        stream
+            .add(StreamIdSpec::Explicit(StreamId::new(1000, 0)), fields)
+            .unwrap();
 
         let after_add = stream.memory_size();
         assert!(after_add > initial_size);
 
         // Add a group
-        stream.create_group(Bytes::from("mygroup"), StreamId::new(0, 0), None).unwrap();
+        stream
+            .create_group(Bytes::from("mygroup"), StreamId::new(0, 0), None)
+            .unwrap();
 
         let after_group = stream.memory_size();
         assert!(after_group > after_add);

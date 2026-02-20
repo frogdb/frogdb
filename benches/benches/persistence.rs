@@ -135,15 +135,11 @@ fn bench_serialize_hash(c: &mut Criterion) {
         let metadata = KeyMetadata::new(value.memory_size());
 
         group.throughput(Throughput::Elements(hash_size as u64));
-        group.bench_with_input(
-            BenchmarkId::new("fields", hash_size),
-            &hash_size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(serialize(&value, &metadata));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("fields", hash_size), &hash_size, |b, _| {
+            b.iter(|| {
+                black_box(serialize(&value, &metadata));
+            });
+        });
     }
 
     group.finish();

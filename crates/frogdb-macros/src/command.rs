@@ -122,14 +122,12 @@ fn parse_command_attr(attrs: &[Attribute]) -> syn::Result<CommandAttr> {
     }
 
     Ok(CommandAttr {
-        name: name.ok_or_else(|| syn::Error::new_spanned(
-            &attrs[0],
-            "missing `name` in #[command(...)]",
-        ))?,
-        arity: arity.ok_or_else(|| syn::Error::new_spanned(
-            &attrs[0],
-            "missing `arity` in #[command(...)]",
-        ))?,
+        name: name.ok_or_else(|| {
+            syn::Error::new_spanned(&attrs[0], "missing `name` in #[command(...)]")
+        })?,
+        arity: arity.ok_or_else(|| {
+            syn::Error::new_spanned(&attrs[0], "missing `arity` in #[command(...)]")
+        })?,
         flags,
         strategy,
     })
@@ -142,34 +140,43 @@ fn parse_arity_spec(s: &str) -> syn::Result<AritySpec> {
     if s.contains("..") {
         if s.ends_with("..") {
             // "N.." means at least N
-            let min: usize = s.trim_end_matches("..").parse()
-                .map_err(|_| syn::Error::new(proc_macro2::Span::call_site(), "invalid arity number"))?;
+            let min: usize = s.trim_end_matches("..").parse().map_err(|_| {
+                syn::Error::new(proc_macro2::Span::call_site(), "invalid arity number")
+            })?;
             return Ok(AritySpec::AtLeast(min));
         } else if s.contains("..=") {
             // "min..=max" inclusive range
             let parts: Vec<&str> = s.split("..=").collect();
             if parts.len() == 2 {
-                let min: usize = parts[0].parse()
-                    .map_err(|_| syn::Error::new(proc_macro2::Span::call_site(), "invalid arity min"))?;
-                let max: usize = parts[1].parse()
-                    .map_err(|_| syn::Error::new(proc_macro2::Span::call_site(), "invalid arity max"))?;
+                let min: usize = parts[0].parse().map_err(|_| {
+                    syn::Error::new(proc_macro2::Span::call_site(), "invalid arity min")
+                })?;
+                let max: usize = parts[1].parse().map_err(|_| {
+                    syn::Error::new(proc_macro2::Span::call_site(), "invalid arity max")
+                })?;
                 return Ok(AritySpec::Range { min, max });
             }
         } else {
             // "min..max" exclusive range (treat as inclusive for simplicity)
             let parts: Vec<&str> = s.split("..").collect();
             if parts.len() == 2 {
-                let min: usize = parts[0].parse()
-                    .map_err(|_| syn::Error::new(proc_macro2::Span::call_site(), "invalid arity min"))?;
-                let max: usize = parts[1].parse()
-                    .map_err(|_| syn::Error::new(proc_macro2::Span::call_site(), "invalid arity max"))?;
-                return Ok(AritySpec::Range { min, max: max.saturating_sub(1) });
+                let min: usize = parts[0].parse().map_err(|_| {
+                    syn::Error::new(proc_macro2::Span::call_site(), "invalid arity min")
+                })?;
+                let max: usize = parts[1].parse().map_err(|_| {
+                    syn::Error::new(proc_macro2::Span::call_site(), "invalid arity max")
+                })?;
+                return Ok(AritySpec::Range {
+                    min,
+                    max: max.saturating_sub(1),
+                });
             }
         }
     }
 
     // Simple number = fixed arity
-    let n: usize = s.parse()
+    let n: usize = s
+        .parse()
         .map_err(|_| syn::Error::new(proc_macro2::Span::call_site(), "invalid arity number"))?;
     Ok(AritySpec::Fixed(n))
 }
@@ -203,9 +210,9 @@ fn parse_keys_attr(attrs: &[Attribute]) -> syn::Result<KeysSpec> {
             // Parse #[keys(step = 2)]
             if let Some(eq_pos) = tokens.find('=') {
                 let step_str = tokens[eq_pos + 1..].trim();
-                let step: usize = step_str.parse().map_err(|_| {
-                    syn::Error::new_spanned(attr, "invalid step value")
-                })?;
+                let step: usize = step_str
+                    .parse()
+                    .map_err(|_| syn::Error::new_spanned(attr, "invalid step value"))?;
                 return Ok(KeysSpec::Step(step));
             }
         }
@@ -313,7 +320,7 @@ fn generate_keys_impl(spec: &KeysSpec) -> TokenStream2 {
                     }
                 }
             }
-        },
+        }
         KeysSpec::Step(step) => {
             // Every N-th argument starting at 0 (for MSET pattern: key1 val1 key2 val2)
             quote! {
@@ -322,7 +329,7 @@ fn generate_keys_impl(spec: &KeysSpec) -> TokenStream2 {
                     .map(|a| &a[..])
                     .collect()
             }
-        },
+        }
         KeysSpec::Custom => quote! {
             self.keys_impl(args)
         },

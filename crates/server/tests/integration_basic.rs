@@ -4,7 +4,7 @@ mod common;
 
 use bytes::Bytes;
 use common::test_server::TestServer;
-use frogdb_metrics::testing::{get_counter};
+use frogdb_metrics::testing::get_counter;
 use frogdb_protocol::Response;
 use std::time::Duration;
 
@@ -142,7 +142,9 @@ async fn test_wrong_arity() {
 
     // GET requires exactly 1 argument
     let response = client.command(&["GET"]).await;
-    assert!(matches!(response, Response::Error(e) if e.starts_with(b"ERR wrong number of arguments")));
+    assert!(
+        matches!(response, Response::Error(e) if e.starts_with(b"ERR wrong number of arguments"))
+    );
 
     server.shutdown().await;
 }

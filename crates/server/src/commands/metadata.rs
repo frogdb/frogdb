@@ -128,7 +128,11 @@ metadata_command!(
     ExecMetadata,
     "EXEC",
     Arity::Fixed(0),
-    CommandFlags::WRITE | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::SKIP_SLOWLOG,
+    CommandFlags::WRITE
+        | CommandFlags::NOSCRIPT
+        | CommandFlags::LOADING
+        | CommandFlags::STALE
+        | CommandFlags::SKIP_SLOWLOG,
     ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction)
 );
 
@@ -208,7 +212,11 @@ metadata_command!(
     AuthMetadata,
     "AUTH",
     Arity::AtLeast(1),
-    CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::NOSCRIPT | CommandFlags::NO_PROPAGATE,
+    CommandFlags::FAST
+        | CommandFlags::LOADING
+        | CommandFlags::STALE
+        | CommandFlags::NOSCRIPT
+        | CommandFlags::NO_PROPAGATE,
     ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth)
 );
 
@@ -216,6 +224,10 @@ metadata_command!(
     HelloMetadata,
     "HELLO",
     Arity::AtLeast(0),
-    CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::NOSCRIPT | CommandFlags::NO_PROPAGATE,
+    CommandFlags::FAST
+        | CommandFlags::LOADING
+        | CommandFlags::STALE
+        | CommandFlags::NOSCRIPT
+        | CommandFlags::NO_PROPAGATE,
     ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth)
 );

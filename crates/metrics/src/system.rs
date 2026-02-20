@@ -91,7 +91,11 @@ impl SystemMetricsCollector {
 
 /// Record server start info metric.
 pub fn record_server_info(recorder: &Arc<dyn MetricsRecorder>, version: &str, mode: &str) {
-    recorder.record_gauge(metric_names::INFO, 1.0, &[("version", version), ("mode", mode)]);
+    recorder.record_gauge(
+        metric_names::INFO,
+        1.0,
+        &[("version", version), ("mode", mode)],
+    );
 }
 
 #[cfg(test)]
@@ -117,8 +121,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_collector() {
         let recorder = Arc::new(NoopMetricsRecorder::new());
-        let handle =
-            SystemMetricsCollector::spawn_collector(recorder, Duration::from_millis(100));
+        let handle = SystemMetricsCollector::spawn_collector(recorder, Duration::from_millis(100));
 
         // Let it run for a bit
         tokio::time::sleep(Duration::from_millis(250)).await;

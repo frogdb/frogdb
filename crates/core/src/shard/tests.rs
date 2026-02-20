@@ -2,8 +2,14 @@ use super::*;
 
 #[test]
 fn test_extract_hash_tag_simple() {
-    assert_eq!(extract_hash_tag(b"{user:1}:profile"), Some(b"user:1".as_slice()));
-    assert_eq!(extract_hash_tag(b"{user:1}:settings"), Some(b"user:1".as_slice()));
+    assert_eq!(
+        extract_hash_tag(b"{user:1}:profile"),
+        Some(b"user:1".as_slice())
+    );
+    assert_eq!(
+        extract_hash_tag(b"{user:1}:settings"),
+        Some(b"user:1".as_slice())
+    );
 }
 
 #[test]

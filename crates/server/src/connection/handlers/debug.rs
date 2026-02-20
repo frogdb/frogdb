@@ -61,7 +61,9 @@ impl ConnectionHandler {
                 ];
                 Response::Bulk(Some(Bytes::from(lines.join("\r\n"))))
             }
-            None => Response::Bulk(Some(Bytes::from("enabled:no\r\nreason:tracer not configured"))),
+            None => Response::Bulk(Some(Bytes::from(
+                "enabled:no\r\nreason:tracer not configured",
+            ))),
         }
     }
 
@@ -170,12 +172,13 @@ impl ConnectionHandler {
     }
 
     /// Format VLL queue info as a response.
-    pub(crate) fn format_vll_response(&self, infos: Vec<frogdb_core::shard::VllQueueInfo>) -> Response {
+    pub(crate) fn format_vll_response(
+        &self,
+        infos: Vec<frogdb_core::shard::VllQueueInfo>,
+    ) -> Response {
         // Check if all queues are empty
         let all_empty = infos.iter().all(|i| {
-            i.queue_depth == 0
-                && i.continuation_lock.is_none()
-                && i.intent_table.is_empty()
+            i.queue_depth == 0 && i.continuation_lock.is_none() && i.intent_table.is_empty()
         });
 
         if all_empty {

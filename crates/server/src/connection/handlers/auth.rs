@@ -22,7 +22,11 @@ impl ConnectionHandler {
             "id={} addr={} name={}",
             self.state.id,
             self.state.addr,
-            self.state.name.as_ref().map(|b| String::from_utf8_lossy(b)).unwrap_or_default()
+            self.state
+                .name
+                .as_ref()
+                .map(|b| String::from_utf8_lossy(b))
+                .unwrap_or_default()
         )
     }
 
@@ -37,12 +41,14 @@ impl ConnectionHandler {
         let result = if args.len() == 1 {
             // AUTH <password> - authenticate as default user
             let password = String::from_utf8_lossy(&args[0]);
-            self.acl_manager.authenticate_default(&password, &client_info)
+            self.acl_manager
+                .authenticate_default(&password, &client_info)
         } else {
             // AUTH <username> <password>
             let username = String::from_utf8_lossy(&args[0]);
             let password = String::from_utf8_lossy(&args[1]);
-            self.acl_manager.authenticate(&username, &password, &client_info)
+            self.acl_manager
+                .authenticate(&username, &password, &client_info)
         };
 
         match result {
@@ -83,9 +89,16 @@ impl ConnectionHandler {
         while i < args.len() {
             if i == 0 {
                 // First argument is protocol version
-                match std::str::from_utf8(&args[i]).ok().and_then(|s| s.parse::<u32>().ok()) {
+                match std::str::from_utf8(&args[i])
+                    .ok()
+                    .and_then(|s| s.parse::<u32>().ok())
+                {
                     Some(v) => requested_version = Some(v),
-                    None => return Response::error("ERR Protocol version is not an integer or out of range"),
+                    None => {
+                        return Response::error(
+                            "ERR Protocol version is not an integer or out of range",
+                        )
+                    }
                 }
             } else {
                 // Check for AUTH or SETNAME
@@ -106,7 +119,10 @@ impl ConnectionHandler {
                     setname = Some(&args[i + 1]);
                     i += 1;
                 } else {
-                    return Response::error(format!("ERR Syntax error in HELLO option '{}'", String::from_utf8_lossy(&args[i])));
+                    return Response::error(format!(
+                        "ERR Syntax error in HELLO option '{}'",
+                        String::from_utf8_lossy(&args[i])
+                    ));
                 }
             }
             i += 1;
@@ -126,8 +142,13 @@ impl ConnectionHandler {
             };
 
             // Check for downgrade after HELLO 3
-            if self.state.hello_received && self.state.protocol_version.is_resp3() && !new_version.is_resp3() {
-                return Response::error("ERR protocol downgrade from RESP3 to RESP2 is not allowed");
+            if self.state.hello_received
+                && self.state.protocol_version.is_resp3()
+                && !new_version.is_resp3()
+            {
+                return Response::error(
+                    "ERR protocol downgrade from RESP3 to RESP2 is not allowed",
+                );
             }
 
             self.state.protocol_version = new_version;
@@ -139,7 +160,10 @@ impl ConnectionHandler {
             let username_str = String::from_utf8_lossy(username);
             let password_str = String::from_utf8_lossy(password);
 
-            match self.acl_manager.authenticate(&username_str, &password_str, &client_info) {
+            match self
+                .acl_manager
+                .authenticate(&username_str, &password_str, &client_info)
+            {
                 Ok(user) => {
                     info!(conn_id = self.state.id, username = %user.username, "Client authenticated");
                     self.state.auth = AuthState::Authenticated(user);
@@ -152,7 +176,9 @@ impl ConnectionHandler {
                         reason = "invalid username-password pair or user is disabled",
                         "Authentication failed"
                     );
-                    return Response::error("WRONGPASS invalid username-password pair or user is disabled");
+                    return Response::error(
+                        "WRONGPASS invalid username-password pair or user is disabled",
+                    );
                 }
             }
         }
@@ -164,7 +190,8 @@ impl ConnectionHandler {
                 self.client_registry.update_name(self.state.id, None);
             } else {
                 self.state.name = Some(name.clone());
-                self.client_registry.update_name(self.state.id, Some(name.clone()));
+                self.client_registry
+                    .update_name(self.state.id, Some(name.clone()));
             }
         }
 
@@ -186,7 +213,11 @@ impl ConnectionHandler {
         let version_val = Response::bulk(Bytes::from(env!("CARGO_PKG_VERSION")));
 
         let proto = Response::bulk(Bytes::from_static(b"proto"));
-        let proto_val = Response::Integer(if self.state.protocol_version.is_resp3() { 3 } else { 2 });
+        let proto_val = Response::Integer(if self.state.protocol_version.is_resp3() {
+            3
+        } else {
+            2
+        });
 
         let id = Response::bulk(Bytes::from_static(b"id"));
         let id_val = Response::Integer(self.state.id as i64);
@@ -214,13 +245,20 @@ impl ConnectionHandler {
         } else {
             // Return as flat array for RESP2
             Response::Array(vec![
-                server, server_val,
-                version, version_val,
-                proto, proto_val,
-                id, id_val,
-                mode, mode_val,
-                role, role_val,
-                modules, modules_val,
+                server,
+                server_val,
+                version,
+                version_val,
+                proto,
+                proto_val,
+                id,
+                id_val,
+                mode,
+                mode_val,
+                role,
+                role_val,
+                modules,
+                modules_val,
             ])
         }
     }
@@ -247,7 +285,10 @@ impl ConnectionHandler {
             "SAVE" => self.handle_acl_save(),
             "LOAD" => self.handle_acl_load(),
             "HELP" => self.handle_acl_help(),
-            _ => Response::error(format!("ERR Unknown subcommand or wrong number of arguments for '{}'", subcmd)),
+            _ => Response::error(format!(
+                "ERR Unknown subcommand or wrong number of arguments for '{}'",
+                subcmd
+            )),
         }
     }
 
@@ -259,13 +300,23 @@ impl ConnectionHandler {
     /// ACL LIST - list all users with their ACL rules.
     fn handle_acl_list(&self) -> Response {
         let users = self.acl_manager.list_users_detailed();
-        Response::Array(users.into_iter().map(|s| Response::bulk(Bytes::from(s))).collect())
+        Response::Array(
+            users
+                .into_iter()
+                .map(|s| Response::bulk(Bytes::from(s)))
+                .collect(),
+        )
     }
 
     /// ACL USERS - list all usernames.
     fn handle_acl_users(&self) -> Response {
         let users = self.acl_manager.list_users();
-        Response::Array(users.into_iter().map(|s| Response::bulk(Bytes::from(s))).collect())
+        Response::Array(
+            users
+                .into_iter()
+                .map(|s| Response::bulk(Bytes::from(s)))
+                .collect(),
+        )
     }
 
     /// ACL GETUSER <username> - get user info.
@@ -466,7 +517,11 @@ impl ConnectionHandler {
             "HELP",
             "    Print this help.",
         ];
-        Response::Array(help.into_iter().map(|s| Response::bulk(Bytes::from(s))).collect())
+        Response::Array(
+            help.into_iter()
+                .map(|s| Response::bulk(Bytes::from(s)))
+                .collect(),
+        )
     }
 
     /// Handle RESET command - reset connection to initial state.
@@ -481,9 +536,11 @@ impl ConnectionHandler {
 
             // Notify all shards to remove this connection's subscriptions
             for sender in self.shard_senders.iter() {
-                let _ = sender.send(ShardMessage::ConnectionClosed {
-                    conn_id: self.state.id,
-                }).await;
+                let _ = sender
+                    .send(ShardMessage::ConnectionClosed {
+                        conn_id: self.state.id,
+                    })
+                    .await;
             }
         }
 

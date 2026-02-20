@@ -28,9 +28,7 @@ impl LatencyBandTracker {
         bands.dedup();
 
         // One counter per band + one for total
-        let counters = (0..=bands.len())
-            .map(|_| AtomicU64::new(0))
-            .collect();
+        let counters = (0..=bands.len()).map(|_| AtomicU64::new(0)).collect();
 
         Self { bands, counters }
     }

@@ -66,7 +66,9 @@ impl VmContextAccessor {
     /// This method must only be called during script execution when the
     /// command context pointers are valid.
     pub fn execute_command(&self, parts: &[Bytes]) -> Result<Response, String> {
-        let ctx_guard = self.cmd_ctx.try_read_err()
+        let ctx_guard = self
+            .cmd_ctx
+            .try_read_err()
             .map_err(|e| format!("ERR lock error: {}", e))?;
         let exec_ctx = ctx_guard
             .as_ref()
@@ -116,7 +118,9 @@ impl VmContextAccessor {
 
     /// Mark the script as having performed a write operation.
     pub fn mark_write(&self) {
-        self.state.lock_or_panic("VmContextAccessor::mark_write").has_writes = true;
+        self.state
+            .lock_or_panic("VmContextAccessor::mark_write")
+            .has_writes = true;
     }
 }
 
@@ -187,14 +191,9 @@ impl LuaVm {
     /// Create a new Lua VM with sandboxing.
     pub fn new(config: ScriptingConfig) -> Result<Self, ScriptError> {
         // Create Lua with minimal standard libraries
-        let libs = StdLib::COROUTINE
-            | StdLib::TABLE
-            | StdLib::STRING
-            | StdLib::MATH;
+        let libs = StdLib::COROUTINE | StdLib::TABLE | StdLib::STRING | StdLib::MATH;
 
-        let lua = unsafe {
-            Lua::unsafe_new_with(libs, mlua::LuaOptions::default())
-        };
+        let lua = unsafe { Lua::unsafe_new_with(libs, mlua::LuaOptions::default()) };
 
         // Set memory limit if configured
         if config.lua_heap_limit_mb > 0 {
@@ -213,7 +212,13 @@ impl LuaVm {
             "Lua VM initialized"
         );
 
-        let vm = Self { lua, config, state, kill_flag, cmd_ctx };
+        let vm = Self {
+            lua,
+            config,
+            state,
+            kill_flag,
+            cmd_ctx,
+        };
 
         // Apply sandbox restrictions
         vm.apply_sandbox().map_err(|e| {
@@ -232,17 +237,17 @@ impl LuaVm {
         let forbidden = [
             "loadfile",
             "dofile",
-            "load",     // Can load bytecode
-            "rawset",   // Can bypass metatables
-            "rawget",   // Can bypass metatables
-            "setfenv",  // Lua 5.1 only, but be safe
-            "getfenv",  // Lua 5.1 only, but be safe
-            "module",   // Deprecated
-            "require",  // No module loading
-            "package",  // No package system
-            "io",       // No I/O
-            "os",       // No OS access (we'll add back safe functions)
-            "debug",    // No debug library
+            "load",           // Can load bytecode
+            "rawset",         // Can bypass metatables
+            "rawget",         // Can bypass metatables
+            "setfenv",        // Lua 5.1 only, but be safe
+            "getfenv",        // Lua 5.1 only, but be safe
+            "module",         // Deprecated
+            "require",        // No module loading
+            "package",        // No package system
+            "io",             // No I/O
+            "os",             // No OS access (we'll add back safe functions)
+            "debug",          // No debug library
             "collectgarbage", // No GC manipulation
         ];
 
@@ -251,28 +256,39 @@ impl LuaVm {
         }
 
         // Create a safe os table with only clock and time
-        let os_table = self.lua.create_table()
+        let os_table = self
+            .lua
+            .create_table()
             .map_err(|e| ScriptError::Internal(format!("Failed to create os table: {}", e)))?;
 
-        let clock_fn = self.lua.create_function(|_, ()| -> LuaResult<f64> {
-            Ok(std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs_f64())
-                .unwrap_or(0.0))
-        }).map_err(|e| ScriptError::Internal(format!("Failed to create clock fn: {}", e)))?;
+        let clock_fn = self
+            .lua
+            .create_function(|_, ()| -> LuaResult<f64> {
+                Ok(std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0))
+            })
+            .map_err(|e| ScriptError::Internal(format!("Failed to create clock fn: {}", e)))?;
 
-        let time_fn = self.lua.create_function(|_, ()| -> LuaResult<i64> {
-            Ok(std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0))
-        }).map_err(|e| ScriptError::Internal(format!("Failed to create time fn: {}", e)))?;
+        let time_fn = self
+            .lua
+            .create_function(|_, ()| -> LuaResult<i64> {
+                Ok(std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0))
+            })
+            .map_err(|e| ScriptError::Internal(format!("Failed to create time fn: {}", e)))?;
 
-        os_table.set("clock", clock_fn)
+        os_table
+            .set("clock", clock_fn)
             .map_err(|e| ScriptError::Internal(format!("Failed to set os.clock: {}", e)))?;
-        os_table.set("time", time_fn)
+        os_table
+            .set("time", time_fn)
             .map_err(|e| ScriptError::Internal(format!("Failed to set os.time: {}", e)))?;
-        globals.set("os", os_table)
+        globals
+            .set("os", os_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set os: {}", e)))?;
 
         Ok(())
@@ -297,9 +313,10 @@ impl LuaVm {
                 // Check timeout
                 let elapsed = start_time.elapsed().as_millis() as u64;
                 if elapsed > timeout_ms + grace_ms {
-                    return Err(mlua::Error::RuntimeError(
-                        format!("BUSY script running for {} ms", elapsed)
-                    ));
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "BUSY script running for {} ms",
+                        elapsed
+                    )));
                 }
 
                 Ok(VmState::Continue)
@@ -313,11 +330,7 @@ impl LuaVm {
     }
 
     /// Prepare the VM for a new script execution.
-    pub fn prepare_execution(
-        &self,
-        keys: &[Bytes],
-        argv: &[Bytes],
-    ) -> Result<(), ScriptError> {
+    pub fn prepare_execution(&self, keys: &[Bytes], argv: &[Bytes]) -> Result<(), ScriptError> {
         let start_time = Instant::now();
 
         // Reset execution state
@@ -340,27 +353,37 @@ impl LuaVm {
         let globals = self.lua.globals();
 
         // Create KEYS table
-        let keys_table = self.lua.create_table()
+        let keys_table = self
+            .lua
+            .create_table()
             .map_err(|e| ScriptError::Internal(format!("Failed to create KEYS table: {}", e)))?;
         for (i, key) in keys.iter().enumerate() {
-            let lua_str = self.lua.create_string(key.as_ref())
-                .map_err(|e| ScriptError::Internal(format!("Failed to create KEYS[{}] string: {}", i + 1, e)))?;
-            keys_table.set(i + 1, lua_str)
-                .map_err(|e| ScriptError::Internal(format!("Failed to set KEYS[{}]: {}", i + 1, e)))?;
+            let lua_str = self.lua.create_string(key.as_ref()).map_err(|e| {
+                ScriptError::Internal(format!("Failed to create KEYS[{}] string: {}", i + 1, e))
+            })?;
+            keys_table.set(i + 1, lua_str).map_err(|e| {
+                ScriptError::Internal(format!("Failed to set KEYS[{}]: {}", i + 1, e))
+            })?;
         }
-        globals.set("KEYS", keys_table)
+        globals
+            .set("KEYS", keys_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set KEYS: {}", e)))?;
 
         // Create ARGV table
-        let argv_table = self.lua.create_table()
+        let argv_table = self
+            .lua
+            .create_table()
             .map_err(|e| ScriptError::Internal(format!("Failed to create ARGV table: {}", e)))?;
         for (i, arg) in argv.iter().enumerate() {
-            let lua_str = self.lua.create_string(arg.as_ref())
-                .map_err(|e| ScriptError::Internal(format!("Failed to create ARGV[{}] string: {}", i + 1, e)))?;
-            argv_table.set(i + 1, lua_str)
-                .map_err(|e| ScriptError::Internal(format!("Failed to set ARGV[{}]: {}", i + 1, e)))?;
+            let lua_str = self.lua.create_string(arg.as_ref()).map_err(|e| {
+                ScriptError::Internal(format!("Failed to create ARGV[{}] string: {}", i + 1, e))
+            })?;
+            argv_table.set(i + 1, lua_str).map_err(|e| {
+                ScriptError::Internal(format!("Failed to set ARGV[{}]: {}", i + 1, e))
+            })?;
         }
-        globals.set("ARGV", argv_table)
+        globals
+            .set("ARGV", argv_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set ARGV: {}", e)))?;
 
         Ok(())
@@ -390,23 +413,22 @@ impl LuaVm {
         let chunk = self.lua.load(source);
 
         // Execute
-        let result = chunk.eval::<Value>()
-            .map_err(|e| {
-                match e {
-                    mlua::Error::MemoryError(_) => ScriptError::MemoryLimitExceeded,
-                    mlua::Error::SyntaxError { message, .. } => ScriptError::Compilation(message),
-                    mlua::Error::RuntimeError(msg) => {
-                        if msg.contains("BUSY") {
-                            ScriptError::Timeout { timeout_ms: self.config.lua_time_limit_ms }
-                        } else if msg.contains("killed") {
-                            ScriptError::Killed
-                        } else {
-                            ScriptError::Runtime(msg)
-                        }
+        let result = chunk.eval::<Value>().map_err(|e| match e {
+            mlua::Error::MemoryError(_) => ScriptError::MemoryLimitExceeded,
+            mlua::Error::SyntaxError { message, .. } => ScriptError::Compilation(message),
+            mlua::Error::RuntimeError(msg) => {
+                if msg.contains("BUSY") {
+                    ScriptError::Timeout {
+                        timeout_ms: self.config.lua_time_limit_ms,
                     }
-                    _ => ScriptError::Runtime(e.to_string()),
+                } else if msg.contains("killed") {
+                    ScriptError::Killed
+                } else {
+                    ScriptError::Runtime(msg)
                 }
-            })?;
+            }
+            _ => ScriptError::Runtime(e.to_string()),
+        })?;
 
         Ok(result)
     }
@@ -462,48 +484,68 @@ impl LuaVm {
 
     /// Check if the script is currently running.
     pub fn is_running(&self) -> bool {
-        self.state.lock_or_panic("LuaVm::is_running").start_time.is_some()
+        self.state
+            .lock_or_panic("LuaVm::is_running")
+            .start_time
+            .is_some()
     }
 
     /// Set up the redis.call and redis.pcall functions.
-    pub fn set_redis_functions(&self, call_fn: Function, pcall_fn: Function) -> Result<(), ScriptError> {
+    pub fn set_redis_functions(
+        &self,
+        call_fn: Function,
+        pcall_fn: Function,
+    ) -> Result<(), ScriptError> {
         let globals = self.lua.globals();
 
-        let redis_table = self.lua.create_table()
+        let redis_table = self
+            .lua
+            .create_table()
             .map_err(|e| ScriptError::Internal(format!("Failed to create redis table: {}", e)))?;
 
-        redis_table.set("call", call_fn)
+        redis_table
+            .set("call", call_fn)
             .map_err(|e| ScriptError::Internal(format!("Failed to set redis.call: {}", e)))?;
 
-        redis_table.set("pcall", pcall_fn)
+        redis_table
+            .set("pcall", pcall_fn)
             .map_err(|e| ScriptError::Internal(format!("Failed to set redis.pcall: {}", e)))?;
 
         // Add redis.log function
-        let log_fn = self.lua.create_function(|_, (level, message): (i32, String)| {
-            match level {
-                0 => tracing::debug!(target: "lua_script", "{}", message),
-                1 => tracing::trace!(target: "lua_script", "{}", message),
-                2 => tracing::info!(target: "lua_script", "{}", message),
-                3 => tracing::warn!(target: "lua_script", "{}", message),
-                _ => tracing::info!(target: "lua_script", "{}", message),
-            }
-            Ok(())
-        }).map_err(|e| ScriptError::Internal(format!("Failed to create log fn: {}", e)))?;
+        let log_fn = self
+            .lua
+            .create_function(|_, (level, message): (i32, String)| {
+                match level {
+                    0 => tracing::debug!(target: "lua_script", "{}", message),
+                    1 => tracing::trace!(target: "lua_script", "{}", message),
+                    2 => tracing::info!(target: "lua_script", "{}", message),
+                    3 => tracing::warn!(target: "lua_script", "{}", message),
+                    _ => tracing::info!(target: "lua_script", "{}", message),
+                }
+                Ok(())
+            })
+            .map_err(|e| ScriptError::Internal(format!("Failed to create log fn: {}", e)))?;
 
-        redis_table.set("log", log_fn)
+        redis_table
+            .set("log", log_fn)
             .map_err(|e| ScriptError::Internal(format!("Failed to set redis.log: {}", e)))?;
 
         // Add log level constants
-        redis_table.set("LOG_DEBUG", 0i32)
+        redis_table
+            .set("LOG_DEBUG", 0i32)
             .map_err(|e| ScriptError::Internal(format!("Failed to set LOG_DEBUG: {}", e)))?;
-        redis_table.set("LOG_VERBOSE", 1i32)
+        redis_table
+            .set("LOG_VERBOSE", 1i32)
             .map_err(|e| ScriptError::Internal(format!("Failed to set LOG_VERBOSE: {}", e)))?;
-        redis_table.set("LOG_NOTICE", 2i32)
+        redis_table
+            .set("LOG_NOTICE", 2i32)
             .map_err(|e| ScriptError::Internal(format!("Failed to set LOG_NOTICE: {}", e)))?;
-        redis_table.set("LOG_WARNING", 3i32)
+        redis_table
+            .set("LOG_WARNING", 3i32)
             .map_err(|e| ScriptError::Internal(format!("Failed to set LOG_WARNING: {}", e)))?;
 
-        globals.set("redis", redis_table)
+        globals
+            .set("redis", redis_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set redis: {}", e)))?;
 
         Ok(())

@@ -36,10 +36,7 @@ impl ShardWorker {
             match registry_guard.get_function(&func_name) {
                 Some((func, lib_name)) => (func.clone(), lib_name.to_string()),
                 None => {
-                    return Response::error(format!(
-                        "ERR Function not found: {}",
-                        func_name
-                    ));
+                    return Response::error(format!("ERR Function not found: {}", func_name));
                 }
             }
         };
@@ -61,10 +58,7 @@ impl ShardWorker {
             match registry_guard.get_library(&library_name) {
                 Some(lib) => lib.code.clone(),
                 None => {
-                    return Response::error(format!(
-                        "ERR Library not found: {}",
-                        library_name
-                    ));
+                    return Response::error(format!("ERR Library not found: {}", library_name));
                 }
             }
         };

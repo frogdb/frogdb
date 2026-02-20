@@ -185,7 +185,11 @@ pub fn download_all_artifacts(path: &str) -> Step<Use> {
 /// Creates an AWS credentials configuration step.
 pub fn configure_aws_credentials() -> Step<Use> {
     Step::new("Configure AWS credentials")
-        .uses("aws-actions", "configure-aws-credentials", AWS_CREDENTIALS_VERSION)
+        .uses(
+            "aws-actions",
+            "configure-aws-credentials",
+            AWS_CREDENTIALS_VERSION,
+        )
         .if_condition(Expression::new("inputs.cloud == 'aws'"))
         .add_with(("role-to-assume", "${{ secrets.AWS_ROLE_ARN }}"))
         .add_with(("aws-region", "${{ vars.AWS_REGION }}"))

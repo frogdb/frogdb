@@ -117,11 +117,7 @@ mod tests {
 
     #[test]
     fn test_function_read_only() {
-        let func = RegisteredFunction::new(
-            "test".to_string(),
-            FunctionFlags::NO_WRITES,
-            None,
-        );
+        let func = RegisteredFunction::new("test".to_string(), FunctionFlags::NO_WRITES, None);
         assert!(func.is_read_only());
         assert!(!func.allows_writes());
 

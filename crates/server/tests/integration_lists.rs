@@ -30,7 +30,9 @@ async fn test_lpop_rpop() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["RPUSH", "mylist", "a", "b", "c", "d"]).await;
+    client
+        .command(&["RPUSH", "mylist", "a", "b", "c", "d"])
+        .await;
 
     // LPOP
     let response = client.command(&["LPOP", "mylist"]).await;
@@ -80,7 +82,9 @@ async fn test_lrange() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["RPUSH", "mylist", "a", "b", "c", "d", "e"]).await;
+    client
+        .command(&["RPUSH", "mylist", "a", "b", "c", "d", "e"])
+        .await;
 
     // Full range
     let response = client.command(&["LRANGE", "mylist", "0", "-1"]).await;

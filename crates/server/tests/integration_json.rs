@@ -73,12 +73,7 @@ async fn test_json_del() {
 
     // Set up document
     client
-        .command(&[
-            "JSON.SET",
-            "doc",
-            "$",
-            r#"{"a":1,"b":{"c":2},"d":[1,2,3]}"#,
-        ])
+        .command(&["JSON.SET", "doc", "$", r#"{"a":1,"b":{"c":2},"d":[1,2,3]}"#])
         .await;
 
     // Delete nested path

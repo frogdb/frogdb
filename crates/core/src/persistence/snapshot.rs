@@ -308,7 +308,10 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
             in_progress.store(false, Ordering::SeqCst);
         });
 
-        tracing::info!(epoch = epoch, "Noop snapshot started (no actual data saved)");
+        tracing::info!(
+            epoch = epoch,
+            "Noop snapshot started (no actual data saved)"
+        );
 
         Ok(handle)
     }
@@ -448,9 +451,8 @@ impl RocksSnapshotCoordinator {
         }
 
         let content = std::fs::read_to_string(&metadata_path)?;
-        let metadata: SnapshotMetadataFile = serde_json::from_str(&content).map_err(|e| {
-            SnapshotError::Internal(format!("Failed to parse metadata: {}", e))
-        })?;
+        let metadata: SnapshotMetadataFile = serde_json::from_str(&content)
+            .map_err(|e| SnapshotError::Internal(format!("Failed to parse metadata: {}", e)))?;
 
         if !metadata.is_complete() {
             // Incomplete snapshot - don't use it
@@ -570,16 +572,10 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
         let initial_epoch = self.epoch.fetch_add(1, Ordering::SeqCst) + 1;
 
         // Record that a snapshot is starting
-        self.metrics_recorder.record_gauge(
-            "frogdb_snapshot_in_progress",
-            1.0,
-            &[],
-        );
-        self.metrics_recorder.record_gauge(
-            "frogdb_snapshot_epoch",
-            initial_epoch as f64,
-            &[],
-        );
+        self.metrics_recorder
+            .record_gauge("frogdb_snapshot_in_progress", 1.0, &[]);
+        self.metrics_recorder
+            .record_gauge("frogdb_snapshot_epoch", initial_epoch as f64, &[]);
 
         tracing::info!(epoch = initial_epoch, "Snapshot started");
 
@@ -609,7 +605,8 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
                 // Use spawn_blocking for RocksDB Checkpoint (it's !Send)
                 let result = tokio::task::spawn_blocking(move || {
                     let snapshot_name = format!("snapshot_{:05}", snapshot_epoch);
-                    let temp_dir = snapshot_dir_inner.join(format!(".snapshot_{:05}.tmp", snapshot_epoch));
+                    let temp_dir =
+                        snapshot_dir_inner.join(format!(".snapshot_{:05}.tmp", snapshot_epoch));
                     let final_dir = snapshot_dir_inner.join(&snapshot_name);
                     let checkpoint_path = temp_dir.join("checkpoint");
 
@@ -632,7 +629,8 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
                     }
 
                     // Create metadata
-                    let mut metadata = SnapshotMetadataFile::new(snapshot_epoch, sequence, num_shards);
+                    let mut metadata =
+                        SnapshotMetadataFile::new(snapshot_epoch, sequence, num_shards);
 
                     // Calculate snapshot size
                     let size_bytes = Self::calculate_dir_size(&checkpoint_path).unwrap_or(0);
@@ -655,12 +653,14 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
                     std::fs::rename(&temp_dir, &final_dir)?;
 
                     // Update 'latest' symlink
-                    if let Err(e) = Self::update_latest_symlink(&snapshot_dir_inner, &snapshot_name) {
+                    if let Err(e) = Self::update_latest_symlink(&snapshot_dir_inner, &snapshot_name)
+                    {
                         tracing::warn!(error = %e, "Failed to update latest symlink");
                     }
 
                     // Clean up old snapshots
-                    if let Err(e) = Self::cleanup_old_snapshots(&snapshot_dir_inner, max_snapshots) {
+                    if let Err(e) = Self::cleanup_old_snapshots(&snapshot_dir_inner, max_snapshots)
+                    {
                         tracing::warn!(error = %e, "Failed to cleanup old snapshots");
                     }
 
@@ -698,11 +698,19 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
                         );
                     }
                     Ok(Err(e)) => {
-                        metrics.increment_counter("frogdb_persistence_errors_total", 1, &[("type", "snapshot")]);
+                        metrics.increment_counter(
+                            "frogdb_persistence_errors_total",
+                            1,
+                            &[("type", "snapshot")],
+                        );
                         tracing::error!(epoch = current_epoch, error = %e, "Snapshot failed");
                     }
                     Err(e) => {
-                        metrics.increment_counter("frogdb_persistence_errors_total", 1, &[("type", "snapshot")]);
+                        metrics.increment_counter(
+                            "frogdb_persistence_errors_total",
+                            1,
+                            &[("type", "snapshot")],
+                        );
                         tracing::error!(epoch = current_epoch, error = %e, "Snapshot task panicked");
                     }
                 }
@@ -1006,11 +1014,7 @@ mod tests {
             std::fs::read_dir(&temp_dir)
                 .unwrap()
                 .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.file_name()
-                        .to_string_lossy()
-                        .starts_with("snapshot_")
-                })
+                .filter(|e| e.file_name().to_string_lossy().starts_with("snapshot_"))
                 .count()
         };
         assert_eq!(count_snapshots(), 7);
@@ -1055,11 +1059,7 @@ mod tests {
         let count = std::fs::read_dir(&temp_dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("snapshot_")
-            })
+            .filter(|e| e.file_name().to_string_lossy().starts_with("snapshot_"))
             .count();
         assert_eq!(count, 5);
 

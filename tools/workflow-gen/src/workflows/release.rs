@@ -4,7 +4,7 @@ use gh_workflow::{Event, Expression, Job, Level, Permissions, Push, Step, Workfl
 
 use crate::helpers::{
     checkout, checkout_with_depth, docker_build_push, docker_login_ghcr, docker_metadata,
-    download_artifact, download_all_artifacts, gh_release, release_build_matrix,
+    download_all_artifacts, download_artifact, gh_release, release_build_matrix,
     rust_toolchain_with_target, setup_buildx, setup_helm, setup_qemu, upload_artifact,
 };
 

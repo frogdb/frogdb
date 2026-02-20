@@ -34,7 +34,6 @@ pub enum EvictionPolicy {
     VolatileTtl,
 }
 
-
 impl EvictionPolicy {
     /// Returns true if this policy only evicts keys with TTL (volatile keys).
     pub fn is_volatile(&self) -> bool {
@@ -49,12 +48,18 @@ impl EvictionPolicy {
 
     /// Returns true if this policy uses LRU (least recently used) ordering.
     pub fn uses_lru(&self) -> bool {
-        matches!(self, EvictionPolicy::VolatileLru | EvictionPolicy::AllkeysLru)
+        matches!(
+            self,
+            EvictionPolicy::VolatileLru | EvictionPolicy::AllkeysLru
+        )
     }
 
     /// Returns true if this policy uses LFU (least frequently used) ordering.
     pub fn uses_lfu(&self) -> bool {
-        matches!(self, EvictionPolicy::VolatileLfu | EvictionPolicy::AllkeysLfu)
+        matches!(
+            self,
+            EvictionPolicy::VolatileLfu | EvictionPolicy::AllkeysLfu
+        )
     }
 
     /// Returns true if this policy uses random selection.

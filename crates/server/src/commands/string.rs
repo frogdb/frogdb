@@ -36,11 +36,7 @@ impl Command for SetnxCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = args[0].clone();
         let value = args[1].clone();
 
@@ -83,11 +79,7 @@ impl Command for SetexCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = args[0].clone();
         let seconds = parse_u64(&args[1])?;
         let value = args[2].clone();
@@ -135,11 +127,7 @@ impl Command for PsetexCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = args[0].clone();
         let ms = parse_u64(&args[1])?;
         let value = args[2].clone();
@@ -187,11 +175,7 @@ impl Command for AppendCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let value = &args[1];
 
@@ -238,11 +222,7 @@ impl Command for StrlenCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         match ctx.store.get(key) {
@@ -285,11 +265,7 @@ impl Command for GetrangeCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let start = parse_i64(&args[1])?;
         let end = parse_i64(&args[2])?;
@@ -335,11 +311,7 @@ impl Command for SetrangeCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let offset = parse_u64(&args[1])? as usize;
         let value = &args[2];
@@ -396,11 +368,7 @@ impl Command for GetdelCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         match ctx.store.get_and_delete(key) {
@@ -443,11 +411,7 @@ impl Command for GetexCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         // First, get the value
@@ -545,11 +509,7 @@ impl Command for IncrCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         if let Some(existing) = ctx.store.get_mut(key) {
@@ -599,11 +559,7 @@ impl Command for DecrCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         if let Some(existing) = ctx.store.get_mut(key) {
@@ -653,11 +609,7 @@ impl Command for IncrbyCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let delta = parse_i64(&args[1])?;
 
@@ -708,11 +660,7 @@ impl Command for DecrbyCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let delta = parse_i64(&args[1])?;
 
@@ -730,8 +678,10 @@ impl Command for DecrbyCommand {
             }
         } else {
             // Key doesn't exist, create with value -delta
-            ctx.store
-                .set(key.clone(), Value::String(StringValue::from_integer(-delta)));
+            ctx.store.set(
+                key.clone(),
+                Value::String(StringValue::from_integer(-delta)),
+            );
             Ok(Response::Integer(-delta))
         }
     }
@@ -764,11 +714,7 @@ impl Command for IncrbyfloatCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let delta = parse_f64(&args[1])?;
 
@@ -841,11 +787,7 @@ impl Command for MgetCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Single-shard execution (multi-shard handled by connection routing)
         let results: Vec<Response> = args
             .iter()
@@ -890,17 +832,14 @@ impl Command for MsetCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() % 2 != 0 {
             return Err(CommandError::WrongArity { command: "MSET" });
         }
 
         for pair in args.chunks(2) {
-            ctx.store.set(pair[0].clone(), Value::string(pair[1].clone()));
+            ctx.store
+                .set(pair[0].clone(), Value::string(pair[1].clone()));
         }
 
         Ok(Response::ok())
@@ -930,11 +869,7 @@ impl Command for MsetnxCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() % 2 != 0 {
             return Err(CommandError::WrongArity { command: "MSETNX" });
         }
@@ -948,7 +883,8 @@ impl Command for MsetnxCommand {
 
         // None exist, set all
         for pair in args.chunks(2) {
-            ctx.store.set(pair[0].clone(), Value::string(pair[1].clone()));
+            ctx.store
+                .set(pair[0].clone(), Value::string(pair[1].clone()));
         }
 
         Ok(Response::Integer(1))
@@ -1017,11 +953,7 @@ impl Command for LcsCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key1 = &args[0];
         let key2 = &args[1];
 
@@ -1055,10 +987,7 @@ impl Command for LcsCommand {
                 }
                 _ => {
                     return Err(CommandError::InvalidArgument {
-                        message: format!(
-                            "Unknown option '{}'",
-                            String::from_utf8_lossy(&opt)
-                        ),
+                        message: format!("Unknown option '{}'", String::from_utf8_lossy(&opt)),
                     });
                 }
             }

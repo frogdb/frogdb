@@ -30,10 +30,7 @@ pub struct AdminHandler {
 
 impl AdminHandler {
     /// Create a new admin handler.
-    pub fn new(
-        client_registry: Arc<ClientRegistry>,
-        config_manager: Arc<ConfigManager>,
-    ) -> Self {
+    pub fn new(client_registry: Arc<ClientRegistry>, config_manager: Arc<ConfigManager>) -> Self {
         Self {
             client_registry,
             config_manager,
@@ -153,7 +150,7 @@ impl AdminHandler {
         match subcommand.as_str() {
             "GET" => self.handle_config_get(sub_args),
             "SET" => self.handle_config_set(sub_args),
-            "REWRITE" => Response::ok(), // Not implemented
+            "REWRITE" => Response::ok(),   // Not implemented
             "RESETSTAT" => Response::ok(), // Not implemented
             "HELP" => self.handle_config_help(),
             _ => Response::error(format!("ERR Unknown CONFIG subcommand '{}'", subcommand)),
@@ -377,6 +374,8 @@ impl ConnectionHandler {
     pub(crate) async fn handle_shutdown(&self, _args: &[Bytes]) -> Response {
         // Note: Actual shutdown requires signaling the main server
         // For now, we just return an error suggesting manual shutdown
-        Response::error("ERR SHUTDOWN is not supported in this mode. Use Ctrl+C to stop the server.")
+        Response::error(
+            "ERR SHUTDOWN is not supported in this mode. Use Ctrl+C to stop the server.",
+        )
     }
 }

@@ -473,7 +473,12 @@ pub struct MetricsSnapshot {
 /// ```
 #[cfg(feature = "testing")]
 pub async fn fetch_metrics(addr: std::net::SocketAddr) -> String {
-    reqwest::get(format!("http://{}/metrics", addr))
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(format!("http://{}/metrics", addr))
+        .send()
         .await
         .unwrap()
         .text()
@@ -1026,7 +1031,10 @@ my_histogram_sum{cmd="GET"} 25.5
         .to_string();
         let snapshot = MetricsSnapshot::new(text);
 
-        assert_eq!(snapshot.histogram_count("my_histogram", &[("cmd", "GET")]), 100);
+        assert_eq!(
+            snapshot.histogram_count("my_histogram", &[("cmd", "GET")]),
+            100
+        );
         assert!((snapshot.histogram_sum("my_histogram", &[("cmd", "GET")]) - 25.5).abs() < 0.001);
     }
 

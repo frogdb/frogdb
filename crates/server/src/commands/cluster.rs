@@ -36,11 +36,7 @@ impl Command for ClusterCommand {
         CommandFlags::ADMIN | CommandFlags::STALE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
             return Err(CommandError::WrongArgCount {
                 command: "CLUSTER".to_string(),
@@ -189,10 +185,7 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             .any(|n| n.is_primary() && n.flags.fail);
 
         // Check if we can form a quorum with reachable nodes (local perspective)
-        let has_local_quorum = ctx
-            .quorum_checker
-            .map(|qc| qc.has_quorum())
-            .unwrap_or(true); // If no quorum checker, assume healthy
+        let has_local_quorum = ctx.quorum_checker.map(|qc| qc.has_quorum()).unwrap_or(true); // If no quorum checker, assume healthy
 
         let cluster_state_str = if has_failed_primary {
             "fail" // A primary is marked as failed
@@ -202,7 +195,11 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             use openraft::ServerState;
             let metrics = raft.metrics().borrow().clone();
 
-            match (metrics.state, metrics.current_leader, metrics.millis_since_quorum_ack) {
+            match (
+                metrics.state,
+                metrics.current_leader,
+                metrics.millis_since_quorum_ack,
+            ) {
                 (ServerState::Candidate, _, _) => "fail", // Trying to elect but can't get quorum
                 (_, None, _) => "fail",                   // No leader known
                 // Leader: require RECENT quorum ack (within timeout) to report healthy
@@ -445,11 +442,8 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
         let mut shards = Vec::new();
 
         // Group nodes by primary (each primary + its replicas = one shard)
-        let mut primary_nodes: Vec<_> = snapshot
-            .nodes
-            .values()
-            .filter(|n| n.is_primary())
-            .collect();
+        let mut primary_nodes: Vec<_> =
+            snapshot.nodes.values().filter(|n| n.is_primary()).collect();
         primary_nodes.sort_by_key(|n| n.id);
 
         for primary in primary_nodes {
@@ -620,13 +614,9 @@ fn cluster_getkeysinslot(
 
     // Query the actual keys in this slot from the store
     let keys = ctx.store.keys_in_slot(slot, count);
-    let response_keys: Vec<Response> = keys
-        .into_iter()
-        .map(Response::bulk)
-        .collect();
+    let response_keys: Vec<Response> = keys.into_iter().map(Response::bulk).collect();
     Ok(Response::Array(response_keys))
 }
-
 
 /// CLUSTER MEET - Adds a node to the cluster.
 /// Syntax: CLUSTER MEET <ip> <port> [<cluster-bus-port>]
@@ -643,10 +633,9 @@ fn cluster_meet(
         return Err(CommandError::ClusterDisabled);
     }
 
-    let host_str = std::str::from_utf8(host)
-        .map_err(|_| CommandError::InvalidArgument {
-            message: "invalid host".to_string(),
-        })?;
+    let host_str = std::str::from_utf8(host).map_err(|_| CommandError::InvalidArgument {
+        message: "invalid host".to_string(),
+    })?;
 
     let port_num: u16 = std::str::from_utf8(port)
         .map_err(|_| CommandError::InvalidArgument {
@@ -658,11 +647,11 @@ fn cluster_meet(
         })?;
 
     // Parse client address
-    let addr: SocketAddr = format!("{}:{}", host_str, port_num)
-        .parse()
-        .map_err(|_| CommandError::InvalidArgument {
+    let addr: SocketAddr = format!("{}:{}", host_str, port_num).parse().map_err(|_| {
+        CommandError::InvalidArgument {
             message: "invalid address".to_string(),
-        })?;
+        }
+    })?;
 
     // Cluster bus port: use explicit value if provided, otherwise client port + 10000
     let cluster_port: u16 = if let Some(cbp) = cluster_bus_port_arg {
@@ -675,15 +664,19 @@ fn cluster_meet(
                 message: "invalid cluster bus port number".to_string(),
             })?
     } else {
-        port_num.checked_add(10000).ok_or(CommandError::InvalidArgument {
-            message: "port number too high (would overflow when adding cluster bus offset)".to_string(),
-        })?
+        port_num
+            .checked_add(10000)
+            .ok_or(CommandError::InvalidArgument {
+                message: "port number too high (would overflow when adding cluster bus offset)"
+                    .to_string(),
+            })?
     };
-    let cluster_addr: SocketAddr = format!("{}:{}", host_str, cluster_port)
-        .parse()
-        .map_err(|_| CommandError::InvalidArgument {
-            message: "invalid cluster address".to_string(),
-        })?;
+    let cluster_addr: SocketAddr =
+        format!("{}:{}", host_str, cluster_port)
+            .parse()
+            .map_err(|_| CommandError::InvalidArgument {
+                message: "invalid cluster address".to_string(),
+            })?;
 
     // Generate node ID from address hash
     use std::hash::{Hash, Hasher};
@@ -714,13 +707,13 @@ fn cluster_forget(ctx: &mut CommandContext, node_id_arg: &Bytes) -> Result<Respo
     }
 
     // Node ID is a 40-character hex string
-    let node_id_str = std::str::from_utf8(node_id_arg)
-        .map_err(|_| CommandError::InvalidArgument {
+    let node_id_str =
+        std::str::from_utf8(node_id_arg).map_err(|_| CommandError::InvalidArgument {
             message: "invalid node ID".to_string(),
         })?;
 
-    let node_id = u64::from_str_radix(node_id_str, 16)
-        .map_err(|_| CommandError::InvalidArgument {
+    let node_id =
+        u64::from_str_radix(node_id_str, 16).map_err(|_| CommandError::InvalidArgument {
             message: "invalid node ID format".to_string(),
         })?;
 
@@ -736,10 +729,7 @@ fn cluster_forget(ctx: &mut CommandContext, node_id_arg: &Bytes) -> Result<Respo
 /// CLUSTER ADDSLOTS - Assigns hash slots to this node.
 ///
 /// Returns `RaftNeeded` response which is intercepted by the connection handler.
-fn cluster_addslots(
-    ctx: &mut CommandContext,
-    slots: &[Bytes],
-) -> Result<Response, CommandError> {
+fn cluster_addslots(ctx: &mut CommandContext, slots: &[Bytes]) -> Result<Response, CommandError> {
     let node_id = ctx.node_id.ok_or(CommandError::ClusterDisabled)?;
 
     // Verify cluster mode is enabled
@@ -750,12 +740,13 @@ fn cluster_addslots(
     // Parse slot numbers
     let mut parsed_slots = Vec::new();
     for slot_arg in slots {
-        let slot_str = std::str::from_utf8(slot_arg)
-            .map_err(|_| CommandError::InvalidArgument {
+        let slot_str =
+            std::str::from_utf8(slot_arg).map_err(|_| CommandError::InvalidArgument {
                 message: "invalid slot".to_string(),
             })?;
 
-        let slot: u16 = slot_str.parse()
+        let slot: u16 = slot_str
+            .parse()
             .map_err(|_| CommandError::InvalidArgument {
                 message: "invalid slot number".to_string(),
             })?;
@@ -783,10 +774,7 @@ fn cluster_addslots(
 /// CLUSTER DELSLOTS - Removes hash slot assignments from this node.
 ///
 /// Returns `RaftNeeded` response which is intercepted by the connection handler.
-fn cluster_delslots(
-    ctx: &mut CommandContext,
-    slots: &[Bytes],
-) -> Result<Response, CommandError> {
+fn cluster_delslots(ctx: &mut CommandContext, slots: &[Bytes]) -> Result<Response, CommandError> {
     let node_id = ctx.node_id.ok_or(CommandError::ClusterDisabled)?;
 
     // Verify cluster mode is enabled
@@ -797,12 +785,13 @@ fn cluster_delslots(
     // Parse slot numbers
     let mut parsed_slots = Vec::new();
     for slot_arg in slots {
-        let slot_str = std::str::from_utf8(slot_arg)
-            .map_err(|_| CommandError::InvalidArgument {
+        let slot_str =
+            std::str::from_utf8(slot_arg).map_err(|_| CommandError::InvalidArgument {
                 message: "invalid slot".to_string(),
             })?;
 
-        let slot: u16 = slot_str.parse()
+        let slot: u16 = slot_str
+            .parse()
             .map_err(|_| CommandError::InvalidArgument {
                 message: "invalid slot number".to_string(),
             })?;
@@ -835,10 +824,7 @@ fn cluster_delslots(
 /// Options:
 /// - FORCE: Force failover even if the primary appears to be down
 /// - TAKEOVER: Force takeover without waiting for primary acknowledgment
-fn cluster_failover(
-    ctx: &mut CommandContext,
-    args: &[Bytes],
-) -> Result<Response, CommandError> {
+fn cluster_failover(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
     let node_id = ctx.node_id.ok_or(CommandError::ClusterDisabled)?;
     let cluster_state = ctx.cluster_state.ok_or(CommandError::ClusterDisabled)?;
 
@@ -862,11 +848,12 @@ fn cluster_failover(
 
     // Get this node's info
     let snapshot = cluster_state.snapshot();
-    let this_node = snapshot.nodes.get(&node_id).ok_or_else(|| {
-        CommandError::InvalidArgument {
+    let this_node = snapshot
+        .nodes
+        .get(&node_id)
+        .ok_or_else(|| CommandError::InvalidArgument {
             message: "Node not found in cluster state".to_string(),
-        }
-    })?;
+        })?;
 
     // Verify this node is a replica
     if this_node.is_primary() {
@@ -876,11 +863,11 @@ fn cluster_failover(
     }
 
     // Get the primary we're replicating
-    let primary_id = this_node.primary_id.ok_or_else(|| {
-        CommandError::InvalidArgument {
+    let primary_id = this_node
+        .primary_id
+        .ok_or_else(|| CommandError::InvalidArgument {
             message: "Replica has no primary configured".to_string(),
-        }
-    })?;
+        })?;
 
     let primary = snapshot.nodes.get(&primary_id);
 
@@ -927,13 +914,13 @@ fn cluster_replicate(
     }
 
     // Parse primary node ID (40-character hex string)
-    let primary_id_str = std::str::from_utf8(primary_id_arg)
-        .map_err(|_| CommandError::InvalidArgument {
+    let primary_id_str =
+        std::str::from_utf8(primary_id_arg).map_err(|_| CommandError::InvalidArgument {
             message: "invalid node ID".to_string(),
         })?;
 
-    let primary_id = u64::from_str_radix(primary_id_str, 16)
-        .map_err(|_| CommandError::InvalidArgument {
+    let primary_id =
+        u64::from_str_radix(primary_id_str, 16).map_err(|_| CommandError::InvalidArgument {
             message: "invalid node ID format".to_string(),
         })?;
 
@@ -950,10 +937,7 @@ fn cluster_replicate(
 }
 
 /// CLUSTER RESET - Resets cluster state.
-fn cluster_reset(
-    ctx: &mut CommandContext,
-    args: &[Bytes],
-) -> Result<Response, CommandError> {
+fn cluster_reset(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
     let _raft = ctx.raft.ok_or(CommandError::ClusterDisabled)?;
 
     // Parse options: HARD or SOFT (default is SOFT)
@@ -1013,10 +997,7 @@ fn cluster_set_config_epoch(
 /// Syntax: CLUSTER SETSLOT <slot> IMPORTING|MIGRATING|NODE|STABLE [<node-id>]
 ///
 /// Returns `RaftNeeded` response which is intercepted by the connection handler.
-fn cluster_setslot(
-    ctx: &mut CommandContext,
-    args: &[Bytes],
-) -> Result<Response, CommandError> {
+fn cluster_setslot(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
     let my_node_id = ctx.node_id.ok_or(CommandError::ClusterDisabled)?;
 
     // Verify cluster mode is enabled
@@ -1066,14 +1047,15 @@ fn cluster_setslot(
                     command: "CLUSTER SETSLOT IMPORTING".to_string(),
                 });
             }
-            let source_id_str = std::str::from_utf8(&args[2])
-                .map_err(|_| CommandError::InvalidArgument {
+            let source_id_str =
+                std::str::from_utf8(&args[2]).map_err(|_| CommandError::InvalidArgument {
                     message: "invalid node ID".to_string(),
                 })?;
-            let source_node = u64::from_str_radix(source_id_str, 16)
-                .map_err(|_| CommandError::InvalidArgument {
+            let source_node = u64::from_str_radix(source_id_str, 16).map_err(|_| {
+                CommandError::InvalidArgument {
                     message: "invalid node ID format".to_string(),
-                })?;
+                }
+            })?;
 
             Ok(Response::RaftNeeded {
                 op: RaftClusterOp::BeginSlotMigration {
@@ -1092,14 +1074,15 @@ fn cluster_setslot(
                     command: "CLUSTER SETSLOT MIGRATING".to_string(),
                 });
             }
-            let target_id_str = std::str::from_utf8(&args[2])
-                .map_err(|_| CommandError::InvalidArgument {
+            let target_id_str =
+                std::str::from_utf8(&args[2]).map_err(|_| CommandError::InvalidArgument {
                     message: "invalid node ID".to_string(),
                 })?;
-            let target_node = u64::from_str_radix(target_id_str, 16)
-                .map_err(|_| CommandError::InvalidArgument {
+            let target_node = u64::from_str_radix(target_id_str, 16).map_err(|_| {
+                CommandError::InvalidArgument {
                     message: "invalid node ID format".to_string(),
-                })?;
+                }
+            })?;
 
             Ok(Response::RaftNeeded {
                 op: RaftClusterOp::BeginSlotMigration {
@@ -1118,14 +1101,15 @@ fn cluster_setslot(
                     command: "CLUSTER SETSLOT NODE".to_string(),
                 });
             }
-            let node_id_str = std::str::from_utf8(&args[2])
-                .map_err(|_| CommandError::InvalidArgument {
+            let node_id_str =
+                std::str::from_utf8(&args[2]).map_err(|_| CommandError::InvalidArgument {
                     message: "invalid node ID".to_string(),
                 })?;
-            let target_node = u64::from_str_radix(node_id_str, 16)
-                .map_err(|_| CommandError::InvalidArgument {
+            let target_node = u64::from_str_radix(node_id_str, 16).map_err(|_| {
+                CommandError::InvalidArgument {
                     message: "invalid node ID format".to_string(),
-                })?;
+                }
+            })?;
 
             // Check if there's an active migration to complete
             if let Some(ref cluster_state) = ctx.cluster_state {
@@ -1163,18 +1147,18 @@ fn cluster_setslot(
                 unregister_node: None,
             })
         }
-        _ => {
-            Err(CommandError::InvalidArgument {
-                message: format!("Unknown SETSLOT subcommand: {}", subcommand),
-            })
-        }
+        _ => Err(CommandError::InvalidArgument {
+            message: format!("Unknown SETSLOT subcommand: {}", subcommand),
+        }),
     }
 }
 
 /// CLUSTER HELP - Returns help for CLUSTER commands.
 fn cluster_help() -> Result<Response, CommandError> {
     let help = vec![
-        Response::bulk(Bytes::from("CLUSTER <subcommand> [<arg> [value] [opt] ...]. Subcommands are:")),
+        Response::bulk(Bytes::from(
+            "CLUSTER <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+        )),
         Response::bulk(Bytes::from("ADDSLOTS <slot> [<slot> ...]")),
         Response::bulk(Bytes::from("    Assign slots to this node.")),
         Response::bulk(Bytes::from("COUNTKEYSINSLOT <slot>")),
@@ -1200,19 +1184,27 @@ fn cluster_help() -> Result<Response, CommandError> {
         Response::bulk(Bytes::from("NODES")),
         Response::bulk(Bytes::from("    Return cluster node information.")),
         Response::bulk(Bytes::from("REPLICATE <node-id>")),
-        Response::bulk(Bytes::from("    Configure this node as a replica of the specified node.")),
+        Response::bulk(Bytes::from(
+            "    Configure this node as a replica of the specified node.",
+        )),
         Response::bulk(Bytes::from("RESET [HARD|SOFT]")),
         Response::bulk(Bytes::from("    Reset the cluster state.")),
         Response::bulk(Bytes::from("SAVECONFIG")),
-        Response::bulk(Bytes::from("    Force saving cluster configuration on disk.")),
+        Response::bulk(Bytes::from(
+            "    Force saving cluster configuration on disk.",
+        )),
         Response::bulk(Bytes::from("SET-CONFIG-EPOCH <epoch>")),
         Response::bulk(Bytes::from("    Set config epoch in this node.")),
-        Response::bulk(Bytes::from("SETSLOT <slot> IMPORTING|MIGRATING|NODE|STABLE [<node-id>]")),
+        Response::bulk(Bytes::from(
+            "SETSLOT <slot> IMPORTING|MIGRATING|NODE|STABLE [<node-id>]",
+        )),
         Response::bulk(Bytes::from("    Set slot state.")),
         Response::bulk(Bytes::from("SHARDS")),
         Response::bulk(Bytes::from("    Return information about cluster shards.")),
         Response::bulk(Bytes::from("SLOTS")),
-        Response::bulk(Bytes::from("    Return slot range information (deprecated, use SHARDS).")),
+        Response::bulk(Bytes::from(
+            "    Return slot range information (deprecated, use SHARDS).",
+        )),
     ];
 
     Ok(Response::Array(help))

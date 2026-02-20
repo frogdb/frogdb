@@ -145,9 +145,7 @@ impl Command for BfAdd {
         // Get or create the bloom filter
         let added = match ctx.store.get_mut(key) {
             Some(value) => {
-                let bf = value
-                    .as_bloom_filter_mut()
-                    .ok_or(CommandError::WrongType)?;
+                let bf = value.as_bloom_filter_mut().ok_or(CommandError::WrongType)?;
                 bf.add(item)
             }
             None => {
@@ -197,9 +195,7 @@ impl Command for BfMadd {
         // Get or create the bloom filter
         let results: Vec<Response> = match ctx.store.get_mut(key) {
             Some(value) => {
-                let bf = value
-                    .as_bloom_filter_mut()
-                    .ok_or(CommandError::WrongType)?;
+                let bf = value.as_bloom_filter_mut().ok_or(CommandError::WrongType)?;
                 items
                     .iter()
                     .map(|item| Response::Integer(if bf.add(item) { 1 } else { 0 }))
@@ -434,9 +430,7 @@ impl Command for BfInsert {
         // Get or create the bloom filter
         let results: Vec<Response> = match ctx.store.get_mut(key) {
             Some(value) => {
-                let bf = value
-                    .as_bloom_filter_mut()
-                    .ok_or(CommandError::WrongType)?;
+                let bf = value.as_bloom_filter_mut().ok_or(CommandError::WrongType)?;
                 items
                     .iter()
                     .map(|item| Response::Integer(if bf.add(item) { 1 } else { 0 }))
@@ -448,7 +442,8 @@ impl Command for BfInsert {
                         message: "Key does not exist".to_string(),
                     });
                 }
-                let mut bf = BloomFilterValue::with_options(capacity, error_rate, expansion, non_scaling);
+                let mut bf =
+                    BloomFilterValue::with_options(capacity, error_rate, expansion, non_scaling);
                 let results: Vec<Response> = items
                     .iter()
                     .map(|item| Response::Integer(if bf.add(item) { 1 } else { 0 }))
@@ -732,7 +727,8 @@ impl Command for BfLoadchunk {
             let capacity = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
             offset += 8;
 
-            let bits_len = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap()) as usize;
+            let bits_len =
+                u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap()) as usize;
             offset += 8;
 
             let bytes_needed = bits_len.div_ceil(8);

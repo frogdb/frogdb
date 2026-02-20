@@ -31,13 +31,13 @@ impl Command for MigrateCommand {
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Parse arguments to validate them
-        MigrateArgs::parse(args).map_err(|e| CommandError::InvalidArgument {
-            message: e,
-        })?;
+        MigrateArgs::parse(args).map_err(|e| CommandError::InvalidArgument { message: e })?;
 
         // Return a special response indicating async migration is needed
         // The connection handler will intercept this and perform the migration
-        Ok(Response::MigrateNeeded { args: args.to_vec() })
+        Ok(Response::MigrateNeeded {
+            args: args.to_vec(),
+        })
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

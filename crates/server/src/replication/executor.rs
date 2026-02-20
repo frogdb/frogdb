@@ -49,10 +49,7 @@ impl ReplicaCommandExecutor {
     /// # Arguments
     /// * `shard_senders` - Channel senders for each shard worker
     /// * `num_shards` - Total number of shards for key routing
-    pub fn new(
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
-        num_shards: usize,
-    ) -> Self {
+    pub fn new(shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>, num_shards: usize) -> Self {
         Self {
             shard_senders,
             num_shards,

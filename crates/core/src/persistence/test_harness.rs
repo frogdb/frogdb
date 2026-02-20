@@ -48,7 +48,11 @@ impl CrashTestHarness {
     }
 
     /// Create a new crash test harness with custom configuration.
-    pub fn with_config(wal_config: WalConfig, rocks_config: RocksConfig, num_shards: usize) -> Self {
+    pub fn with_config(
+        wal_config: WalConfig,
+        rocks_config: RocksConfig,
+        num_shards: usize,
+    ) -> Self {
         let dir = TempDir::new().expect("Failed to create temp directory");
         let rocks = Arc::new(
             RocksStore::open(dir.path(), num_shards, &rocks_config)
@@ -99,7 +103,9 @@ impl CrashTestHarness {
     ///
     /// Panics if called after crash().
     pub fn rocks(&self) -> &Arc<RocksStore> {
-        self.rocks.as_ref().expect("RocksStore not available after crash")
+        self.rocks
+            .as_ref()
+            .expect("RocksStore not available after crash")
     }
 
     /// Get the database path.
@@ -138,13 +144,7 @@ impl CrashTestHarness {
     }
 
     /// Write a key-value pair with expiry.
-    pub fn put_with_expiry(
-        &self,
-        shard_id: usize,
-        key: &[u8],
-        value: &Value,
-        expires_at: Instant,
-    ) {
+    pub fn put_with_expiry(&self, shard_id: usize, key: &[u8], value: &Value, expires_at: Instant) {
         let mut metadata = KeyMetadata::new(value.memory_size());
         metadata.expires_at = Some(expires_at);
         let serialized = serialize(value, &metadata);
@@ -221,7 +221,10 @@ impl CrashTestHarness {
 
     /// Get the count of keys in a shard.
     pub fn count_keys(&self, shard_id: usize) -> usize {
-        self.rocks().iter_cf(shard_id).expect("Failed to iterate").count()
+        self.rocks()
+            .iter_cf(shard_id)
+            .expect("Failed to iterate")
+            .count()
     }
 
     /// Get the total count of keys across all shards.

@@ -35,11 +35,7 @@ impl Command for SetbitCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let offset = parse_u64(&args[1])?;
         let value = parse_u64(&args[2])?;
@@ -103,11 +99,7 @@ impl Command for GetbitCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let offset = parse_u64(&args[1])?;
 
@@ -153,11 +145,7 @@ impl Command for BitcountCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         let (start, end, bit_mode) = if args.len() >= 3 {
@@ -224,11 +212,7 @@ impl Command for BitopCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let op = BitOp::parse(&args[0]).ok_or_else(|| CommandError::InvalidArgument {
             message: "operation is not a valid BITOP operation".to_string(),
         })?;
@@ -266,8 +250,10 @@ impl Command for BitopCommand {
         if result.is_empty() {
             ctx.store.delete(destkey);
         } else {
-            ctx.store
-                .set(destkey.clone(), Value::String(StringValue::new(Bytes::from(result))));
+            ctx.store.set(
+                destkey.clone(),
+                Value::String(StringValue::new(Bytes::from(result))),
+            );
         }
 
         Ok(Response::Integer(result_len as i64))
@@ -306,11 +292,7 @@ impl Command for BitposCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let bit = parse_u64(&args[1])?;
 
@@ -398,11 +380,7 @@ impl Command for BitfieldCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_bitfield(ctx, args, false)
     }
 
@@ -434,11 +412,7 @@ impl Command for BitfieldRoCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_bitfield(ctx, args, true)
     }
 
@@ -500,8 +474,13 @@ fn execute_bitfield(
                 increment,
             } => {
                 let bit_offset = offset.resolve(encoding);
-                let (new_value, _overflowed) =
-                    frogdb_core::bitfield_incrby(&mut data, encoding, bit_offset, increment, overflow_mode);
+                let (new_value, _overflowed) = frogdb_core::bitfield_incrby(
+                    &mut data,
+                    encoding,
+                    bit_offset,
+                    increment,
+                    overflow_mode,
+                );
                 match new_value {
                     Some(v) => results.push(Response::Integer(v)),
                     None => results.push(Response::null()),
@@ -544,10 +523,10 @@ fn parse_bitfield_subcommands(
                 if i + 2 >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                let encoding = BitfieldEncoding::parse(&args[i + 1])
-                    .ok_or(CommandError::SyntaxError)?;
-                let offset = BitfieldOffset::parse(&args[i + 2])
-                    .ok_or(CommandError::SyntaxError)?;
+                let encoding =
+                    BitfieldEncoding::parse(&args[i + 1]).ok_or(CommandError::SyntaxError)?;
+                let offset =
+                    BitfieldOffset::parse(&args[i + 2]).ok_or(CommandError::SyntaxError)?;
                 subcommands.push(BitfieldSubCommand::Get { encoding, offset });
                 i += 3;
             }
@@ -560,10 +539,10 @@ fn parse_bitfield_subcommands(
                 if i + 3 >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                let encoding = BitfieldEncoding::parse(&args[i + 1])
-                    .ok_or(CommandError::SyntaxError)?;
-                let offset = BitfieldOffset::parse(&args[i + 2])
-                    .ok_or(CommandError::SyntaxError)?;
+                let encoding =
+                    BitfieldEncoding::parse(&args[i + 1]).ok_or(CommandError::SyntaxError)?;
+                let offset =
+                    BitfieldOffset::parse(&args[i + 2]).ok_or(CommandError::SyntaxError)?;
                 let value = parse_i64(&args[i + 3])?;
                 subcommands.push(BitfieldSubCommand::Set {
                     encoding,
@@ -581,10 +560,10 @@ fn parse_bitfield_subcommands(
                 if i + 3 >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                let encoding = BitfieldEncoding::parse(&args[i + 1])
-                    .ok_or(CommandError::SyntaxError)?;
-                let offset = BitfieldOffset::parse(&args[i + 2])
-                    .ok_or(CommandError::SyntaxError)?;
+                let encoding =
+                    BitfieldEncoding::parse(&args[i + 1]).ok_or(CommandError::SyntaxError)?;
+                let offset =
+                    BitfieldOffset::parse(&args[i + 2]).ok_or(CommandError::SyntaxError)?;
                 let increment = parse_i64(&args[i + 3])?;
                 subcommands.push(BitfieldSubCommand::IncrBy {
                     encoding,
@@ -602,8 +581,7 @@ fn parse_bitfield_subcommands(
                 if i + 1 >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                let mode = OverflowMode::parse(&args[i + 1])
-                    .ok_or(CommandError::SyntaxError)?;
+                let mode = OverflowMode::parse(&args[i + 1]).ok_or(CommandError::SyntaxError)?;
                 subcommands.push(BitfieldSubCommand::Overflow(mode));
                 i += 2;
             }

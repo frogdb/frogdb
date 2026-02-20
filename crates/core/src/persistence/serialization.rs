@@ -23,7 +23,10 @@ use crate::bloom::{BloomFilterValue, BloomLayer};
 use crate::hyperloglog::{HyperLogLogValue, HLL_DENSE_SIZE};
 use crate::json::JsonValue;
 use crate::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
-use crate::types::{HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec, StreamValue, StringValue, Value};
+use crate::types::{
+    HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec,
+    StreamValue, StringValue, Value,
+};
 use bitvec::prelude::*;
 
 /// Size of the serialization header in bytes.
@@ -83,10 +86,7 @@ pub fn serialize(value: &Value, metadata: &KeyMetadata) -> Vec<u8> {
     result.push(0);
 
     // Expires at (8 bytes) - Unix timestamp in milliseconds, -1 for no expiry
-    let expires_ms = metadata
-        .expires_at
-        .map(instant_to_unix_ms)
-        .unwrap_or(-1);
+    let expires_ms = metadata.expires_at.map(instant_to_unix_ms).unwrap_or(-1);
     result.extend_from_slice(&expires_ms.to_le_bytes());
 
     // LFU counter (1 byte)
@@ -196,8 +196,7 @@ fn serialize_sorted_set(zset: &SortedSetValue) -> (u8, Vec<u8>) {
     let len = entries.len() as u32;
 
     // Calculate size: 4 (len) + sum of (8 (score) + 4 (member_len) + member_bytes)
-    let payload_size: usize =
-        4 + entries.iter().map(|(m, _)| 8 + 4 + m.len()).sum::<usize>();
+    let payload_size: usize = 4 + entries.iter().map(|(m, _)| 8 + 4 + m.len()).sum::<usize>();
 
     let mut payload = Vec::with_capacity(payload_size);
 
@@ -220,8 +219,10 @@ fn serialize_hash(hash: &HashValue) -> (u8, Vec<u8>) {
     let len = entries.len() as u32;
 
     // Calculate size: 4 (len) + sum of (4 (field_len) + field + 4 (value_len) + value)
-    let payload_size: usize =
-        4 + entries.iter().map(|(f, v)| 4 + f.len() + 4 + v.len()).sum::<usize>();
+    let payload_size: usize = 4 + entries
+        .iter()
+        .map(|(f, v)| 4 + f.len() + 4 + v.len())
+        .sum::<usize>();
 
     let mut payload = Vec::with_capacity(payload_size);
 
@@ -245,8 +246,7 @@ fn serialize_list(list: &ListValue) -> (u8, Vec<u8>) {
     let len = entries.len() as u32;
 
     // Calculate size: 4 (len) + sum of (4 (elem_len) + elem)
-    let payload_size: usize =
-        4 + entries.iter().map(|e| 4 + e.len()).sum::<usize>();
+    let payload_size: usize = 4 + entries.iter().map(|e| 4 + e.len()).sum::<usize>();
 
     let mut payload = Vec::with_capacity(payload_size);
 
@@ -268,8 +268,7 @@ fn serialize_set(set: &SetValue) -> (u8, Vec<u8>) {
     let len = entries.len() as u32;
 
     // Calculate size: 4 (len) + sum of (4 (member_len) + member)
-    let payload_size: usize =
-        4 + entries.iter().map(|m| 4 + m.len()).sum::<usize>();
+    let payload_size: usize = 4 + entries.iter().map(|m| 4 + m.len()).sum::<usize>();
 
     let mut payload = Vec::with_capacity(payload_size);
 
@@ -594,7 +593,8 @@ fn deserialize_sorted_set(payload: &[u8]) -> Result<SortedSetValue, Serializatio
                 "Sorted set payload truncated at member length".to_string(),
             ));
         }
-        let member_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        let member_len =
+            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
         // Read member bytes
@@ -631,7 +631,8 @@ fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
                 "Hash payload truncated at field length".to_string(),
             ));
         }
-        let field_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        let field_len =
+            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
         // Read field bytes
@@ -649,7 +650,8 @@ fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
                 "Hash payload truncated at value length".to_string(),
             ));
         }
-        let value_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        let value_len =
+            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
         // Read value bytes
@@ -723,7 +725,8 @@ fn deserialize_set(payload: &[u8]) -> Result<SetValue, SerializationError> {
                 "Set payload truncated at member length".to_string(),
             ));
         }
-        let member_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        let member_len =
+            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
         // Read member bytes
@@ -773,7 +776,8 @@ fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError>
         let id = StreamId::new(id_ms, id_seq);
 
         // Read number of fields
-        let num_fields = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        let num_fields =
+            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
         let mut fields = Vec::with_capacity(num_fields);
@@ -784,7 +788,8 @@ fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError>
                     "Stream payload truncated at field length".to_string(),
                 ));
             }
-            let field_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+            let field_len =
+                u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
 
             // Read field bytes
@@ -802,7 +807,8 @@ fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError>
                     "Stream payload truncated at value length".to_string(),
                 ));
             }
-            let value_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+            let value_len =
+                u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
 
             // Read value bytes
@@ -901,7 +907,12 @@ fn deserialize_bloom_filter(payload: &[u8]) -> Result<BloomFilterValue, Serializ
         layers.push(BloomLayer::from_raw(bits, k, count, capacity));
     }
 
-    Ok(BloomFilterValue::from_raw(layers, error_rate, expansion, non_scaling))
+    Ok(BloomFilterValue::from_raw(
+        layers,
+        error_rate,
+        expansion,
+        non_scaling,
+    ))
 }
 
 /// Deserialize a HyperLogLog from payload.
@@ -958,9 +969,10 @@ fn deserialize_hyperloglog(payload: &[u8]) -> Result<HyperLogLogValue, Serializa
 
             Ok(HyperLogLogValue::from_dense(registers))
         }
-        _ => Err(SerializationError::InvalidPayload(
-            format!("Unknown HyperLogLog encoding: {}", encoding),
-        )),
+        _ => Err(SerializationError::InvalidPayload(format!(
+            "Unknown HyperLogLog encoding: {}",
+            encoding
+        ))),
     }
 }
 
@@ -1028,7 +1040,8 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
                 "TimeSeries payload truncated at label value length".to_string(),
             ));
         }
-        let value_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        let value_len =
+            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
         if offset + value_len > payload.len() {
@@ -1079,7 +1092,12 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
         let data = payload[offset..offset + data_len].to_vec();
         offset += data_len;
 
-        chunks.push(CompressedChunk::from_raw(data, start_time, end_time, sample_count));
+        chunks.push(CompressedChunk::from_raw(
+            data,
+            start_time,
+            end_time,
+            sample_count,
+        ));
     }
 
     // Active samples
@@ -1193,7 +1211,10 @@ mod unit_tests {
         let data = serialize(&value, &metadata);
         let (value2, metadata2) = deserialize(&data).unwrap();
 
-        assert_eq!(value2.as_string().unwrap().as_bytes().as_ref(), b"hello world");
+        assert_eq!(
+            value2.as_string().unwrap().as_bytes().as_ref(),
+            b"hello world"
+        );
         assert_eq!(metadata2.lfu_counter, metadata.lfu_counter);
         assert!(metadata2.expires_at.is_none());
     }
@@ -1272,7 +1293,7 @@ mod unit_tests {
     fn test_deserialize_unknown_type() {
         let mut data = vec![0u8; HEADER_SIZE];
         data[0] = 255; // Unknown type
-        // Set payload_len to 0
+                       // Set payload_len to 0
         data[16..24].copy_from_slice(&0u64.to_le_bytes());
 
         let result = deserialize(&data);

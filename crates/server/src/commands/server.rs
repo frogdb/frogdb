@@ -40,11 +40,7 @@ impl Command for DbsizeCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        _args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
         // Returns local shard key count
         // In scatter-gather mode, connection.rs will sum counts from all shards
         let count = ctx.store.len();
@@ -81,11 +77,7 @@ impl Command for FlushdbCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Parse optional ASYNC/SYNC argument
         // Note: We only support SYNC for now
         if !args.is_empty() {
@@ -136,11 +128,7 @@ impl Command for FlushallCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Same as FLUSHDB since we only have one database
         if !args.is_empty() {
             let mode = args[0].to_ascii_uppercase();

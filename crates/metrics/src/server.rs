@@ -7,8 +7,8 @@ use crate::latency_bands::LatencyBandTracker;
 use crate::metric_names;
 use crate::prometheus_recorder::PrometheusRecorder;
 use crate::status::StatusCollector;
-use frogdb_core::MetricsRecorder;
 use bytes::Bytes;
+use frogdb_core::MetricsRecorder;
 use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -104,7 +104,17 @@ impl MetricsServer {
                     let debug_state = debug_state.clone();
                     let status_collector = status_collector.clone();
                     let band_tracker = band_tracker.clone();
-                    async move { handle_request(req, recorder, health, debug_state, status_collector, band_tracker).await }
+                    async move {
+                        handle_request(
+                            req,
+                            recorder,
+                            health,
+                            debug_state,
+                            status_collector,
+                            band_tracker,
+                        )
+                        .await
+                    }
                 });
 
                 if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
@@ -288,8 +298,8 @@ mod tests {
         let tracker = Arc::new(LatencyBandTracker::new(vec![5, 10, 50]));
 
         // Record some latencies
-        tracker.record(3);  // <= 5ms
-        tracker.record(7);  // <= 10ms
+        tracker.record(3); // <= 5ms
+        tracker.record(7); // <= 10ms
         tracker.record(100); // overflow
 
         let response = handle_metrics(recorder.clone(), Some(tracker));

@@ -69,16 +69,12 @@ async fn main() -> Result<()> {
 
     // Handle --intrinsic-latency (standalone mode)
     if let Some(duration) = cli.intrinsic_latency {
-        println!(
-            "Running intrinsic latency test for {} seconds...",
-            duration
-        );
+        println!("Running intrinsic latency test for {} seconds...", duration);
         println!("(Press Ctrl+C to abort)\n");
 
-        let progress_callback: latency_test::ProgressCallback =
-            Box::new(|max_us| {
-                println!("Max latency so far: {} microseconds.", max_us);
-            });
+        let progress_callback: latency_test::ProgressCallback = Box::new(|max_us| {
+            println!("Max latency so far: {} microseconds.", max_us);
+        });
 
         let result = latency_test::run_intrinsic_latency_test(duration, Some(progress_callback));
         latency_test::print_latency_report(&result);

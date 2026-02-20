@@ -268,9 +268,10 @@ where
     T::Err: std::fmt::Display,
 {
     let s = std::str::from_utf8(bytes.as_ref()).map_err(|_| CommandError::SyntaxError)?;
-    s.parse().map_err(|e: T::Err| CommandError::InvalidArgument {
-        message: e.to_string(),
-    })
+    s.parse()
+        .map_err(|e: T::Err| CommandError::InvalidArgument {
+            message: e.to_string(),
+        })
 }
 
 /// Parse bytes as u64.
@@ -488,7 +489,9 @@ mod tests {
     use super::*;
 
     fn bytes_vec(strs: &[&'static str]) -> Vec<Bytes> {
-        strs.iter().map(|s| Bytes::from_static(s.as_bytes())).collect()
+        strs.iter()
+            .map(|s| Bytes::from_static(s.as_bytes()))
+            .collect()
     }
 
     #[test]
@@ -629,7 +632,7 @@ mod tests {
 
         assert_eq!(parser.next_u64().unwrap(), 42);
         assert_eq!(parser.next_i64().unwrap(), -10);
-        assert!((parser.next_f64().unwrap() - 3.14).abs() < 0.001);
+        assert!((parser.next_f64().unwrap() - 3.14_f64).abs() < 0.001);
     }
 
     #[test]

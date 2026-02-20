@@ -36,20 +36,18 @@ async fn test_eval_redis_call_set_get() {
 
     // Use redis.call to GET the value
     let response = client
-        .command(&[
-            "EVAL",
-            "return redis.call('GET', KEYS[1])",
-            "1",
-            "mykey",
-        ])
+        .command(&["EVAL", "return redis.call('GET', KEYS[1])", "1", "mykey"])
         .await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("myvalue"))));
 
     // Verify metrics
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "EVAL")], 2.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "EVAL")],
+        2.0,
+    );
 
     server.shutdown().await;
 }
@@ -61,23 +59,13 @@ async fn test_eval_redis_call_incr() {
 
     // Use redis.call to INCR
     let response = client
-        .command(&[
-            "EVAL",
-            "return redis.call('INCR', KEYS[1])",
-            "1",
-            "counter",
-        ])
+        .command(&["EVAL", "return redis.call('INCR', KEYS[1])", "1", "counter"])
         .await;
     assert_eq!(response, Response::Integer(1));
 
     // INCR again
     let response = client
-        .command(&[
-            "EVAL",
-            "return redis.call('INCR', KEYS[1])",
-            "1",
-            "counter",
-        ])
+        .command(&["EVAL", "return redis.call('INCR', KEYS[1])", "1", "counter"])
         .await;
     assert_eq!(response, Response::Integer(2));
 
@@ -137,7 +125,11 @@ async fn test_eval_redis_call_raises_on_error() {
     match response {
         Response::Error(e) => {
             let err_str = String::from_utf8_lossy(&e);
-            assert!(err_str.contains("WRONGTYPE"), "Expected WRONGTYPE error, got: {}", err_str);
+            assert!(
+                err_str.contains("WRONGTYPE"),
+                "Expected WRONGTYPE error, got: {}",
+                err_str
+            );
         }
         _ => panic!("Expected error response, got: {:?}", response),
     }
@@ -145,8 +137,11 @@ async fn test_eval_redis_call_raises_on_error() {
     // Verify metrics - EVAL command was executed (even though script errored)
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "EVAL")], 1.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "EVAL")],
+        1.0,
+    );
 
     server.shutdown().await;
 }
@@ -172,17 +167,22 @@ async fn test_eval_redis_pcall_returns_error_table() {
         return 'no error'
     "#;
 
-    let response = client
-        .command(&["EVAL", script, "1", "stringkey"])
-        .await;
+    let response = client.command(&["EVAL", script, "1", "stringkey"]).await;
 
     // pcall should capture the error and we return the error message
     match response {
         Response::Bulk(Some(b)) => {
             let err_str = String::from_utf8_lossy(&b);
-            assert!(err_str.contains("WRONGTYPE"), "Expected WRONGTYPE in error, got: {}", err_str);
+            assert!(
+                err_str.contains("WRONGTYPE"),
+                "Expected WRONGTYPE in error, got: {}",
+                err_str
+            );
         }
-        _ => panic!("Expected bulk string with error message, got: {:?}", response),
+        _ => panic!(
+            "Expected bulk string with error message, got: {:?}",
+            response
+        ),
     }
 
     server.shutdown().await;
@@ -219,11 +219,7 @@ async fn test_eval_undeclared_key_error() {
 
     // Try to access a key that wasn't declared in KEYS
     let response = client
-        .command(&[
-            "EVAL",
-            "return redis.call('GET', 'undeclared_key')",
-            "0",
-        ])
+        .command(&["EVAL", "return redis.call('GET', 'undeclared_key')", "0"])
         .await;
 
     match response {
@@ -252,11 +248,7 @@ async fn test_eval_forbidden_command_blocked() {
 
     // EVAL should not be callable from within a script (nested scripts forbidden)
     let response = client
-        .command(&[
-            "EVAL",
-            "return redis.call('EVAL', 'return 1', '0')",
-            "0",
-        ])
+        .command(&["EVAL", "return redis.call('EVAL', 'return 1', '0')", "0"])
         .await;
 
     match response {
@@ -290,9 +282,7 @@ async fn test_eval_write_tracking() {
         return 'done'
     "#;
 
-    let response = client
-        .command(&["EVAL", script, "2", "key1", "key2"])
-        .await;
+    let response = client.command(&["EVAL", script, "2", "key1", "key2"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("done"))));
 
     // Verify the writes actually happened
@@ -355,9 +345,7 @@ async fn test_eval_conditional_logic() {
     assert_eq!(response, Response::Integer(10));
 
     // Second call - key exists, should add ARGV[1] to current value
-    let response = client
-        .command(&["EVAL", script, "1", "counter", "5"])
-        .await;
+    let response = client.command(&["EVAL", script, "1", "counter", "5"]).await;
     assert_eq!(response, Response::Integer(15));
 
     server.shutdown().await;
@@ -422,8 +410,11 @@ async fn test_evalsha_after_script_load() {
     // Verify metrics - EVALSHA was executed
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "EVALSHA")], 1.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "EVALSHA")],
+        1.0,
+    );
 
     server.shutdown().await;
 }

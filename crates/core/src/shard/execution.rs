@@ -42,7 +42,9 @@ impl ShardWorker {
         }
 
         // Check memory before write operations
-        let is_write = handler.flags().contains(crate::command::CommandFlags::WRITE);
+        let is_write = handler
+            .flags()
+            .contains(crate::command::CommandFlags::WRITE);
         if is_write {
             if let Err(err) = self.check_memory_for_write() {
                 return err.to_response();
@@ -82,17 +84,11 @@ impl ShardWorker {
         );
         if is_get_command {
             if matches!(response, Response::Null) {
-                self.metrics_recorder.increment_counter(
-                    "frogdb_keyspace_misses_total",
-                    1,
-                    &[],
-                );
+                self.metrics_recorder
+                    .increment_counter("frogdb_keyspace_misses_total", 1, &[]);
             } else {
-                self.metrics_recorder.increment_counter(
-                    "frogdb_keyspace_hits_total",
-                    1,
-                    &[],
-                );
+                self.metrics_recorder
+                    .increment_counter("frogdb_keyspace_hits_total", 1, &[]);
             }
         }
 
@@ -128,12 +124,14 @@ impl ShardWorker {
             }
 
             // Persist to WAL for write operations
-            self.persist_command_to_wal(&cmd_name_str, &command.args).await;
+            self.persist_command_to_wal(&cmd_name_str, &command.args)
+                .await;
 
             // Broadcast to replicas (if running as primary with connected replicas)
             // Skip broadcast if this command came from replication (to avoid infinite loops)
             if conn_id != REPLICA_INTERNAL_CONN_ID && self.replication_broadcaster.is_active() {
-                self.replication_broadcaster.broadcast_command(&cmd_name_str, &command.args);
+                self.replication_broadcaster
+                    .broadcast_command(&cmd_name_str, &command.args);
             }
         }
 
@@ -162,7 +160,9 @@ impl ShardWorker {
         // Execute all commands
         let mut results = Vec::with_capacity(commands.len());
         for command in commands {
-            let response = self.execute_command(&command, conn_id, protocol_version).await;
+            let response = self
+                .execute_command(&command, conn_id, protocol_version)
+                .await;
             results.push(response);
         }
 
@@ -170,25 +170,28 @@ impl ShardWorker {
     }
 
     /// Execute part of a scatter-gather operation.
-    pub(crate) async fn execute_scatter_part(&mut self, keys: &[Bytes], operation: &ScatterOp) -> PartialResult {
+    pub(crate) async fn execute_scatter_part(
+        &mut self,
+        keys: &[Bytes],
+        operation: &ScatterOp,
+    ) -> PartialResult {
         let results = match operation {
-            ScatterOp::MGet => {
-                keys.iter()
-                    .map(|key| {
-                        let response = match self.store.get(key) {
-                            Some(value) => {
-                                if let Some(sv) = value.as_string() {
-                                    Response::bulk(sv.as_bytes())
-                                } else {
-                                    Response::null()
-                                }
+            ScatterOp::MGet => keys
+                .iter()
+                .map(|key| {
+                    let response = match self.store.get(key) {
+                        Some(value) => {
+                            if let Some(sv) = value.as_string() {
+                                Response::bulk(sv.as_bytes())
+                            } else {
+                                Response::null()
                             }
-                            None => Response::null(),
-                        };
-                        (key.clone(), response)
-                    })
-                    .collect()
-            }
+                        }
+                        None => Response::null(),
+                    };
+                    (key.clone(), response)
+                })
+                .collect(),
             ScatterOp::MSet { pairs } => {
                 let mut results = Vec::with_capacity(pairs.len());
                 for (key, value) in pairs {
@@ -235,22 +238,20 @@ impl ShardWorker {
                 }
                 results
             }
-            ScatterOp::Exists => {
-                keys.iter()
-                    .map(|key| {
-                        let exists = self.store.contains(key);
-                        (key.clone(), Response::Integer(if exists { 1 } else { 0 }))
-                    })
-                    .collect()
-            }
-            ScatterOp::Touch => {
-                keys.iter()
-                    .map(|key| {
-                        let touched = self.store.touch(key);
-                        (key.clone(), Response::Integer(if touched { 1 } else { 0 }))
-                    })
-                    .collect()
-            }
+            ScatterOp::Exists => keys
+                .iter()
+                .map(|key| {
+                    let exists = self.store.contains(key);
+                    (key.clone(), Response::Integer(if exists { 1 } else { 0 }))
+                })
+                .collect(),
+            ScatterOp::Touch => keys
+                .iter()
+                .map(|key| {
+                    let touched = self.store.touch(key);
+                    (key.clone(), Response::Integer(if touched { 1 } else { 0 }))
+                })
+                .collect(),
             ScatterOp::Keys { pattern } => {
                 // Get all keys matching pattern
                 let all_keys = self.store.all_keys();
@@ -264,7 +265,10 @@ impl ShardWorker {
             ScatterOp::DbSize => {
                 // Return the key count for this shard
                 let count = self.store.len();
-                vec![(Bytes::from_static(b"__dbsize__"), Response::Integer(count as i64))]
+                vec![(
+                    Bytes::from_static(b"__dbsize__"),
+                    Response::Integer(count as i64),
+                )]
             }
             ScatterOp::FlushDb => {
                 // Clear all keys in this shard
@@ -272,13 +276,23 @@ impl ShardWorker {
                 self.increment_version();
                 vec![(Bytes::from_static(b"__flushdb__"), Response::ok())]
             }
-            ScatterOp::Scan { cursor, count, pattern, key_type } => {
+            ScatterOp::Scan {
+                cursor,
+                count,
+                pattern,
+                key_type,
+            } => {
                 // Scan keys in this shard
                 let pattern_ref = pattern.as_ref().map(|p| p.as_ref());
-                let (next_cursor, found_keys) = self.store.scan_filtered(*cursor, *count, pattern_ref, *key_type);
+                let (next_cursor, found_keys) =
+                    self.store
+                        .scan_filtered(*cursor, *count, pattern_ref, *key_type);
                 // Return cursor and keys as a special response
                 let mut results = Vec::with_capacity(found_keys.len() + 1);
-                results.push((Bytes::from_static(b"__cursor__"), Response::Integer(next_cursor as i64)));
+                results.push((
+                    Bytes::from_static(b"__cursor__"),
+                    Response::Integer(next_cursor as i64),
+                ));
                 for key in found_keys {
                     results.push((key.clone(), Response::bulk(key)));
                 }
@@ -292,8 +306,7 @@ impl ShardWorker {
                         // Get expiry if any
                         let expiry = self.store.get_expiry(source_key);
                         let expiry_ms = expiry.map(|exp| {
-                            exp.duration_since(std::time::Instant::now())
-                                .as_millis() as i64
+                            exp.duration_since(std::time::Instant::now()).as_millis() as i64
                         });
 
                         // Serialize the value based on its type
@@ -348,8 +361,7 @@ impl ShardWorker {
                         // Set expiry if provided
                         if let Some(ms) = expiry_ms {
                             if *ms > 0 {
-                                let expires_at =
-                                    Instant::now() + Duration::from_millis(*ms as u64);
+                                let expires_at = Instant::now() + Duration::from_millis(*ms as u64);
                                 self.store.set_expiry(dest_key, expires_at);
                             }
                         }

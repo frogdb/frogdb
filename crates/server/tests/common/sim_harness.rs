@@ -228,7 +228,8 @@ impl OperationHistory {
                     if let Some(invoke) = invokes.remove(&op.op_id) {
                         // Convert command name to lowercase for model matching
                         let function = invoke.command.to_lowercase();
-                        let op_id = history.invoke(invoke.client_id, &function, invoke.args.clone());
+                        let op_id =
+                            history.invoke(invoke.client_id, &function, invoke.args.clone());
                         let result = self.convert_result(&op.result);
                         history.respond(op_id, result);
                     }
@@ -280,11 +281,7 @@ impl OperationHistory {
     /// Record a transaction (EXEC) as a single atomic operation.
     ///
     /// Commands are encoded as: [num_cmds, cmd1_name, cmd1_num_args, cmd1_args..., cmd2_name, ...]
-    pub fn record_exec_invoke(
-        &mut self,
-        client_id: u64,
-        commands: &[(String, Vec<Bytes>)],
-    ) -> u64 {
+    pub fn record_exec_invoke(&mut self, client_id: u64, commands: &[(String, Vec<Bytes>)]) -> u64 {
         let mut args = Vec::new();
         args.push(Bytes::from(commands.len().to_string()));
 
@@ -444,7 +441,10 @@ mod tests {
         let mut history = OperationHistory::new();
 
         let commands = vec![
-            ("SET".to_string(), vec![Bytes::from("key"), Bytes::from("value")]),
+            (
+                "SET".to_string(),
+                vec![Bytes::from("key"), Bytes::from("value")],
+            ),
             ("GET".to_string(), vec![Bytes::from("key")]),
         ];
         let _op_id = history.record_exec_invoke(1, &commands);
@@ -461,7 +461,17 @@ mod tests {
     fn test_record_exec_return() {
         let mut history = OperationHistory::new();
 
-        let op_id = history.record_invoke(1, "EXEC", vec![Bytes::from("1"), Bytes::from("SET"), Bytes::from("2"), Bytes::from("key"), Bytes::from("val")]);
+        let op_id = history.record_invoke(
+            1,
+            "EXEC",
+            vec![
+                Bytes::from("1"),
+                Bytes::from("SET"),
+                Bytes::from("2"),
+                Bytes::from("key"),
+                Bytes::from("val"),
+            ],
+        );
         history.record_exec_return(op_id, 1, &[OperationResult::Ok]);
 
         assert!(history.is_complete());

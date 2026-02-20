@@ -46,15 +46,11 @@ fn bench_get(c: &mut Criterion) {
         let key = &keys[store_size / 2]; // Middle key for consistent access
 
         group.throughput(Throughput::Elements(1));
-        group.bench_with_input(
-            BenchmarkId::new("keys", store_size),
-            &store_size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(store.get(key));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("keys", store_size), &store_size, |b, _| {
+            b.iter(|| {
+                black_box(store.get(key));
+            });
+        });
     }
 
     group.finish();
@@ -96,15 +92,11 @@ fn bench_set_update(c: &mut Criterion) {
         let new_value = random_value(128);
 
         group.throughput(Throughput::Elements(1));
-        group.bench_with_input(
-            BenchmarkId::new("keys", store_size),
-            &store_size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(store.set(key.clone(), new_value.clone()));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("keys", store_size), &store_size, |b, _| {
+            b.iter(|| {
+                black_box(store.set(key.clone(), new_value.clone()));
+            });
+        });
     }
 
     group.finish();
@@ -183,15 +175,11 @@ fn bench_get_with_expiry_check(c: &mut Criterion) {
         let key = keys[store_size / 2].clone();
 
         group.throughput(Throughput::Elements(1));
-        group.bench_with_input(
-            BenchmarkId::new("keys", store_size),
-            &store_size,
-            |b, _| {
-                b.iter(|| {
-                    black_box(store.get_with_expiry_check(&key));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("keys", store_size), &store_size, |b, _| {
+            b.iter(|| {
+                black_box(store.get_with_expiry_check(&key));
+            });
+        });
     }
 
     group.finish();

@@ -183,10 +183,8 @@ impl CommandRouter {
     fn route_pubsub_mode(cmd_name: &str) -> RouteResult {
         match cmd_name {
             // Subscription management
-            "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE"
-            | "SSUBSCRIBE" | "SUNSUBSCRIBE" => {
-                RouteResult::ConnectionLevel(ConnectionLevelHandler::PubSub)
-            }
+            "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" | "SSUBSCRIBE"
+            | "SUNSUBSCRIBE" => RouteResult::ConnectionLevel(ConnectionLevelHandler::PubSub),
             // Allowed in pub/sub mode
             "PING" | "RESET" | "QUIT" | "DEBUG" => {
                 RouteResult::ConnectionLevel(ConnectionLevelHandler::ConnectionState)
@@ -216,7 +214,6 @@ impl CommandRouter {
             ConnectionLevelOp::Replication => ConnectionLevelHandler::Replication,
         }
     }
-
 }
 
 #[cfg(test)]
@@ -263,5 +260,4 @@ mod tests {
             RouteResult::ConnectionLevel(ConnectionLevelHandler::Transaction)
         ));
     }
-
 }

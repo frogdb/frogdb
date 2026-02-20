@@ -185,7 +185,11 @@ pub struct MigrateClient {
 
 impl MigrateClient {
     /// Connect to a target server.
-    pub async fn connect(host: &str, port: u16, timeout_dur: Duration) -> Result<Self, MigrateError> {
+    pub async fn connect(
+        host: &str,
+        port: u16,
+        timeout_dur: Duration,
+    ) -> Result<Self, MigrateError> {
         let addr = format!("{}:{}", host, port);
 
         let stream = timeout(timeout_dur, TcpStream::connect(&addr))

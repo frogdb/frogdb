@@ -21,13 +21,13 @@
 //! let metrics: Arc<dyn MetricsRecorder> = Arc::new(NoopMetricsRecorder);
 //! ```
 
-pub mod wal;
-pub mod replication;
 pub mod metrics;
+pub mod replication;
 pub mod tracing_traits;
+pub mod wal;
 
 // Re-export all traits and noop implementations
-pub use wal::{WalWriter, WalOperation, NoopWalWriter};
-pub use replication::{ReplicationTracker, ReplicationConfig, NoopReplicationTracker};
 pub use metrics::{MetricsRecorder, NoopMetricsRecorder};
-pub use tracing_traits::{Tracer, Span, NoopTracer, NoopSpan};
+pub use replication::{NoopReplicationTracker, ReplicationConfig, ReplicationTracker};
+pub use tracing_traits::{NoopSpan, NoopTracer, Span, Tracer};
+pub use wal::{NoopWalWriter, WalOperation, WalWriter};

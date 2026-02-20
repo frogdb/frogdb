@@ -154,11 +154,7 @@ fn test_read_your_writes() {
                     {
                         let s = store.lock().unwrap();
                         let read_value = s.get(&key).cloned();
-                        assert_eq!(
-                            read_value,
-                            Some(value),
-                            "Must read the value we just wrote"
-                        );
+                        assert_eq!(read_value, Some(value), "Must read the value we just wrote");
                     }
                 }));
             }
@@ -671,10 +667,7 @@ fn test_mset_cross_shard_partial_visibility() {
 
             // Writer thread
             let writer = thread::spawn(move || {
-                cluster_w.mset(&[
-                    (key_shard0, b"v1".to_vec()),
-                    (key_shard1, b"v2".to_vec()),
-                ]);
+                cluster_w.mset(&[(key_shard0, b"v1".to_vec()), (key_shard1, b"v2".to_vec())]);
             });
 
             // Reader thread (concurrent)
@@ -695,9 +688,9 @@ fn test_mset_cross_shard_partial_visibility() {
             let states = observed_states.lock().unwrap();
             for state in states.iter() {
                 match (state[0].as_ref(), state[1].as_ref()) {
-                    (None, None) => {} // Before write
-                    (Some(v), None) if v == b"v1" => {} // Partial (first key)
-                    (None, Some(v)) if v == b"v2" => {} // Partial (second key)
+                    (None, None) => {}                                       // Before write
+                    (Some(v), None) if v == b"v1" => {}                      // Partial (first key)
+                    (None, Some(v)) if v == b"v2" => {}                      // Partial (second key)
                     (Some(v1), Some(v2)) if v1 == b"v1" && v2 == b"v2" => {} // Complete
                     other => panic!("Unexpected state: {:?}", other),
                 }
@@ -915,13 +908,10 @@ fn test_watch_detects_concurrent_modification() {
                 shuttle::thread::yield_now();
 
                 // Try to EXEC (update key to "watcher_value")
-                let result = store_watcher.exec_with_watch(
-                    &[("key", watched_version)],
-                    |data| {
-                        let version = data.get("key").map(|(_, v)| v + 1).unwrap_or(1);
-                        data.insert("key".to_string(), ("watcher_value".to_string(), version));
-                    },
-                );
+                let result = store_watcher.exec_with_watch(&[("key", watched_version)], |data| {
+                    let version = data.get("key").map(|(_, v)| v + 1).unwrap_or(1);
+                    data.insert("key".to_string(), ("watcher_value".to_string(), version));
+                });
 
                 if result.is_none() {
                     aborts.fetch_add(1, Ordering::SeqCst);
@@ -997,10 +987,7 @@ fn test_watch_multiple_watchers() {
 
             // At least one should succeed, but possibly all if they serialize perfectly
             let total_successes = success_count.load(Ordering::SeqCst);
-            assert!(
-                total_successes >= 1,
-                "At least one watcher should succeed"
-            );
+            assert!(total_successes >= 1, "At least one watcher should succeed");
 
             // If multiple succeeded, they must have serialized (each saw the other's write)
             // The final counter value depends on how many serialized successfully
@@ -1778,11 +1765,7 @@ fn test_concurrent_json_numincrby() {
 
             // Final value should be 4 * 10 = 40
             let data = json.get("$.counter").unwrap();
-            assert_eq!(
-                data.as_i64().unwrap(),
-                40,
-                "All increments must be counted"
-            );
+            assert_eq!(data.as_i64().unwrap(), 40, "All increments must be counted");
         },
         1000,
     );
@@ -1976,7 +1959,9 @@ fn test_concurrent_json_mixed_operations() {
                 assert_eq!(arr.len(), 5, "Items should have 5 elements");
             }
 
-            let name = json.get("$.name").and_then(|v| v.as_str().map(String::from));
+            let name = json
+                .get("$.name")
+                .and_then(|v| v.as_str().map(String::from));
             assert!(name.is_some(), "Name should exist");
         },
         1000,

@@ -74,10 +74,7 @@ impl ScriptRouter for CrossShardRouter {
         }
 
         // Collect all unique shards
-        let mut shards: Vec<usize> = keys
-            .iter()
-            .map(|k| shard_for_key(k, num_shards))
-            .collect();
+        let mut shards: Vec<usize> = keys.iter().map(|k| shard_for_key(k, num_shards)).collect();
         shards.sort_unstable();
         shards.dedup();
 
@@ -219,7 +216,9 @@ mod tests {
                     assert!(shards.contains(&s1));
                     assert!(shards.contains(&s2));
                 }
-                ScriptRoute::SingleShard(_) => panic!("Different shard keys should return CrossShard"),
+                ScriptRoute::SingleShard(_) => {
+                    panic!("Different shard keys should return CrossShard")
+                }
             }
         }
     }

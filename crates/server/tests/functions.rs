@@ -177,8 +177,11 @@ end)
     // Verify metrics
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
-    MetricsDelta::new(before, after)
-        .assert_counter_increased_gte("frogdb_commands_total", &[("command", "FUNCTION")], 2.0);
+    MetricsDelta::new(before, after).assert_counter_increased_gte(
+        "frogdb_commands_total",
+        &[("command", "FUNCTION")],
+        2.0,
+    );
 
     server.shutdown().await;
 }
@@ -212,8 +215,11 @@ end)
     // Verify metrics
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "FCALL")], 1.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "FCALL")],
+        1.0,
+    );
 
     server.shutdown().await;
 }
@@ -246,8 +252,11 @@ end)
     // Verify metrics
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "FCALL")], 1.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "FCALL")],
+        1.0,
+    );
 
     server.shutdown().await;
 }
@@ -290,8 +299,11 @@ redis.register_function{
     // Verify metrics
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "FCALL_RO")], 1.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "FCALL_RO")],
+        1.0,
+    );
 
     server.shutdown().await;
 }
@@ -332,8 +344,11 @@ end)
     tokio::time::sleep(Duration::from_millis(50)).await;
     let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
     // FCALL_RO was called but failed
-    MetricsDelta::new(before, after)
-        .assert_counter_increased("frogdb_commands_total", &[("command", "FCALL_RO")], 1.0);
+    MetricsDelta::new(before, after).assert_counter_increased(
+        "frogdb_commands_total",
+        &[("command", "FCALL_RO")],
+        1.0,
+    );
 
     server.shutdown().await;
 }
@@ -448,7 +463,9 @@ end)
     }
 
     // Load with REPLACE - should succeed
-    let response = client.command(&["FUNCTION", "LOAD", "REPLACE", code2]).await;
+    let response = client
+        .command(&["FUNCTION", "LOAD", "REPLACE", code2])
+        .await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("replacelib"))));
 
     // Verify updated version
@@ -481,7 +498,10 @@ end)
     let dump_response = client.command(&["FUNCTION", "DUMP"]).await;
     let dump_data = match dump_response {
         Response::Bulk(Some(data)) => data,
-        _ => panic!("Expected bulk string from FUNCTION DUMP, got: {:?}", dump_response),
+        _ => panic!(
+            "Expected bulk string from FUNCTION DUMP, got: {:?}",
+            dump_response
+        ),
     };
 
     // Flush all functions
@@ -832,7 +852,11 @@ async fn test_function_persistence_across_restart() {
         BytesFrame::BulkString(Bytes::from("0")),
     ]);
     framed.send(frame).await.unwrap();
-    let response = timeout(Duration::from_secs(5), framed.next()).await.unwrap().unwrap().unwrap();
+    let response = timeout(Duration::from_secs(5), framed.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     assert_eq!(
         frame_to_response(response),
         Response::Bulk(Some(Bytes::from("persisted")))
@@ -844,7 +868,11 @@ async fn test_function_persistence_across_restart() {
         BytesFrame::BulkString(Bytes::from("LIST")),
     ]);
     framed.send(frame).await.unwrap();
-    let response = timeout(Duration::from_secs(5), framed.next()).await.unwrap().unwrap().unwrap();
+    let response = timeout(Duration::from_secs(5), framed.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     match frame_to_response(response) {
         Response::Array(arr) => {
             assert_eq!(arr.len(), 1, "Should have exactly one library loaded");
@@ -914,7 +942,11 @@ end)
         BytesFrame::BulkString(Bytes::from(code)),
     ]);
     framed.send(frame).await.unwrap();
-    let _ = timeout(Duration::from_secs(5), framed.next()).await.unwrap().unwrap().unwrap();
+    let _ = timeout(Duration::from_secs(5), framed.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 
     // Verify file exists with content
     let functions_file = temp_dir.path().join("functions.fdb");
@@ -928,7 +960,11 @@ end)
         BytesFrame::BulkString(Bytes::from("deletelib")),
     ]);
     framed.send(frame).await.unwrap();
-    let _ = timeout(Duration::from_secs(5), framed.next()).await.unwrap().unwrap().unwrap();
+    let _ = timeout(Duration::from_secs(5), framed.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 
     // Verify file size decreased (empty registry has smaller dump)
     let file_size_after_delete = std::fs::metadata(&functions_file).unwrap().len();
@@ -1001,7 +1037,11 @@ end)
         BytesFrame::BulkString(Bytes::from(code)),
     ]);
     framed.send(frame).await.unwrap();
-    let _ = timeout(Duration::from_secs(5), framed.next()).await.unwrap().unwrap().unwrap();
+    let _ = timeout(Duration::from_secs(5), framed.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 
     // Verify file exists with content
     let functions_file = temp_dir.path().join("functions.fdb");
@@ -1014,7 +1054,11 @@ end)
         BytesFrame::BulkString(Bytes::from("FLUSH")),
     ]);
     framed.send(frame).await.unwrap();
-    let _ = timeout(Duration::from_secs(5), framed.next()).await.unwrap().unwrap().unwrap();
+    let _ = timeout(Duration::from_secs(5), framed.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 
     // Verify file size decreased (empty registry has smaller dump)
     let file_size_after_flush = std::fs::metadata(&functions_file).unwrap().len();

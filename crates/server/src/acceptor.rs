@@ -2,13 +2,13 @@
 
 use anyhow::Result;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
-use std::sync::atomic::AtomicI64;
 use frogdb_core::{
     persistence::SnapshotCoordinator, shard::NewConnection, AclManager, ClientRegistry,
     ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry, MetricsRecorder,
     ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
 };
 use frogdb_metrics::{metric_names, SharedTracer};
+use std::sync::atomic::AtomicI64;
 
 use crate::config::TracingConfig;
 use crate::replication::PrimaryReplicationHandler;
@@ -205,11 +205,17 @@ impl Acceptor {
                     let client_handle = self.client_registry.register(conn_id, addr, local_addr);
 
                     // Record connection metrics
-                    self.metrics_recorder
-                        .increment_counter(metric_names::CONNECTIONS_TOTAL, 1, &[]);
+                    self.metrics_recorder.increment_counter(
+                        metric_names::CONNECTIONS_TOTAL,
+                        1,
+                        &[],
+                    );
                     let current = self.current_connections.fetch_add(1, Ordering::SeqCst) + 1;
-                    self.metrics_recorder
-                        .record_gauge(metric_names::CONNECTIONS_CURRENT, current as f64, &[]);
+                    self.metrics_recorder.record_gauge(
+                        metric_names::CONNECTIONS_CURRENT,
+                        current as f64,
+                        &[],
+                    );
 
                     debug!(
                         conn_id,
@@ -247,7 +253,9 @@ impl Acceptor {
                     let config = ConnectionConfig {
                         num_shards: self.shard_senders.len(),
                         allow_cross_slot: self.allow_cross_slot,
-                        scatter_gather_timeout: Duration::from_millis(self.scatter_gather_timeout_ms),
+                        scatter_gather_timeout: Duration::from_millis(
+                            self.scatter_gather_timeout_ms,
+                        ),
                         is_admin: self.is_admin,
                         admin_enabled: self.admin_enabled,
                         hotshards_config: self.hotshards_config.clone(),
@@ -282,8 +290,11 @@ impl Acceptor {
 
                         // Decrement connection count when handler finishes
                         let current = current_connections.fetch_sub(1, Ordering::SeqCst) - 1;
-                        metrics_recorder
-                            .record_gauge(metric_names::CONNECTIONS_CURRENT, current as f64, &[]);
+                        metrics_recorder.record_gauge(
+                            metric_names::CONNECTIONS_CURRENT,
+                            current as f64,
+                            &[],
+                        );
                     });
                 }
                 Err(e) => {

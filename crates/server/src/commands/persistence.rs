@@ -2,8 +2,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    deserialize, serialize, Arity, Command, CommandContext, CommandError, CommandFlags,
-    KeyMetadata,
+    deserialize, serialize, Arity, Command, CommandContext, CommandError, CommandFlags, KeyMetadata,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -91,11 +90,7 @@ impl Command for DumpCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         match ctx.store.get_with_expiry_check(key) {
@@ -137,11 +132,7 @@ impl Command for RestoreCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = args[0].clone();
         let ttl_ms = parse_i64(&args[1])?;
         let serialized_value = &args[2];
@@ -173,11 +164,10 @@ impl Command for RestoreCommand {
         }
 
         // Deserialize the value
-        let (value, mut metadata) = deserialize(serialized_value).map_err(|e| {
-            CommandError::InvalidArgument {
+        let (value, mut metadata) =
+            deserialize(serialized_value).map_err(|e| CommandError::InvalidArgument {
                 message: format!("DUMP payload version or checksum are wrong: {}", e),
-            }
-        })?;
+            })?;
 
         // Handle TTL
         if ttl_ms > 0 {

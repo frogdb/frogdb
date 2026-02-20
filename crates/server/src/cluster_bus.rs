@@ -7,9 +7,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use frogdb_core::cluster::{
-    handle_rpc_request, parse_rpc_message, send_rpc_response, ClusterRaft,
-};
+use frogdb_core::cluster::{handle_rpc_request, parse_rpc_message, send_rpc_response, ClusterRaft};
 use tokio::net::TcpStream;
 
 use crate::net::tcp_listener_reusable;

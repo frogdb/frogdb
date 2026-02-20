@@ -39,5 +39,5 @@ pub mod history;
 pub mod models;
 
 pub use checker::{check_linearizability, LinearizabilityResult};
-pub use history::{History, Operation, OpKind};
+pub use history::{History, OpKind, Operation};
 pub use models::{KVModel, KVState, Model, RegisterModel};

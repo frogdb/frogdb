@@ -10,7 +10,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     extract_hash_tag, shard_for_key, slot_for_key, Arity, Command, CommandContext, CommandError,
-    CommandFlags, ExecutionStrategy, MergeStrategy, ServerWideOp, Value,
+    CommandFlags, ConnectionLevelOp, ExecutionStrategy, MergeStrategy, ServerWideOp, Value,
 };
 use frogdb_protocol::Response;
 
@@ -33,11 +33,7 @@ impl Command for TypeCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let key_type = ctx.store.key_type(key);
         Ok(Response::Simple(Bytes::from(key_type.as_str())))
@@ -71,11 +67,7 @@ impl Command for RenameCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let old_key = &args[0];
         let new_key = &args[1];
 
@@ -88,9 +80,12 @@ impl Command for RenameCommand {
         }
 
         // Get the value from old key
-        let value = ctx.store.get(old_key).ok_or(CommandError::InvalidArgument {
-            message: "no such key".to_string(),
-        })?;
+        let value = ctx
+            .store
+            .get(old_key)
+            .ok_or(CommandError::InvalidArgument {
+                message: "no such key".to_string(),
+            })?;
 
         // Get expiry if any
         let expiry = ctx.store.get_expiry(old_key);
@@ -137,11 +132,7 @@ impl Command for RenamenxCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let old_key = &args[0];
         let new_key = &args[1];
 
@@ -159,9 +150,12 @@ impl Command for RenamenxCommand {
         }
 
         // Get the value from old key
-        let value = ctx.store.get(old_key).ok_or(CommandError::InvalidArgument {
-            message: "no such key".to_string(),
-        })?;
+        let value = ctx
+            .store
+            .get(old_key)
+            .ok_or(CommandError::InvalidArgument {
+                message: "no such key".to_string(),
+            })?;
 
         // Get expiry if any
         let expiry = ctx.store.get_expiry(old_key);
@@ -214,11 +208,7 @@ impl Command for TouchCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Multi-key TOUCH: count how many keys were touched
         let mut touched = 0i64;
         for key in args {
@@ -259,11 +249,7 @@ impl Command for UnlinkCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Multi-key UNLINK: delete all keys and return count
         // Currently synchronous, async deletion can be added later
         let mut deleted = 0i64;
@@ -299,11 +285,7 @@ impl Command for ObjectCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let subcommand = args[0].to_ascii_uppercase();
 
         match subcommand.as_slice() {
@@ -473,11 +455,11 @@ impl Command for DebugCommand {
         CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let subcommand = args[0].to_ascii_uppercase();
 
         match subcommand.as_slice() {
@@ -525,12 +507,8 @@ impl Command for DebugCommand {
                                     "hashtable"
                                 }
                             }
-                            Value::Stream(_) => {
-                                "radix-tree"
-                            }
-                            Value::BloomFilter(_) => {
-                                "bloom"
-                            }
+                            Value::Stream(_) => "radix-tree",
+                            Value::BloomFilter(_) => "bloom",
                             Value::HyperLogLog(hll) => {
                                 if hll.is_sparse() {
                                     "sparse"
@@ -538,12 +516,8 @@ impl Command for DebugCommand {
                                     "dense"
                                 }
                             }
-                            Value::TimeSeries(_) => {
-                                "gorilla"
-                            }
-                            Value::Json(_) => {
-                                "raw"
-                            }
+                            Value::TimeSeries(_) => "gorilla",
+                            Value::Json(_) => "raw",
                         };
                         let info = format!(
                             "Value at:0x0 refcount:1 encoding:{} serializedlength:{} lru:0 lru_seconds_idle:0",
@@ -642,11 +616,7 @@ impl Command for CopyCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let source = &args[0];
         let dest = &args[1];
 

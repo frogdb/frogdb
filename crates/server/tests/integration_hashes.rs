@@ -12,7 +12,9 @@ async fn test_hset_hget() {
     let mut client = server.connect().await;
 
     // HSET single field
-    let response = client.command(&["HSET", "myhash", "field1", "value1"]).await;
+    let response = client
+        .command(&["HSET", "myhash", "field1", "value1"])
+        .await;
     assert_eq!(response, Response::Integer(1)); // 1 new field added
 
     // HGET existing field
@@ -30,7 +32,9 @@ async fn test_hset_hget() {
     assert_eq!(response, Response::Integer(2)); // 2 new fields added
 
     // Update existing field (returns 0)
-    let response = client.command(&["HSET", "myhash", "field1", "updated"]).await;
+    let response = client
+        .command(&["HSET", "myhash", "field1", "updated"])
+        .await;
     assert_eq!(response, Response::Integer(0)); // 0 new fields, 1 updated
 
     server.shutdown().await;
@@ -140,7 +144,9 @@ async fn test_hlen_hexists() {
     let response = client.command(&["HLEN", "myhash"]).await;
     assert_eq!(response, Response::Integer(0));
 
-    client.command(&["HSET", "myhash", "f1", "v1", "f2", "v2"]).await;
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2"])
+        .await;
 
     // HLEN
     let response = client.command(&["HLEN", "myhash"]).await;

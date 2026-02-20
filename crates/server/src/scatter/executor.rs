@@ -5,9 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use frogdb_core::{
-    ExecuteSignal, MetricsRecorder, PartialResult, ShardMessage, ShardReadyResult,
-};
+use frogdb_core::{ExecuteSignal, MetricsRecorder, PartialResult, ShardMessage, ShardReadyResult};
 
 use crate::server::next_txid;
 use frogdb_protocol::Response;
@@ -153,7 +151,9 @@ impl ScatterGatherExecutor {
             // Send proceed signal
             if execute_tx.send(ExecuteSignal { proceed: true }).is_err() {
                 // Abort remaining shards
-                for (&abort_shard_id, _) in partition.shard_keys.iter().skip(result_receivers.len() + 1) {
+                for (&abort_shard_id, _) in
+                    partition.shard_keys.iter().skip(result_receivers.len() + 1)
+                {
                     let _ = self.shard_senders[abort_shard_id]
                         .send(ShardMessage::VllAbort { txid })
                         .await;

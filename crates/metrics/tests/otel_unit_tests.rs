@@ -3,10 +3,10 @@
 //! These tests verify that the OtelRecorder and CompositeRecorder
 //! work correctly without requiring an actual OTLP collector.
 
+use frogdb_core::{MetricsRecorder, NoopMetricsRecorder};
 use frogdb_metrics::config::MetricsConfig;
 use frogdb_metrics::otlp::{CompositeRecorder, OtlpRecorder};
 use frogdb_metrics::prometheus_recorder::PrometheusRecorder;
-use frogdb_core::{MetricsRecorder, NoopMetricsRecorder};
 use std::sync::Arc;
 
 /// Test that OTLP recorder returns None when disabled.
@@ -98,13 +98,10 @@ fn test_nested_composite_recorders() {
     let prom2 = Arc::new(PrometheusRecorder::new());
 
     let inner = Arc::new(CompositeRecorder::new(vec![
-        prom1.clone() as Arc<dyn MetricsRecorder>,
+        prom1.clone() as Arc<dyn MetricsRecorder>
     ])) as Arc<dyn MetricsRecorder>;
 
-    let outer = CompositeRecorder::new(vec![
-        inner,
-        prom2.clone() as Arc<dyn MetricsRecorder>,
-    ]);
+    let outer = CompositeRecorder::new(vec![inner, prom2.clone() as Arc<dyn MetricsRecorder>]);
 
     outer.increment_counter("nested_test", 1, &[]);
 
@@ -140,10 +137,7 @@ fn test_semantic_attributes() {
     recorder.increment_counter(
         "db_operation",
         1,
-        &[
-            ("db_system", "frogdb"),
-            ("db_operation", "GET"),
-        ],
+        &[("db_system", "frogdb"), ("db_operation", "GET")],
     );
 
     let output = recorder.encode();
@@ -175,7 +169,7 @@ fn test_composite_recorder_concurrent() {
 
     let prom = Arc::new(PrometheusRecorder::new());
     let composite = Arc::new(CompositeRecorder::new(vec![
-        prom.clone() as Arc<dyn MetricsRecorder>,
+        prom.clone() as Arc<dyn MetricsRecorder>
     ]));
 
     let mut handles = vec![];

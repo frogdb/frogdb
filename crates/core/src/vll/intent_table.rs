@@ -103,7 +103,8 @@ impl IntentTable {
 
     /// Check if a transaction can proceed for all keys using SCA.
     pub fn can_proceed(&self, keys: &[Bytes], txid: u64, mode: LockMode) -> bool {
-        keys.iter().all(|key| self.can_proceed_for_key(key, txid, mode))
+        keys.iter()
+            .all(|key| self.can_proceed_for_key(key, txid, mode))
     }
 
     /// Check if two access modes conflict.
@@ -160,7 +161,10 @@ impl IntentTable {
 
     /// Check if a key has any pending intents.
     pub fn has_intents(&self, key: &Bytes) -> bool {
-        self.intents_by_key.get(key).map(|m| !m.is_empty()).unwrap_or(false)
+        self.intents_by_key
+            .get(key)
+            .map(|m| !m.is_empty())
+            .unwrap_or(false)
     }
 
     /// Get all txids with intents on a key.

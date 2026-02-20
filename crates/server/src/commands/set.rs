@@ -16,10 +16,7 @@ use frogdb_protocol::Response;
 use super::utils::{get_or_create_set, parse_i64, parse_usize};
 
 /// Get an existing set (cloned), returning None if key doesn't exist, Error if wrong type.
-fn get_set_inline(
-    ctx: &mut CommandContext,
-    key: &Bytes,
-) -> Result<Option<SetValue>, CommandError> {
+fn get_set_inline(ctx: &mut CommandContext, key: &Bytes) -> Result<Option<SetValue>, CommandError> {
     match ctx.store.get(key) {
         Some(value) => {
             if let Some(set) = value.as_set() {
@@ -51,11 +48,7 @@ impl Command for SaddCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let set = get_or_create_set(ctx, key)?;
 
@@ -97,11 +90,7 @@ impl Command for SremCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         // Check if key exists
@@ -159,11 +148,7 @@ impl Command for SmembersCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         match get_set_inline(ctx, key)? {
@@ -214,11 +199,7 @@ impl Command for SismemberCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let member = &args[1];
 
@@ -262,11 +243,7 @@ impl Command for SmismemberCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         match get_set_inline(ctx, key)? {
@@ -284,7 +261,8 @@ impl Command for SmismemberCommand {
                 Ok(Response::Array(results))
             }
             None => {
-                let results: Vec<Response> = args[1..].iter().map(|_| Response::Integer(0)).collect();
+                let results: Vec<Response> =
+                    args[1..].iter().map(|_| Response::Integer(0)).collect();
                 Ok(Response::Array(results))
             }
         }
@@ -318,11 +296,7 @@ impl Command for ScardCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         match get_set_inline(ctx, key)? {
@@ -359,11 +333,7 @@ impl Command for SunionCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Get the first set (or empty)
         let first = match get_set_inline(ctx, &args[0])? {
             Some(s) => s.clone(),
@@ -414,11 +384,7 @@ impl Command for SinterCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let empty_result = if ctx.protocol_version.is_resp3() {
             Response::Set(vec![])
         } else {
@@ -476,11 +442,7 @@ impl Command for SdiffCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let empty_result = if ctx.protocol_version.is_resp3() {
             Response::Set(vec![])
         } else {
@@ -537,11 +499,7 @@ impl Command for SunionstoreCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = &args[0];
 
         // Get the first set (or empty)
@@ -596,11 +554,7 @@ impl Command for SinterstoreCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = &args[0];
 
         // Get the first set (or empty)
@@ -662,11 +616,7 @@ impl Command for SdiffstoreCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = &args[0];
 
         // Get the first set (or empty)
@@ -724,11 +674,7 @@ impl Command for SintercardCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let numkeys = parse_usize(&args[0])?;
 
         if numkeys == 0 {
@@ -820,11 +766,7 @@ impl Command for SrandmemberCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         let count = if args.len() > 1 {
@@ -899,11 +841,7 @@ impl Command for SpopCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         let count = if args.len() > 1 {
@@ -984,11 +922,7 @@ impl Command for SmoveCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let source = &args[0];
         let dest = &args[1];
         let member = &args[2];
@@ -1056,11 +990,7 @@ impl Command for SscanCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let cursor = parse_usize(&args[1])?;
 

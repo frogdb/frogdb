@@ -23,11 +23,7 @@ impl Command for PingCommand {
         CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::STALE | CommandFlags::LOADING
     }
 
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
             Ok(Response::pong())
         } else {
@@ -56,11 +52,7 @@ impl Command for EchoCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         Ok(Response::bulk(args[0].clone()))
     }
 
@@ -114,11 +106,7 @@ impl Command for CommandCommand {
         CommandFlags::READONLY | CommandFlags::LOADING | CommandFlags::STALE
     }
 
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
             // COMMAND - return info about all commands
             return Ok(Response::Array(vec![])); // Simplified for now
@@ -169,11 +157,11 @@ impl Command for CommandCommand {
                         // Format: [name, arity, [flags], first_key, last_key, step]
                         let info = Response::Array(vec![
                             Response::bulk(cmd_name.clone()),
-                            Response::Integer(-1), // Variable arity
+                            Response::Integer(-1),   // Variable arity
                             Response::Array(vec![]), // Flags
-                            Response::Integer(0), // First key
-                            Response::Integer(0), // Last key
-                            Response::Integer(0), // Step
+                            Response::Integer(0),    // First key
+                            Response::Integer(0),    // Last key
+                            Response::Integer(0),    // Step
                         ]);
                         results.push(info);
                     }
@@ -183,7 +171,9 @@ impl Command for CommandCommand {
             b"GETKEYS" => {
                 // COMMAND GETKEYS command [args...] - return keys for a command
                 if args.len() < 2 {
-                    return Err(CommandError::WrongArity { command: "COMMAND|GETKEYS" });
+                    return Err(CommandError::WrongArity {
+                        command: "COMMAND|GETKEYS",
+                    });
                 }
                 // For simplicity, return empty array
                 Ok(Response::Array(vec![]))
@@ -194,23 +184,29 @@ impl Command for CommandCommand {
                     Response::bulk(Bytes::from_static(b"COMMAND [subcommand [arg [arg ...]]]")),
                     Response::bulk(Bytes::from_static(b"Return info about Redis commands.")),
                     Response::bulk(Bytes::from_static(b"Subcommands:")),
-                    Response::bulk(Bytes::from_static(b"  (no subcommand) -- Return info about all commands")),
+                    Response::bulk(Bytes::from_static(
+                        b"  (no subcommand) -- Return info about all commands",
+                    )),
                     Response::bulk(Bytes::from_static(b"  COUNT -- Return count of commands")),
-                    Response::bulk(Bytes::from_static(b"  DOCS [cmd ...] -- Return documentation for commands")),
-                    Response::bulk(Bytes::from_static(b"  INFO [cmd ...] -- Return info for commands")),
-                    Response::bulk(Bytes::from_static(b"  GETKEYS cmd [args...] -- Extract keys from command")),
+                    Response::bulk(Bytes::from_static(
+                        b"  DOCS [cmd ...] -- Return documentation for commands",
+                    )),
+                    Response::bulk(Bytes::from_static(
+                        b"  INFO [cmd ...] -- Return info for commands",
+                    )),
+                    Response::bulk(Bytes::from_static(
+                        b"  GETKEYS cmd [args...] -- Extract keys from command",
+                    )),
                     Response::bulk(Bytes::from_static(b"  HELP -- Print this help")),
                 ];
                 Ok(Response::Array(help))
             }
-            _ => {
-                Err(CommandError::InvalidArgument {
-                    message: format!(
-                        "unknown subcommand '{}'. Try COMMAND HELP.",
-                        String::from_utf8_lossy(&subcommand)
-                    ),
-                })
-            }
+            _ => Err(CommandError::InvalidArgument {
+                message: format!(
+                    "unknown subcommand '{}'. Try COMMAND HELP.",
+                    String::from_utf8_lossy(&subcommand)
+                ),
+            }),
         }
     }
 
@@ -235,11 +231,7 @@ impl Command for GetCommand {
         CommandFlags::READONLY | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         match ctx.store.get_with_expiry_check(key) {
@@ -279,11 +271,7 @@ impl Command for SetCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = args[0].clone();
         let value = args[1].clone();
 
@@ -414,11 +402,7 @@ impl Command for DelCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Multi-key DEL: delete all keys and return count
         // Cross-shard routing is handled by connection handler
         let mut deleted = 0i64;
@@ -457,11 +441,7 @@ impl Command for ExistsCommand {
         }
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Multi-key EXISTS: count how many keys exist
         // Note: Redis counts duplicates (EXISTS key key returns 2 if key exists)
         let mut count = 0i64;

@@ -278,10 +278,7 @@ impl FailureDetector {
             }
         }
 
-        tracing::info!(
-            new_primary = new_primary.id,
-            "Automatic failover completed"
-        );
+        tracing::info!(new_primary = new_primary.id, "Automatic failover completed");
     }
 
     /// Get the configuration.

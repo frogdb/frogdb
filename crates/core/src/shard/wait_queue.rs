@@ -115,10 +115,7 @@ impl ShardWaitQueue {
         }
 
         // Index by connection ID
-        self.conn_entries
-            .entry(conn_id)
-            .or_default()
-            .push(slot_idx);
+        self.conn_entries.entry(conn_id).or_default().push(slot_idx);
 
         self.waiter_count += 1;
         Ok(())
@@ -174,10 +171,7 @@ impl ShardWaitQueue {
         };
 
         // Collect other keys to clean up (excluding the current key)
-        let other_keys: Vec<Bytes> = entry.keys.iter()
-            .filter(|k| *k != key)
-            .cloned()
-            .collect();
+        let other_keys: Vec<Bytes> = entry.keys.iter().filter(|k| *k != key).cloned().collect();
 
         // Remove from all other key indices
         for k in &other_keys {

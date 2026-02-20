@@ -1,7 +1,10 @@
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use crate::vll::{ExecuteSignal, IntentTable, LockMode, ShardReadyResult, TransactionQueue, VllError, VllPendingOp};
+use crate::vll::{
+    ExecuteSignal, IntentTable, LockMode, ShardReadyResult, TransactionQueue, VllError,
+    VllPendingOp,
+};
 
 use super::message::ScatterOp;
 use super::types::PartialResult;
@@ -49,7 +52,8 @@ impl ShardWorker {
         intent_table.declare_intents(&keys, txid, mode);
 
         // Create pending operation
-        let pending_op = VllPendingOp::new(txid, keys.clone(), mode, operation, ready_tx, execute_rx);
+        let pending_op =
+            VllPendingOp::new(txid, keys.clone(), mode, operation, ready_tx, execute_rx);
         if let Err(e) = tx_queue.enqueue(pending_op) {
             intent_table.remove_all_intents(&keys, txid);
             tracing::warn!(shard_id = self.shard_id, txid, error = %e, "Failed to enqueue VLL operation");
@@ -93,7 +97,11 @@ impl ShardWorker {
     }
 
     /// Handle VLL execute - execute a ready operation.
-    pub(crate) async fn handle_vll_execute(&mut self, txid: u64, response_tx: oneshot::Sender<PartialResult>) {
+    pub(crate) async fn handle_vll_execute(
+        &mut self,
+        txid: u64,
+        response_tx: oneshot::Sender<PartialResult>,
+    ) {
         let tx_queue = match self.tx_queue.as_mut() {
             Some(q) => q,
             None => {

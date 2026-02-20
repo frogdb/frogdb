@@ -8,9 +8,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use openraft::error::{
-    InstallSnapshotError, NetworkError, RPCError, RaftError, Unreachable,
-};
+use openraft::error::{InstallSnapshotError, NetworkError, RPCError, RaftError, Unreachable};
 use openraft::network::{RPCOption, RaftNetwork, RaftNetworkFactory};
 use openraft::raft::{
     AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, InstallSnapshotResponse,
@@ -179,15 +177,18 @@ impl ClusterNetwork {
 
         // Send length-prefixed message
         let len = request_bytes.len() as u32;
-        stream.write_all(&len.to_be_bytes()).await.map_err(|e| {
-            ClusterError::NetworkError(format!("failed to write length: {}", e))
-        })?;
-        stream.write_all(&request_bytes).await.map_err(|e| {
-            ClusterError::NetworkError(format!("failed to write request: {}", e))
-        })?;
-        stream.flush().await.map_err(|e| {
-            ClusterError::NetworkError(format!("failed to flush: {}", e))
-        })?;
+        stream
+            .write_all(&len.to_be_bytes())
+            .await
+            .map_err(|e| ClusterError::NetworkError(format!("failed to write length: {}", e)))?;
+        stream
+            .write_all(&request_bytes)
+            .await
+            .map_err(|e| ClusterError::NetworkError(format!("failed to write request: {}", e)))?;
+        stream
+            .flush()
+            .await
+            .map_err(|e| ClusterError::NetworkError(format!("failed to flush: {}", e)))?;
 
         // Receive response with timeout
         let request_timeout = std::time::Duration::from_millis(self.request_timeout_ms);
@@ -201,9 +202,7 @@ impl ClusterNetwork {
 
             // Sanity check on length
             if len > 64 * 1024 * 1024 {
-                return Err(ClusterError::NetworkError(
-                    "response too large".to_string(),
-                ));
+                return Err(ClusterError::NetworkError("response too large".to_string()));
             }
 
             // Read response body
@@ -240,9 +239,9 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
         async move {
             match this.send_rpc(request).await {
                 Ok(ClusterRpcResponse::AppendEntries(resp)) => Ok(resp),
-                Ok(ClusterRpcResponse::Error(msg)) => {
-                    Err(RPCError::Network(NetworkError::new(&Unreachable::new(&NetworkErrorWrapper(msg)))))
-                }
+                Ok(ClusterRpcResponse::Error(msg)) => Err(RPCError::Network(NetworkError::new(
+                    &Unreachable::new(&NetworkErrorWrapper(msg)),
+                ))),
                 Ok(_) => Err(RPCError::Network(NetworkError::new(&Unreachable::new(
                     &NetworkErrorWrapper("unexpected response type".to_string()),
                 )))),
@@ -266,9 +265,9 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
         async move {
             match this.send_rpc(request).await {
                 Ok(ClusterRpcResponse::Vote(resp)) => Ok(resp),
-                Ok(ClusterRpcResponse::Error(msg)) => {
-                    Err(RPCError::Network(NetworkError::new(&Unreachable::new(&NetworkErrorWrapper(msg)))))
-                }
+                Ok(ClusterRpcResponse::Error(msg)) => Err(RPCError::Network(NetworkError::new(
+                    &Unreachable::new(&NetworkErrorWrapper(msg)),
+                ))),
                 Ok(_) => Err(RPCError::Network(NetworkError::new(&Unreachable::new(
                     &NetworkErrorWrapper("unexpected response type".to_string()),
                 )))),
@@ -295,9 +294,9 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
         async move {
             match this.send_rpc(request).await {
                 Ok(ClusterRpcResponse::InstallSnapshot(resp)) => Ok(resp),
-                Ok(ClusterRpcResponse::Error(msg)) => {
-                    Err(RPCError::Network(NetworkError::new(&Unreachable::new(&NetworkErrorWrapper(msg)))))
-                }
+                Ok(ClusterRpcResponse::Error(msg)) => Err(RPCError::Network(NetworkError::new(
+                    &Unreachable::new(&NetworkErrorWrapper(msg)),
+                ))),
                 Ok(_) => Err(RPCError::Network(NetworkError::new(&Unreachable::new(
                     &NetworkErrorWrapper("unexpected response type".to_string()),
                 )))),
@@ -318,38 +317,31 @@ pub async fn handle_rpc_request(
     request: ClusterRpcRequest,
 ) -> ClusterRpcResponse {
     match request {
-        ClusterRpcRequest::AppendEntries(req) => {
-            match raft.append_entries(req).await {
-                Ok(resp) => ClusterRpcResponse::AppendEntries(resp),
-                Err(e) => ClusterRpcResponse::Error(e.to_string()),
-            }
-        }
-        ClusterRpcRequest::Vote(req) => {
-            match raft.vote(req).await {
-                Ok(resp) => ClusterRpcResponse::Vote(resp),
-                Err(e) => ClusterRpcResponse::Error(e.to_string()),
-            }
-        }
-        ClusterRpcRequest::InstallSnapshot(req) => {
-            match raft.install_snapshot(req).await {
-                Ok(resp) => ClusterRpcResponse::InstallSnapshot(resp),
-                Err(e) => ClusterRpcResponse::Error(e.to_string()),
-            }
-        }
+        ClusterRpcRequest::AppendEntries(req) => match raft.append_entries(req).await {
+            Ok(resp) => ClusterRpcResponse::AppendEntries(resp),
+            Err(e) => ClusterRpcResponse::Error(e.to_string()),
+        },
+        ClusterRpcRequest::Vote(req) => match raft.vote(req).await {
+            Ok(resp) => ClusterRpcResponse::Vote(resp),
+            Err(e) => ClusterRpcResponse::Error(e.to_string()),
+        },
+        ClusterRpcRequest::InstallSnapshot(req) => match raft.install_snapshot(req).await {
+            Ok(resp) => ClusterRpcResponse::InstallSnapshot(resp),
+            Err(e) => ClusterRpcResponse::Error(e.to_string()),
+        },
     }
 }
 
 /// Parse an incoming message from a cluster bus connection.
 ///
 /// Returns the parsed request if successful.
-pub async fn parse_rpc_message(
-    stream: &mut TcpStream,
-) -> Result<ClusterRpcRequest, ClusterError> {
+pub async fn parse_rpc_message(stream: &mut TcpStream) -> Result<ClusterRpcRequest, ClusterError> {
     // Read length prefix
     let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await.map_err(|e| {
-        ClusterError::NetworkError(format!("failed to read message length: {}", e))
-    })?;
+    stream
+        .read_exact(&mut len_buf)
+        .await
+        .map_err(|e| ClusterError::NetworkError(format!("failed to read message length: {}", e)))?;
     let len = u32::from_be_bytes(len_buf) as usize;
 
     // Sanity check on length
@@ -359,9 +351,10 @@ pub async fn parse_rpc_message(
 
     // Read message body
     let mut message_bytes = vec![0u8; len];
-    stream.read_exact(&mut message_bytes).await.map_err(|e| {
-        ClusterError::NetworkError(format!("failed to read message: {}", e))
-    })?;
+    stream
+        .read_exact(&mut message_bytes)
+        .await
+        .map_err(|e| ClusterError::NetworkError(format!("failed to read message: {}", e)))?;
 
     // Deserialize request
     serde_json::from_slice(&message_bytes)
@@ -379,15 +372,18 @@ pub async fn send_rpc_response(
 
     // Send length-prefixed message
     let len = response_bytes.len() as u32;
-    stream.write_all(&len.to_be_bytes()).await.map_err(|e| {
-        ClusterError::NetworkError(format!("failed to write length: {}", e))
-    })?;
-    stream.write_all(&response_bytes).await.map_err(|e| {
-        ClusterError::NetworkError(format!("failed to write response: {}", e))
-    })?;
-    stream.flush().await.map_err(|e| {
-        ClusterError::NetworkError(format!("failed to flush: {}", e))
-    })?;
+    stream
+        .write_all(&len.to_be_bytes())
+        .await
+        .map_err(|e| ClusterError::NetworkError(format!("failed to write length: {}", e)))?;
+    stream
+        .write_all(&response_bytes)
+        .await
+        .map_err(|e| ClusterError::NetworkError(format!("failed to write response: {}", e)))?;
+    stream
+        .flush()
+        .await
+        .map_err(|e| ClusterError::NetworkError(format!("failed to flush: {}", e)))?;
 
     Ok(())
 }

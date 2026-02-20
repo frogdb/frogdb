@@ -30,30 +30,30 @@ pub mod testing;
 use std::sync::Arc;
 use std::time::Instant;
 
+pub use bundle::{
+    BundleConfig, BundleGenerator, BundleInfo, BundleManifest, BundleStore, ClusterStateJson,
+    DiagnosticCollector, DiagnosticData, ShardMemoryJson, SlowlogEntryJson, TraceEntryJson,
+};
 pub use config::MetricsConfig;
 pub use config::TracingConfig;
 pub use debug::{DebugState, ServerInfo};
 pub use health::HealthChecker;
-pub use prometheus_recorder::PrometheusRecorder;
-pub use server::MetricsServer;
-pub use status::{ServerStatus, StatusCollector, StatusCollectorConfig};
-pub use system::SystemMetricsCollector;
 pub use hotshards::{
     format_hotshards_info, format_hotshards_report, HotShardCollector, HotShardConfig,
     HotShardReport, ShardStats, ShardStatus,
 };
+pub use latency_bands::LatencyBandTracker;
 pub use memorydiag::{
     calculate_variance, format_report as format_memory_report, MemoryDiagCollector,
     MemoryDiagConfig, MemoryDiagReport, MemorySummary, ShardMemoryVariance,
 };
-pub use latency_bands::LatencyBandTracker;
+pub use prometheus_recorder::PrometheusRecorder;
+pub use server::MetricsServer;
+pub use status::{ServerStatus, StatusCollector, StatusCollectorConfig};
+pub use system::SystemMetricsCollector;
 pub use tracing::{
     create_tracer, OtelTracer, RecentTraceEntry, RequestSpan, ScatterGatherSpan, SharedTracer,
     TracingStatus,
-};
-pub use bundle::{
-    BundleConfig, BundleGenerator, BundleInfo, BundleManifest, BundleStore, ClusterStateJson,
-    DiagnosticCollector, DiagnosticData, ShardMemoryJson, SlowlogEntryJson, TraceEntryJson,
 };
 
 // Re-export typed metrics system
@@ -185,7 +185,10 @@ pub fn create_metrics_recorder(config: &MetricsConfig) -> Arc<dyn MetricsRecorde
     recorder.record_gauge(
         metric_names::INFO,
         1.0,
-        &[("version", env!("CARGO_PKG_VERSION")), ("mode", "standalone")],
+        &[
+            ("version", env!("CARGO_PKG_VERSION")),
+            ("mode", "standalone"),
+        ],
     );
 
     Arc::new(recorder)

@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
 
-use frogdb_core::{ClientFlags, ClientRegistry, ShardMemoryStats, ShardMessage, WalLagStatsResponse};
+use frogdb_core::{
+    ClientFlags, ClientRegistry, ShardMemoryStats, ShardMessage, WalLagStatsResponse,
+};
 
 use crate::health::HealthChecker;
 use crate::prometheus_recorder::PrometheusRecorder;
@@ -305,7 +307,8 @@ impl StatusCollector {
         let memory_status = self.build_memory_status(&shard_stats);
 
         // Build health status with issue detection
-        let health_status = self.build_health_status(&clients_status, &memory_status, &wal_lag_stats);
+        let health_status =
+            self.build_health_status(&clients_status, &memory_status, &wal_lag_stats);
 
         // Build shard status
         let shards: Vec<ShardStatus> = shard_stats
@@ -352,7 +355,7 @@ impl StatusCollector {
                 },
                 snapshot: if self.persistence_enabled {
                     Some(SnapshotStatus {
-                        in_progress: false, // Would need snapshot coordinator integration
+                        in_progress: false,   // Would need snapshot coordinator integration
                         last_timestamp: None, // Would need snapshot coordinator integration
                     })
                 } else {
@@ -530,7 +533,8 @@ impl StatusCollector {
 
         // Check memory pressure
         if memory.limit_bytes > 0 {
-            let usage_percent = (memory.used_bytes as f64 / memory.limit_bytes as f64 * 100.0) as u8;
+            let usage_percent =
+                (memory.used_bytes as f64 / memory.limit_bytes as f64 * 100.0) as u8;
             if usage_percent >= self.config.memory_warning_percent {
                 let severity = if usage_percent >= 95 {
                     "critical"

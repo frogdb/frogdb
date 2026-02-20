@@ -91,11 +91,7 @@ impl Command for ZunionCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let numkeys = parse_usize(&args[0])?;
         if numkeys == 0 || args.len() < numkeys + 1 {
             return Err(CommandError::SyntaxError);
@@ -172,11 +168,7 @@ impl Command for ZunionstoreCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = args[0].clone();
         let numkeys = parse_usize(&args[1])?;
         if numkeys == 0 || args.len() < numkeys + 2 {
@@ -265,11 +257,7 @@ impl Command for ZinterCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let numkeys = parse_usize(&args[0])?;
         if numkeys == 0 || args.len() < numkeys + 1 {
             return Err(CommandError::SyntaxError);
@@ -364,11 +352,7 @@ impl Command for ZinterstoreCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = args[0].clone();
         let numkeys = parse_usize(&args[1])?;
         if numkeys == 0 || args.len() < numkeys + 2 {
@@ -482,11 +466,7 @@ impl Command for ZintercardCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let numkeys = parse_usize(&args[0])?;
         if numkeys == 0 || args.len() < numkeys + 1 {
             return Err(CommandError::SyntaxError);
@@ -583,11 +563,7 @@ impl Command for ZdiffCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let numkeys = parse_usize(&args[0])?;
         if numkeys == 0 || args.len() < numkeys + 1 {
             return Err(CommandError::SyntaxError);
@@ -599,8 +575,8 @@ impl Command for ZdiffCommand {
         // Check all keys are in same shard
         require_same_shard(keys, ctx.num_shards)?;
 
-        let with_scores = !remaining.is_empty()
-            && remaining[0].to_ascii_uppercase().as_slice() == b"WITHSCORES";
+        let with_scores =
+            !remaining.is_empty() && remaining[0].to_ascii_uppercase().as_slice() == b"WITHSCORES";
 
         // Start with members from first set
         let first_value = match ctx.store.get(&keys[0]) {
@@ -670,11 +646,7 @@ impl Command for ZdiffstoreCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = args[0].clone();
         let numkeys = parse_usize(&args[1])?;
         if numkeys == 0 || args.len() < numkeys + 2 {

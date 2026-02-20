@@ -364,9 +364,9 @@ impl ShardWorker {
 
     /// Check if watched keys have changed since they were watched.
     pub(crate) fn check_watches(&self, watches: &[(Bytes, u64)]) -> bool {
-        watches.iter().all(|(key, watched_ver)| {
-            self.get_key_version(key) == *watched_ver
-        })
+        watches
+            .iter()
+            .all(|(key, watched_ver)| self.get_key_version(key) == *watched_ver)
     }
 
     /// Check if this connection can execute during a continuation lock.

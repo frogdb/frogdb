@@ -115,7 +115,9 @@ async fn test_copy_hash() {
     let mut client = server.connect().await;
 
     // Create hash
-    client.command(&["HSET", "src", "field1", "value1", "field2", "value2"]).await;
+    client
+        .command(&["HSET", "src", "field1", "value1", "field2", "value2"])
+        .await;
 
     // COPY hash
     let response = client.command(&["COPY", "src", "dst"]).await;
@@ -166,7 +168,9 @@ async fn test_copy_set() {
     let mut client = server.connect().await;
 
     // Create set
-    client.command(&["SADD", "src", "member1", "member2", "member3"]).await;
+    client
+        .command(&["SADD", "src", "member1", "member2", "member3"])
+        .await;
 
     // COPY set
     let response = client.command(&["COPY", "src", "dst"]).await;
@@ -188,7 +192,9 @@ async fn test_copy_sorted_set() {
     let mut client = server.connect().await;
 
     // Create sorted set
-    client.command(&["ZADD", "src", "1", "one", "2", "two", "3", "three"]).await;
+    client
+        .command(&["ZADD", "src", "1", "one", "2", "two", "3", "three"])
+        .await;
 
     // COPY sorted set
     let response = client.command(&["COPY", "src", "dst"]).await;
@@ -266,7 +272,9 @@ async fn test_randomkey_multiple_keys() {
 
     // Add multiple keys of different types
     client.command(&["SET", "str-key", "value"]).await;
-    client.command(&["HSET", "hash-key", "field", "value"]).await;
+    client
+        .command(&["HSET", "hash-key", "field", "value"])
+        .await;
     client.command(&["LPUSH", "list-key", "item"]).await;
     client.command(&["SADD", "set-key", "member"]).await;
     client.command(&["ZADD", "zset-key", "1", "member"]).await;

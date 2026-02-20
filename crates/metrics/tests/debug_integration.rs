@@ -17,7 +17,12 @@ use reqwest::StatusCode;
 async fn test_debug_index_loads() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug")).send().await.unwrap();
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(resp
         .headers()
@@ -30,7 +35,10 @@ async fn test_debug_index_loads() {
     let body = resp.text().await.unwrap();
     assert!(body.contains("FrogDB"), "Page should contain FrogDB title");
     assert!(body.contains("htmx"), "Page should reference HTMX");
-    assert!(body.contains("Alpine") || body.contains("alpine"), "Page should reference Alpine.js");
+    assert!(
+        body.contains("Alpine") || body.contains("alpine"),
+        "Page should reference Alpine.js"
+    );
 
     server.shutdown().await;
 }
@@ -39,7 +47,12 @@ async fn test_debug_index_loads() {
 async fn test_debug_index_trailing_slash() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/")).send().await.unwrap();
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(resp
         .headers()
@@ -59,18 +72,22 @@ async fn test_debug_index_trailing_slash() {
 async fn test_debug_htmx_asset() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/assets/js/htmx.min.js"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/assets/js/htmx.min.js"))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "HTMX asset should exist");
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("javascript"), "HTMX asset should be JavaScript");
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("javascript"),
+        "HTMX asset should be JavaScript"
+    );
 
     // Verify it's not empty
     let body = resp.text().await.unwrap();
@@ -83,18 +100,22 @@ async fn test_debug_htmx_asset() {
 async fn test_debug_alpine_asset() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/assets/js/alpine.min.js"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/assets/js/alpine.min.js"))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "Alpine asset should exist");
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("javascript"), "Alpine asset should be JavaScript");
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("javascript"),
+        "Alpine asset should be JavaScript"
+    );
 
     server.shutdown().await;
 }
@@ -103,18 +124,22 @@ async fn test_debug_alpine_asset() {
 async fn test_debug_uplot_asset() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/assets/js/uPlot.min.js"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/assets/js/uPlot.min.js"))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "uPlot asset should exist");
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("javascript"), "uPlot asset should be JavaScript");
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("javascript"),
+        "uPlot asset should be JavaScript"
+    );
 
     server.shutdown().await;
 }
@@ -123,18 +148,22 @@ async fn test_debug_uplot_asset() {
 async fn test_debug_css_asset() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/assets/css/style.css"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/assets/css/style.css"))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "style.css should exist");
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("text/css"), "style.css should be CSS");
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("text/css"),
+        "style.css should be CSS"
+    );
 
     server.shutdown().await;
 }
@@ -143,18 +172,22 @@ async fn test_debug_css_asset() {
 async fn test_debug_chota_asset() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/assets/css/chota.min.css"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/assets/css/chota.min.css"))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "chota.min.css should exist");
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("text/css"), "chota.min.css should be CSS");
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("text/css"),
+        "chota.min.css should be CSS"
+    );
 
     server.shutdown().await;
 }
@@ -163,18 +196,22 @@ async fn test_debug_chota_asset() {
 async fn test_debug_uplot_css_asset() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/assets/css/uPlot.min.css"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/assets/css/uPlot.min.css"))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "uPlot.min.css should exist");
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("text/css"), "uPlot.min.css should be CSS");
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("text/css"),
+        "uPlot.min.css should be CSS"
+    );
 
     server.shutdown().await;
 }
@@ -183,11 +220,17 @@ async fn test_debug_uplot_css_asset() {
 async fn test_debug_asset_not_found() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/assets/nonexistent.js"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/assets/nonexistent.js"))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "Nonexistent asset should return 404");
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "Nonexistent asset should return 404"
+    );
 
     server.shutdown().await;
 }
@@ -200,7 +243,9 @@ async fn test_debug_asset_not_found() {
 async fn test_api_cluster() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/cluster"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/cluster"))
         .send()
         .await
         .unwrap();
@@ -215,10 +260,19 @@ async fn test_api_cluster() {
 
     let json: serde_json::Value = resp.json().await.unwrap();
     assert!(json.get("role").is_some(), "Should have role field");
-    assert!(json.get("uptime_seconds").is_some(), "Should have uptime_seconds field");
-    assert!(json.get("num_shards").is_some(), "Should have num_shards field");
+    assert!(
+        json.get("uptime_seconds").is_some(),
+        "Should have uptime_seconds field"
+    );
+    assert!(
+        json.get("num_shards").is_some(),
+        "Should have num_shards field"
+    );
     assert!(json.get("version").is_some(), "Should have version field");
-    assert!(json.get("bind_addr").is_some(), "Should have bind_addr field");
+    assert!(
+        json.get("bind_addr").is_some(),
+        "Should have bind_addr field"
+    );
     assert!(json.get("port").is_some(), "Should have port field");
 
     server.shutdown().await;
@@ -228,7 +282,9 @@ async fn test_api_cluster() {
 async fn test_api_config() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/config"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/config"))
         .send()
         .await
         .unwrap();
@@ -251,8 +307,14 @@ async fn test_api_config() {
 
     // Verify config entry structure
     let first_entry = &entries[0];
-    assert!(first_entry.get("name").is_some(), "Config entry should have name");
-    assert!(first_entry.get("value").is_some(), "Config entry should have value");
+    assert!(
+        first_entry.get("name").is_some(),
+        "Config entry should have name"
+    );
+    assert!(
+        first_entry.get("value").is_some(),
+        "Config entry should have value"
+    );
 
     server.shutdown().await;
 }
@@ -261,7 +323,9 @@ async fn test_api_config() {
 async fn test_api_metrics() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/metrics"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/metrics"))
         .send()
         .await
         .unwrap();
@@ -275,10 +339,22 @@ async fn test_api_metrics() {
         .contains("application/json"));
 
     let json: serde_json::Value = resp.json().await.unwrap();
-    assert!(json.get("timestamp").is_some(), "Should have timestamp field");
-    assert!(json.get("throughput").is_some(), "Should have throughput field");
-    assert!(json.get("connections_current").is_some(), "Should have connections_current field");
-    assert!(json.get("keys_total").is_some(), "Should have keys_total field");
+    assert!(
+        json.get("timestamp").is_some(),
+        "Should have timestamp field"
+    );
+    assert!(
+        json.get("throughput").is_some(),
+        "Should have throughput field"
+    );
+    assert!(
+        json.get("connections_current").is_some(),
+        "Should have connections_current field"
+    );
+    assert!(
+        json.get("keys_total").is_some(),
+        "Should have keys_total field"
+    );
 
     server.shutdown().await;
 }
@@ -287,7 +363,9 @@ async fn test_api_metrics() {
 async fn test_api_slowlog() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/slowlog"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/slowlog"))
         .send()
         .await
         .unwrap();
@@ -311,7 +389,9 @@ async fn test_api_slowlog() {
 async fn test_api_latency() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/latency"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/latency"))
         .send()
         .await
         .unwrap();
@@ -339,7 +419,9 @@ async fn test_api_latency() {
 async fn test_partial_cluster() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/partials/cluster"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/partials/cluster"))
         .send()
         .await
         .unwrap();
@@ -353,8 +435,14 @@ async fn test_partial_cluster() {
         .contains("text/html"));
 
     let body = resp.text().await.unwrap();
-    assert!(body.contains("Uptime"), "Cluster partial should contain Uptime");
-    assert!(body.contains("Shards"), "Cluster partial should contain Shards");
+    assert!(
+        body.contains("Uptime"),
+        "Cluster partial should contain Uptime"
+    );
+    assert!(
+        body.contains("Shards"),
+        "Cluster partial should contain Shards"
+    );
 
     server.shutdown().await;
 }
@@ -363,7 +451,9 @@ async fn test_partial_cluster() {
 async fn test_partial_config() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/partials/config"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/partials/config"))
         .send()
         .await
         .unwrap();
@@ -377,8 +467,14 @@ async fn test_partial_config() {
         .contains("text/html"));
 
     let body = resp.text().await.unwrap();
-    assert!(body.contains("Configuration"), "Config partial should contain Configuration header");
-    assert!(body.contains("<table"), "Config partial should contain a table");
+    assert!(
+        body.contains("Configuration"),
+        "Config partial should contain Configuration header"
+    );
+    assert!(
+        body.contains("<table"),
+        "Config partial should contain a table"
+    );
 
     server.shutdown().await;
 }
@@ -387,7 +483,9 @@ async fn test_partial_config() {
 async fn test_partial_metrics() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/partials/metrics"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/partials/metrics"))
         .send()
         .await
         .unwrap();
@@ -401,7 +499,10 @@ async fn test_partial_metrics() {
         .contains("text/html"));
 
     let body = resp.text().await.unwrap();
-    assert!(body.contains("Metrics") || body.contains("metrics"), "Metrics partial should contain metrics content");
+    assert!(
+        body.contains("Metrics") || body.contains("metrics"),
+        "Metrics partial should contain metrics content"
+    );
 
     server.shutdown().await;
 }
@@ -410,7 +511,9 @@ async fn test_partial_metrics() {
 async fn test_partial_slowlog() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/partials/slowlog"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/partials/slowlog"))
         .send()
         .await
         .unwrap();
@@ -424,7 +527,10 @@ async fn test_partial_slowlog() {
         .contains("text/html"));
 
     let body = resp.text().await.unwrap();
-    assert!(body.contains("Slow") || body.contains("slow"), "Slowlog partial should contain slowlog content");
+    assert!(
+        body.contains("Slow") || body.contains("slow"),
+        "Slowlog partial should contain slowlog content"
+    );
 
     server.shutdown().await;
 }
@@ -433,7 +539,9 @@ async fn test_partial_slowlog() {
 async fn test_partial_latency() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/partials/latency"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/partials/latency"))
         .send()
         .await
         .unwrap();
@@ -447,7 +555,10 @@ async fn test_partial_latency() {
         .contains("text/html"));
 
     let body = resp.text().await.unwrap();
-    assert!(body.contains("Latency") || body.contains("latency"), "Latency partial should contain latency content");
+    assert!(
+        body.contains("Latency") || body.contains("latency"),
+        "Latency partial should contain latency content"
+    );
 
     server.shutdown().await;
 }
@@ -460,11 +571,17 @@ async fn test_partial_latency() {
 async fn test_debug_invalid_path() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/invalid"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/invalid"))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "Invalid path should return 404");
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "Invalid path should return 404"
+    );
 
     server.shutdown().await;
 }
@@ -473,11 +590,17 @@ async fn test_debug_invalid_path() {
 async fn test_debug_invalid_api_path() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/invalid"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/invalid"))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "Invalid API path should return 404");
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "Invalid API path should return 404"
+    );
 
     server.shutdown().await;
 }
@@ -486,11 +609,17 @@ async fn test_debug_invalid_api_path() {
 async fn test_debug_invalid_partial_path() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/partials/invalid"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/partials/invalid"))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "Invalid partial path should return 404");
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "Invalid partial path should return 404"
+    );
 
     server.shutdown().await;
 }
@@ -499,14 +628,19 @@ async fn test_debug_invalid_partial_path() {
 async fn test_debug_method_not_allowed() {
     let server = TestServer::start().await;
 
-    let resp = server.client()
+    let resp = server
+        .client()
         .post(server.metrics_url("/debug"))
         .send()
         .await
         .unwrap();
 
     // POST to debug should return 404 (only GET is handled for /debug paths)
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "POST to /debug should return 404");
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "POST to /debug should return 404"
+    );
 
     server.shutdown().await;
 }
@@ -519,16 +653,17 @@ async fn test_debug_method_not_allowed() {
 async fn test_all_js_assets() {
     let server = TestServer::start().await;
 
-    let assets = &[
-        "js/htmx.min.js",
-        "js/alpine.min.js",
-        "js/uPlot.min.js",
-    ];
+    let assets = &["js/htmx.min.js", "js/alpine.min.js", "js/uPlot.min.js"];
 
     for asset in assets {
         let url = server.metrics_url(&format!("/debug/assets/{}", asset));
         let resp = server.client().get(&url).send().await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "Asset {} should exist", asset);
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "Asset {} should exist",
+            asset
+        );
         assert!(
             resp.headers()
                 .get("content-type")
@@ -548,16 +683,17 @@ async fn test_all_js_assets() {
 async fn test_all_css_assets() {
     let server = TestServer::start().await;
 
-    let assets = &[
-        "css/style.css",
-        "css/chota.min.css",
-        "css/uPlot.min.css",
-    ];
+    let assets = &["css/style.css", "css/chota.min.css", "css/uPlot.min.css"];
 
     for asset in assets {
         let url = server.metrics_url(&format!("/debug/assets/{}", asset));
         let resp = server.client().get(&url).send().await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "Asset {} should exist", asset);
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "Asset {} should exist",
+            asset
+        );
         assert!(
             resp.headers()
                 .get("content-type")
@@ -586,7 +722,9 @@ async fn test_all_css_assets() {
 async fn test_api_bundle_list() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/bundle/list"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/bundle/list"))
         .send()
         .await
         .unwrap();
@@ -617,7 +755,9 @@ async fn test_api_bundle_list() {
 async fn test_api_bundle_list_empty() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/bundle/list"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/bundle/list"))
         .send()
         .await
         .unwrap();
@@ -642,7 +782,9 @@ async fn test_api_bundle_list_empty() {
 async fn test_api_bundle_generate_instant() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/bundle/generate"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/bundle/generate"))
         .send()
         .await
         .unwrap();
@@ -676,7 +818,9 @@ async fn test_api_bundle_generate_instant() {
 async fn test_api_bundle_generate_with_duration() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/bundle/generate?duration=1"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/bundle/generate?duration=1"))
         .send()
         .await
         .unwrap();
@@ -709,7 +853,9 @@ async fn test_api_bundle_generate_with_duration() {
 async fn test_api_bundle_generate_content_type() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/bundle/generate"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/bundle/generate"))
         .send()
         .await
         .unwrap();
@@ -741,7 +887,9 @@ async fn test_api_bundle_generate_content_type() {
 async fn test_api_bundle_generate_content_disposition() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/bundle/generate"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/bundle/generate"))
         .send()
         .await
         .unwrap();
@@ -792,7 +940,9 @@ async fn test_api_bundle_download_by_id() {
         let bundle_id = String::from_utf8_lossy(&id_bytes);
 
         // Now download by ID
-        let download_resp = server.client().get(server.metrics_url(&format!("/debug/api/bundle/{}", bundle_id)))
+        let download_resp = server
+            .client()
+            .get(server.metrics_url(&format!("/debug/api/bundle/{}", bundle_id)))
             .send()
             .await
             .unwrap();
@@ -818,7 +968,11 @@ async fn test_api_bundle_download_by_id() {
 
         let data = download_resp.bytes().await.unwrap();
         assert!(!data.is_empty(), "Downloaded ZIP should not be empty");
-        assert_eq!(&data[0..2], b"PK", "Downloaded data should be a valid ZIP file");
+        assert_eq!(
+            &data[0..2],
+            b"PK",
+            "Downloaded data should be a valid ZIP file"
+        );
     }
 
     server.shutdown().await;
@@ -828,7 +982,9 @@ async fn test_api_bundle_download_by_id() {
 async fn test_api_bundle_download_not_found() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/bundle/nonexistent-bundle-id"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/bundle/nonexistent-bundle-id"))
         .send()
         .await
         .unwrap();
@@ -852,7 +1008,9 @@ async fn test_api_bundle_download_not_found() {
 async fn test_api_bundle_zip_structure() {
     let server = TestServer::start().await;
 
-    let resp = server.client().get(server.metrics_url("/debug/api/bundle/generate"))
+    let resp = server
+        .client()
+        .get(server.metrics_url("/debug/api/bundle/generate"))
         .send()
         .await
         .unwrap();

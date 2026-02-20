@@ -39,11 +39,7 @@ impl Command for InfoCommand {
         CommandFlags::READONLY | CommandFlags::LOADING | CommandFlags::STALE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let section = if args.is_empty() {
             None
         } else {
@@ -64,10 +60,7 @@ impl Command for InfoCommand {
             Some(other) => {
                 // Unknown section - return empty
                 return Err(CommandError::InvalidArgument {
-                    message: format!(
-                        "Invalid section '{}'",
-                        String::from_utf8_lossy(other)
-                    ),
+                    message: format!("Invalid section '{}'", String::from_utf8_lossy(other)),
                 });
             }
         };
@@ -426,10 +419,8 @@ fn build_latency_baseline_info() -> String {
                 exceeded,
             )
         }
-        None => {
-            "# Latency_Baseline\r\n\
+        None => "# Latency_Baseline\r\n\
              baseline_test_run:0\r\n\r\n"
-                .to_string()
-        }
+            .to_string(),
     }
 }

@@ -19,11 +19,9 @@ impl ConnectionHandler {
     /// with the handler refined by command name (e.g., `Admin` + `CONFIG` → `Config`).
     /// Returns `None` if the command uses `Standard` or another non-connection-level strategy.
     fn connection_level_handler_for(&self, cmd_name: &str) -> Option<ConnectionLevelHandler> {
-        let entry = self.registry.get(cmd_name)?;
+        let entry = self.registry.get_entry(cmd_name)?;
         match entry.execution_strategy() {
-            ExecutionStrategy::ConnectionLevel(op) => {
-                Some(Self::refine_handler(&op, cmd_name))
-            }
+            ExecutionStrategy::ConnectionLevel(op) => Some(Self::refine_handler(&op, cmd_name)),
             _ => None,
         }
     }
@@ -84,7 +82,9 @@ impl ConnectionHandler {
             ConnectionLevelHandler::PubSub => self.dispatch_pubsub(cmd_name, args).await,
 
             // Sharded Pub/Sub handlers
-            ConnectionLevelHandler::ShardedPubSub => self.dispatch_sharded_pubsub(cmd_name, args).await,
+            ConnectionLevelHandler::ShardedPubSub => {
+                self.dispatch_sharded_pubsub(cmd_name, args).await
+            }
 
             // Transaction handlers
             ConnectionLevelHandler::Transaction => self.dispatch_transaction(cmd_name, args).await,
@@ -106,7 +106,9 @@ impl ConnectionHandler {
             ConnectionLevelHandler::Status => Some(vec![self.handle_status_command(args).await]),
 
             // Connection state handlers
-            ConnectionLevelHandler::ConnectionState => self.dispatch_connection_state(cmd_name, args).await,
+            ConnectionLevelHandler::ConnectionState => {
+                self.dispatch_connection_state(cmd_name, args).await
+            }
 
             // Cluster handlers - fall through to standard routing
             ConnectionLevelHandler::Cluster => None,
@@ -148,7 +150,11 @@ impl ConnectionHandler {
     }
 
     /// Dispatch sharded pub/sub commands.
-    async fn dispatch_sharded_pubsub(&mut self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
+    async fn dispatch_sharded_pubsub(
+        &mut self,
+        cmd_name: &str,
+        args: &[Bytes],
+    ) -> Option<Vec<Response>> {
         match cmd_name {
             "SSUBSCRIBE" => {
                 if let Err(err) = self.validate_channel_access(args) {
@@ -170,7 +176,11 @@ impl ConnectionHandler {
     }
 
     /// Dispatch transaction commands.
-    async fn dispatch_transaction(&mut self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
+    async fn dispatch_transaction(
+        &mut self,
+        cmd_name: &str,
+        args: &[Bytes],
+    ) -> Option<Vec<Response>> {
         match cmd_name {
             "MULTI" => Some(vec![self.handle_multi()]),
             "EXEC" => Some(vec![self.handle_exec().await]),
@@ -182,7 +192,11 @@ impl ConnectionHandler {
     }
 
     /// Dispatch scripting commands.
-    async fn dispatch_scripting(&mut self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
+    async fn dispatch_scripting(
+        &mut self,
+        cmd_name: &str,
+        args: &[Bytes],
+    ) -> Option<Vec<Response>> {
         match cmd_name {
             "EVAL" => Some(vec![self.handle_eval(args).await]),
             "EVALSHA" => Some(vec![self.handle_evalsha(args).await]),
@@ -238,7 +252,11 @@ impl ConnectionHandler {
     }
 
     /// Dispatch connection state commands.
-    async fn dispatch_connection_state(&mut self, cmd_name: &str, _args: &[Bytes]) -> Option<Vec<Response>> {
+    async fn dispatch_connection_state(
+        &mut self,
+        cmd_name: &str,
+        _args: &[Bytes],
+    ) -> Option<Vec<Response>> {
         match cmd_name {
             "RESET" => Some(vec![self.handle_reset().await]),
             // Note: SELECT, QUIT, PING, ECHO, COMMAND are handled via standard shard routing
@@ -248,7 +266,10 @@ impl ConnectionHandler {
 
     /// Route and execute a command, handling transaction and pub/sub modes.
     /// Returns a Vec of responses since pub/sub commands can return multiple messages.
-    pub(crate) async fn route_and_execute_with_transaction(&mut self, cmd: &frogdb_protocol::ParsedCommand) -> Vec<Response> {
+    pub(crate) async fn route_and_execute_with_transaction(
+        &mut self,
+        cmd: &frogdb_protocol::ParsedCommand,
+    ) -> Vec<Response> {
         let cmd_name = cmd.name_uppercase();
         let cmd_name_str = String::from_utf8_lossy(&cmd_name);
 
@@ -275,7 +296,10 @@ impl ConnectionHandler {
         // Category-based dispatch using registry-driven handler lookup
         // This handles: pub/sub, transactions, scripting, functions, admin commands
         if let Some(handler) = self.connection_level_handler_for(&cmd_name_str) {
-            if let Some(responses) = self.dispatch_connection_level(handler, &cmd_name_str, &cmd.args).await {
+            if let Some(responses) = self
+                .dispatch_connection_level(handler, &cmd_name_str, &cmd.args)
+                .await
+            {
                 return responses;
             }
         }
@@ -293,7 +317,9 @@ impl ConnectionHandler {
         if cmd_name_str == "PSYNC" {
             // Check if we have a primary replication handler (we're running as primary)
             if self.primary_replication_handler.is_none() {
-                return vec![Response::error("ERR PSYNC not supported - server is not running as primary")];
+                return vec![Response::error(
+                    "ERR PSYNC not supported - server is not running as primary",
+                )];
             }
             // Execute PSYNC command which will return PSYNC_HANDOFF signal
             return vec![self.route_and_execute(cmd).await];

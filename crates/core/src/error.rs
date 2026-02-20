@@ -377,7 +377,8 @@ impl From<crate::types::StreamIdParseError> for CommandError {
 impl From<crate::types::StreamAddError> for CommandError {
     fn from(_err: crate::types::StreamAddError) -> Self {
         CommandError::InvalidArgument {
-            message: "The ID specified in XADD is equal or smaller than the target stream top item".to_string(),
+            message: "The ID specified in XADD is equal or smaller than the target stream top item"
+                .to_string(),
         }
     }
 }

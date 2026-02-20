@@ -24,11 +24,7 @@ impl Command for ZpopminCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let count = if args.len() > 1 {
             parse_usize(&args[1])?
@@ -73,11 +69,7 @@ impl Command for ZpopmaxCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let count = if args.len() > 1 {
             parse_usize(&args[1])?
@@ -122,11 +114,7 @@ impl Command for ZmpopCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let numkeys = parse_usize(&args[0])?;
         if numkeys == 0 || args.len() < numkeys + 2 {
             return Err(CommandError::SyntaxError);
@@ -231,11 +219,7 @@ impl Command for ZrandmemberCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         let value = match ctx.store.get(key) {
@@ -260,8 +244,8 @@ impl Command for ZrandmemberCommand {
             }
         } else {
             let count = parse_i64(&args[1])?;
-            let with_scores = args.len() > 2
-                && args[2].to_ascii_uppercase().as_slice() == b"WITHSCORES";
+            let with_scores =
+                args.len() > 2 && args[2].to_ascii_uppercase().as_slice() == b"WITHSCORES";
 
             let results = zset.random_members(count);
 

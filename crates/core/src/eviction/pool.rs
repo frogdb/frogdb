@@ -32,7 +32,12 @@ pub struct EvictionCandidate {
 
 impl EvictionCandidate {
     /// Create a new eviction candidate.
-    pub fn new(key: Bytes, idle_time: Duration, lfu_value: u8, ttl_remaining: Option<Duration>) -> Self {
+    pub fn new(
+        key: Bytes,
+        idle_time: Duration,
+        lfu_value: u8,
+        ttl_remaining: Option<Duration>,
+    ) -> Self {
         Self {
             key,
             idle_time,
@@ -150,19 +155,32 @@ impl EvictionPool {
 
         if self.is_full() {
             // Find the best (lowest rank) candidate to potentially replace
-            let min_rank = self.candidates.iter().map(|c| c.lru_rank()).min().unwrap_or(0);
+            let min_rank = self
+                .candidates
+                .iter()
+                .map(|c| c.lru_rank())
+                .min()
+                .unwrap_or(0);
             if rank <= min_rank {
                 return false;
             }
 
             // Remove the best candidate (least idle)
-            if let Some(pos) = self.candidates.iter().position(|c| c.lru_rank() == min_rank) {
+            if let Some(pos) = self
+                .candidates
+                .iter()
+                .position(|c| c.lru_rank() == min_rank)
+            {
                 self.candidates.remove(pos);
             }
         }
 
         // Insert in sorted position (worst first)
-        let pos = self.candidates.iter().position(|c| c.lru_rank() < rank).unwrap_or(self.candidates.len());
+        let pos = self
+            .candidates
+            .iter()
+            .position(|c| c.lru_rank() < rank)
+            .unwrap_or(self.candidates.len());
         self.candidates.insert(pos, candidate);
         true
     }
@@ -184,19 +202,32 @@ impl EvictionPool {
 
         if self.is_full() {
             // Find the best (lowest rank = highest counter) candidate
-            let min_rank = self.candidates.iter().map(|c| c.lfu_rank()).min().unwrap_or(0);
+            let min_rank = self
+                .candidates
+                .iter()
+                .map(|c| c.lfu_rank())
+                .min()
+                .unwrap_or(0);
             if rank <= min_rank {
                 return false;
             }
 
             // Remove the best candidate (highest counter)
-            if let Some(pos) = self.candidates.iter().position(|c| c.lfu_rank() == min_rank) {
+            if let Some(pos) = self
+                .candidates
+                .iter()
+                .position(|c| c.lfu_rank() == min_rank)
+            {
                 self.candidates.remove(pos);
             }
         }
 
         // Insert in sorted position (worst first)
-        let pos = self.candidates.iter().position(|c| c.lfu_rank() < rank).unwrap_or(self.candidates.len());
+        let pos = self
+            .candidates
+            .iter()
+            .position(|c| c.lfu_rank() < rank)
+            .unwrap_or(self.candidates.len());
         self.candidates.insert(pos, candidate);
         true
     }
@@ -222,19 +253,32 @@ impl EvictionPool {
 
         if self.is_full() {
             // Find the best (lowest rank = longest TTL) candidate
-            let min_rank = self.candidates.iter().map(|c| c.ttl_rank()).min().unwrap_or(0);
+            let min_rank = self
+                .candidates
+                .iter()
+                .map(|c| c.ttl_rank())
+                .min()
+                .unwrap_or(0);
             if rank <= min_rank {
                 return false;
             }
 
             // Remove the best candidate
-            if let Some(pos) = self.candidates.iter().position(|c| c.ttl_rank() == min_rank) {
+            if let Some(pos) = self
+                .candidates
+                .iter()
+                .position(|c| c.ttl_rank() == min_rank)
+            {
                 self.candidates.remove(pos);
             }
         }
 
         // Insert in sorted position (worst first)
-        let pos = self.candidates.iter().position(|c| c.ttl_rank() < rank).unwrap_or(self.candidates.len());
+        let pos = self
+            .candidates
+            .iter()
+            .position(|c| c.ttl_rank() < rank)
+            .unwrap_or(self.candidates.len());
         self.candidates.insert(pos, candidate);
         true
     }

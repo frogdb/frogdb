@@ -103,7 +103,8 @@ impl FunctionRegistry {
         // Build index for new functions
         let function_names: Vec<String> = library.functions.keys().cloned().collect();
         for func_name in &function_names {
-            self.function_index.insert(func_name.clone(), lib_name.clone());
+            self.function_index
+                .insert(func_name.clone(), lib_name.clone());
         }
 
         // Store the library
@@ -114,11 +115,12 @@ impl FunctionRegistry {
 
     /// Delete a library by name.
     pub fn delete_library(&mut self, name: &str) -> Result<(), FunctionError> {
-        let library = self.libraries.remove(name).ok_or_else(|| {
-            FunctionError::LibraryNotFound {
-                name: name.to_string(),
-            }
-        })?;
+        let library =
+            self.libraries
+                .remove(name)
+                .ok_or_else(|| FunctionError::LibraryNotFound {
+                    name: name.to_string(),
+                })?;
 
         // Remove function index entries
         for func_name in library.functions.keys() {
@@ -337,10 +339,7 @@ mod tests {
     fn test_delete_nonexistent_library() {
         let mut registry = FunctionRegistry::new();
         let result = registry.delete_library("nonexistent");
-        assert!(matches!(
-            result,
-            Err(FunctionError::LibraryNotFound { .. })
-        ));
+        assert!(matches!(result, Err(FunctionError::LibraryNotFound { .. })));
     }
 
     #[test]

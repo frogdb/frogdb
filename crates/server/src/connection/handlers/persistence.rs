@@ -240,9 +240,12 @@ impl ConnectionHandler {
         }
 
         // Connect to target server
-        let mut client = match MigrateClient::connect(&parsed.host, parsed.port, timeout_dur).await {
+        let mut client = match MigrateClient::connect(&parsed.host, parsed.port, timeout_dur).await
+        {
             Ok(c) => c,
-            Err(MigrateError::Timeout) => return Response::error("IOERR timeout connecting to target"),
+            Err(MigrateError::Timeout) => {
+                return Response::error("IOERR timeout connecting to target")
+            }
             Err(e) => return Response::error(format!("IOERR error connecting to target: {}", e)),
         };
 
@@ -272,7 +275,11 @@ impl ConnectionHandler {
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
                     let remaining = expires_ms - now_ms;
-                    if remaining > 0 { remaining } else { 0 }
+                    if remaining > 0 {
+                        remaining
+                    } else {
+                        0
+                    }
                 } else {
                     0 // No expiry
                 }
@@ -291,7 +298,10 @@ impl ConnectionHandler {
             let mut delete_shard_keys: HashMap<usize, Vec<Bytes>> = HashMap::new();
             for (key, _) in &dumps {
                 let shard_id = shard_for_key(key, self.num_shards);
-                delete_shard_keys.entry(shard_id).or_default().push(key.clone());
+                delete_shard_keys
+                    .entry(shard_id)
+                    .or_default()
+                    .push(key.clone());
             }
 
             let delete_txid = next_txid();
@@ -333,9 +343,7 @@ impl ConnectionHandler {
                 // otherwise start immediately
                 if self.snapshot_coordinator.in_progress() {
                     self.snapshot_coordinator.schedule_snapshot();
-                    return Response::Simple(Bytes::from_static(
-                        b"Background saving scheduled",
-                    ));
+                    return Response::Simple(Bytes::from_static(b"Background saving scheduled"));
                 }
                 // No save in progress, fall through to start one immediately
             }
@@ -348,9 +356,7 @@ impl ConnectionHandler {
             }
             Err(frogdb_core::persistence::SnapshotError::AlreadyInProgress) => {
                 // Return a simple status like Redis does
-                Response::Simple(Bytes::from_static(
-                    b"Background save already in progress",
-                ))
+                Response::Simple(Bytes::from_static(b"Background save already in progress"))
             }
             Err(e) => Response::error(format!("ERR {}", e)),
         }

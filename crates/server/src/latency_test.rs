@@ -191,14 +191,8 @@ pub fn format_with_commas(n: u64) -> String {
 pub fn print_latency_report(result: &LatencyTestResult) {
     println!();
     println!("Results:");
-    println!(
-        "  Duration: {} seconds",
-        result.duration_secs
-    );
-    println!(
-        "  Samples:  {}",
-        format_with_commas(result.samples)
-    );
+    println!("  Duration: {} seconds", result.duration_secs);
+    println!("  Samples:  {}", format_with_commas(result.samples));
     println!("  Min:      {} us", result.min_us);
     println!("  Max:      {} us", result.max_us);
     println!("  Avg:      {:.1} us", result.avg_us);
@@ -210,7 +204,9 @@ pub fn print_latency_report(result: &LatencyTestResult) {
     } else if result.max_us < 2000 {
         println!("  Good - acceptable for most workloads.");
     } else if result.max_us < 10000 {
-        println!("  Warning - elevated latency suggests virtualization overhead or system contention.");
+        println!(
+            "  Warning - elevated latency suggests virtualization overhead or system contention."
+        );
     } else {
         println!("  Critical - very high latency indicates severe system issues.");
     }

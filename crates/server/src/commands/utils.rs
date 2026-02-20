@@ -178,7 +178,8 @@ impl NxXxOptions {
             b"NX" => {
                 if self.xx {
                     return Err(CommandError::InvalidArgument {
-                        message: "XX and NX options at the same time are not compatible".to_string(),
+                        message: "XX and NX options at the same time are not compatible"
+                            .to_string(),
                     });
                 }
                 Ok(Some(Self { nx: true, ..*self }))
@@ -186,7 +187,8 @@ impl NxXxOptions {
             b"XX" => {
                 if self.nx {
                     return Err(CommandError::InvalidArgument {
-                        message: "XX and NX options at the same time are not compatible".to_string(),
+                        message: "XX and NX options at the same time are not compatible"
+                            .to_string(),
                     });
                 }
                 Ok(Some(Self { xx: true, ..*self }))
@@ -221,7 +223,8 @@ impl GtLtOptions {
             b"GT" => {
                 if self.lt {
                     return Err(CommandError::InvalidArgument {
-                        message: "GT and LT options at the same time are not compatible".to_string(),
+                        message: "GT and LT options at the same time are not compatible"
+                            .to_string(),
                     });
                 }
                 Ok(Some(Self { gt: true, ..*self }))
@@ -229,7 +232,8 @@ impl GtLtOptions {
             b"LT" => {
                 if self.gt {
                     return Err(CommandError::InvalidArgument {
-                        message: "GT and LT options at the same time are not compatible".to_string(),
+                        message: "GT and LT options at the same time are not compatible"
+                            .to_string(),
                     });
                 }
                 Ok(Some(Self { lt: true, ..*self }))

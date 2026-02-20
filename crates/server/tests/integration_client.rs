@@ -5,9 +5,9 @@ mod common;
 use bytes::Bytes;
 use common::test_server::TestServer;
 use frogdb_protocol::Response;
+use futures::StreamExt;
 use std::time::Duration;
 use tokio::time::timeout;
-use futures::StreamExt;
 
 // ============================================================================
 // RESET Command Tests
@@ -165,7 +165,9 @@ async fn test_reset_unsubscribes_from_sharded_channels() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Publish should report 0 subscribers
-    let response = publisher.command(&["SPUBLISH", "sharded:chan", "msg"]).await;
+    let response = publisher
+        .command(&["SPUBLISH", "sharded:chan", "msg"])
+        .await;
     assert_eq!(response, Response::Integer(0));
 
     server.shutdown().await;
@@ -227,12 +229,17 @@ async fn test_client_setname_getname() {
     assert!(matches!(response, Response::Null | Response::Bulk(None)));
 
     // Set a name
-    let response = client.command(&["CLIENT", "SETNAME", "test-connection"]).await;
+    let response = client
+        .command(&["CLIENT", "SETNAME", "test-connection"])
+        .await;
     assert_eq!(response, Response::ok());
 
     // Get the name back
     let response = client.command(&["CLIENT", "GETNAME"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("test-connection"))));
+    assert_eq!(
+        response,
+        Response::Bulk(Some(Bytes::from("test-connection")))
+    );
 
     // Clear the name by setting empty string
     let response = client.command(&["CLIENT", "SETNAME", ""]).await;
@@ -250,7 +257,9 @@ async fn test_client_setname_invalid_name() {
     let mut client = server.connect().await;
 
     // Names with spaces should be rejected
-    let response = client.command(&["CLIENT", "SETNAME", "name with spaces"]).await;
+    let response = client
+        .command(&["CLIENT", "SETNAME", "name with spaces"])
+        .await;
     assert!(matches!(response, Response::Error(_)));
 
     server.shutdown().await;
@@ -319,7 +328,9 @@ async fn test_client_kill_by_id() {
     };
 
     // Kill victim by ID
-    let response = killer.command(&["CLIENT", "KILL", "ID", &victim_id.to_string()]).await;
+    let response = killer
+        .command(&["CLIENT", "KILL", "ID", &victim_id.to_string()])
+        .await;
     assert_eq!(response, Response::Integer(1), "Should kill 1 connection");
 
     // Give time for kill to take effect
@@ -327,11 +338,7 @@ async fn test_client_kill_by_id() {
 
     // Victim should be disconnected - verify by trying to read from the connection
     // The connection should be closed, so reading should return None or timeout
-    let read_result = timeout(
-        Duration::from_millis(500),
-        victim.framed.next(),
-    )
-    .await;
+    let read_result = timeout(Duration::from_millis(500), victim.framed.next()).await;
 
     match read_result {
         Ok(None) => {
@@ -374,9 +381,12 @@ async fn test_client_pause_unpause() {
     assert_eq!(response, Response::ok());
 
     // Writes should work after unpause
-    let response = timeout(Duration::from_millis(500), worker.command(&["SET", "key", "value"]))
-        .await
-        .expect("SET should complete after unpause");
+    let response = timeout(
+        Duration::from_millis(500),
+        worker.command(&["SET", "key", "value"]),
+    )
+    .await
+    .expect("SET should complete after unpause");
     assert_eq!(response, Response::ok());
 
     server.shutdown().await;
@@ -680,17 +690,35 @@ async fn test_client_stats_basic() {
         Response::Bulk(Some(data)) => {
             let stats_str = String::from_utf8_lossy(&data);
             // Should contain our client name
-            assert!(stats_str.contains("stats-test"), "Should contain client name");
+            assert!(
+                stats_str.contains("stats-test"),
+                "Should contain client name"
+            );
             // Should contain cmd_total (at least 13 commands: SETNAME + 10 PINGs + SET + GET)
             assert!(stats_str.contains("cmd_total="), "Should contain cmd_total");
             // Should contain bytes_recv
-            assert!(stats_str.contains("bytes_recv="), "Should contain bytes_recv");
+            assert!(
+                stats_str.contains("bytes_recv="),
+                "Should contain bytes_recv"
+            );
             // Should contain bytes_sent
-            assert!(stats_str.contains("bytes_sent="), "Should contain bytes_sent");
+            assert!(
+                stats_str.contains("bytes_sent="),
+                "Should contain bytes_sent"
+            );
             // Should contain latency metrics
-            assert!(stats_str.contains("latency_avg_us="), "Should contain latency_avg_us");
-            assert!(stats_str.contains("latency_p99_us="), "Should contain latency_p99_us");
-            assert!(stats_str.contains("latency_max_us="), "Should contain latency_max_us");
+            assert!(
+                stats_str.contains("latency_avg_us="),
+                "Should contain latency_avg_us"
+            );
+            assert!(
+                stats_str.contains("latency_p99_us="),
+                "Should contain latency_p99_us"
+            );
+            assert!(
+                stats_str.contains("latency_max_us="),
+                "Should contain latency_max_us"
+            );
         }
         _ => panic!("Expected bulk string response, got {:?}", response),
     }
@@ -725,7 +753,10 @@ async fn test_client_stats_by_id() {
         Response::Bulk(Some(data)) => {
             let stats_str = String::from_utf8_lossy(&data);
             // Should contain our client info
-            assert!(stats_str.contains(&format!("id={}", client_id)), "Should contain our ID");
+            assert!(
+                stats_str.contains(&format!("id={}", client_id)),
+                "Should contain our ID"
+            );
             assert!(stats_str.contains("id-test"), "Should contain our name");
             assert!(stats_str.contains("cmd_total="), "Should contain cmd_total");
         }
@@ -842,8 +873,16 @@ async fn test_client_stats_bytes_tracking() {
                 .unwrap_or(0);
 
             // Bytes should be non-zero and reflect the large value we sent/received
-            assert!(bytes_recv > 1000, "bytes_recv should be > 1000 (large value sent), got {}", bytes_recv);
-            assert!(bytes_sent > 1000, "bytes_sent should be > 1000 (large value received), got {}", bytes_sent);
+            assert!(
+                bytes_recv > 1000,
+                "bytes_recv should be > 1000 (large value sent), got {}",
+                bytes_recv
+            );
+            assert!(
+                bytes_sent > 1000,
+                "bytes_sent should be > 1000 (large value received), got {}",
+                bytes_sent
+            );
         }
         _ => panic!("Expected bulk string response, got {:?}", response),
     }
@@ -941,7 +980,9 @@ async fn test_client_stats_invalid_syntax() {
     );
 
     // Invalid client ID format
-    let response = client.command(&["CLIENT", "STATS", "ID", "notanumber"]).await;
+    let response = client
+        .command(&["CLIENT", "STATS", "ID", "notanumber"])
+        .await;
     assert!(
         matches!(response, Response::Error(_)),
         "Should return error for invalid client ID format"
@@ -957,8 +998,12 @@ async fn test_client_stats_multiple_clients() {
     let mut client2 = server.connect().await;
 
     // Set names for identification
-    client1.command(&["CLIENT", "SETNAME", "multi-test-1"]).await;
-    client2.command(&["CLIENT", "SETNAME", "multi-test-2"]).await;
+    client1
+        .command(&["CLIENT", "SETNAME", "multi-test-1"])
+        .await;
+    client2
+        .command(&["CLIENT", "SETNAME", "multi-test-2"])
+        .await;
 
     // Run different numbers of commands on each client
     for _ in 0..10 {
@@ -974,8 +1019,14 @@ async fn test_client_stats_multiple_clients() {
         Response::Bulk(Some(data)) => {
             let stats_str = String::from_utf8_lossy(&data);
             // Should contain both client names
-            assert!(stats_str.contains("multi-test-1"), "Should contain client1 name");
-            assert!(stats_str.contains("multi-test-2"), "Should contain client2 name");
+            assert!(
+                stats_str.contains("multi-test-1"),
+                "Should contain client1 name"
+            );
+            assert!(
+                stats_str.contains("multi-test-2"),
+                "Should contain client2 name"
+            );
         }
         _ => panic!("Expected bulk string response, got {:?}", response),
     }

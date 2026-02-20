@@ -22,14 +22,18 @@ fn test_all_workflows_serialize() {
 
     // Release workflow
     let release = workflows::release::release_workflow();
-    let yaml = release.to_string().expect("release workflow should serialize");
+    let yaml = release
+        .to_string()
+        .expect("release workflow should serialize");
     assert!(yaml.contains("name: Release"));
     assert!(yaml.contains("build-binaries"));
     assert!(yaml.contains("helm"));
 
     // Deploy workflow
     let deploy = workflows::deploy::deploy_workflow();
-    let yaml = deploy.to_string().expect("deploy workflow should serialize");
+    let yaml = deploy
+        .to_string()
+        .expect("deploy workflow should serialize");
     assert!(yaml.contains("name: Deploy"));
     assert!(yaml.contains("workflow_dispatch"));
     assert!(yaml.contains("terraform"));
@@ -114,7 +118,10 @@ fn test_deploy_workflow_has_cloud_providers() {
     assert!(yaml.contains("- azure"), "Deploy should support Azure");
 
     // Check environment options
-    assert!(yaml.contains("- dev"), "Deploy should support dev environment");
+    assert!(
+        yaml.contains("- dev"),
+        "Deploy should support dev environment"
+    );
     assert!(
         yaml.contains("- staging"),
         "Deploy should support staging environment"
@@ -126,7 +133,10 @@ fn test_deploy_workflow_has_cloud_providers() {
 
     // Check terraform actions
     assert!(yaml.contains("- plan"), "Deploy should support plan action");
-    assert!(yaml.contains("- apply"), "Deploy should support apply action");
+    assert!(
+        yaml.contains("- apply"),
+        "Deploy should support apply action"
+    );
     assert!(
         yaml.contains("- destroy"),
         "Deploy should support destroy action"
@@ -139,7 +149,10 @@ fn test_workflow_triggers() {
     // Test workflow triggers on push and pull_request to main
     let test = workflows::test::test_workflow();
     let yaml = test.to_string().unwrap();
-    assert!(yaml.contains("push:"), "Test workflow should trigger on push");
+    assert!(
+        yaml.contains("push:"),
+        "Test workflow should trigger on push"
+    );
     assert!(
         yaml.contains("pull_request:"),
         "Test workflow should trigger on pull_request"

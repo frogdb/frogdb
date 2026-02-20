@@ -121,11 +121,17 @@ impl ClusterConfigSection {
 
         // Validate cluster bus address
         if self.cluster_bus_addr.is_empty() {
-            anyhow::bail!("cluster.cluster_bus_addr must be specified when cluster mode is enabled");
+            anyhow::bail!(
+                "cluster.cluster_bus_addr must be specified when cluster mode is enabled"
+            );
         }
 
         // Parse and validate cluster bus address
-        if self.cluster_bus_addr.parse::<std::net::SocketAddr>().is_err() {
+        if self
+            .cluster_bus_addr
+            .parse::<std::net::SocketAddr>()
+            .is_err()
+        {
             anyhow::bail!(
                 "invalid cluster.cluster_bus_addr '{}', expected host:port format",
                 self.cluster_bus_addr

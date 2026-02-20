@@ -115,13 +115,14 @@ impl fmt::Display for FunctionError {
                 write!(f, "ERR function killed")
             }
             FunctionError::Unkillable => {
-                write!(
-                    f,
-                    "ERR function has performed writes and cannot be killed"
-                )
+                write!(f, "ERR function has performed writes and cannot be killed")
             }
             FunctionError::UnsupportedEngine { engine } => {
-                write!(f, "ERR Unsupported engine '{}'. Only 'lua' is supported.", engine)
+                write!(
+                    f,
+                    "ERR Unsupported engine '{}'. Only 'lua' is supported.",
+                    engine
+                )
             }
             FunctionError::SerializationError { message } => {
                 write!(f, "ERR Serialization error: {}", message)

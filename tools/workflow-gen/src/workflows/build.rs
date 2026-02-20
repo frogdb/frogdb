@@ -11,11 +11,9 @@ use crate::helpers::{
 /// Creates the build workflow.
 pub fn build_workflow() -> Workflow {
     Workflow::new("Build")
-        .on(
-            Event::default()
-                .push(Push::default().add_branch("main"))
-                .pull_request(PullRequest::default().add_branch("main")),
-        )
+        .on(Event::default()
+            .push(Push::default().add_branch("main"))
+            .pull_request(PullRequest::default().add_branch("main")))
         .add_env(("CARGO_TERM_COLOR", "always"))
         .add_env(("REGISTRY", "ghcr.io"))
         .add_env(("IMAGE_NAME", "${{ github.repository }}"))
@@ -34,9 +32,8 @@ fn build_job() -> Job {
         .add_step(setup_zig())
         .add_step(cargo_cache_matrix())
         .add_step(
-            Step::new("Build").run(
-                "cargo zigbuild --release --target ${{ matrix.target }} --bin frogdb-server",
-            ),
+            Step::new("Build")
+                .run("cargo zigbuild --release --target ${{ matrix.target }} --bin frogdb-server"),
         )
         .add_step(upload_artifact(
             "frogdb-server-${{ matrix.arch }}",

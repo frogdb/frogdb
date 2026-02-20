@@ -276,8 +276,16 @@ pub fn bitcount(data: &[u8], start: Option<i64>, end: Option<i64>, bit_mode: boo
         let e = end.unwrap_or(bit_len - 1);
 
         // Handle negative indices
-        let s = if s < 0 { (bit_len + s).max(0) } else { s.min(bit_len - 1) };
-        let e = if e < 0 { (bit_len + e).max(0) } else { e.min(bit_len - 1) };
+        let s = if s < 0 {
+            (bit_len + s).max(0)
+        } else {
+            s.min(bit_len - 1)
+        };
+        let e = if e < 0 {
+            (bit_len + e).max(0)
+        } else {
+            e.min(bit_len - 1)
+        };
 
         if s > e {
             return 0;
@@ -290,8 +298,16 @@ pub fn bitcount(data: &[u8], start: Option<i64>, end: Option<i64>, bit_mode: boo
         let e = end.unwrap_or(len - 1);
 
         // Handle negative indices
-        let s = if s < 0 { (len + s).max(0) } else { s.min(len - 1) };
-        let e = if e < 0 { (len + e).max(0) } else { e.min(len - 1) };
+        let s = if s < 0 {
+            (len + s).max(0)
+        } else {
+            s.min(len - 1)
+        };
+        let e = if e < 0 {
+            (len + e).max(0)
+        } else {
+            e.min(len - 1)
+        };
 
         if s > e {
             return 0;
@@ -337,7 +353,13 @@ pub fn bitcount(data: &[u8], start: Option<i64>, end: Option<i64>, bit_mode: boo
 /// Find the position of the first bit set to the given value.
 ///
 /// Returns None if no such bit is found.
-pub fn bitpos(data: &[u8], bit: u8, start: Option<i64>, end: Option<i64>, bit_mode: bool) -> Option<i64> {
+pub fn bitpos(
+    data: &[u8],
+    bit: u8,
+    start: Option<i64>,
+    end: Option<i64>,
+    bit_mode: bool,
+) -> Option<i64> {
     if data.is_empty() {
         // For empty string, if looking for 0, return 0; if looking for 1, return -1 (not found)
         return if bit == 0 { Some(0) } else { None };
@@ -354,8 +376,16 @@ pub fn bitpos(data: &[u8], bit: u8, start: Option<i64>, end: Option<i64>, bit_mo
         let range_specified = start.is_some() || end.is_some();
 
         // Handle negative indices
-        let s = if s < 0 { (bit_len + s).max(0) } else { s.min(bit_len) };
-        let e = if e < 0 { (bit_len + e).max(0) } else { e.min(bit_len - 1) };
+        let s = if s < 0 {
+            (bit_len + s).max(0)
+        } else {
+            s.min(bit_len)
+        };
+        let e = if e < 0 {
+            (bit_len + e).max(0)
+        } else {
+            e.min(bit_len - 1)
+        };
 
         if s > e {
             return None;
@@ -370,7 +400,11 @@ pub fn bitpos(data: &[u8], bit: u8, start: Option<i64>, end: Option<i64>, bit_mo
 
         // Handle negative indices
         let s = if s < 0 { (len + s).max(0) } else { s.min(len) };
-        let e = if e < 0 { (len + e).max(0) } else { e.min(len - 1) };
+        let e = if e < 0 {
+            (len + e).max(0)
+        } else {
+            e.min(len - 1)
+        };
 
         if s > e {
             return None;
@@ -424,7 +458,12 @@ pub fn bitfield_get(data: &[u8], encoding: BitfieldEncoding, offset: u64) -> i64
 /// Write a value to a bitfield.
 ///
 /// Returns the old value.
-pub fn bitfield_set(data: &mut Vec<u8>, encoding: BitfieldEncoding, offset: u64, value: i64) -> i64 {
+pub fn bitfield_set(
+    data: &mut Vec<u8>,
+    encoding: BitfieldEncoding,
+    offset: u64,
+    value: i64,
+) -> i64 {
     let old_value = bitfield_get(data, encoding, offset);
 
     let bits = encoding.bits() as u64;
@@ -463,7 +502,8 @@ pub fn bitfield_incrby(
                 match overflow {
                     OverflowMode::Wrap => {
                         let range = 1i128 << bits;
-                        let wrapped = ((v as i128 - min as i128) % range + range) % range + min as i128;
+                        let wrapped =
+                            ((v as i128 - min as i128) % range + range) % range + min as i128;
                         (wrapped as i64, true)
                     }
                     OverflowMode::Sat => {
@@ -505,23 +545,19 @@ pub fn bitfield_incrby(
 
         match old_u.checked_add(inc_u) {
             Some(v) if v <= max => (v as i64, false),
-            Some(v) => {
-                match overflow {
-                    OverflowMode::Wrap => ((v & max) as i64, true),
-                    OverflowMode::Sat => (max as i64, true),
-                    OverflowMode::Fail => return (None, true),
+            Some(v) => match overflow {
+                OverflowMode::Wrap => ((v & max) as i64, true),
+                OverflowMode::Sat => (max as i64, true),
+                OverflowMode::Fail => return (None, true),
+            },
+            None => match overflow {
+                OverflowMode::Wrap => {
+                    let v = old_u.wrapping_add(inc_u) & max;
+                    (v as i64, true)
                 }
-            }
-            None => {
-                match overflow {
-                    OverflowMode::Wrap => {
-                        let v = old_u.wrapping_add(inc_u) & max;
-                        (v as i64, true)
-                    }
-                    OverflowMode::Sat => (max as i64, true),
-                    OverflowMode::Fail => return (None, true),
-                }
-            }
+                OverflowMode::Sat => (max as i64, true),
+                OverflowMode::Fail => return (None, true),
+            },
         }
     };
 

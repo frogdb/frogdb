@@ -29,7 +29,11 @@ impl ConnectionHandler {
         use tokio::sync::oneshot;
 
         // Handle WAIT command specially - it uses the replication tracker, not shard routing
-        if let frogdb_protocol::BlockingOp::Wait { num_replicas, timeout_ms } = proto_op {
+        if let frogdb_protocol::BlockingOp::Wait {
+            num_replicas,
+            timeout_ms,
+        } = proto_op
+        {
             return self.handle_wait_command(num_replicas, timeout_ms).await;
         }
 
@@ -60,13 +64,17 @@ impl ConnectionHandler {
             None => return Response::error("ERR Internal error: invalid shard"),
         };
 
-        if sender.send(ShardMessage::BlockWait {
-            conn_id: self.state.id,
-            keys: keys.clone(),
-            op,
-            response_tx,
-            deadline,
-        }).await.is_err() {
+        if sender
+            .send(ShardMessage::BlockWait {
+                conn_id: self.state.id,
+                keys: keys.clone(),
+                op,
+                response_tx,
+                deadline,
+            })
+            .await
+            .is_err()
+        {
             return Response::error("ERR Internal error: shard unreachable");
         }
 
@@ -98,9 +106,11 @@ impl ConnectionHandler {
             Err(_) => {
                 // Timeout - send unregister and return null
                 if let Some(sender) = self.shard_senders.get(target_shard) {
-                    let _ = sender.send(ShardMessage::UnregisterWait {
-                        conn_id: self.state.id,
-                    }).await;
+                    let _ = sender
+                        .send(ShardMessage::UnregisterWait {
+                            conn_id: self.state.id,
+                        })
+                        .await;
                 }
                 Response::Null
             }

@@ -163,9 +163,7 @@ mod tests {
 
     #[test]
     fn test_range_query() {
-        let samples: Vec<(i64, f64)> = (0..10)
-            .map(|i| (1000 + i * 100, i as f64))
-            .collect();
+        let samples: Vec<(i64, f64)> = (0..10).map(|i| (1000 + i * 100, i as f64)).collect();
         let chunk = CompressedChunk::from_samples(&samples);
 
         // Query middle range
@@ -186,12 +184,12 @@ mod tests {
         let samples = vec![(1000i64, 1.0f64), (2000i64, 2.0f64)];
         let chunk = CompressedChunk::from_samples(&samples);
 
-        assert!(chunk.overlaps(500, 1500));   // Overlaps start
-        assert!(chunk.overlaps(1500, 2500));  // Overlaps end
-        assert!(chunk.overlaps(1200, 1800));  // Inside
-        assert!(chunk.overlaps(500, 2500));   // Contains
+        assert!(chunk.overlaps(500, 1500)); // Overlaps start
+        assert!(chunk.overlaps(1500, 2500)); // Overlaps end
+        assert!(chunk.overlaps(1200, 1800)); // Inside
+        assert!(chunk.overlaps(500, 2500)); // Contains
         assert!(!chunk.overlaps(2500, 3000)); // After
-        assert!(!chunk.overlaps(0, 500));     // Before
+        assert!(!chunk.overlaps(0, 500)); // Before
     }
 
     #[test]

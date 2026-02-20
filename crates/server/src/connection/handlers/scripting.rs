@@ -125,7 +125,8 @@ impl ConnectionHandler {
 
         // Phase 1: Acquire continuation locks on all shards (in sorted order)
         let mut release_txs: Vec<oneshot::Sender<()>> = Vec::with_capacity(shards.len());
-        let mut ready_rxs: Vec<oneshot::Receiver<ShardReadyResult>> = Vec::with_capacity(shards.len());
+        let mut ready_rxs: Vec<oneshot::Receiver<ShardReadyResult>> =
+            Vec::with_capacity(shards.len());
 
         for &shard_id in &shards {
             let (ready_tx, ready_rx) = oneshot::channel();
@@ -310,7 +311,8 @@ impl ConnectionHandler {
 
         // Phase 1: Acquire continuation locks on all shards
         let mut release_txs: Vec<oneshot::Sender<()>> = Vec::with_capacity(shards.len());
-        let mut ready_rxs: Vec<oneshot::Receiver<ShardReadyResult>> = Vec::with_capacity(shards.len());
+        let mut ready_rxs: Vec<oneshot::Receiver<ShardReadyResult>> =
+            Vec::with_capacity(shards.len());
 
         for &shard_id in &shards {
             let (ready_tx, ready_rx) = oneshot::channel();
@@ -455,10 +457,7 @@ impl ConnectionHandler {
 
         // Query shard 0 (in production, would need to check the target shard)
         let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ScriptExists {
-            shas,
-            response_tx,
-        };
+        let msg = ShardMessage::ScriptExists { shas, response_tx };
 
         if self.shard_senders[0].send(msg).await.is_err() {
             return Response::error("ERR shard unavailable");
@@ -485,9 +484,7 @@ impl ConnectionHandler {
                 b"ASYNC" => true,
                 b"SYNC" => false,
                 _ => {
-                    return Response::error(
-                        "ERR SCRIPT FLUSH only supports ASYNC and SYNC options",
-                    )
+                    return Response::error("ERR SCRIPT FLUSH only supports ASYNC and SYNC options")
                 }
             }
         } else {
@@ -498,9 +495,7 @@ impl ConnectionHandler {
         let mut handles = Vec::with_capacity(self.num_shards);
         for sender in self.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
-            let _ = sender
-                .send(ShardMessage::ScriptFlush { response_tx })
-                .await;
+            let _ = sender.send(ShardMessage::ScriptFlush { response_tx }).await;
             handles.push(response_rx);
         }
 
@@ -517,9 +512,7 @@ impl ConnectionHandler {
         // Try to kill on all shards, return first error or success
         for sender in self.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
-            let _ = sender
-                .send(ShardMessage::ScriptKill { response_tx })
-                .await;
+            let _ = sender.send(ShardMessage::ScriptKill { response_tx }).await;
 
             if let Ok(result) = response_rx.await {
                 match result {
@@ -826,9 +819,7 @@ impl ConnectionHandler {
         if !args.is_empty() {
             let mode = args[0].to_ascii_uppercase();
             if mode.as_slice() != b"ASYNC" && mode.as_slice() != b"SYNC" {
-                return Response::error(
-                    "ERR FUNCTION FLUSH only supports ASYNC and SYNC options",
-                );
+                return Response::error("ERR FUNCTION FLUSH only supports ASYNC and SYNC options");
             }
         }
 

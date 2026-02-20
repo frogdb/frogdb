@@ -63,7 +63,9 @@ async fn test_psubscribe_pattern() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Publish to a matching channel
-    let response = publisher.command(&["PUBLISH", "news.sports", "goal!"]).await;
+    let response = publisher
+        .command(&["PUBLISH", "news.sports", "goal!"])
+        .await;
     assert!(matches!(response, Response::Integer(n) if n >= 1));
 
     // Subscriber should receive a pmessage
@@ -80,11 +82,16 @@ async fn test_psubscribe_pattern() {
     }
 
     // Publish to a non-matching channel should not deliver
-    publisher.command(&["PUBLISH", "weather.today", "sunny"]).await;
+    publisher
+        .command(&["PUBLISH", "weather.today", "sunny"])
+        .await;
 
     // Should not receive a message
     let msg = subscriber.read_message(Duration::from_millis(200)).await;
-    assert!(msg.is_none(), "Should not receive message for non-matching pattern");
+    assert!(
+        msg.is_none(),
+        "Should not receive message for non-matching pattern"
+    );
 
     server.shutdown().await;
 }
@@ -196,7 +203,9 @@ async fn test_pubsub_numpat() {
     let mut client = server.connect().await;
 
     // Subscribe to patterns
-    subscriber.command(&["PSUBSCRIBE", "news.*", "sports.*"]).await;
+    subscriber
+        .command(&["PSUBSCRIBE", "news.*", "sports.*"])
+        .await;
     subscriber.read_message(Duration::from_millis(100)).await; // Read second psubscribe response
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -245,7 +254,9 @@ async fn test_multiple_subscribers() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Publish a message
-    let response = publisher.command(&["PUBLISH", "broadcast", "hello everyone"]).await;
+    let response = publisher
+        .command(&["PUBLISH", "broadcast", "hello everyone"])
+        .await;
     // Should return count >= 2 (both subscribers received it)
     assert!(matches!(response, Response::Integer(n) if n >= 2));
 
@@ -282,22 +293,38 @@ async fn test_namespace_isolation() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // PUBLISH (broadcast) should only reach SUBSCRIBE, not SSUBSCRIBE
-    publisher.command(&["PUBLISH", "orders", "broadcast message"]).await;
+    publisher
+        .command(&["PUBLISH", "orders", "broadcast message"])
+        .await;
 
     let broadcast_msg = broadcast_sub.read_message(Duration::from_secs(1)).await;
     let sharded_msg = sharded_sub.read_message(Duration::from_millis(200)).await;
 
-    assert!(broadcast_msg.is_some(), "Broadcast subscriber should receive PUBLISH");
-    assert!(sharded_msg.is_none(), "Sharded subscriber should NOT receive PUBLISH");
+    assert!(
+        broadcast_msg.is_some(),
+        "Broadcast subscriber should receive PUBLISH"
+    );
+    assert!(
+        sharded_msg.is_none(),
+        "Sharded subscriber should NOT receive PUBLISH"
+    );
 
     // SPUBLISH (sharded) should only reach SSUBSCRIBE, not SUBSCRIBE
-    publisher.command(&["SPUBLISH", "orders", "sharded message"]).await;
+    publisher
+        .command(&["SPUBLISH", "orders", "sharded message"])
+        .await;
 
     let broadcast_msg = broadcast_sub.read_message(Duration::from_millis(200)).await;
     let sharded_msg = sharded_sub.read_message(Duration::from_secs(1)).await;
 
-    assert!(broadcast_msg.is_none(), "Broadcast subscriber should NOT receive SPUBLISH");
-    assert!(sharded_msg.is_some(), "Sharded subscriber should receive SPUBLISH");
+    assert!(
+        broadcast_msg.is_none(),
+        "Broadcast subscriber should NOT receive SPUBLISH"
+    );
+    assert!(
+        sharded_msg.is_some(),
+        "Sharded subscriber should receive SPUBLISH"
+    );
 
     server.shutdown().await;
 }
@@ -319,7 +346,9 @@ async fn test_sharded_subscribe_publish() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Publish to the sharded channel
-    let response = publisher.command(&["SPUBLISH", "orders:123", "new order"]).await;
+    let response = publisher
+        .command(&["SPUBLISH", "orders:123", "new order"])
+        .await;
     assert!(matches!(response, Response::Integer(n) if n >= 1));
 
     // Subscriber should receive an smessage

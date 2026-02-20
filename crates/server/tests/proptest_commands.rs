@@ -67,8 +67,12 @@ fn try_parse_lex_bound(arg: &[u8]) -> Option<LexBound> {
     match arg[0] {
         b'-' if arg.len() == 1 => Some(LexBound::Min),
         b'+' if arg.len() == 1 => Some(LexBound::Max),
-        b'[' => Some(LexBound::Inclusive(bytes::Bytes::copy_from_slice(&arg[1..]))),
-        b'(' => Some(LexBound::Exclusive(bytes::Bytes::copy_from_slice(&arg[1..]))),
+        b'[' => Some(LexBound::Inclusive(bytes::Bytes::copy_from_slice(
+            &arg[1..],
+        ))),
+        b'(' => Some(LexBound::Exclusive(bytes::Bytes::copy_from_slice(
+            &arg[1..],
+        ))),
         _ => None,
     }
 }
@@ -358,8 +362,14 @@ mod edge_case_tests {
     #[test]
     fn test_lex_bound_edge_cases() {
         // Just the prefix character should work
-        assert!(matches!(try_parse_lex_bound(b"["), Some(LexBound::Inclusive(_))));
-        assert!(matches!(try_parse_lex_bound(b"("), Some(LexBound::Exclusive(_))));
+        assert!(matches!(
+            try_parse_lex_bound(b"["),
+            Some(LexBound::Inclusive(_))
+        ));
+        assert!(matches!(
+            try_parse_lex_bound(b"("),
+            Some(LexBound::Exclusive(_))
+        ));
 
         // - and + with extra chars should fail
         assert!(try_parse_lex_bound(b"-extra").is_none());

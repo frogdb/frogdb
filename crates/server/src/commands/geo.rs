@@ -11,9 +11,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags, Coordinates,
-    DistanceUnit, SortedSetValue, Value, geohash_decode, geohash_encode, geohash_to_score,
-    geohash_to_string, haversine_distance, is_within_box, score_to_geohash,
+    geohash_decode, geohash_encode, geohash_to_score, geohash_to_string, haversine_distance,
+    is_within_box, score_to_geohash, Arity, BoundingBox, Command, CommandContext, CommandError,
+    CommandFlags, Coordinates, DistanceUnit, SortedSetValue, Value,
 };
 use frogdb_protocol::Response;
 
@@ -49,11 +49,7 @@ impl Command for GeoaddCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         // Parse options using shared utility
@@ -147,11 +143,7 @@ impl Command for GeodistCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let member1 = &args[1];
         let member2 = &args[2];
@@ -216,11 +208,7 @@ impl Command for GeohashCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let members = &args[1..];
 
@@ -230,15 +218,13 @@ impl Command for GeohashCommand {
 
                 let results: Vec<Response> = members
                     .iter()
-                    .map(|member| {
-                        match zset.get_score(member) {
-                            Some(score) => {
-                                let hash = score_to_geohash(score);
-                                let hash_str = geohash_to_string(hash);
-                                Response::bulk(Bytes::from(hash_str))
-                            }
-                            None => Response::null(),
+                    .map(|member| match zset.get_score(member) {
+                        Some(score) => {
+                            let hash = score_to_geohash(score);
+                            let hash_str = geohash_to_string(hash);
+                            Response::bulk(Bytes::from(hash_str))
                         }
+                        None => Response::null(),
                     })
                     .collect();
 
@@ -278,11 +264,7 @@ impl Command for GeoposCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let members = &args[1..];
 
@@ -292,17 +274,15 @@ impl Command for GeoposCommand {
 
                 let results: Vec<Response> = members
                     .iter()
-                    .map(|member| {
-                        match zset.get_score(member) {
-                            Some(score) => {
-                                let (lon, lat) = geohash_decode(score_to_geohash(score));
-                                Response::Array(vec![
-                                    Response::bulk(Bytes::from(format_float(lon))),
-                                    Response::bulk(Bytes::from(format_float(lat))),
-                                ])
-                            }
-                            None => Response::null(),
+                    .map(|member| match zset.get_score(member) {
+                        Some(score) => {
+                            let (lon, lat) = geohash_decode(score_to_geohash(score));
+                            Response::Array(vec![
+                                Response::bulk(Bytes::from(format_float(lon))),
+                                Response::bulk(Bytes::from(format_float(lat))),
+                            ])
                         }
+                        None => Response::null(),
                     })
                     .collect();
 
@@ -342,11 +322,7 @@ impl Command for GeosearchCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
         // Parse search options
@@ -385,11 +361,7 @@ impl Command for GeosearchstoreCommand {
         CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let destkey = &args[0];
         let srckey = &args[1];
 
@@ -451,11 +423,7 @@ impl Command for GeoradiusCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let lon = parse_f64(&args[1])?;
         let lat = parse_f64(&args[2])?;
@@ -518,11 +486,7 @@ impl Command for GeoradiusbymemberCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let member = &args[1];
         let radius = parse_f64(&args[2])?;
@@ -654,16 +618,20 @@ fn parse_geosearch_options(
                     Some(value) => {
                         let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
-                        let score = zset.get_score(member).ok_or_else(|| CommandError::InvalidArgument {
-                            message: format!(
-                                "could not decode requested zset member: {}",
-                                String::from_utf8_lossy(member)
-                            ),
+                        let score = zset.get_score(member).ok_or_else(|| {
+                            CommandError::InvalidArgument {
+                                message: format!(
+                                    "could not decode requested zset member: {}",
+                                    String::from_utf8_lossy(member)
+                                ),
+                            }
                         })?;
 
                         let (lon, lat) = geohash_decode(score_to_geohash(score));
-                        Some(Coordinates::new(lon, lat).ok_or_else(|| CommandError::InvalidArgument {
-                            message: "member has invalid coordinates".to_string(),
+                        Some(Coordinates::new(lon, lat).ok_or_else(|| {
+                            CommandError::InvalidArgument {
+                                message: "member has invalid coordinates".to_string(),
+                            }
                         })?)
                     }
                     None => {
@@ -683,8 +651,10 @@ fn parse_geosearch_options(
                 }
                 let lon = parse_f64(&args[i + 1])?;
                 let lat = parse_f64(&args[i + 2])?;
-                center = Some(Coordinates::new(lon, lat).ok_or_else(|| CommandError::InvalidArgument {
-                    message: format!("invalid longitude,latitude pair {},{}", lon, lat),
+                center = Some(Coordinates::new(lon, lat).ok_or_else(|| {
+                    CommandError::InvalidArgument {
+                        message: format!("invalid longitude,latitude pair {},{}", lon, lat),
+                    }
                 })?);
                 i += 3;
             }
@@ -880,7 +850,12 @@ fn execute_geosearch(
                     let in_area = if let Some(radius_m) = opts.radius_m {
                         dist_m <= radius_m
                     } else {
-                        is_within_box(opts.center, coords, opts.width_m.unwrap(), opts.height_m.unwrap())
+                        is_within_box(
+                            opts.center,
+                            coords,
+                            opts.width_m.unwrap(),
+                            opts.height_m.unwrap(),
+                        )
                     };
 
                     if in_area {
@@ -893,8 +868,16 @@ fn execute_geosearch(
                         results.push(GeoSearchResult {
                             member,
                             dist,
-                            hash: if opts.with_hash || opts.store_dist { Some(hash) } else { None },
-                            coords: if opts.with_coord { Some((lon, lat)) } else { None },
+                            hash: if opts.with_hash || opts.store_dist {
+                                Some(hash)
+                            } else {
+                                None
+                            },
+                            coords: if opts.with_coord {
+                                Some((lon, lat))
+                            } else {
+                                None
+                            },
                         });
 
                         // Early exit if ANY and we have enough results

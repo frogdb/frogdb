@@ -86,7 +86,13 @@ impl AclLogEntry {
     }
 
     /// Check if this entry can be collapsed with another similar event.
-    pub fn can_collapse(&self, entry_type: AclLogEntryType, reason: &str, username: &str, object: &str) -> bool {
+    pub fn can_collapse(
+        &self,
+        entry_type: AclLogEntryType,
+        reason: &str,
+        username: &str,
+        object: &str,
+    ) -> bool {
         self.entry_type == entry_type
             && self.reason == reason
             && self.username == username
@@ -107,14 +113,23 @@ impl AclLogEntry {
         vec![
             ("count", AclLogValue::Integer(self.count as i64)),
             ("reason", AclLogValue::String(self.reason.clone())),
-            ("context", AclLogValue::String(self.entry_type.name().to_string())),
+            (
+                "context",
+                AclLogValue::String(self.entry_type.name().to_string()),
+            ),
             ("object", AclLogValue::String(self.object.clone())),
             ("username", AclLogValue::String(self.username.clone())),
             ("age-seconds", AclLogValue::Float(self.age_seconds())),
             ("client-info", AclLogValue::String(self.client_info.clone())),
             ("entry-id", AclLogValue::Integer(self.entry_id as i64)),
-            ("timestamp-created", AclLogValue::Integer(self.timestamp_usec as i64 / 1_000_000)),
-            ("timestamp-last-updated", AclLogValue::Integer(self.timestamp_usec as i64 / 1_000_000)),
+            (
+                "timestamp-created",
+                AclLogValue::Integer(self.timestamp_usec as i64 / 1_000_000),
+            ),
+            (
+                "timestamp-last-updated",
+                AclLogValue::Integer(self.timestamp_usec as i64 / 1_000_000),
+            ),
         ]
     }
 
@@ -376,7 +391,11 @@ mod tests {
         let log = AclLog::new(10);
 
         for i in 0..5 {
-            log.log_command_denied(&format!("user{}", i), "127.0.0.1:12345", &format!("CMD{}", i));
+            log.log_command_denied(
+                &format!("user{}", i),
+                "127.0.0.1:12345",
+                &format!("CMD{}", i),
+            );
         }
 
         // Get specific count

@@ -30,10 +30,7 @@ pub const MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION: usize = 10_000;
 #[derive(Debug, Clone)]
 pub enum PubSubMessage {
     /// Standard channel message.
-    Message {
-        channel: Bytes,
-        payload: Bytes,
-    },
+    Message { channel: Bytes, payload: Bytes },
     /// Pattern-matched message.
     PatternMessage {
         pattern: Bytes,
@@ -41,40 +38,19 @@ pub enum PubSubMessage {
         payload: Bytes,
     },
     /// Sharded channel message.
-    ShardedMessage {
-        channel: Bytes,
-        payload: Bytes,
-    },
+    ShardedMessage { channel: Bytes, payload: Bytes },
     /// Subscription confirmation.
-    Subscribe {
-        channel: Bytes,
-        count: usize,
-    },
+    Subscribe { channel: Bytes, count: usize },
     /// Unsubscription confirmation.
-    Unsubscribe {
-        channel: Bytes,
-        count: usize,
-    },
+    Unsubscribe { channel: Bytes, count: usize },
     /// Pattern subscription confirmation.
-    PSubscribe {
-        pattern: Bytes,
-        count: usize,
-    },
+    PSubscribe { pattern: Bytes, count: usize },
     /// Pattern unsubscription confirmation.
-    PUnsubscribe {
-        pattern: Bytes,
-        count: usize,
-    },
+    PUnsubscribe { pattern: Bytes, count: usize },
     /// Sharded subscription confirmation.
-    SSubscribe {
-        channel: Bytes,
-        count: usize,
-    },
+    SSubscribe { channel: Bytes, count: usize },
     /// Sharded unsubscription confirmation.
-    SUnsubscribe {
-        channel: Bytes,
-        count: usize,
-    },
+    SUnsubscribe { channel: Bytes, count: usize },
 }
 
 impl PubSubMessage {
@@ -96,7 +72,11 @@ impl PubSubMessage {
                     Response::bulk(payload.clone()),
                 ]
             }
-            PubSubMessage::PatternMessage { pattern, channel, payload } => {
+            PubSubMessage::PatternMessage {
+                pattern,
+                channel,
+                payload,
+            } => {
                 vec![
                     Response::bulk(Bytes::from_static(b"pmessage")),
                     Response::bulk(pattern.clone()),
@@ -448,7 +428,8 @@ impl ShardSubscriptions {
     /// Returns true if the connection was subscribed.
     pub fn punsubscribe(&mut self, pattern: &Bytes, conn_id: ConnId) -> bool {
         let initial_len = self.pattern_subs.len();
-        self.pattern_subs.retain(|(p, _, c, _)| !(*c == conn_id && p == pattern));
+        self.pattern_subs
+            .retain(|(p, _, c, _)| !(*c == conn_id && p == pattern));
         self.pattern_subs.len() < initial_len
     }
 
@@ -456,13 +437,15 @@ impl ShardSubscriptions {
     pub fn get_connection_patterns(&self, conn_id: ConnId) -> Vec<Bytes> {
         self.pattern_subs
             .iter()
-            .filter_map(|(p, _, c, _)| {
-                if *c == conn_id {
-                    Some(p.clone())
-                } else {
-                    None
-                }
-            })
+            .filter_map(
+                |(p, _, c, _)| {
+                    if *c == conn_id {
+                        Some(p.clone())
+                    } else {
+                        None
+                    }
+                },
+            )
             .collect()
     }
 
@@ -528,10 +511,13 @@ impl ShardSubscriptions {
         // Direct channel subscribers
         if let Some(conns) = self.channel_subs.get(channel) {
             for sender in conns.values() {
-                if sender.send(PubSubMessage::Message {
-                    channel: channel.clone(),
-                    payload: payload.clone(),
-                }).is_ok() {
+                if sender
+                    .send(PubSubMessage::Message {
+                        channel: channel.clone(),
+                        payload: payload.clone(),
+                    })
+                    .is_ok()
+                {
                     count += 1;
                 }
             }
@@ -562,10 +548,13 @@ impl ShardSubscriptions {
 
         if let Some(conns) = self.sharded_subs.get(channel) {
             for sender in conns.values() {
-                if sender.send(PubSubMessage::ShardedMessage {
-                    channel: channel.clone(),
-                    payload: payload.clone(),
-                }).is_ok() {
+                if sender
+                    .send(PubSubMessage::ShardedMessage {
+                        channel: channel.clone(),
+                        payload: payload.clone(),
+                    })
+                    .is_ok()
+                {
                     count += 1;
                 }
             }
@@ -604,9 +593,7 @@ impl ShardSubscriptions {
     pub fn channels(&self, pattern: Option<&GlobPattern>) -> Vec<Bytes> {
         self.channel_subs
             .keys()
-            .filter(|ch| {
-                pattern.as_ref().is_none_or(|p| p.matches(ch))
-            })
+            .filter(|ch| pattern.as_ref().is_none_or(|p| p.matches(ch)))
             .cloned()
             .collect()
     }
@@ -616,7 +603,8 @@ impl ShardSubscriptions {
         channels
             .iter()
             .map(|ch| {
-                let count = self.channel_subs
+                let count = self
+                    .channel_subs
                     .get(ch)
                     .map(|conns| conns.len())
                     .unwrap_or(0);
@@ -629,9 +617,7 @@ impl ShardSubscriptions {
     pub fn shard_channels(&self, pattern: Option<&GlobPattern>) -> Vec<Bytes> {
         self.sharded_subs
             .keys()
-            .filter(|ch| {
-                pattern.as_ref().is_none_or(|p| p.matches(ch))
-            })
+            .filter(|ch| pattern.as_ref().is_none_or(|p| p.matches(ch)))
             .cloned()
             .collect()
     }
@@ -641,7 +627,8 @@ impl ShardSubscriptions {
         channels
             .iter()
             .map(|ch| {
-                let count = self.sharded_subs
+                let count = self
+                    .sharded_subs
                     .get(ch)
                     .map(|conns| conns.len())
                     .unwrap_or(0);
@@ -806,7 +793,10 @@ mod tests {
         let msg2 = rx2.try_recv().unwrap();
 
         match (msg1, msg2) {
-            (PubSubMessage::Message { payload: p1, .. }, PubSubMessage::Message { payload: p2, .. }) => {
+            (
+                PubSubMessage::Message { payload: p1, .. },
+                PubSubMessage::Message { payload: p2, .. },
+            ) => {
                 assert_eq!(p1, Bytes::from_static(b"hello"));
                 assert_eq!(p2, Bytes::from_static(b"hello"));
             }
@@ -821,11 +811,18 @@ mod tests {
 
         subs.psubscribe(Bytes::from_static(b"news.*"), 1, tx);
 
-        let count = subs.publish(&Bytes::from_static(b"news.sports"), &Bytes::from_static(b"score!"));
+        let count = subs.publish(
+            &Bytes::from_static(b"news.sports"),
+            &Bytes::from_static(b"score!"),
+        );
         assert_eq!(count, 1);
 
         match rx.try_recv().unwrap() {
-            PubSubMessage::PatternMessage { pattern, channel, payload } => {
+            PubSubMessage::PatternMessage {
+                pattern,
+                channel,
+                payload,
+            } => {
                 assert_eq!(pattern, Bytes::from_static(b"news.*"));
                 assert_eq!(channel, Bytes::from_static(b"news.sports"));
                 assert_eq!(payload, Bytes::from_static(b"score!"));
@@ -834,7 +831,10 @@ mod tests {
         }
 
         // Non-matching channel should not deliver
-        let count = subs.publish(&Bytes::from_static(b"weather.today"), &Bytes::from_static(b"sunny"));
+        let count = subs.publish(
+            &Bytes::from_static(b"weather.today"),
+            &Bytes::from_static(b"sunny"),
+        );
         assert_eq!(count, 0);
     }
 
@@ -845,7 +845,10 @@ mod tests {
 
         subs.ssubscribe(Bytes::from_static(b"orders"), 1, tx);
 
-        let count = subs.spublish(&Bytes::from_static(b"orders"), &Bytes::from_static(b"new order"));
+        let count = subs.spublish(
+            &Bytes::from_static(b"orders"),
+            &Bytes::from_static(b"new order"),
+        );
         assert_eq!(count, 1);
 
         match rx.try_recv().unwrap() {
@@ -878,7 +881,10 @@ mod tests {
         assert!(subs.get_connection_sharded_channels(1).is_empty());
 
         // Connection 2 should still have ch1
-        assert_eq!(subs.get_connection_channels(2), vec![Bytes::from_static(b"ch1")]);
+        assert_eq!(
+            subs.get_connection_channels(2),
+            vec![Bytes::from_static(b"ch1")]
+        );
     }
 
     #[test]

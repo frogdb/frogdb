@@ -261,7 +261,11 @@ fn test_scatter_gather_child_shard_spans() {
     sg_span.end();
 
     let spans = test_tracer.get_finished_spans();
-    assert_eq!(spans.len(), 3, "Should have scatter-gather span and 2 shard spans");
+    assert_eq!(
+        spans.len(),
+        3,
+        "Should have scatter-gather span and 2 shard spans"
+    );
 
     // Find the scatter-gather span
     let sg = spans
@@ -415,7 +419,11 @@ fn test_custom_service_name_in_resource() {
     span.end();
 
     let spans = test_tracer.get_finished_spans();
-    assert_eq!(spans.len(), 1, "Should create span with custom service name");
+    assert_eq!(
+        spans.len(),
+        1,
+        "Should create span with custom service name"
+    );
 
     // Note: Resource attributes are not on individual spans but on the tracer provider.
     // We verify the tracer was created successfully with the custom config.

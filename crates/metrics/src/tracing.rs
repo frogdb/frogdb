@@ -290,7 +290,8 @@ impl RequestSpan {
     /// Add an attribute to the span.
     pub fn set_attribute(&self, key: &str, value: impl Into<opentelemetry::Value>) {
         if let Some(ref ctx) = self.context {
-            ctx.span().set_attribute(KeyValue::new(key.to_string(), value.into()));
+            ctx.span()
+                .set_attribute(KeyValue::new(key.to_string(), value.into()));
         }
     }
 
@@ -363,7 +364,8 @@ impl ShardSpan {
     /// Add an attribute.
     pub fn set_attribute(&self, key: &str, value: impl Into<opentelemetry::Value>) {
         if let Some(ref ctx) = self.context {
-            ctx.span().set_attribute(KeyValue::new(key.to_string(), value.into()));
+            ctx.span()
+                .set_attribute(KeyValue::new(key.to_string(), value.into()));
         }
     }
 
@@ -419,7 +421,8 @@ impl StoreSpan {
     /// Add an attribute.
     pub fn set_attribute(&self, key: &str, value: impl Into<opentelemetry::Value>) {
         if let Some(ref ctx) = self.context {
-            ctx.span().set_attribute(KeyValue::new(key.to_string(), value.into()));
+            ctx.span()
+                .set_attribute(KeyValue::new(key.to_string(), value.into()));
         }
     }
 
@@ -461,7 +464,10 @@ impl ScatterGatherSpan {
 
         let span = tracer
             .tracer
-            .span_builder(format!("frogdb.scatter_gather.{}", operation.to_lowercase()))
+            .span_builder(format!(
+                "frogdb.scatter_gather.{}",
+                operation.to_lowercase()
+            ))
             .with_kind(SpanKind::Internal)
             .with_attributes(vec![
                 KeyValue::new(semantic::DB_SYSTEM, "frogdb"),
@@ -505,7 +511,8 @@ impl ScatterGatherSpan {
     /// Add an attribute.
     pub fn set_attribute(&self, key: &str, value: impl Into<opentelemetry::Value>) {
         if let Some(ref ctx) = self.context {
-            ctx.span().set_attribute(KeyValue::new(key.to_string(), value.into()));
+            ctx.span()
+                .set_attribute(KeyValue::new(key.to_string(), value.into()));
         }
     }
 
@@ -620,7 +627,9 @@ mod test_tracer {
 pub use test_tracer::TestTracer;
 
 /// Create a shared tracer from configuration.
-pub fn create_tracer(config: &TracingConfig) -> Result<SharedTracer, Box<dyn std::error::Error + Send + Sync>> {
+pub fn create_tracer(
+    config: &TracingConfig,
+) -> Result<SharedTracer, Box<dyn std::error::Error + Send + Sync>> {
     let tracer = OtelTracer::new(config)?;
     Ok(Arc::new(tracer))
 }

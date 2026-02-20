@@ -12,7 +12,10 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "dashboard-gen", about = "Generate Grafana dashboard from FrogDB metrics")]
+#[command(
+    name = "dashboard-gen",
+    about = "Generate Grafana dashboard from FrogDB metrics"
+)]
 struct Args {
     /// Output file for the dashboard JSON
     #[arg(short, long, default_value = "deploy/dashboards/frogdb-overview.json")]
@@ -247,12 +250,7 @@ fn generate_dashboard() -> Result<Value> {
 }
 
 /// Create a panel for a metric based on its type.
-fn create_metric_panel(
-    metric: &MetricDefinition,
-    id: i32,
-    x: i32,
-    y: i32,
-) -> (Value, i32, i32) {
+fn create_metric_panel(metric: &MetricDefinition, id: i32, x: i32, y: i32) -> (Value, i32, i32) {
     let width = 12;
     let height = 8;
 
@@ -277,7 +275,8 @@ fn create_counter_panel(
     let query = if metric.labels.is_empty() {
         format!("rate({}{{instance=~\"$instance\"}}[5m])", metric.name)
     } else {
-        format!("sum by ({}) (rate({}{{instance=~\"$instance\"}}[5m]))",
+        format!(
+            "sum by ({}) (rate({}{{instance=~\"$instance\"}}[5m]))",
             metric.labels.join(", "),
             metric.name
         )
@@ -348,7 +347,8 @@ fn create_gauge_panel(
     let query = if metric.labels.is_empty() {
         format!("{}{{instance=~\"$instance\"}}", metric.name)
     } else {
-        format!("sum by ({}) ({}{{instance=~\"$instance\"}})",
+        format!(
+            "sum by ({}) ({}{{instance=~\"$instance\"}})",
             metric.labels.join(", "),
             metric.name
         )

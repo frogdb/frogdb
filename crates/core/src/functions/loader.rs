@@ -71,8 +71,11 @@ fn execute_in_sandbox(code: &str) -> Result<Vec<CapturedRegistration>, FunctionE
         })?;
 
     // Extract captured registrations
-    let regs = registrations.try_lock_err()
-        .map_err(|e| FunctionError::Internal { message: format!("Lock error: {}", e) })?
+    let regs = registrations
+        .try_lock_err()
+        .map_err(|e| FunctionError::Internal {
+            message: format!("Lock error: {}", e),
+        })?
         .clone();
 
     Ok(regs)
@@ -159,7 +162,9 @@ fn setup_register_function_binding(
             }
 
             // Store the registration
-            regs.try_lock_err().map_err(lock_err_to_lua)?.push(registration);
+            regs.try_lock_err()
+                .map_err(lock_err_to_lua)?
+                .push(registration);
 
             Ok(())
         })
@@ -232,9 +237,9 @@ fn parse_table_registration(t: &mlua::Table) -> LuaResult<CapturedRegistration> 
     })?;
 
     // Get callback (required) - just verify it exists
-    let _callback: mlua::Function = t.get("callback").map_err(|_| {
-        mlua::Error::RuntimeError("Missing required field 'callback'".to_string())
-    })?;
+    let _callback: mlua::Function = t
+        .get("callback")
+        .map_err(|_| mlua::Error::RuntimeError("Missing required field 'callback'".to_string()))?;
 
     // Get optional description
     let description: Option<String> = t.get("description").ok();
@@ -322,10 +327,7 @@ pub fn validate_library(library: &FunctionLibrary) -> Result<(), FunctionError> 
             .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
         {
             return Err(FunctionError::ParseError {
-                message: format!(
-                    "Function name '{}' contains invalid characters",
-                    name
-                ),
+                message: format!("Function name '{}' contains invalid characters", name),
             });
         }
     }

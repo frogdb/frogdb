@@ -149,9 +149,11 @@ impl TestServer {
 
         let handle = tokio::spawn(async move {
             let server = Server::new(config).await.unwrap();
-            let _ = server.run_until(async move {
-                let _ = shutdown_rx.await;
-            }).await;
+            let _ = server
+                .run_until(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
         });
 
         // Wait for server to be ready
@@ -200,9 +202,11 @@ impl TestServer {
 
         let handle = tokio::spawn(async move {
             let server = Server::new(config).await.unwrap();
-            let _ = server.run_until(async move {
-                let _ = shutdown_rx.await;
-            }).await;
+            let _ = server
+                .run_until(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
         });
 
         // Wait for server to be ready
@@ -225,7 +229,10 @@ impl TestServer {
     }
 
     /// Start a replica server with custom configuration.
-    pub async fn start_replica_with_config(primary: &TestServer, test_config: TestServerConfig) -> Self {
+    pub async fn start_replica_with_config(
+        primary: &TestServer,
+        test_config: TestServerConfig,
+    ) -> Self {
         let port = Self::allocate_port();
         let metrics_port = Self::allocate_port();
         let (owned_dir, data_dir) = match test_config.data_dir {
@@ -253,9 +260,11 @@ impl TestServer {
 
         let handle = tokio::spawn(async move {
             let server = Server::new(config).await.unwrap();
-            let _ = server.run_until(async move {
-                let _ = shutdown_rx.await;
-            }).await;
+            let _ = server
+                .run_until(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
         });
 
         // Wait for server to be ready
@@ -338,7 +347,12 @@ impl TestServer {
 
     /// Fetch metrics as raw Prometheus text format.
     pub async fn fetch_metrics(&self) -> String {
-        reqwest::get(self.metrics_url("/metrics"))
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(self.metrics_url("/metrics"))
+            .send()
             .await
             .unwrap()
             .text()

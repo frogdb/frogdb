@@ -54,10 +54,7 @@ async fn test_debug_bundle_generate_basic() {
             assert!(!id.is_empty(), "Bundle ID should not be empty");
             // Bundle ID should be a valid string
             let id_str = String::from_utf8_lossy(&id);
-            assert!(
-                !id_str.is_empty(),
-                "Bundle ID string should not be empty"
-            );
+            assert!(!id_str.is_empty(), "Bundle ID string should not be empty");
         }
         Response::Error(e) => {
             let err_str = String::from_utf8_lossy(&e);
@@ -115,7 +112,9 @@ async fn test_debug_bundle_generate_duration_missing_value() {
             let err_str = String::from_utf8_lossy(&e);
             // Should get an error about missing duration value
             assert!(
-                err_str.contains("ERR") || err_str.contains("syntax") || err_str.contains("missing"),
+                err_str.contains("ERR")
+                    || err_str.contains("syntax")
+                    || err_str.contains("missing"),
                 "Expected error about missing duration value, got: {}",
                 err_str
             );
@@ -142,7 +141,9 @@ async fn test_debug_bundle_generate_duration_invalid() {
             let err_str = String::from_utf8_lossy(&e);
             // Should get an error about invalid duration value
             assert!(
-                err_str.contains("ERR") || err_str.contains("invalid") || err_str.contains("integer"),
+                err_str.contains("ERR")
+                    || err_str.contains("invalid")
+                    || err_str.contains("integer"),
                 "Expected error about invalid duration value, got: {}",
                 err_str
             );
@@ -244,10 +245,7 @@ async fn test_debug_bundle_list_entry_structure() {
                             "Third field (size) should be integer"
                         );
                     }
-                    _ => panic!(
-                        "List entry should be an array, got {:?}",
-                        first_entry
-                    ),
+                    _ => panic!("List entry should be an array, got {:?}", first_entry),
                 }
             }
         }
@@ -271,7 +269,9 @@ async fn test_debug_bundle_unknown_subcommand() {
             let err_str = String::from_utf8_lossy(&e);
             // Should get an error about unknown subcommand
             assert!(
-                err_str.contains("ERR") || err_str.contains("unknown") || err_str.contains("subcommand"),
+                err_str.contains("ERR")
+                    || err_str.contains("unknown")
+                    || err_str.contains("subcommand"),
                 "Expected error about unknown subcommand, got: {}",
                 err_str
             );

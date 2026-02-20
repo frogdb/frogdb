@@ -27,13 +27,15 @@ pub(crate) fn convert_blocking_op(op: frogdb_protocol::BlockingOp) -> frogdb_cor
     match op {
         frogdb_protocol::BlockingOp::BLPop => frogdb_core::BlockingOp::BLPop,
         frogdb_protocol::BlockingOp::BRPop => frogdb_core::BlockingOp::BRPop,
-        frogdb_protocol::BlockingOp::BLMove { dest, src_dir, dest_dir } => {
-            frogdb_core::BlockingOp::BLMove {
-                dest,
-                src_dir: convert_direction(src_dir),
-                dest_dir: convert_direction(dest_dir),
-            }
-        }
+        frogdb_protocol::BlockingOp::BLMove {
+            dest,
+            src_dir,
+            dest_dir,
+        } => frogdb_core::BlockingOp::BLMove {
+            dest,
+            src_dir: convert_direction(src_dir),
+            dest_dir: convert_direction(dest_dir),
+        },
         frogdb_protocol::BlockingOp::BLMPop { direction, count } => {
             frogdb_core::BlockingOp::BLMPop {
                 direction: convert_direction(direction),
@@ -45,26 +47,31 @@ pub(crate) fn convert_blocking_op(op: frogdb_protocol::BlockingOp) -> frogdb_cor
         frogdb_protocol::BlockingOp::BZMPop { min, count } => {
             frogdb_core::BlockingOp::BZMPop { min, count }
         }
-        frogdb_protocol::BlockingOp::XRead { after_ids, count } => {
-            frogdb_core::BlockingOp::XRead {
-                after_ids: after_ids
-                    .into_iter()
-                    .map(|(ms, seq)| StreamId::new(ms, seq))
-                    .collect(),
-                count,
-            }
-        }
-        frogdb_protocol::BlockingOp::XReadGroup { group, consumer, noack, count } => {
-            frogdb_core::BlockingOp::XReadGroup {
-                group,
-                consumer,
-                noack,
-                count,
-            }
-        }
-        frogdb_protocol::BlockingOp::Wait { num_replicas, timeout_ms } => {
-            frogdb_core::BlockingOp::Wait { num_replicas, timeout_ms }
-        }
+        frogdb_protocol::BlockingOp::XRead { after_ids, count } => frogdb_core::BlockingOp::XRead {
+            after_ids: after_ids
+                .into_iter()
+                .map(|(ms, seq)| StreamId::new(ms, seq))
+                .collect(),
+            count,
+        },
+        frogdb_protocol::BlockingOp::XReadGroup {
+            group,
+            consumer,
+            noack,
+            count,
+        } => frogdb_core::BlockingOp::XReadGroup {
+            group,
+            consumer,
+            noack,
+            count,
+        },
+        frogdb_protocol::BlockingOp::Wait {
+            num_replicas,
+            timeout_ms,
+        } => frogdb_core::BlockingOp::Wait {
+            num_replicas,
+            timeout_ms,
+        },
     }
 }
 
@@ -228,14 +235,16 @@ pub(crate) fn convert_raft_cluster_op(op: &RaftClusterOp) -> Option<ClusterComma
 
 /// Commands that have subcommands (container commands in Redis terminology).
 pub(crate) const CONTAINER_COMMANDS: &[&str] = &[
-    "ACL", "CLIENT", "CONFIG", "CLUSTER", "DEBUG", "MEMORY", "MODULE",
-    "OBJECT", "SCRIPT", "SLOWLOG", "XGROUP", "XINFO", "COMMAND", "PUBSUB",
-    "FUNCTION", "LATENCY", "STATUS",
+    "ACL", "CLIENT", "CONFIG", "CLUSTER", "DEBUG", "MEMORY", "MODULE", "OBJECT", "SCRIPT",
+    "SLOWLOG", "XGROUP", "XINFO", "COMMAND", "PUBSUB", "FUNCTION", "LATENCY", "STATUS",
 ];
 
 /// Extract subcommand from args for container commands.
 pub(crate) fn extract_subcommand(command: &str, args: &[Bytes]) -> Option<String> {
-    if CONTAINER_COMMANDS.iter().any(|c| c.eq_ignore_ascii_case(command)) {
+    if CONTAINER_COMMANDS
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(command))
+    {
         args.first()
             .map(|a| String::from_utf8_lossy(a).to_uppercase())
     } else {

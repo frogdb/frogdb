@@ -112,10 +112,8 @@ impl MemoryDiagCollector {
     /// Collect full memory diagnostics report.
     pub async fn collect(&self) -> MemoryDiagReport {
         // Gather memory stats and big keys in parallel
-        let (shard_stats, big_keys_responses) = tokio::join!(
-            self.gather_memory_stats(),
-            self.gather_big_keys()
-        );
+        let (shard_stats, big_keys_responses) =
+            tokio::join!(self.gather_memory_stats(), self.gather_big_keys());
 
         // Aggregate big keys from all shards
         let mut all_big_keys: Vec<BigKeyInfo> = big_keys_responses
@@ -304,7 +302,10 @@ pub fn format_report(report: &MemoryDiagReport) -> String {
         "Total data memory: {} bytes\n",
         report.summary.total_data_memory
     ));
-    output.push_str(&format!("Number of shards: {}\n", report.summary.num_shards));
+    output.push_str(&format!(
+        "Number of shards: {}\n",
+        report.summary.num_shards
+    ));
     output.push('\n');
 
     // Shard memory distribution section (only if multiple shards)
@@ -324,17 +325,14 @@ pub fn format_report(report: &MemoryDiagReport) -> String {
         ));
         output.push_str(&format!(
             "Range: {} bytes (shard {} to shard {})\n",
-            report.variance.range_bytes,
-            report.variance.min_shard,
-            report.variance.max_shard
+            report.variance.range_bytes, report.variance.min_shard, report.variance.max_shard
         ));
 
         // Show percentage difference for max shard
         if report.variance.average_bytes > 0.0 {
-            let max_diff_pct =
-                ((report.variance.max_bytes as f64 - report.variance.average_bytes)
-                    / report.variance.average_bytes)
-                    * 100.0;
+            let max_diff_pct = ((report.variance.max_bytes as f64 - report.variance.average_bytes)
+                / report.variance.average_bytes)
+                * 100.0;
             if max_diff_pct > 10.0 {
                 output.push_str(&format!(
                     "* Shard {} has {:.1}% more memory than average\n",
@@ -408,8 +406,7 @@ pub fn format_report(report: &MemoryDiagReport) -> String {
 
     // Check peak memory
     if report.summary.total_peak > 0 && report.summary.total_data_memory > 0 {
-        let peak_ratio =
-            report.summary.total_peak as f64 / report.summary.total_data_memory as f64;
+        let peak_ratio = report.summary.total_peak as f64 / report.summary.total_data_memory as f64;
         if peak_ratio > 1.5 {
             output.push_str(&format!(
                 "* Peak memory was {:.1}x higher than current usage\n",
@@ -469,7 +466,11 @@ impl std::fmt::Display for MemoryDiagReport {
 impl frogdb_core::MemoryReport for MemoryDiagReport {}
 
 impl frogdb_core::MemoryDiagnosticsCollector for MemoryDiagCollector {
-    fn collect(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Arc<dyn frogdb_core::MemoryReport>> + Send + '_>> {
+    fn collect(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Arc<dyn frogdb_core::MemoryReport>> + Send + '_>,
+    > {
         Box::pin(async move {
             let report = self.collect().await;
             Arc::new(report) as Arc<dyn frogdb_core::MemoryReport>

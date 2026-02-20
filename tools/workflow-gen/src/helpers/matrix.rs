@@ -16,13 +16,11 @@ pub fn matrix_with_includes(includes: Vec<Value>) -> Strategy {
 
 /// Creates a build matrix for Linux targets.
 pub fn linux_build_matrix() -> Strategy {
-    let targets: Vec<Value> = targets_to_matrix_include(&[
-        RustTarget::X86_64Linux,
-        RustTarget::Aarch64Linux,
-    ])
-    .into_iter()
-    .map(|t| serde_json::to_value(t).unwrap())
-    .collect();
+    let targets: Vec<Value> =
+        targets_to_matrix_include(&[RustTarget::X86_64Linux, RustTarget::Aarch64Linux])
+            .into_iter()
+            .map(|t| serde_json::to_value(t).unwrap())
+            .collect();
 
     matrix_with_includes(targets)
 }

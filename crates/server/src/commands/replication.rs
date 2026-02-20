@@ -7,7 +7,10 @@
 //! - WAIT: Wait for replica acknowledgments
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp, ExecutionStrategy};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 
 // ============================================================================
@@ -34,11 +37,7 @@ impl Command for ReplicaofCommand {
         CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::STALE
     }
 
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() != 2 {
             return Err(CommandError::WrongArity {
                 command: "REPLICAOF",
@@ -109,11 +108,7 @@ impl Command for SlaveofCommand {
         CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::STALE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Delegate to REPLICAOF
         ReplicaofCommand.execute(ctx, args)
     }
@@ -149,11 +144,7 @@ impl Command for ReplconfCommand {
         CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
     }
 
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
             return Ok(Response::ok());
         }
@@ -304,31 +295,26 @@ impl Command for PsyncCommand {
         ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Replication)
     }
 
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() != 2 {
-            return Err(CommandError::WrongArity {
-                command: "PSYNC",
-            });
+            return Err(CommandError::WrongArity { command: "PSYNC" });
         }
 
-        let replication_id = std::str::from_utf8(&args[0]).map_err(|_| {
-            CommandError::InvalidArgument {
+        let replication_id =
+            std::str::from_utf8(&args[0]).map_err(|_| CommandError::InvalidArgument {
                 message: "invalid replication_id encoding".to_string(),
-            }
-        })?;
+            })?;
 
         let offset_str =
             std::str::from_utf8(&args[1]).map_err(|_| CommandError::InvalidArgument {
                 message: "invalid offset encoding".to_string(),
             })?;
 
-        let offset: i64 = offset_str.parse().map_err(|_| CommandError::InvalidArgument {
-            message: "invalid offset number".to_string(),
-        })?;
+        let offset: i64 = offset_str
+            .parse()
+            .map_err(|_| CommandError::InvalidArgument {
+                message: "invalid offset number".to_string(),
+            })?;
 
         tracing::info!(
             replication_id = %replication_id,
@@ -342,8 +328,8 @@ impl Command for PsyncCommand {
         // and call PrimaryReplicationHandler::handle_psync() with the replication_id and offset.
         Ok(Response::Array(vec![
             Response::Simple(Bytes::from_static(b"PSYNC_HANDOFF")),
-            Response::Bulk(Some(args[0].clone())),  // replication_id
-            Response::Bulk(Some(args[1].clone())),  // offset
+            Response::Bulk(Some(args[0].clone())), // replication_id
+            Response::Bulk(Some(args[1].clone())), // offset
         ]))
     }
 
@@ -379,15 +365,9 @@ impl Command for WaitCommand {
         CommandFlags::NOSCRIPT
     }
 
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() != 2 {
-            return Err(CommandError::WrongArity {
-                command: "WAIT",
-            });
+            return Err(CommandError::WrongArity { command: "WAIT" });
         }
 
         let num_replicas: u32 = std::str::from_utf8(&args[0])
@@ -417,9 +397,12 @@ impl Command for WaitCommand {
         // Return a BlockingNeeded response that tells the connection handler
         // to perform the wait operation using the replication tracker.
         Ok(Response::BlockingNeeded {
-            keys: vec![], // WAIT doesn't use keys, it waits for replica ACKs
+            keys: vec![],                        // WAIT doesn't use keys, it waits for replica ACKs
             timeout: timeout_ms as f64 / 1000.0, // Convert ms to seconds for consistency
-            op: frogdb_protocol::BlockingOp::Wait { num_replicas, timeout_ms },
+            op: frogdb_protocol::BlockingOp::Wait {
+                num_replicas,
+                timeout_ms,
+            },
         })
     }
 
@@ -465,7 +448,7 @@ impl Command for RoleCommand {
         // The full implementation will check the replication configuration
         Ok(Response::Array(vec![
             Response::bulk(Bytes::from_static(b"master")),
-            Response::Integer(0), // replication offset
+            Response::Integer(0),    // replication offset
             Response::Array(vec![]), // no replicas yet
         ]))
     }

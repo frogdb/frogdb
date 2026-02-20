@@ -178,12 +178,17 @@ mod tests {
         config.compression = "invalid".to_string();
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid compression type"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid compression type"));
     }
 
     #[test]
     fn test_validate_valid_compression_types() {
-        for compression in ["none", "snappy", "lz4", "zstd", "NONE", "Snappy", "LZ4", "ZSTD"] {
+        for compression in [
+            "none", "snappy", "lz4", "zstd", "NONE", "Snappy", "LZ4", "ZSTD",
+        ] {
             let mut config = PersistenceConfig::default();
             config.compression = compression.to_string();
             assert!(
@@ -200,7 +205,10 @@ mod tests {
         config.durability_mode = "invalid".to_string();
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid durability_mode"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid durability_mode"));
     }
 
     #[test]

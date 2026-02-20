@@ -596,8 +596,7 @@ impl<'a> CommandContext<'a> {
     /// ```
     #[inline]
     pub fn require_cluster(&self) -> Result<ClusterContextRef<'_>, CommandError> {
-        self.cluster_context()
-            .ok_or(CommandError::ClusterDisabled)
+        self.cluster_context().ok_or(CommandError::ClusterDisabled)
     }
 
     /// Get replication context, returning an error if replication is not enabled.

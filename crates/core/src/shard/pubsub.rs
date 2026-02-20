@@ -18,14 +18,19 @@ impl ShardWorker {
             .into_iter()
             .enumerate()
             .map(|(i, channel)| {
-                self.subscriptions.subscribe(channel, conn_id, sender.clone());
+                self.subscriptions
+                    .subscribe(channel, conn_id, sender.clone());
                 i + 1 // Placeholder count
             })
             .collect()
     }
 
     /// Handle UNSUBSCRIBE - unsubscribe from broadcast channels.
-    pub(crate) fn handle_unsubscribe(&mut self, channels: Vec<Bytes>, conn_id: ConnId) -> Vec<usize> {
+    pub(crate) fn handle_unsubscribe(
+        &mut self,
+        channels: Vec<Bytes>,
+        conn_id: ConnId,
+    ) -> Vec<usize> {
         channels
             .into_iter()
             .enumerate()
@@ -47,14 +52,19 @@ impl ShardWorker {
             .into_iter()
             .enumerate()
             .map(|(i, pattern)| {
-                self.subscriptions.psubscribe(pattern, conn_id, sender.clone());
+                self.subscriptions
+                    .psubscribe(pattern, conn_id, sender.clone());
                 i + 1 // Placeholder count
             })
             .collect()
     }
 
     /// Handle PUNSUBSCRIBE - unsubscribe from patterns.
-    pub(crate) fn handle_punsubscribe(&mut self, patterns: Vec<Bytes>, conn_id: ConnId) -> Vec<usize> {
+    pub(crate) fn handle_punsubscribe(
+        &mut self,
+        patterns: Vec<Bytes>,
+        conn_id: ConnId,
+    ) -> Vec<usize> {
         patterns
             .into_iter()
             .enumerate()
@@ -76,14 +86,19 @@ impl ShardWorker {
             .into_iter()
             .enumerate()
             .map(|(i, channel)| {
-                self.subscriptions.ssubscribe(channel, conn_id, sender.clone());
+                self.subscriptions
+                    .ssubscribe(channel, conn_id, sender.clone());
                 i + 1 // Placeholder count
             })
             .collect()
     }
 
     /// Handle SUNSUBSCRIBE - unsubscribe from sharded channels.
-    pub(crate) fn handle_sunsubscribe(&mut self, channels: Vec<Bytes>, conn_id: ConnId) -> Vec<usize> {
+    pub(crate) fn handle_sunsubscribe(
+        &mut self,
+        channels: Vec<Bytes>,
+        conn_id: ConnId,
+    ) -> Vec<usize> {
         channels
             .into_iter()
             .enumerate()
@@ -95,7 +110,10 @@ impl ShardWorker {
     }
 
     /// Handle introspection requests.
-    pub(crate) fn handle_introspection(&self, request: IntrospectionRequest) -> IntrospectionResponse {
+    pub(crate) fn handle_introspection(
+        &self,
+        request: IntrospectionRequest,
+    ) -> IntrospectionResponse {
         match request {
             IntrospectionRequest::Channels { pattern } => {
                 let channels = self.subscriptions.channels(pattern.as_ref());

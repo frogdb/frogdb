@@ -117,8 +117,7 @@ impl ScriptCache {
         }
 
         // Evict until we have space
-        while (self.scripts.len() >= self.max_scripts
-            || self.current_bytes + size > self.max_bytes)
+        while (self.scripts.len() >= self.max_scripts || self.current_bytes + size > self.max_bytes)
             && !self.scripts.is_empty()
         {
             if let Some((_, evicted)) = self.scripts.pop_front() {

@@ -22,7 +22,10 @@ const GENERATED_HEADER: &str = r#"# ============================================
 # ============================================================================="#;
 
 #[derive(Parser, Debug)]
-#[command(name = "helm-gen", about = "Generate Helm chart files from FrogDB config")]
+#[command(
+    name = "helm-gen",
+    about = "Generate Helm chart files from FrogDB config"
+)]
 struct Args {
     /// Output directory for the Helm chart
     #[arg(short, long, default_value = "deploy/helm/frogdb")]
@@ -141,7 +144,9 @@ fn check_files(output_dir: &PathBuf, version: &str) -> Result<()> {
     }
 
     if has_diff {
-        anyhow::bail!("Generated files differ from checked-in files. Run 'just helm-gen' to regenerate.");
+        anyhow::bail!(
+            "Generated files differ from checked-in files. Run 'just helm-gen' to regenerate."
+        );
     }
 
     println!("All generated files are up to date.");

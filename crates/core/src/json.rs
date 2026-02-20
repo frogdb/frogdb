@@ -229,7 +229,13 @@ impl JsonValue {
     /// Set a value at a JSONPath.
     ///
     /// Returns true if any value was set.
-    pub fn set(&mut self, path: &str, value: JsonData, nx: bool, xx: bool) -> Result<bool, JsonError> {
+    pub fn set(
+        &mut self,
+        path: &str,
+        value: JsonData,
+        nx: bool,
+        xx: bool,
+    ) -> Result<bool, JsonError> {
         if path == "$" || path == "." {
             // Setting at root
             if nx && !self.data.is_null() {
@@ -330,10 +336,15 @@ impl JsonValue {
                     let current = n.as_f64().ok_or(JsonError::NotANumber)?;
                     let result = current + incr;
                     results.push(result);
-                    if result.fract() == 0.0 && result >= i64::MIN as f64 && result <= i64::MAX as f64 {
+                    if result.fract() == 0.0
+                        && result >= i64::MIN as f64
+                        && result <= i64::MAX as f64
+                    {
                         JsonData::Number(serde_json::Number::from(result as i64))
                     } else {
-                        JsonData::Number(serde_json::Number::from_f64(result).ok_or(JsonError::NotANumber)?)
+                        JsonData::Number(
+                            serde_json::Number::from_f64(result).ok_or(JsonError::NotANumber)?,
+                        )
                     }
                 }
                 _ => return Err(JsonError::NotANumber),
@@ -362,10 +373,15 @@ impl JsonValue {
                     let current = n.as_f64().ok_or(JsonError::NotANumber)?;
                     let result = current * mult;
                     results.push(result);
-                    if result.fract() == 0.0 && result >= i64::MIN as f64 && result <= i64::MAX as f64 {
+                    if result.fract() == 0.0
+                        && result >= i64::MIN as f64
+                        && result <= i64::MAX as f64
+                    {
                         JsonData::Number(serde_json::Number::from(result as i64))
                     } else {
-                        JsonData::Number(serde_json::Number::from_f64(result).ok_or(JsonError::NotANumber)?)
+                        JsonData::Number(
+                            serde_json::Number::from_f64(result).ok_or(JsonError::NotANumber)?,
+                        )
                     }
                 }
                 _ => return Err(JsonError::NotANumber),
@@ -415,7 +431,11 @@ impl JsonValue {
     }
 
     /// Append values to an array at a path.
-    pub fn arr_append(&mut self, path: &str, values: Vec<JsonData>) -> Result<Vec<usize>, JsonError> {
+    pub fn arr_append(
+        &mut self,
+        path: &str,
+        values: Vec<JsonData>,
+    ) -> Result<Vec<usize>, JsonError> {
         let paths = extract_concrete_paths(path, &self.data)?;
         if paths.is_empty() {
             return Err(JsonError::PathNotFound(path.to_string()));
@@ -455,7 +475,11 @@ impl JsonValue {
                 JsonData::Array(arr) => {
                     let len = arr.len() as i64;
                     let start_idx = normalize_array_index(start, len);
-                    let stop_idx = if stop == 0 { len } else { normalize_array_index(stop, len) };
+                    let stop_idx = if stop == 0 {
+                        len
+                    } else {
+                        normalize_array_index(stop, len)
+                    };
 
                     let mut found = -1i64;
                     for i in start_idx..stop_idx.min(len) {
@@ -526,7 +550,11 @@ impl JsonValue {
     }
 
     /// Pop a value from an array at a path.
-    pub fn arr_pop(&mut self, path: &str, index: Option<i64>) -> Result<Vec<Option<JsonData>>, JsonError> {
+    pub fn arr_pop(
+        &mut self,
+        path: &str,
+        index: Option<i64>,
+    ) -> Result<Vec<Option<JsonData>>, JsonError> {
         let paths = extract_concrete_paths(path, &self.data)?;
         if paths.is_empty() {
             return Err(JsonError::PathNotFound(path.to_string()));
@@ -730,8 +758,7 @@ fn estimate_json_size(data: &JsonData) -> usize {
         JsonData::Number(_) => 8,
         JsonData::String(s) => s.len() + mem::size_of::<String>(),
         JsonData::Array(arr) => {
-            mem::size_of::<Vec<JsonData>>()
-                + arr.iter().map(estimate_json_size).sum::<usize>()
+            mem::size_of::<Vec<JsonData>>() + arr.iter().map(estimate_json_size).sum::<usize>()
         }
         JsonData::Object(obj) => {
             mem::size_of::<serde_json::Map<String, JsonData>>()
@@ -825,7 +852,9 @@ fn parse_path_segments(path: &str) -> Result<Vec<PathPattern>, JsonError> {
             '.' => {
                 if chars.peek() == Some(&'.') {
                     // Recursive descent - not fully supported, treat as error for now
-                    return Err(JsonError::InvalidPath("recursive descent not supported".to_string()));
+                    return Err(JsonError::InvalidPath(
+                        "recursive descent not supported".to_string(),
+                    ));
                 }
                 // Read key name
                 let mut key = String::new();
@@ -866,11 +895,17 @@ fn parse_path_segments(path: &str) -> Result<Vec<PathPattern>, JsonError> {
                 } else if let Ok(idx) = content.parse::<i64>() {
                     segments.push(PathPattern::Index(idx));
                 } else {
-                    return Err(JsonError::InvalidPath(format!("invalid bracket content: {}", content)));
+                    return Err(JsonError::InvalidPath(format!(
+                        "invalid bracket content: {}",
+                        content
+                    )));
                 }
             }
             _ => {
-                return Err(JsonError::InvalidPath(format!("unexpected character: {}", c)));
+                return Err(JsonError::InvalidPath(format!(
+                    "unexpected character: {}",
+                    c
+                )));
             }
         }
     }
@@ -965,7 +1000,10 @@ fn navigate_to_path<'a>(data: &'a JsonData, path: &[PathSegment]) -> Option<&'a 
 }
 
 /// Navigate to a path in the JSON data mutably.
-fn navigate_to_path_mut<'a>(data: &'a mut JsonData, path: &[PathSegment]) -> Option<&'a mut JsonData> {
+fn navigate_to_path_mut<'a>(
+    data: &'a mut JsonData,
+    path: &[PathSegment],
+) -> Option<&'a mut JsonData> {
     let mut current = data;
     for segment in path {
         match segment {
@@ -981,7 +1019,11 @@ fn navigate_to_path_mut<'a>(data: &'a mut JsonData, path: &[PathSegment]) -> Opt
 }
 
 /// Set a value at a concrete path.
-fn set_at_path(data: &mut JsonData, path: &[PathSegment], value: JsonData) -> Result<bool, JsonError> {
+fn set_at_path(
+    data: &mut JsonData,
+    path: &[PathSegment],
+    value: JsonData,
+) -> Result<bool, JsonError> {
     if path.is_empty() {
         *data = value;
         return Ok(true);
@@ -1316,7 +1358,13 @@ mod tests {
     #[test]
     fn test_set_simple() {
         let mut json = JsonValue::parse(br#"{"name": "test"}"#).unwrap();
-        json.set("$.name", JsonData::String("updated".to_string()), false, false).unwrap();
+        json.set(
+            "$.name",
+            JsonData::String("updated".to_string()),
+            false,
+            false,
+        )
+        .unwrap();
 
         let values = json.get("$.name").unwrap();
         assert_eq!(values[0], &JsonData::String("updated".to_string()));
@@ -1327,14 +1375,23 @@ mod tests {
         let mut json = JsonValue::parse(br#"{"name": "test"}"#).unwrap();
 
         // Should not update existing
-        let result = json.set("$.name", JsonData::String("updated".to_string()), true, false).unwrap();
+        let result = json
+            .set(
+                "$.name",
+                JsonData::String("updated".to_string()),
+                true,
+                false,
+            )
+            .unwrap();
         assert!(!result);
 
         let values = json.get("$.name").unwrap();
         assert_eq!(values[0], &JsonData::String("test".to_string()));
 
         // Should set new
-        let result = json.set("$.new", JsonData::String("value".to_string()), true, false).unwrap();
+        let result = json
+            .set("$.new", JsonData::String("value".to_string()), true, false)
+            .unwrap();
         assert!(result);
     }
 
@@ -1343,11 +1400,20 @@ mod tests {
         let mut json = JsonValue::parse(br#"{"name": "test"}"#).unwrap();
 
         // Should not set non-existing
-        let result = json.set("$.new", JsonData::String("value".to_string()), false, true).unwrap();
+        let result = json
+            .set("$.new", JsonData::String("value".to_string()), false, true)
+            .unwrap();
         assert!(!result);
 
         // Should update existing
-        let result = json.set("$.name", JsonData::String("updated".to_string()), false, true).unwrap();
+        let result = json
+            .set(
+                "$.name",
+                JsonData::String("updated".to_string()),
+                false,
+                true,
+            )
+            .unwrap();
         assert!(result);
     }
 
@@ -1364,7 +1430,10 @@ mod tests {
 
     #[test]
     fn test_type_at() {
-        let json = JsonValue::parse(br#"{"s": "str", "n": 42, "f": 3.14, "b": true, "a": [], "o": {}, "null": null}"#).unwrap();
+        let json = JsonValue::parse(
+            br#"{"s": "str", "n": 42, "f": 3.14, "b": true, "a": [], "o": {}, "null": null}"#,
+        )
+        .unwrap();
 
         assert_eq!(json.type_at("$.s").unwrap(), vec![JsonType::String]);
         assert_eq!(json.type_at("$.n").unwrap(), vec![JsonType::Integer]);
@@ -1412,21 +1481,39 @@ mod tests {
     #[test]
     fn test_arr_append() {
         let mut json = JsonValue::parse(br#"{"items": [1, 2]}"#).unwrap();
-        let results = json.arr_append("$.items", vec![JsonData::Number(serde_json::Number::from(3))]).unwrap();
+        let results = json
+            .arr_append(
+                "$.items",
+                vec![JsonData::Number(serde_json::Number::from(3))],
+            )
+            .unwrap();
         assert_eq!(results, vec![3]);
     }
 
     #[test]
     fn test_arr_index() {
         let json = JsonValue::parse(br#"{"items": [1, 2, 3, 2]}"#).unwrap();
-        let results = json.arr_index("$.items", &JsonData::Number(serde_json::Number::from(2)), 0, 0).unwrap();
+        let results = json
+            .arr_index(
+                "$.items",
+                &JsonData::Number(serde_json::Number::from(2)),
+                0,
+                0,
+            )
+            .unwrap();
         assert_eq!(results, vec![1]);
     }
 
     #[test]
     fn test_arr_insert() {
         let mut json = JsonValue::parse(br#"{"items": [1, 3]}"#).unwrap();
-        let results = json.arr_insert("$.items", 1, vec![JsonData::Number(serde_json::Number::from(2))]).unwrap();
+        let results = json
+            .arr_insert(
+                "$.items",
+                1,
+                vec![JsonData::Number(serde_json::Number::from(2))],
+            )
+            .unwrap();
         assert_eq!(results, vec![3]);
 
         let values = json.get("$.items").unwrap();
@@ -1445,7 +1532,10 @@ mod tests {
     fn test_arr_pop() {
         let mut json = JsonValue::parse(br#"{"items": [1, 2, 3]}"#).unwrap();
         let results = json.arr_pop("$.items", None).unwrap();
-        assert_eq!(results, vec![Some(JsonData::Number(serde_json::Number::from(3)))]);
+        assert_eq!(
+            results,
+            vec![Some(JsonData::Number(serde_json::Number::from(3)))]
+        );
 
         let results = json.arr_len("$.items").unwrap();
         assert_eq!(results, vec![Some(2)]);

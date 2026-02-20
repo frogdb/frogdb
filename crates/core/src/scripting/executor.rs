@@ -10,8 +10,8 @@ use mlua::{MultiValue, Value};
 use tracing::{debug, info, warn};
 
 use super::bindings::{
-    extract_keys_from_command, is_forbidden_in_script, is_write_command,
-    lua_args_to_command, response_to_lua, validate_key_access,
+    extract_keys_from_command, is_forbidden_in_script, is_write_command, lua_args_to_command,
+    response_to_lua, validate_key_access,
 };
 use super::cache::{hex_to_sha, sha_to_hex, ScriptCache, ScriptSha};
 use super::config::ScriptingConfig;
@@ -131,9 +131,8 @@ impl ScriptExecutor {
         // We use transmute to erase the lifetime from the fat pointer to dyn Store.
         // This is safe because we ensure the pointer is only used during script
         // execution and cleared afterwards.
-        let store_ptr: *mut dyn crate::store::Store = unsafe {
-            std::mem::transmute(ctx.store as *mut dyn crate::store::Store)
-        };
+        let store_ptr: *mut dyn crate::store::Store =
+            unsafe { std::mem::transmute(ctx.store as *mut dyn crate::store::Store) };
         let cmd_exec_ctx = CommandExecutionContext {
             store_ptr,
             registry_ptr: registry as *const CommandRegistry,
@@ -196,10 +195,7 @@ impl ScriptExecutor {
     }
 
     /// Set up redis.call and redis.pcall bindings.
-    fn setup_redis_bindings(
-        &self,
-        declared_keys: &[Bytes],
-    ) -> Result<(), ScriptError> {
+    fn setup_redis_bindings(&self, declared_keys: &[Bytes]) -> Result<(), ScriptError> {
         let lua = self.vm.lua();
 
         // Clone declared_keys so we can move it into the closures
@@ -212,114 +208,120 @@ impl ScriptExecutor {
         let accessor_for_pcall = self.vm.create_context_accessor();
 
         // Create redis.call function
-        let call_fn = lua.create_function(move |lua_ctx, args: MultiValue| -> mlua::Result<Value> {
-            // Convert args to command parts
-            let parts = match lua_args_to_command(args) {
-                Ok(p) => p,
-                Err(e) => {
-                    return Err(mlua::Error::RuntimeError(e.to_string()));
-                }
-            };
-
-            if parts.is_empty() {
-                return Err(mlua::Error::RuntimeError(
-                    "ERR wrong number of arguments for redis command".to_string(),
-                ));
-            }
-
-            // Get command name
-            let cmd_name = String::from_utf8_lossy(&parts[0]).to_uppercase();
-
-            // Check if forbidden
-            if let Some(err) = is_forbidden_in_script(&cmd_name) {
-                return Err(mlua::Error::RuntimeError(err.to_string()));
-            }
-
-            // Validate key access
-            let keys = extract_keys_from_command(&cmd_name, &parts);
-            for key in &keys {
-                if let Err(e) = validate_key_access(key, &keys_for_call) {
-                    return Err(mlua::Error::RuntimeError(e.to_string()));
-                }
-            }
-
-            // Track writes
-            if is_write_command(&cmd_name) {
-                accessor_for_call.mark_write();
-            }
-
-            // Execute the command
-            match accessor_for_call.execute_command(&parts) {
-                Ok(response) => {
-                    // redis.call raises error on Redis errors
-                    if let Response::Error(ref e) = response {
-                        return Err(mlua::Error::RuntimeError(
-                            String::from_utf8_lossy(e).to_string()
-                        ));
+        let call_fn = lua
+            .create_function(move |lua_ctx, args: MultiValue| -> mlua::Result<Value> {
+                // Convert args to command parts
+                let parts = match lua_args_to_command(args) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Err(mlua::Error::RuntimeError(e.to_string()));
                     }
-                    response_to_lua(lua_ctx, response)
+                };
+
+                if parts.is_empty() {
+                    return Err(mlua::Error::RuntimeError(
+                        "ERR wrong number of arguments for redis command".to_string(),
+                    ));
                 }
-                Err(e) => Err(mlua::Error::RuntimeError(e)),
-            }
-        }).map_err(|e| ScriptError::Internal(format!("Failed to create call function: {}", e)))?;
+
+                // Get command name
+                let cmd_name = String::from_utf8_lossy(&parts[0]).to_uppercase();
+
+                // Check if forbidden
+                if let Some(err) = is_forbidden_in_script(&cmd_name) {
+                    return Err(mlua::Error::RuntimeError(err.to_string()));
+                }
+
+                // Validate key access
+                let keys = extract_keys_from_command(&cmd_name, &parts);
+                for key in &keys {
+                    if let Err(e) = validate_key_access(key, &keys_for_call) {
+                        return Err(mlua::Error::RuntimeError(e.to_string()));
+                    }
+                }
+
+                // Track writes
+                if is_write_command(&cmd_name) {
+                    accessor_for_call.mark_write();
+                }
+
+                // Execute the command
+                match accessor_for_call.execute_command(&parts) {
+                    Ok(response) => {
+                        // redis.call raises error on Redis errors
+                        if let Response::Error(ref e) = response {
+                            return Err(mlua::Error::RuntimeError(
+                                String::from_utf8_lossy(e).to_string(),
+                            ));
+                        }
+                        response_to_lua(lua_ctx, response)
+                    }
+                    Err(e) => Err(mlua::Error::RuntimeError(e)),
+                }
+            })
+            .map_err(|e| ScriptError::Internal(format!("Failed to create call function: {}", e)))?;
 
         // Create redis.pcall function (same as call but catches errors)
-        let pcall_fn = lua.create_function(move |lua_ctx, args: MultiValue| {
-            // Convert args to command parts
-            let parts = match lua_args_to_command(args) {
-                Ok(p) => p,
-                Err(e) => {
-                    // pcall returns error as table
+        let pcall_fn = lua
+            .create_function(move |lua_ctx, args: MultiValue| {
+                // Convert args to command parts
+                let parts = match lua_args_to_command(args) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        // pcall returns error as table
+                        let table = lua_ctx.create_table()?;
+                        table.set("err", e.to_string())?;
+                        return Ok(Value::Table(table));
+                    }
+                };
+
+                if parts.is_empty() {
                     let table = lua_ctx.create_table()?;
-                    table.set("err", e.to_string())?;
+                    table.set("err", "ERR wrong number of arguments for redis command")?;
                     return Ok(Value::Table(table));
                 }
-            };
 
-            if parts.is_empty() {
-                let table = lua_ctx.create_table()?;
-                table.set("err", "ERR wrong number of arguments for redis command")?;
-                return Ok(Value::Table(table));
-            }
+                // Get command name
+                let cmd_name = String::from_utf8_lossy(&parts[0]).to_uppercase();
 
-            // Get command name
-            let cmd_name = String::from_utf8_lossy(&parts[0]).to_uppercase();
-
-            // Check if forbidden
-            if let Some(err) = is_forbidden_in_script(&cmd_name) {
-                let table = lua_ctx.create_table()?;
-                table.set("err", err)?;
-                return Ok(Value::Table(table));
-            }
-
-            // Validate key access
-            let keys = extract_keys_from_command(&cmd_name, &parts);
-            for key in &keys {
-                if let Err(e) = validate_key_access(key, &keys_for_pcall) {
+                // Check if forbidden
+                if let Some(err) = is_forbidden_in_script(&cmd_name) {
                     let table = lua_ctx.create_table()?;
-                    table.set("err", e.to_string())?;
+                    table.set("err", err)?;
                     return Ok(Value::Table(table));
                 }
-            }
 
-            // Track writes
-            if is_write_command(&cmd_name) {
-                accessor_for_pcall.mark_write();
-            }
+                // Validate key access
+                let keys = extract_keys_from_command(&cmd_name, &parts);
+                for key in &keys {
+                    if let Err(e) = validate_key_access(key, &keys_for_pcall) {
+                        let table = lua_ctx.create_table()?;
+                        table.set("err", e.to_string())?;
+                        return Ok(Value::Table(table));
+                    }
+                }
 
-            // Execute the command
-            match accessor_for_pcall.execute_command(&parts) {
-                Ok(response) => {
-                    // pcall returns errors as {err='...'} table instead of raising
-                    response_to_lua(lua_ctx, response)
+                // Track writes
+                if is_write_command(&cmd_name) {
+                    accessor_for_pcall.mark_write();
                 }
-                Err(e) => {
-                    let table = lua_ctx.create_table()?;
-                    table.set("err", e)?;
-                    Ok(Value::Table(table))
+
+                // Execute the command
+                match accessor_for_pcall.execute_command(&parts) {
+                    Ok(response) => {
+                        // pcall returns errors as {err='...'} table instead of raising
+                        response_to_lua(lua_ctx, response)
+                    }
+                    Err(e) => {
+                        let table = lua_ctx.create_table()?;
+                        table.set("err", e)?;
+                        Ok(Value::Table(table))
+                    }
                 }
-            }
-        }).map_err(|e| ScriptError::Internal(format!("Failed to create pcall function: {}", e)))?;
+            })
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to create pcall function: {}", e))
+            })?;
 
         self.vm.set_redis_functions(call_fn, pcall_fn)?;
 
@@ -438,9 +440,8 @@ impl ScriptExecutor {
         self.vm.prepare_execution(keys, argv)?;
 
         // Set up command execution context
-        let store_ptr: *mut dyn crate::store::Store = unsafe {
-            std::mem::transmute(ctx.store as *mut dyn crate::store::Store)
-        };
+        let store_ptr: *mut dyn crate::store::Store =
+            unsafe { std::mem::transmute(ctx.store as *mut dyn crate::store::Store) };
         let cmd_exec_ctx = CommandExecutionContext {
             store_ptr,
             registry_ptr: registry as *const CommandRegistry,
@@ -457,7 +458,10 @@ impl ScriptExecutor {
 
         // Strip shebang from library code (Lua doesn't understand #!)
         let library_code_clean = if library_code.starts_with("#!") {
-            library_code.find('\n').map(|pos| &library_code[pos + 1..]).unwrap_or("")
+            library_code
+                .find('\n')
+                .map(|pos| &library_code[pos + 1..])
+                .unwrap_or("")
         } else {
             library_code
         };
@@ -516,76 +520,92 @@ return fn(KEYS, ARGV)
         let globals = lua.globals();
 
         // Create a storage table for registered functions
-        let functions_table = lua.create_table()
-            .map_err(|e| ScriptError::Internal(format!("Failed to create functions table: {}", e)))?;
+        let functions_table = lua.create_table().map_err(|e| {
+            ScriptError::Internal(format!("Failed to create functions table: {}", e))
+        })?;
 
-        globals.set("__frogdb_functions", functions_table)
+        globals
+            .set("__frogdb_functions", functions_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set functions table: {}", e)))?;
 
         // Get the redis table and add register_function
-        let redis_table: mlua::Table = globals.get("redis")
+        let redis_table: mlua::Table = globals
+            .get("redis")
             .map_err(|e| ScriptError::Internal(format!("Failed to get redis table: {}", e)))?;
 
         // Create register_function
-        let register_fn = lua.create_function(|lua_ctx, args: MultiValue| -> mlua::Result<()> {
-            let args_vec: Vec<Value> = args.into_iter().collect();
+        let register_fn = lua
+            .create_function(|lua_ctx, args: MultiValue| -> mlua::Result<()> {
+                let args_vec: Vec<Value> = args.into_iter().collect();
 
-            if args_vec.is_empty() {
-                return Err(mlua::Error::RuntimeError(
-                    "redis.register_function requires at least one argument".to_string(),
-                ));
-            }
-
-            let globals = lua_ctx.globals();
-            let functions_table: mlua::Table = globals.get("__frogdb_functions")
-                .map_err(|_| mlua::Error::RuntimeError("Functions table not found".to_string()))?;
-
-            match &args_vec[0] {
-                // Table form: redis.register_function{function_name='name', callback=fn, ...}
-                Value::Table(t) => {
-                    let name: String = t.get("function_name")
-                        .map_err(|_| mlua::Error::RuntimeError(
-                            "Missing required field 'function_name'".to_string()
-                        ))?;
-
-                    let callback: mlua::Function = t.get("callback")
-                        .map_err(|_| mlua::Error::RuntimeError(
-                            "Missing required field 'callback'".to_string()
-                        ))?;
-
-                    functions_table.set(name, callback)?;
-                }
-
-                // Simple form: redis.register_function('name', callback)
-                Value::String(name) => {
-                    if args_vec.len() < 2 {
-                        return Err(mlua::Error::RuntimeError(
-                            "redis.register_function requires a callback function".to_string(),
-                        ));
-                    }
-
-                    let callback = match &args_vec[1] {
-                        Value::Function(f) => f.clone(),
-                        _ => return Err(mlua::Error::RuntimeError(
-                            "Second argument must be a function".to_string(),
-                        )),
-                    };
-
-                    functions_table.set(name.to_str()?, callback)?;
-                }
-
-                _ => {
+                if args_vec.is_empty() {
                     return Err(mlua::Error::RuntimeError(
-                        "First argument must be a string or table".to_string(),
+                        "redis.register_function requires at least one argument".to_string(),
                     ));
                 }
-            }
 
-            Ok(())
-        }).map_err(|e| ScriptError::Internal(format!("Failed to create register_function: {}", e)))?;
+                let globals = lua_ctx.globals();
+                let functions_table: mlua::Table =
+                    globals.get("__frogdb_functions").map_err(|_| {
+                        mlua::Error::RuntimeError("Functions table not found".to_string())
+                    })?;
 
-        redis_table.set("register_function", register_fn)
-            .map_err(|e| ScriptError::Internal(format!("Failed to set register_function: {}", e)))?;
+                match &args_vec[0] {
+                    // Table form: redis.register_function{function_name='name', callback=fn, ...}
+                    Value::Table(t) => {
+                        let name: String = t.get("function_name").map_err(|_| {
+                            mlua::Error::RuntimeError(
+                                "Missing required field 'function_name'".to_string(),
+                            )
+                        })?;
+
+                        let callback: mlua::Function = t.get("callback").map_err(|_| {
+                            mlua::Error::RuntimeError(
+                                "Missing required field 'callback'".to_string(),
+                            )
+                        })?;
+
+                        functions_table.set(name, callback)?;
+                    }
+
+                    // Simple form: redis.register_function('name', callback)
+                    Value::String(name) => {
+                        if args_vec.len() < 2 {
+                            return Err(mlua::Error::RuntimeError(
+                                "redis.register_function requires a callback function".to_string(),
+                            ));
+                        }
+
+                        let callback = match &args_vec[1] {
+                            Value::Function(f) => f.clone(),
+                            _ => {
+                                return Err(mlua::Error::RuntimeError(
+                                    "Second argument must be a function".to_string(),
+                                ))
+                            }
+                        };
+
+                        functions_table.set(name.to_str()?, callback)?;
+                    }
+
+                    _ => {
+                        return Err(mlua::Error::RuntimeError(
+                            "First argument must be a string or table".to_string(),
+                        ));
+                    }
+                }
+
+                Ok(())
+            })
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to create register_function: {}", e))
+            })?;
+
+        redis_table
+            .set("register_function", register_fn)
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to set register_function: {}", e))
+            })?;
 
         Ok(())
     }
@@ -622,7 +642,8 @@ mod tests {
 
         let sha = executor.load_script(Bytes::from_static(b"return 1"));
 
-        let results = executor.scripts_exist(&[sha.as_bytes(), b"nonexistent1234567890123456789012345678"]);
+        let results =
+            executor.scripts_exist(&[sha.as_bytes(), b"nonexistent1234567890123456789012345678"]);
         assert_eq!(results, vec![true, false]);
     }
 

@@ -218,10 +218,7 @@ impl ConfigManager {
                     if !valid_policies.contains(&lower.as_str()) {
                         return Err(ConfigError::InvalidValue {
                             param: "maxmemory-policy".to_string(),
-                            message: format!(
-                                "must be one of: {}",
-                                valid_policies.join(", ")
-                            ),
+                            message: format!("must be one of: {}", valid_policies.join(", ")),
                         });
                     }
                     mgr.runtime.write().unwrap().maxmemory_policy = lower;
@@ -347,7 +344,13 @@ impl ConfigManager {
             ParamMeta {
                 name: "scatter-gather-timeout-ms",
                 mutable: true,
-                getter: |mgr| mgr.runtime.read().unwrap().scatter_gather_timeout_ms.to_string(),
+                getter: |mgr| {
+                    mgr.runtime
+                        .read()
+                        .unwrap()
+                        .scatter_gather_timeout_ms
+                        .to_string()
+                },
                 setter: Some(|mgr, val| {
                     let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
                         param: "scatter-gather-timeout-ms".to_string(),
@@ -361,7 +364,13 @@ impl ConfigManager {
             ParamMeta {
                 name: "slowlog-log-slower-than",
                 mutable: true,
-                getter: |mgr| mgr.runtime.read().unwrap().slowlog_log_slower_than.to_string(),
+                getter: |mgr| {
+                    mgr.runtime
+                        .read()
+                        .unwrap()
+                        .slowlog_log_slower_than
+                        .to_string()
+                },
                 setter: Some(|mgr, val| {
                     let parsed: i64 = val.parse().map_err(|_| ConfigError::InvalidValue {
                         param: "slowlog-log-slower-than".to_string(),

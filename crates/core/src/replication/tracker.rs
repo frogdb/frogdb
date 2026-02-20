@@ -435,8 +435,11 @@ mod tests {
 
         let tracker_clone = tracker.clone();
         let wait_handle = tokio::spawn(async move {
-            tokio::time::timeout(Duration::from_millis(100), tracker_clone.wait_for_acks(100, 1))
-                .await
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                tracker_clone.wait_for_acks(100, 1),
+            )
+            .await
         });
 
         // Send ACK after a short delay

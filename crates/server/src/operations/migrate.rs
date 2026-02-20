@@ -112,27 +112,34 @@ pub enum MigrateState {
 impl std::fmt::Debug for MigrateState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MigrateState::ParseArgs { args } => {
-                f.debug_struct("ParseArgs").field("args_len", &args.len()).finish()
-            }
-            MigrateState::Connecting { parsed } => {
-                f.debug_struct("Connecting").field("host", &parsed.host).finish()
-            }
-            MigrateState::Authenticating { parsed, .. } => {
-                f.debug_struct("Authenticating").field("host", &parsed.host).finish()
-            }
-            MigrateState::SelectingDb { parsed, .. } => {
-                f.debug_struct("SelectingDb").field("db", &parsed.dest_db).finish()
-            }
-            MigrateState::DumpingKeys { parsed, .. } => {
-                f.debug_struct("DumpingKeys").field("keys_count", &parsed.keys.len()).finish()
-            }
-            MigrateState::RestoringKeys { dumps, .. } => {
-                f.debug_struct("RestoringKeys").field("dumps_count", &dumps.len()).finish()
-            }
-            MigrateState::DeletingLocal { migrated_keys, .. } => {
-                f.debug_struct("DeletingLocal").field("migrated_count", &migrated_keys.len()).finish()
-            }
+            MigrateState::ParseArgs { args } => f
+                .debug_struct("ParseArgs")
+                .field("args_len", &args.len())
+                .finish(),
+            MigrateState::Connecting { parsed } => f
+                .debug_struct("Connecting")
+                .field("host", &parsed.host)
+                .finish(),
+            MigrateState::Authenticating { parsed, .. } => f
+                .debug_struct("Authenticating")
+                .field("host", &parsed.host)
+                .finish(),
+            MigrateState::SelectingDb { parsed, .. } => f
+                .debug_struct("SelectingDb")
+                .field("db", &parsed.dest_db)
+                .finish(),
+            MigrateState::DumpingKeys { parsed, .. } => f
+                .debug_struct("DumpingKeys")
+                .field("keys_count", &parsed.keys.len())
+                .finish(),
+            MigrateState::RestoringKeys { dumps, .. } => f
+                .debug_struct("RestoringKeys")
+                .field("dumps_count", &dumps.len())
+                .finish(),
+            MigrateState::DeletingLocal { migrated_keys, .. } => f
+                .debug_struct("DeletingLocal")
+                .field("migrated_count", &migrated_keys.len())
+                .finish(),
         }
     }
 }
@@ -207,9 +214,7 @@ impl Operation for MigrateOperation {
             MigrateState::SelectingDb { mut client, parsed } => {
                 // Phase 4: Select destination database
                 match client.select_db(parsed.dest_db).await {
-                    Ok(()) => {
-                        PhaseResult::Continue(MigrateState::DumpingKeys { client, parsed })
-                    }
+                    Ok(()) => PhaseResult::Continue(MigrateState::DumpingKeys { client, parsed }),
                     Err(e) => PhaseResult::Failed(Response::error(format!(
                         "ERR Target instance returned error: {}",
                         e
