@@ -287,12 +287,12 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::cluster::ReadwriteCommand);
 
     // Replication
-    registry.register(crate::replication::ReplicaofCommand);
-    registry.register(crate::replication::SlaveofCommand);
-    registry.register(crate::replication::WaitCommand);
+    registry.register(crate::commands::replication::ReplicaofCommand);
+    registry.register(crate::commands::replication::SlaveofCommand);
+    registry.register(crate::commands::replication::WaitCommand);
     registry.register(crate::commands::stub::WaitaofCommand); // WAITAOF not yet implemented
-    registry.register(crate::replication::PsyncCommand);
-    registry.register(crate::replication::ReplconfCommand);
+    registry.register(crate::commands::replication::PsyncCommand);
+    registry.register(crate::commands::replication::ReplconfCommand);
 
     // Memory (handled specially in connection.rs for scatter-gather)
     registry.register(crate::commands::memory::MemoryCommand);
@@ -327,7 +327,7 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Server
     registry.register(crate::commands::stub::BgrewriteaofCommand);
     registry.register(crate::commands::server::LolwutCommand);
-    registry.register(crate::replication::RoleCommand);
+    registry.register(crate::commands::replication::RoleCommand);
     registry.register(crate::commands::stub::SaveCommand);
     registry.register(crate::commands::stub::MonitorCommand);
 
