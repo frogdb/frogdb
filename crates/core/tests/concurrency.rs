@@ -7,6 +7,11 @@
 
 mod common;
 
+use common::mock_cluster::*;
+use common::mock_json::*;
+use common::mock_snapshot::*;
+use common::mock_streams::*;
+use common::mock_watch::*;
 use common::{assert_all_unique, spawn_collect};
 use serde_json;
 use shuttle::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -637,149 +642,6 @@ fn test_concurrent_spop() {
 // Cross-shard concurrency tests (MGET/MSET scatter-gather simulation)
 // ============================================================================
 
-/// Simulated value type for cross-shard testing.
-#[derive(Clone, Debug, PartialEq)]
-enum Value {
-    String(Vec<u8>),
-    #[allow(dead_code)]
-    List(Vec<Vec<u8>>),
-}
-
-impl Value {
-    fn string(data: Vec<u8>) -> Self {
-        Value::String(data)
-    }
-
-    fn as_string(&self) -> Option<&Vec<u8>> {
-        match self {
-            Value::String(s) => Some(s),
-            _ => None,
-        }
-    }
-}
-
-/// Simulates multi-shard coordination for scatter-gather operations.
-/// Each "shard" is a Mutex<HashMap> representing shard state.
-///
-/// This models the connection → multi-shard execution flow in FrogDB,
-/// where cross-shard MSET/MGET operations use scatter-gather that is
-/// NOT atomic across shards.
-struct TestCluster {
-    shards: Vec<Arc<Mutex<HashMap<Vec<u8>, Value>>>>,
-    num_shards: usize,
-}
-
-impl TestCluster {
-    fn new(num_shards: usize) -> Self {
-        Self {
-            shards: (0..num_shards)
-                .map(|_| Arc::new(Mutex::new(HashMap::new())))
-                .collect(),
-            num_shards,
-        }
-    }
-
-    fn shard_for_key(&self, key: &[u8]) -> usize {
-        // Simplified hash (real impl uses CRC16)
-        key.iter().map(|&b| b as usize).sum::<usize>() % self.num_shards
-    }
-
-    /// Extract hash tag from key if present (e.g., "{tag}key" -> "tag").
-    /// Keys with same hash tag are guaranteed to be on same shard.
-    fn extract_hash_tag<'a>(&self, key: &'a [u8]) -> Option<&'a [u8]> {
-        let start = key.iter().position(|&b| b == b'{')?;
-        let end = key[start..].iter().position(|&b| b == b'}')?;
-        if end > 1 {
-            Some(&key[start + 1..start + end])
-        } else {
-            None
-        }
-    }
-
-    fn shard_for_key_with_tag(&self, key: &[u8]) -> usize {
-        if let Some(tag) = self.extract_hash_tag(key) {
-            tag.iter().map(|&b| b as usize).sum::<usize>() % self.num_shards
-        } else {
-            self.shard_for_key(key)
-        }
-    }
-
-    /// MSET with scatter-gather semantics (non-atomic across shards).
-    /// This simulates the real behavior where each shard commits independently.
-    fn mset(&self, pairs: &[(Vec<u8>, Vec<u8>)]) {
-        // Group by shard
-        let mut by_shard: HashMap<usize, Vec<(Vec<u8>, Vec<u8>)>> = HashMap::new();
-        for (k, v) in pairs {
-            let shard_id = self.shard_for_key_with_tag(k);
-            by_shard
-                .entry(shard_id)
-                .or_default()
-                .push((k.clone(), v.clone()));
-        }
-
-        // Execute on each shard (simulates parallel scatter)
-        // In the real implementation, these run concurrently without coordination
-        for (shard_id, shard_pairs) in by_shard {
-            let mut shard = self.shards[shard_id].lock().unwrap();
-            for (k, v) in shard_pairs {
-                shard.insert(k, Value::string(v));
-            }
-            // Yield between shard operations to simulate non-atomicity
-            drop(shard);
-            shuttle::thread::yield_now();
-        }
-    }
-
-    /// MSET atomic version - all keys in single shard lock.
-    /// Used to test same-shard atomicity.
-    fn mset_atomic(&self, pairs: &[(Vec<u8>, Vec<u8>)]) {
-        // Verify all keys are on same shard (would be rejected with CROSSSLOT otherwise)
-        let shard_ids: HashSet<_> = pairs
-            .iter()
-            .map(|(k, _)| self.shard_for_key_with_tag(k))
-            .collect();
-        assert_eq!(
-            shard_ids.len(),
-            1,
-            "Atomic MSET requires all keys on same shard"
-        );
-
-        let shard_id = *shard_ids.iter().next().unwrap();
-        let mut shard = self.shards[shard_id].lock().unwrap();
-        for (k, v) in pairs {
-            shard.insert(k.clone(), Value::string(v.clone()));
-        }
-        // Single lock release - atomic from observer's perspective
-    }
-
-    /// MGET with scatter-gather semantics.
-    /// Results may reflect different points in time across shards.
-    /// Within a single shard, reads are atomic (single lock acquisition).
-    fn mget(&self, keys: &[Vec<u8>]) -> Vec<Option<Vec<u8>>> {
-        // Group keys by shard (preserving order indices)
-        let mut by_shard: HashMap<usize, Vec<(usize, &Vec<u8>)>> = HashMap::new();
-        for (idx, k) in keys.iter().enumerate() {
-            let shard_id = self.shard_for_key_with_tag(k);
-            by_shard.entry(shard_id).or_default().push((idx, k));
-        }
-
-        let mut results = vec![None; keys.len()];
-
-        // Read from each shard (atomically within shard, but yields between shards)
-        for (shard_id, shard_keys) in by_shard {
-            let shard = self.shards[shard_id].lock().unwrap();
-            for (idx, k) in shard_keys {
-                results[idx] = shard.get(k).and_then(|v| v.as_string().cloned());
-            }
-            drop(shard);
-            // Yield between shard reads to simulate cross-shard non-isolation
-            shuttle::thread::yield_now();
-        }
-
-        results
-    }
-}
-
 /// Verify that MGET can observe partial MSET results when keys span shards.
 /// This documents the current behavior (not a bug, but must be understood).
 #[test]
@@ -1029,60 +891,6 @@ fn test_multi_exec_isolation() {
 // WATCH concurrency tests
 // ============================================================================
 
-/// Simulates a store with version tracking for WATCH functionality.
-struct WatchableStore {
-    data: Mutex<HashMap<String, (String, u64)>>, // (value, version)
-}
-
-impl WatchableStore {
-    fn new() -> Self {
-        Self {
-            data: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn get_version(&self, key: &str) -> Option<u64> {
-        self.data.lock().unwrap().get(key).map(|(_, v)| *v)
-    }
-
-    fn get(&self, key: &str) -> Option<String> {
-        self.data.lock().unwrap().get(key).map(|(v, _)| v.clone())
-    }
-
-    fn set(&self, key: &str, value: &str) {
-        let mut data = self.data.lock().unwrap();
-        let version = data.get(key).map(|(_, v)| v + 1).unwrap_or(1);
-        data.insert(key.to_string(), (value.to_string(), version));
-    }
-
-    /// Check if version is unchanged (EXEC check)
-    #[allow(dead_code)]
-    fn exec_if_unchanged(&self, key: &str, watched_version: Option<u64>) -> bool {
-        let data = self.data.lock().unwrap();
-        let current_version = data.get(key).map(|(_, v)| *v);
-        watched_version == current_version
-    }
-
-    /// Execute transaction only if watched keys unchanged
-    fn exec_with_watch<F, R>(&self, watched_keys: &[(&str, Option<u64>)], f: F) -> Option<R>
-    where
-        F: FnOnce(&mut HashMap<String, (String, u64)>) -> R,
-    {
-        let mut data = self.data.lock().unwrap();
-
-        // Check all watched keys
-        for (key, watched_version) in watched_keys {
-            let current_version = data.get(*key).map(|(_, v)| *v);
-            if *watched_version != current_version {
-                return None; // Abort - watched key changed
-            }
-        }
-
-        // Execute transaction
-        Some(f(&mut data))
-    }
-}
-
 /// WATCH key → concurrent SET → EXEC should abort.
 #[test]
 fn test_watch_detects_concurrent_modification() {
@@ -1204,13 +1012,6 @@ fn test_watch_multiple_watchers() {
 // ============================================================================
 // Type conflict concurrency tests
 // ============================================================================
-
-/// Typed value enum for testing type conflicts.
-#[derive(Clone, Debug)]
-enum TypedValue {
-    String(String),
-    List(Vec<String>),
-}
 
 /// Concurrent SET (string) and LPUSH (list) on same key.
 /// One should succeed, one should get WRONGTYPE error.
@@ -1506,52 +1307,6 @@ fn test_del_concurrent_access() {
 // Snapshot concurrency tests
 // ============================================================================
 
-/// Simulates a snapshot coordinator with atomic in_progress flag.
-///
-/// This models the RocksSnapshotCoordinator behavior where:
-/// - start_snapshot() uses CAS to acquire the in_progress flag
-/// - Only one snapshot can be in progress at a time
-/// - Concurrent snapshot attempts get AlreadyInProgress error
-struct MockSnapshotCoordinator {
-    in_progress: AtomicBool,
-    epoch: AtomicU64,
-    completed_epochs: Mutex<Vec<u64>>,
-}
-
-impl MockSnapshotCoordinator {
-    fn new() -> Self {
-        Self {
-            in_progress: AtomicBool::new(false),
-            epoch: AtomicU64::new(0),
-            completed_epochs: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn start_snapshot(&self) -> Result<u64, &'static str> {
-        // CAS to acquire the in_progress lock (matches RocksSnapshotCoordinator)
-        if self
-            .in_progress
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return Err("AlreadyInProgress");
-        }
-
-        // Increment epoch atomically
-        let epoch = self.epoch.fetch_add(1, Ordering::SeqCst) + 1;
-        Ok(epoch)
-    }
-
-    fn complete_snapshot(&self, epoch: u64) {
-        self.completed_epochs.lock().unwrap().push(epoch);
-        self.in_progress.store(false, Ordering::SeqCst);
-    }
-
-    fn in_progress(&self) -> bool {
-        self.in_progress.load(Ordering::SeqCst)
-    }
-}
-
 /// Test that concurrent snapshot attempts are properly rejected.
 ///
 /// Multiple threads attempting start_snapshot() simultaneously should
@@ -1603,8 +1358,8 @@ fn test_snapshot_atomicity_shuttle() {
 
             // Snapshots are serialized, so multiple can succeed if they don't overlap
             // But all completed epochs should be unique and sequential
-            let completed = coord.completed_epochs.lock().unwrap();
-            assert_all_unique(&*completed);
+            let completed = coord.completed_epochs();
+            assert_all_unique(&completed);
         },
         1000,
     );
@@ -1754,56 +1509,6 @@ fn test_snapshot_atomicity_pct() {
 // ============================================================================
 // Stream Blocking Operation Tests
 // ============================================================================
-
-/// Simulates a simple wait queue for stream blocking operations.
-/// Tests that FIFO ordering is maintained when multiple waiters are added
-/// and satisfied concurrently.
-struct MockStreamWaitQueue {
-    /// Queue of waiting thread IDs (simulating connection IDs).
-    waiters: Mutex<Vec<usize>>,
-    /// Threads that have been satisfied (received their response).
-    satisfied: Mutex<Vec<usize>>,
-}
-
-impl MockStreamWaitQueue {
-    fn new() -> Self {
-        Self {
-            waiters: Mutex::new(Vec::new()),
-            satisfied: Mutex::new(Vec::new()),
-        }
-    }
-
-    /// Add a waiter to the queue (simulates XREAD BLOCK starting).
-    fn add_waiter(&self, thread_id: usize) {
-        let mut waiters = self.waiters.lock().unwrap();
-        waiters.push(thread_id);
-    }
-
-    /// Check if there are waiters.
-    fn has_waiters(&self) -> bool {
-        let waiters = self.waiters.lock().unwrap();
-        !waiters.is_empty()
-    }
-
-    /// Pop the oldest waiter and mark as satisfied (simulates XADD waking a waiter).
-    fn satisfy_oldest(&self) -> Option<usize> {
-        let mut waiters = self.waiters.lock().unwrap();
-        if waiters.is_empty() {
-            return None;
-        }
-        let thread_id = waiters.remove(0); // FIFO
-        drop(waiters);
-
-        let mut satisfied = self.satisfied.lock().unwrap();
-        satisfied.push(thread_id);
-        Some(thread_id)
-    }
-
-    /// Get the order in which waiters were satisfied.
-    fn satisfied_order(&self) -> Vec<usize> {
-        self.satisfied.lock().unwrap().clone()
-    }
-}
 
 /// Test that stream waiters are satisfied in FIFO order.
 #[test]
@@ -1961,93 +1666,6 @@ fn test_concurrent_xadd_xread() {
 // ============================================================================
 // JSON Type Concurrency Tests
 // ============================================================================
-
-/// Simulated JSON value with path-based access.
-/// Used to test concurrent JSON operations.
-struct MockJsonValue {
-    data: Mutex<serde_json::Value>,
-}
-
-impl MockJsonValue {
-    fn new(data: serde_json::Value) -> Self {
-        Self {
-            data: Mutex::new(data),
-        }
-    }
-
-    fn get(&self, path: &str) -> Option<serde_json::Value> {
-        let data = self.data.lock().unwrap();
-        // Simplified path resolution for testing (only supports $.field)
-        if path == "$" {
-            return Some(data.clone());
-        }
-        if path.starts_with("$.") {
-            let field = &path[2..];
-            return data.get(field).cloned();
-        }
-        None
-    }
-
-    fn set(&self, path: &str, value: serde_json::Value) -> bool {
-        let mut data = self.data.lock().unwrap();
-        if path == "$" {
-            *data = value;
-            return true;
-        }
-        if path.starts_with("$.") {
-            let field = &path[2..];
-            if let serde_json::Value::Object(ref mut obj) = *data {
-                obj.insert(field.to_string(), value);
-                return true;
-            }
-        }
-        false
-    }
-
-    fn incr_by(&self, path: &str, delta: i64) -> Option<i64> {
-        let mut data = self.data.lock().unwrap();
-        if path.starts_with("$.") {
-            let field = &path[2..];
-            if let serde_json::Value::Object(ref mut obj) = *data {
-                if let Some(serde_json::Value::Number(n)) = obj.get(field) {
-                    if let Some(current) = n.as_i64() {
-                        let new_val = current + delta;
-                        obj.insert(field.to_string(), serde_json::json!(new_val));
-                        return Some(new_val);
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    fn arr_append(&self, path: &str, value: serde_json::Value) -> Option<usize> {
-        let mut data = self.data.lock().unwrap();
-        if path.starts_with("$.") {
-            let field = &path[2..];
-            if let serde_json::Value::Object(ref mut obj) = *data {
-                if let Some(serde_json::Value::Array(ref mut arr)) = obj.get_mut(field) {
-                    arr.push(value);
-                    return Some(arr.len());
-                }
-            }
-        }
-        None
-    }
-
-    fn arr_pop(&self, path: &str) -> Option<serde_json::Value> {
-        let mut data = self.data.lock().unwrap();
-        if path.starts_with("$.") {
-            let field = &path[2..];
-            if let serde_json::Value::Object(ref mut obj) = *data {
-                if let Some(serde_json::Value::Array(ref mut arr)) = obj.get_mut(field) {
-                    return arr.pop();
-                }
-            }
-        }
-        None
-    }
-}
 
 /// Test concurrent JSON.SET operations on different paths.
 ///

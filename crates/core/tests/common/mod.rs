@@ -1,5 +1,11 @@
 //! Shared test utilities for frogdb-core integration tests.
 
+pub mod mock_cluster;
+pub mod mock_json;
+pub mod mock_snapshot;
+pub mod mock_streams;
+pub mod mock_watch;
+
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
