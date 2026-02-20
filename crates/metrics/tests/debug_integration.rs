@@ -17,7 +17,7 @@ use reqwest::StatusCode;
 async fn test_debug_index_loads() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug")).await.unwrap();
+    let resp = server.client().get(server.metrics_url("/debug")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(resp
         .headers()
@@ -39,7 +39,7 @@ async fn test_debug_index_loads() {
 async fn test_debug_index_trailing_slash() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/")).await.unwrap();
+    let resp = server.client().get(server.metrics_url("/debug/")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(resp
         .headers()
@@ -59,7 +59,8 @@ async fn test_debug_index_trailing_slash() {
 async fn test_debug_htmx_asset() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/assets/js/htmx.min.js"))
+    let resp = server.client().get(server.metrics_url("/debug/assets/js/htmx.min.js"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "HTMX asset should exist");
@@ -82,7 +83,8 @@ async fn test_debug_htmx_asset() {
 async fn test_debug_alpine_asset() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/assets/js/alpine.min.js"))
+    let resp = server.client().get(server.metrics_url("/debug/assets/js/alpine.min.js"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "Alpine asset should exist");
@@ -101,7 +103,8 @@ async fn test_debug_alpine_asset() {
 async fn test_debug_uplot_asset() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/assets/js/uPlot.min.js"))
+    let resp = server.client().get(server.metrics_url("/debug/assets/js/uPlot.min.js"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "uPlot asset should exist");
@@ -120,7 +123,8 @@ async fn test_debug_uplot_asset() {
 async fn test_debug_css_asset() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/assets/css/style.css"))
+    let resp = server.client().get(server.metrics_url("/debug/assets/css/style.css"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "style.css should exist");
@@ -139,7 +143,8 @@ async fn test_debug_css_asset() {
 async fn test_debug_chota_asset() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/assets/css/chota.min.css"))
+    let resp = server.client().get(server.metrics_url("/debug/assets/css/chota.min.css"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "chota.min.css should exist");
@@ -158,7 +163,8 @@ async fn test_debug_chota_asset() {
 async fn test_debug_uplot_css_asset() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/assets/css/uPlot.min.css"))
+    let resp = server.client().get(server.metrics_url("/debug/assets/css/uPlot.min.css"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "uPlot.min.css should exist");
@@ -177,7 +183,8 @@ async fn test_debug_uplot_css_asset() {
 async fn test_debug_asset_not_found() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/assets/nonexistent.js"))
+    let resp = server.client().get(server.metrics_url("/debug/assets/nonexistent.js"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND, "Nonexistent asset should return 404");
@@ -193,7 +200,8 @@ async fn test_debug_asset_not_found() {
 async fn test_api_cluster() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/cluster"))
+    let resp = server.client().get(server.metrics_url("/debug/api/cluster"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -220,7 +228,8 @@ async fn test_api_cluster() {
 async fn test_api_config() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/config"))
+    let resp = server.client().get(server.metrics_url("/debug/api/config"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -252,7 +261,8 @@ async fn test_api_config() {
 async fn test_api_metrics() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/metrics"))
+    let resp = server.client().get(server.metrics_url("/debug/api/metrics"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -277,7 +287,8 @@ async fn test_api_metrics() {
 async fn test_api_slowlog() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/slowlog"))
+    let resp = server.client().get(server.metrics_url("/debug/api/slowlog"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -300,7 +311,8 @@ async fn test_api_slowlog() {
 async fn test_api_latency() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/latency"))
+    let resp = server.client().get(server.metrics_url("/debug/api/latency"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -327,7 +339,8 @@ async fn test_api_latency() {
 async fn test_partial_cluster() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/partials/cluster"))
+    let resp = server.client().get(server.metrics_url("/debug/partials/cluster"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -350,7 +363,8 @@ async fn test_partial_cluster() {
 async fn test_partial_config() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/partials/config"))
+    let resp = server.client().get(server.metrics_url("/debug/partials/config"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -373,7 +387,8 @@ async fn test_partial_config() {
 async fn test_partial_metrics() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/partials/metrics"))
+    let resp = server.client().get(server.metrics_url("/debug/partials/metrics"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -395,7 +410,8 @@ async fn test_partial_metrics() {
 async fn test_partial_slowlog() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/partials/slowlog"))
+    let resp = server.client().get(server.metrics_url("/debug/partials/slowlog"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -417,7 +433,8 @@ async fn test_partial_slowlog() {
 async fn test_partial_latency() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/partials/latency"))
+    let resp = server.client().get(server.metrics_url("/debug/partials/latency"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -443,7 +460,8 @@ async fn test_partial_latency() {
 async fn test_debug_invalid_path() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/invalid"))
+    let resp = server.client().get(server.metrics_url("/debug/invalid"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND, "Invalid path should return 404");
@@ -455,7 +473,8 @@ async fn test_debug_invalid_path() {
 async fn test_debug_invalid_api_path() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/invalid"))
+    let resp = server.client().get(server.metrics_url("/debug/api/invalid"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND, "Invalid API path should return 404");
@@ -467,7 +486,8 @@ async fn test_debug_invalid_api_path() {
 async fn test_debug_invalid_partial_path() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/partials/invalid"))
+    let resp = server.client().get(server.metrics_url("/debug/partials/invalid"))
+        .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND, "Invalid partial path should return 404");
@@ -479,8 +499,7 @@ async fn test_debug_invalid_partial_path() {
 async fn test_debug_method_not_allowed() {
     let server = TestServer::start().await;
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = server.client()
         .post(server.metrics_url("/debug"))
         .send()
         .await
@@ -508,7 +527,7 @@ async fn test_all_js_assets() {
 
     for asset in assets {
         let url = server.metrics_url(&format!("/debug/assets/{}", asset));
-        let resp = reqwest::get(&url).await.unwrap();
+        let resp = server.client().get(&url).send().await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK, "Asset {} should exist", asset);
         assert!(
             resp.headers()
@@ -537,7 +556,7 @@ async fn test_all_css_assets() {
 
     for asset in assets {
         let url = server.metrics_url(&format!("/debug/assets/{}", asset));
-        let resp = reqwest::get(&url).await.unwrap();
+        let resp = server.client().get(&url).send().await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK, "Asset {} should exist", asset);
         assert!(
             resp.headers()
@@ -567,7 +586,8 @@ async fn test_all_css_assets() {
 async fn test_api_bundle_list() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/list"))
+    let resp = server.client().get(server.metrics_url("/debug/api/bundle/list"))
+        .send()
         .await
         .unwrap();
 
@@ -597,7 +617,8 @@ async fn test_api_bundle_list() {
 async fn test_api_bundle_list_empty() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/list"))
+    let resp = server.client().get(server.metrics_url("/debug/api/bundle/list"))
+        .send()
         .await
         .unwrap();
 
@@ -621,7 +642,8 @@ async fn test_api_bundle_list_empty() {
 async fn test_api_bundle_generate_instant() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/generate"))
+    let resp = server.client().get(server.metrics_url("/debug/api/bundle/generate"))
+        .send()
         .await
         .unwrap();
 
@@ -654,7 +676,8 @@ async fn test_api_bundle_generate_instant() {
 async fn test_api_bundle_generate_with_duration() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/generate?duration=1"))
+    let resp = server.client().get(server.metrics_url("/debug/api/bundle/generate?duration=1"))
+        .send()
         .await
         .unwrap();
 
@@ -686,7 +709,8 @@ async fn test_api_bundle_generate_with_duration() {
 async fn test_api_bundle_generate_content_type() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/generate"))
+    let resp = server.client().get(server.metrics_url("/debug/api/bundle/generate"))
+        .send()
         .await
         .unwrap();
 
@@ -717,7 +741,8 @@ async fn test_api_bundle_generate_content_type() {
 async fn test_api_bundle_generate_content_disposition() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/generate"))
+    let resp = server.client().get(server.metrics_url("/debug/api/bundle/generate"))
+        .send()
         .await
         .unwrap();
 
@@ -767,7 +792,8 @@ async fn test_api_bundle_download_by_id() {
         let bundle_id = String::from_utf8_lossy(&id_bytes);
 
         // Now download by ID
-        let download_resp = reqwest::get(server.metrics_url(&format!("/debug/api/bundle/{}", bundle_id)))
+        let download_resp = server.client().get(server.metrics_url(&format!("/debug/api/bundle/{}", bundle_id)))
+            .send()
             .await
             .unwrap();
 
@@ -802,7 +828,8 @@ async fn test_api_bundle_download_by_id() {
 async fn test_api_bundle_download_not_found() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/nonexistent-bundle-id"))
+    let resp = server.client().get(server.metrics_url("/debug/api/bundle/nonexistent-bundle-id"))
+        .send()
         .await
         .unwrap();
 
@@ -825,7 +852,8 @@ async fn test_api_bundle_download_not_found() {
 async fn test_api_bundle_zip_structure() {
     let server = TestServer::start().await;
 
-    let resp = reqwest::get(server.metrics_url("/debug/api/bundle/generate"))
+    let resp = server.client().get(server.metrics_url("/debug/api/bundle/generate"))
+        .send()
         .await
         .unwrap();
 
