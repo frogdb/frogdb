@@ -5,6 +5,7 @@
 
 pub mod acl;
 pub mod auth;
+pub mod basic;
 pub mod bitmap;
 pub mod blocking;
 pub mod bloom;
@@ -43,6 +44,7 @@ pub mod utils;
 
 pub use acl::*;
 pub use auth::*;
+pub use basic::*;
 pub use bitmap::*;
 pub use blocking::*;
 pub use bloom::*;

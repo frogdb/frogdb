@@ -1,10 +1,8 @@
 //! Main server implementation.
 
-pub mod basic_commands;
 mod register;
 mod util;
 
-pub use basic_commands as commands;
 pub use register::register_commands;
 pub use util::{next_conn_id, next_txid};
 
