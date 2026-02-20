@@ -1,12 +1,13 @@
 //! HTTP server for metrics and health endpoints.
 
 use crate::config::MetricsConfig;
+use crate::debug::{self, DebugState};
 use crate::health::HealthChecker;
+use crate::latency_bands::LatencyBandTracker;
 use crate::metric_names;
 use crate::prometheus_recorder::PrometheusRecorder;
 use crate::status::StatusCollector;
 use frogdb_core::MetricsRecorder;
-use frogdb_debug::{DebugRouter, DebugState, LatencyBandTracker, MetricsProvider};
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::body::Incoming;
@@ -137,7 +138,7 @@ async fn handle_request(
     debug!(method = %method, path = %path, "Metrics server request");
 
     let response = match (method, path) {
-        (&Method::GET, "/metrics") => handle_metrics(recorder.clone(), band_tracker.clone()),
+        (&Method::GET, "/metrics") => handle_metrics(recorder, band_tracker),
         (&Method::GET, "/health/live") => handle_health_live(health),
         (&Method::GET, "/health/ready") => handle_health_ready(health),
         // Convenience aliases
@@ -145,22 +146,10 @@ async fn handle_request(
         (&Method::GET, "/readyz") => handle_health_ready(health),
         // Status JSON endpoint
         (&Method::GET, "/status/json") => handle_status_json(status_collector).await,
-        // Debug web UI - delegate to DebugRouter
+        // Debug web UI
         (&Method::GET, p) if p.starts_with("/debug") => {
             if let Some(ref state) = debug_state {
-                // Create a DebugRouter and delegate the request
-                let mut router = DebugRouter::new(Arc::clone(state));
-                // Add metrics provider for debug endpoints
-                router = router.with_metrics(recorder as Arc<dyn MetricsProvider>);
-                // Add band tracker if available
-                if let Some(tracker) = band_tracker {
-                    router = router.with_band_tracker(tracker);
-                }
-                // Route the request
-                match router.route(&req).await {
-                    Some(response) => response,
-                    None => not_found(),
-                }
+                debug::handle_debug_request(req.uri(), state, &recorder).await
             } else {
                 // Debug UI not enabled, return a helpful message
                 Response::builder()
@@ -185,8 +174,7 @@ fn handle_metrics(
     if let Some(tracker) = band_tracker {
         // Export cumulative counts with "le" labels (like histogram buckets)
         for (label, count) in tracker.get_counts() {
-            MetricsRecorder::record_gauge(
-                &*recorder,
+            recorder.record_gauge(
                 metric_names::LATENCY_BAND_REQUESTS,
                 count as f64,
                 &[("le", &label)],

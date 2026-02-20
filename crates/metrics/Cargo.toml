@@ -13,7 +13,6 @@ testing = ["dep:reqwest", "opentelemetry_sdk/testing"]
 
 [dependencies]
 frogdb-core = { path = "../core" }
-frogdb-debug = { path = "../debug" }
 frogdb-metrics-derive = { path = "../metrics-derive" }
 
 # Prometheus
@@ -49,11 +48,12 @@ serde_json = { workspace = true }
 # Bytes
 bytes = { workspace = true }
 
-# Debug web UI (provided by frogdb-debug)
-# rust-embed and mime_guess moved to frogdb-debug
+# Debug web UI
+rust-embed = { version = "8", features = ["compression"] }
+mime_guess = "2"
 
-# ZIP archive support for debug bundles (provided by frogdb-debug)
-# zip moved to frogdb-debug
+# ZIP archive support for debug bundles
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # HTTP client for testing (optional)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }

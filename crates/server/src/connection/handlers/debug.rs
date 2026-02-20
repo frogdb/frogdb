@@ -271,12 +271,9 @@ impl ConnectionHandler {
 
         // Create bundle config and collector
         let config = frogdb_metrics::BundleConfig::default();
-        // Convert Option<Arc<OtelTracer>> to Option<Arc<dyn TraceProvider>>
-        let trace_provider: Option<std::sync::Arc<dyn frogdb_metrics::TraceProvider>> =
-            self.shared_tracer.clone().map(|t| t as std::sync::Arc<dyn frogdb_metrics::TraceProvider>);
         let collector = frogdb_metrics::DiagnosticCollector::new(
             self.shard_senders.clone(),
-            trace_provider,
+            self.shared_tracer.clone(),
             config.clone(),
         );
 
