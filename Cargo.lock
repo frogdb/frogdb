@@ -1471,6 +1471,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-telemetry"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "dashmap",
+ "frogdb-core",
+ "frogdb-metrics-derive",
+ "frogdb-protocol",
+ "frogdb-server",
+ "frogdb-telemetry",
+ "futures",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "mime_guess",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "parking_lot",
+ "prometheus",
+ "redis-protocol",
+ "reqwest",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "zip",
+]
+
+[[package]]
 name = "frogdb-testing"
 version = "0.1.0"
 dependencies = [
