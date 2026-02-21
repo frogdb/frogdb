@@ -4,9 +4,9 @@
 //! operations through the RESP protocol.
 
 use bytes::Bytes;
-use frogdb_metrics::testing::{MetricsDelta, MetricsSnapshot};
 use frogdb_protocol::Response;
 use frogdb_server::{Config, Server};
+use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot};
 use futures::{SinkExt, StreamExt};
 use proptest::prelude::*;
 use redis_protocol::codec::Resp2;

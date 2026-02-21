@@ -4,8 +4,8 @@
 //! counters, gauges, and histograms with proper label encoding.
 
 use frogdb_core::MetricsRecorder;
-use frogdb_metrics::metric_names;
-use frogdb_metrics::prometheus_recorder::PrometheusRecorder;
+use frogdb_telemetry::metric_names;
+use frogdb_telemetry::prometheus_recorder::PrometheusRecorder;
 use std::sync::Arc;
 
 /// Test that counters are correctly recorded and incremented.
@@ -196,7 +196,7 @@ fn test_shard_metrics() {
 /// Test CommandTimer records success path correctly.
 #[test]
 fn test_command_timer_success() {
-    use frogdb_metrics::CommandTimer;
+    use frogdb_telemetry::CommandTimer;
 
     let recorder = Arc::new(PrometheusRecorder::new());
     let timer = CommandTimer::new("PING".to_string(), recorder.clone());
@@ -219,7 +219,7 @@ fn test_command_timer_success() {
 /// Test CommandTimer records error path correctly.
 #[test]
 fn test_command_timer_error() {
-    use frogdb_metrics::CommandTimer;
+    use frogdb_telemetry::CommandTimer;
 
     let recorder = Arc::new(PrometheusRecorder::new());
     let timer = CommandTimer::new("SET".to_string(), recorder.clone());

@@ -17,10 +17,12 @@ use frogdb_core::{
     ClusterStateMachine, ClusterStorage, CommandRegistry, MetricsRecorder, NoopBroadcaster,
     ReplicationTrackerImpl, ShardMessage, ShardWorker, SharedBroadcaster,
 };
-use frogdb_metrics::{
-    ConfigEntry, DebugState, HealthChecker, MetricsServer, PrometheusRecorder, ServerInfo,
-    SharedTracer, StatusCollector, SystemMetricsCollector,
+use frogdb_debug::{ConfigEntry, DebugState, ServerInfo};
+use frogdb_telemetry::{
+    HealthChecker, PrometheusRecorder, SharedTracer, StatusCollector, SystemMetricsCollector,
 };
+
+use crate::observability_server::ObservabilityServer;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -117,7 +119,7 @@ pub struct Server {
     latency_baseline: Option<LatencyTestResult>,
 
     /// Optional latency band tracker for SLO monitoring.
-    band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
+    band_tracker: Option<Arc<frogdb_telemetry::LatencyBandTracker>>,
 
     /// Optional network factory for cluster node management.
     network_factory: Option<Arc<ClusterNetworkFactory>>,
@@ -148,7 +150,7 @@ impl Server {
             let recorder = Arc::new(PrometheusRecorder::new());
             // Record server info
             recorder.record_gauge(
-                frogdb_metrics::metric_names::INFO,
+                frogdb_telemetry::metric_names::INFO,
                 1.0,
                 &[
                     ("version", env!("CARGO_PKG_VERSION")),
@@ -158,7 +160,7 @@ impl Server {
             // Record maxmemory at startup
             if config.memory.maxmemory > 0 {
                 recorder.record_gauge(
-                    frogdb_metrics::metric_names::MEMORY_MAXMEMORY_BYTES,
+                    frogdb_telemetry::metric_names::MEMORY_MAXMEMORY_BYTES,
                     config.memory.maxmemory as f64,
                     &[],
                 );
@@ -677,7 +679,7 @@ impl Server {
         // Initialize distributed tracer if enabled
         let shared_tracer = if config.tracing.enabled {
             let tracing_config = config.tracing.to_metrics_config();
-            match frogdb_metrics::create_tracer(&tracing_config) {
+            match frogdb_telemetry::create_tracer(&tracing_config) {
                 Ok(tracer) => {
                     info!(
                         endpoint = %config.tracing.otlp_endpoint,
@@ -706,7 +708,7 @@ impl Server {
         // Create latency band tracker if enabled
         let band_tracker = if config.latency_bands.enabled {
             let tracker =
-                frogdb_metrics::LatencyBandTracker::new(config.latency_bands.bands.clone());
+                frogdb_telemetry::LatencyBandTracker::new(config.latency_bands.bands.clone());
             info!(
                 bands = ?config.latency_bands.bands,
                 "Latency band tracking enabled"
@@ -908,7 +910,7 @@ impl Server {
 
         // Start metrics server if enabled
         let metrics_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
-            let metrics_config = frogdb_metrics::MetricsConfig {
+            let metrics_config = frogdb_telemetry::MetricsConfig {
                 enabled: self.config.metrics.enabled,
                 bind: self.config.metrics.bind.clone(),
                 port: self.config.metrics.port,
@@ -976,7 +978,7 @@ impl Server {
                 mode,
             ));
 
-            let mut server = MetricsServer::new(
+            let mut server = ObservabilityServer::new(
                 metrics_config,
                 prometheus.clone(),
                 self.health_checker.clone(),

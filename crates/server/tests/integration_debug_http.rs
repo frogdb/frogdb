@@ -1,11 +1,11 @@
-//! Integration tests for FrogDB debug web UI endpoints.
+//! Integration tests for FrogDB debug web UI HTTP endpoints.
 //!
 //! These tests verify that the debug HTTP server exposes the debug dashboard,
 //! static assets, JSON APIs, and HTML partials correctly.
 
 mod common;
 
-use common::TestServer;
+use common::test_server::TestServer;
 use frogdb_protocol::Response;
 use reqwest::StatusCode;
 
@@ -15,10 +15,10 @@ use reqwest::StatusCode;
 
 #[tokio::test]
 async fn test_debug_index_loads() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug"))
         .send()
         .await
@@ -45,10 +45,10 @@ async fn test_debug_index_loads() {
 
 #[tokio::test]
 async fn test_debug_index_trailing_slash() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/"))
         .send()
         .await
@@ -70,10 +70,10 @@ async fn test_debug_index_trailing_slash() {
 
 #[tokio::test]
 async fn test_debug_htmx_asset() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/assets/js/htmx.min.js"))
         .send()
         .await
@@ -98,10 +98,10 @@ async fn test_debug_htmx_asset() {
 
 #[tokio::test]
 async fn test_debug_alpine_asset() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/assets/js/alpine.min.js"))
         .send()
         .await
@@ -122,10 +122,10 @@ async fn test_debug_alpine_asset() {
 
 #[tokio::test]
 async fn test_debug_uplot_asset() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/assets/js/uPlot.min.js"))
         .send()
         .await
@@ -146,10 +146,10 @@ async fn test_debug_uplot_asset() {
 
 #[tokio::test]
 async fn test_debug_css_asset() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/assets/css/style.css"))
         .send()
         .await
@@ -170,10 +170,10 @@ async fn test_debug_css_asset() {
 
 #[tokio::test]
 async fn test_debug_chota_asset() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/assets/css/chota.min.css"))
         .send()
         .await
@@ -194,10 +194,10 @@ async fn test_debug_chota_asset() {
 
 #[tokio::test]
 async fn test_debug_uplot_css_asset() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/assets/css/uPlot.min.css"))
         .send()
         .await
@@ -218,10 +218,10 @@ async fn test_debug_uplot_css_asset() {
 
 #[tokio::test]
 async fn test_debug_asset_not_found() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/assets/nonexistent.js"))
         .send()
         .await
@@ -241,10 +241,10 @@ async fn test_debug_asset_not_found() {
 
 #[tokio::test]
 async fn test_api_cluster() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/cluster"))
         .send()
         .await
@@ -280,10 +280,10 @@ async fn test_api_cluster() {
 
 #[tokio::test]
 async fn test_api_config() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/config"))
         .send()
         .await
@@ -321,10 +321,10 @@ async fn test_api_config() {
 
 #[tokio::test]
 async fn test_api_metrics() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/metrics"))
         .send()
         .await
@@ -361,10 +361,10 @@ async fn test_api_metrics() {
 
 #[tokio::test]
 async fn test_api_slowlog() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/slowlog"))
         .send()
         .await
@@ -387,10 +387,10 @@ async fn test_api_slowlog() {
 
 #[tokio::test]
 async fn test_api_latency() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/latency"))
         .send()
         .await
@@ -417,10 +417,10 @@ async fn test_api_latency() {
 
 #[tokio::test]
 async fn test_partial_cluster() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/partials/cluster"))
         .send()
         .await
@@ -449,10 +449,10 @@ async fn test_partial_cluster() {
 
 #[tokio::test]
 async fn test_partial_config() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/partials/config"))
         .send()
         .await
@@ -481,10 +481,10 @@ async fn test_partial_config() {
 
 #[tokio::test]
 async fn test_partial_metrics() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/partials/metrics"))
         .send()
         .await
@@ -509,10 +509,10 @@ async fn test_partial_metrics() {
 
 #[tokio::test]
 async fn test_partial_slowlog() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/partials/slowlog"))
         .send()
         .await
@@ -537,10 +537,10 @@ async fn test_partial_slowlog() {
 
 #[tokio::test]
 async fn test_partial_latency() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/partials/latency"))
         .send()
         .await
@@ -569,10 +569,10 @@ async fn test_partial_latency() {
 
 #[tokio::test]
 async fn test_debug_invalid_path() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/invalid"))
         .send()
         .await
@@ -588,10 +588,10 @@ async fn test_debug_invalid_path() {
 
 #[tokio::test]
 async fn test_debug_invalid_api_path() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/invalid"))
         .send()
         .await
@@ -607,10 +607,10 @@ async fn test_debug_invalid_api_path() {
 
 #[tokio::test]
 async fn test_debug_invalid_partial_path() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/partials/invalid"))
         .send()
         .await
@@ -626,10 +626,10 @@ async fn test_debug_invalid_partial_path() {
 
 #[tokio::test]
 async fn test_debug_method_not_allowed() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .post(server.metrics_url("/debug"))
         .send()
         .await
@@ -651,13 +651,14 @@ async fn test_debug_method_not_allowed() {
 
 #[tokio::test]
 async fn test_all_js_assets() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
     let assets = &["js/htmx.min.js", "js/alpine.min.js", "js/uPlot.min.js"];
 
     for asset in assets {
         let url = server.metrics_url(&format!("/debug/assets/{}", asset));
-        let resp = server.client().get(&url).send().await.unwrap();
+        let resp = client.get(&url).send().await.unwrap();
         assert_eq!(
             resp.status(),
             StatusCode::OK,
@@ -681,13 +682,14 @@ async fn test_all_js_assets() {
 
 #[tokio::test]
 async fn test_all_css_assets() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
     let assets = &["css/style.css", "css/chota.min.css", "css/uPlot.min.css"];
 
     for asset in assets {
         let url = server.metrics_url(&format!("/debug/assets/{}", asset));
-        let resp = server.client().get(&url).send().await.unwrap();
+        let resp = client.get(&url).send().await.unwrap();
         assert_eq!(
             resp.status(),
             StatusCode::OK,
@@ -720,10 +722,10 @@ async fn test_all_css_assets() {
 
 #[tokio::test]
 async fn test_api_bundle_list() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/bundle/list"))
         .send()
         .await
@@ -753,10 +755,10 @@ async fn test_api_bundle_list() {
 
 #[tokio::test]
 async fn test_api_bundle_list_empty() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/bundle/list"))
         .send()
         .await
@@ -780,10 +782,10 @@ async fn test_api_bundle_list_empty() {
 
 #[tokio::test]
 async fn test_api_bundle_generate_instant() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/bundle/generate"))
         .send()
         .await
@@ -816,10 +818,10 @@ async fn test_api_bundle_generate_instant() {
 
 #[tokio::test]
 async fn test_api_bundle_generate_with_duration() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/bundle/generate?duration=1"))
         .send()
         .await
@@ -851,10 +853,10 @@ async fn test_api_bundle_generate_with_duration() {
 
 #[tokio::test]
 async fn test_api_bundle_generate_content_type() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/bundle/generate"))
         .send()
         .await
@@ -885,10 +887,10 @@ async fn test_api_bundle_generate_content_type() {
 
 #[tokio::test]
 async fn test_api_bundle_generate_content_disposition() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/bundle/generate"))
         .send()
         .await
@@ -929,19 +931,19 @@ async fn test_api_bundle_generate_content_disposition() {
 
 #[tokio::test]
 async fn test_api_bundle_download_by_id() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
     // Generate a new bundle via RESP to store it
-    let mut client = server.connect().await;
-    let response = client.command(&["DEBUG", "BUNDLE", "GENERATE"]).await;
+    let mut resp_client = server.connect().await;
+    let response = resp_client.command(&["DEBUG", "BUNDLE", "GENERATE"]).await;
 
     // Extract the bundle ID if generation succeeded
     if let Response::Bulk(Some(id_bytes)) = response {
         let bundle_id = String::from_utf8_lossy(&id_bytes);
 
         // Now download by ID
-        let download_resp = server
-            .client()
+        let download_resp = client
             .get(server.metrics_url(&format!("/debug/api/bundle/{}", bundle_id)))
             .send()
             .await
@@ -980,10 +982,10 @@ async fn test_api_bundle_download_by_id() {
 
 #[tokio::test]
 async fn test_api_bundle_download_not_found() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/bundle/nonexistent-bundle-id"))
         .send()
         .await
@@ -1006,10 +1008,10 @@ async fn test_api_bundle_download_not_found() {
 
 #[tokio::test]
 async fn test_api_bundle_zip_structure() {
-    let server = TestServer::start().await;
+    let server = TestServer::start_standalone().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let resp = server
-        .client()
+    let resp = client
         .get(server.metrics_url("/debug/api/bundle/generate"))
         .send()
         .await

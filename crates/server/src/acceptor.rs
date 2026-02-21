@@ -7,7 +7,7 @@ use frogdb_core::{
     ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry, MetricsRecorder,
     ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
 };
-use frogdb_metrics::{metric_names, SharedTracer};
+use frogdb_telemetry::{metric_names, SharedTracer};
 use std::sync::atomic::AtomicI64;
 
 use crate::config::TracingConfig;
@@ -108,13 +108,13 @@ pub struct Acceptor {
     admin_enabled: bool,
 
     /// Hot shard detection configuration.
-    hotshards_config: frogdb_metrics::HotShardConfig,
+    hotshards_config: frogdb_debug::HotShardConfig,
 
     /// Memory diagnostics configuration.
-    memory_diag_config: frogdb_metrics::MemoryDiagConfig,
+    memory_diag_config: frogdb_debug::MemoryDiagConfig,
 
     /// Optional latency band tracker for SLO monitoring.
-    band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
+    band_tracker: Option<Arc<frogdb_telemetry::LatencyBandTracker>>,
 
     /// Optional Raft instance (only when cluster mode is enabled).
     raft: Option<Arc<ClusterRaft>>,
@@ -149,9 +149,9 @@ impl Acceptor {
         node_id: Option<u64>,
         is_admin: bool,
         admin_enabled: bool,
-        hotshards_config: frogdb_metrics::HotShardConfig,
-        memory_diag_config: frogdb_metrics::MemoryDiagConfig,
-        band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
+        hotshards_config: frogdb_debug::HotShardConfig,
+        memory_diag_config: frogdb_debug::MemoryDiagConfig,
+        band_tracker: Option<Arc<frogdb_telemetry::LatencyBandTracker>>,
         raft: Option<Arc<ClusterRaft>>,
         network_factory: Option<Arc<ClusterNetworkFactory>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,

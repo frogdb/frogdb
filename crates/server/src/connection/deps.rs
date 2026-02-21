@@ -10,7 +10,8 @@ use frogdb_core::{
     persistence::SnapshotCoordinator, AclManager, ClusterNetworkFactory, ClusterRaft, ClusterState,
     CommandRegistry, MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
 };
-use frogdb_metrics::{HotShardConfig, LatencyBandTracker, MemoryDiagConfig, SharedTracer};
+use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
+use frogdb_telemetry::{LatencyBandTracker, SharedTracer};
 use tokio::sync::mpsc;
 
 use frogdb_core::ClientRegistry;

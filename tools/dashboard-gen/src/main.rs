@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use frogdb_metrics::{MetricDefinition, MetricType, ALL_METRICS};
+use frogdb_telemetry::{MetricDefinition, MetricType, ALL_METRICS};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;

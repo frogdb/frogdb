@@ -273,8 +273,8 @@ impl ConnectionHandler {
         }
 
         // Create bundle config and collector
-        let config = frogdb_metrics::BundleConfig::default();
-        let collector = frogdb_metrics::DiagnosticCollector::new(
+        let config = frogdb_debug::BundleConfig::default();
+        let collector = frogdb_debug::DiagnosticCollector::new(
             self.shard_senders.clone(),
             self.shared_tracer.clone(),
             config.clone(),
@@ -288,13 +288,13 @@ impl ConnectionHandler {
         };
 
         // Generate the bundle
-        let generator = frogdb_metrics::BundleGenerator::new(config.clone());
-        let id = frogdb_metrics::BundleGenerator::generate_id();
+        let generator = frogdb_debug::BundleGenerator::new(config.clone());
+        let id = frogdb_debug::BundleGenerator::generate_id();
 
         match generator.create_zip(&id, &data, duration_secs) {
             Ok(zip_data) => {
                 // Try to store the bundle for later HTTP download
-                let store = frogdb_metrics::BundleStore::new(config);
+                let store = frogdb_debug::BundleStore::new(config);
                 if let Err(e) = store.store(&id, &zip_data) {
                     tracing::warn!(error = %e, "Failed to store bundle (HTTP download may not work)");
                 }
@@ -310,8 +310,8 @@ impl ConnectionHandler {
     ///
     /// Lists all available bundles with their ID, timestamp, and size.
     pub(crate) fn handle_debug_bundle_list(&self) -> Response {
-        let config = frogdb_metrics::BundleConfig::default();
-        let store = frogdb_metrics::BundleStore::new(config);
+        let config = frogdb_debug::BundleConfig::default();
+        let store = frogdb_debug::BundleStore::new(config);
         let bundles = store.list();
 
         let entries: Vec<Response> = bundles

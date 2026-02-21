@@ -1024,7 +1024,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "frogdb-metrics",
+ "frogdb-telemetry",
  "serde",
  "serde_json",
 ]
@@ -1351,6 +1351,21 @@ dependencies = [
 [[package]]
 name = "frogdb-debug"
 version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-core",
+ "frogdb-telemetry",
+ "http-body-util",
+ "hyper",
+ "mime_guess",
+ "parking_lot",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "zip",
+]
 
 [[package]]
 name = "frogdb-macros"
@@ -1359,40 +1374,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
-]
-
-[[package]]
-name = "frogdb-metrics"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "dashmap",
- "frogdb-core",
- "frogdb-metrics",
- "frogdb-metrics-derive",
- "frogdb-protocol",
- "frogdb-server",
- "futures",
- "http-body-util",
- "hyper",
- "hyper-util",
- "mime_guess",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "parking_lot",
- "prometheus",
- "redis-protocol",
- "reqwest",
- "rust-embed",
- "serde",
- "serde_json",
- "sysinfo",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "zip",
 ]
 
 [[package]]
@@ -1430,12 +1411,16 @@ dependencies = [
  "crc16",
  "figment",
  "frogdb-core",
+ "frogdb-debug",
  "frogdb-macros",
- "frogdb-metrics",
  "frogdb-protocol",
+ "frogdb-telemetry",
  "frogdb-testing",
  "futures",
  "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "openraft",
  "proptest",
  "rand 0.8.5",
@@ -1457,6 +1442,32 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turmoil",
+ "zip",
+]
+
+[[package]]
+name = "frogdb-telemetry"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "dashmap",
+ "frogdb-core",
+ "frogdb-metrics-derive",
+ "frogdb-telemetry",
+ "http-body-util",
+ "hyper",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "parking_lot",
+ "prometheus",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
