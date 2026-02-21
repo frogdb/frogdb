@@ -34,21 +34,26 @@ pub const DOCKER_BUILD_PUSH_VERSION: &str = "v5";
 pub const SETUP_HELM_VERSION: &str = "v3";
 
 /// azure/setup-kubectl version
+#[allow(dead_code)]
 pub const SETUP_KUBECTL_VERSION: &str = "v3";
 
 /// goto-bus-stop/setup-zig version
 pub const SETUP_ZIG_VERSION: &str = "v2";
 
 /// hashicorp/setup-terraform version
+#[allow(dead_code)]
 pub const SETUP_TERRAFORM_VERSION: &str = "v3";
 
 /// aws-actions/configure-aws-credentials version
+#[allow(dead_code)]
 pub const AWS_CREDENTIALS_VERSION: &str = "v4";
 
 /// google-github-actions/auth version
+#[allow(dead_code)]
 pub const GCP_AUTH_VERSION: &str = "v2";
 
 /// azure/login version
+#[allow(dead_code)]
 pub const AZURE_LOGIN_VERSION: &str = "v1";
 
 /// softprops/action-gh-release version
@@ -61,4 +66,5 @@ pub const HELM_VERSION: &str = "v3.13.0";
 pub const ZIG_VERSION: &str = "0.11.0";
 
 /// Terraform version
+#[allow(dead_code)]
 pub const TERRAFORM_VERSION: &str = "1.6.0";

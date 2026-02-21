@@ -10,7 +10,7 @@
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, KeyAccessType, ShardMessage, TransactionResult};
+use frogdb_core::{shard_for_key, ShardMessage, TransactionResult};
 use frogdb_protocol::{ParsedCommand, Response};
 use std::sync::Arc;
 use tokio::sync::oneshot;

@@ -70,19 +70,19 @@ pub struct PrimaryReplicationHandler {
 /// Handle to a replica connection.
 struct ReplicaConnectionHandle {
     /// Replica ID
-    replica_id: u64,
+    _replica_id: u64,
 
     /// Replica address
-    address: SocketAddr,
+    _address: SocketAddr,
 
     /// Channel to send frames to this replica
-    frame_tx: mpsc::Sender<ReplicationFrame>,
+    _frame_tx: mpsc::Sender<ReplicationFrame>,
 
     /// Connection state
-    state: ReplicaState,
+    _state: ReplicaState,
 
     /// Connected at timestamp
-    connected_at: Instant,
+    _connected_at: Instant,
 }
 
 impl PrimaryReplicationHandler {
@@ -401,11 +401,11 @@ impl PrimaryReplicationHandler {
         // Register connection handle
         {
             let handle = ReplicaConnectionHandle {
-                replica_id,
-                address: addr,
-                frame_tx,
-                state: ReplicaState::Streaming,
-                connected_at: Instant::now(),
+                _replica_id: replica_id,
+                _address: addr,
+                _frame_tx: frame_tx,
+                _state: ReplicaState::Streaming,
+                _connected_at: Instant::now(),
             };
             self.connections.write().await.insert(replica_id, handle);
         }

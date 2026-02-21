@@ -51,7 +51,7 @@ mod bytes_vec_serde {
     use bytes::Bytes;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S>(bytes: &Vec<Bytes>, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(bytes: &[Bytes], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {

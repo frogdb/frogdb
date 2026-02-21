@@ -44,7 +44,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use frogdb_core::{
     persistence::SnapshotCoordinator, AclManager, ClientHandle, ClientRegistry,
     ClusterNetworkFactory, ClusterRaft, ClusterState, CommandFlags, CommandRegistry,
@@ -69,8 +69,8 @@ pub use crate::server::next_txid;
 
 // Re-export utility functions used by handler submodules and internally
 pub(crate) use util::{
-    convert_blocking_op, convert_raft_cluster_op, estimate_command_size, estimate_resp2_frame_size,
-    extract_subcommand, format_timestamp_iso, key_access_type_for_flags,
+    estimate_command_size, estimate_resp2_frame_size, extract_subcommand,
+    key_access_type_for_flags,
 };
 
 /// Connection handler that processes client commands.
@@ -130,7 +130,7 @@ pub struct ConnectionHandler {
     shared_tracer: Option<SharedTracer>,
 
     /// Tracing configuration.
-    tracing_config: TracingConfig,
+    _tracing_config: TracingConfig,
 
     /// Optional replication tracker for WAIT command.
     replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
@@ -148,7 +148,7 @@ pub struct ConnectionHandler {
     admin_enabled: bool,
 
     /// Hot shard detection configuration.
-    hotshards_config: frogdb_debug::HotShardConfig,
+    _hotshards_config: frogdb_debug::HotShardConfig,
 
     /// Memory diagnostics configuration.
     memory_diag_config: frogdb_debug::MemoryDiagConfig,
@@ -232,13 +232,13 @@ impl ConnectionHandler {
             snapshot_coordinator: admin.snapshot_coordinator,
             function_registry: admin.function_registry,
             shared_tracer: observability.shared_tracer,
-            tracing_config: observability.tracing_config,
+            _tracing_config: observability.tracing_config,
             replication_tracker: cluster.replication_tracker,
             cluster_state: cluster.cluster_state,
             node_id: cluster.node_id,
             is_admin: config.is_admin,
             admin_enabled: config.admin_enabled,
-            hotshards_config: config.hotshards_config,
+            _hotshards_config: config.hotshards_config,
             memory_diag_config: config.memory_diag_config,
             band_tracker: observability.band_tracker,
             raft: cluster.raft,

@@ -5,12 +5,14 @@ use serde::Serialize;
 /// Cloud provider options for deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[allow(dead_code)]
 pub enum CloudProvider {
     Aws,
     Gcp,
     Azure,
 }
 
+#[allow(dead_code)]
 impl CloudProvider {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -32,12 +34,14 @@ impl CloudProvider {
 /// Deployment environment options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[allow(dead_code)]
 pub enum Environment {
     Dev,
     Staging,
     Production,
 }
 
+#[allow(dead_code)]
 impl Environment {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -59,12 +63,14 @@ impl Environment {
 /// Terraform action options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[allow(dead_code)]
 pub enum TerraformAction {
     Plan,
     Apply,
     Destroy,
 }
 
+#[allow(dead_code)]
 impl TerraformAction {
     pub fn as_str(&self) -> &'static str {
         match self {

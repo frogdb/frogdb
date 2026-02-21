@@ -47,13 +47,8 @@ pub fn parse_shebang(code: &str) -> Result<ShebangInfo, FunctionError> {
     let mut name = None;
 
     for part in &parts[1..] {
-        if let Some((key, value)) = part.split_once('=') {
-            match key {
-                "name" => name = Some(value.to_string()),
-                _ => {
-                    // Ignore unknown keys for forward compatibility
-                }
-            }
+        if let Some(("name", value)) = part.split_once('=') {
+            name = Some(value.to_string());
         }
     }
 

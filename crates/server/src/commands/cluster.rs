@@ -385,7 +385,7 @@ fn cluster_slots(ctx: &mut CommandContext) -> Result<Response, CommandError> {
         }
 
         // Convert to slot ranges and build response
-        for (node_id, slots) in node_slots {
+        for (node_id, _slots) in node_slots {
             if let Some(node) = snapshot.nodes.get(&node_id) {
                 // Merge consecutive slots into ranges
                 let ranges = snapshot.get_node_slots(node_id);

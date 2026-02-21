@@ -248,7 +248,7 @@ pub struct StatusCollector {
     health_checker: HealthChecker,
     shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
     client_registry: Arc<ClientRegistry>,
-    recorder: Arc<PrometheusRecorder>,
+    _recorder: Arc<PrometheusRecorder>,
     start_time: Instant,
     // Configuration values needed for status
     max_clients: usize,
@@ -278,7 +278,7 @@ impl StatusCollector {
             health_checker,
             shard_senders,
             client_registry,
-            recorder,
+            _recorder: recorder,
             start_time,
             max_clients,
             maxmemory,

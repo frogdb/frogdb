@@ -16,6 +16,7 @@ pub struct BuildTarget {
     pub ext: Option<String>,
 }
 
+#[allow(dead_code)]
 impl BuildTarget {
     pub fn new(target: &str, os: &str, arch: &str) -> Self {
         Self {
@@ -39,9 +40,11 @@ pub enum RustTarget {
     Aarch64Linux,
     X86_64MacOs,
     Aarch64MacOs,
+    #[allow(dead_code)]
     X86_64Windows,
 }
 
+#[allow(dead_code)]
 impl RustTarget {
     /// Returns the Rust target triple.
     pub fn triple(&self) -> &'static str {
@@ -80,7 +83,7 @@ impl RustTarget {
     }
 
     /// Converts to a BuildTarget for matrix configuration.
-    pub fn to_build_target(&self) -> BuildTarget {
+    pub fn to_build_target(self) -> BuildTarget {
         BuildTarget {
             target: self.triple().to_string(),
             os: self.runner_os().to_string(),
@@ -110,11 +113,13 @@ impl RustTarget {
 }
 
 /// Linux build targets (for build.yml).
+#[allow(dead_code)]
 pub fn linux_targets() -> Vec<RustTarget> {
     vec![RustTarget::X86_64Linux, RustTarget::Aarch64Linux]
 }
 
 /// Release build targets (for release.yml).
+#[allow(dead_code)]
 pub fn release_targets() -> Vec<RustTarget> {
     vec![
         RustTarget::X86_64Linux,

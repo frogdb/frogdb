@@ -873,7 +873,7 @@ fn parse_path_segments(path: &str) -> Result<Vec<PathPattern>, JsonError> {
             '[' => {
                 let mut bracket_content = String::new();
                 let mut depth = 1;
-                while let Some(c) = chars.next() {
+                for c in chars.by_ref() {
                     if c == '[' {
                         depth += 1;
                     } else if c == ']' {

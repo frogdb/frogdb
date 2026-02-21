@@ -88,7 +88,7 @@ pub enum AclRule {
     /// Deny a specific subcommand (Redis 7.0+).
     DenySubcommand { command: String, subcommand: String },
     /// Add a selector with additional permissions (Redis 7.0+).
-    AddSelector(PermissionSet),
+    AddSelector(Box<PermissionSet>),
     /// Clear all selectors (Redis 7.0+).
     ClearSelectors,
 }
@@ -196,7 +196,7 @@ impl AclRule {
                 });
             }
             let perm_set = parse_selector_rules(inner)?;
-            return Ok(AclRule::AddSelector(perm_set));
+            return Ok(AclRule::AddSelector(Box::new(perm_set)));
         }
 
         // Command rules
@@ -390,7 +390,7 @@ impl AclRule {
                     });
             }
             AclRule::AddSelector(perm_set) => {
-                user.selectors.push(perm_set.clone());
+                user.selectors.push(*perm_set.clone());
             }
             AclRule::ClearSelectors => {
                 user.selectors.clear();
@@ -826,7 +826,7 @@ mod tests {
     #[test]
     fn test_parse_selector_simple() {
         let result = AclRule::parse("(~temp:* +@read)");
-        assert!(matches!(result, Ok(AclRule::AddSelector(perm_set)) if {
+        assert!(matches!(result, Ok(AclRule::AddSelector(ref perm_set)) if {
             perm_set.key_patterns.len() == 1 &&
             perm_set.key_patterns[0].pattern == "temp:*" &&
             perm_set.commands.allowed_categories.contains(&CommandCategory::Read)
@@ -905,7 +905,7 @@ mod tests {
         perm_set.add_key_pattern(KeyPattern::new("temp:*".to_string()));
         perm_set.commands.allow_category(CommandCategory::Read);
 
-        AclRule::AddSelector(perm_set).apply(&mut user);
+        AclRule::AddSelector(Box::new(perm_set)).apply(&mut user);
 
         assert_eq!(user.selectors.len(), 1);
         assert_eq!(user.selectors[0].key_patterns[0].pattern, "temp:*");

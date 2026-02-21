@@ -36,6 +36,7 @@ pub struct ClusterStorage {
 
 impl ClusterStorage {
     /// Open or create cluster storage at the given path.
+    #[allow(clippy::result_large_err)]
     pub fn open(path: &Path) -> Result<Self, StorageError<NodeId>> {
         let mut opts = Options::default();
         opts.create_if_missing(true);
@@ -53,7 +54,7 @@ impl ClusterStorage {
             StorageError::from_io_error(
                 openraft::ErrorSubject::Store,
                 openraft::ErrorVerb::Write,
-                std::io::Error::new(std::io::ErrorKind::Other, e),
+                std::io::Error::other(e),
             )
         })?;
 
@@ -89,6 +90,7 @@ impl ClusterStorage {
     }
 
     /// Get metadata value.
+    #[allow(clippy::result_large_err)]
     fn get_meta<T: for<'a> Deserialize<'a>>(
         &self,
         key: &[u8],
@@ -113,6 +115,7 @@ impl ClusterStorage {
     }
 
     /// Set metadata value.
+    #[allow(clippy::result_large_err)]
     fn set_meta<T: Serialize>(&self, key: &[u8], value: &T) -> Result<(), StorageError<NodeId>> {
         let data = serde_json::to_vec(value).map_err(|e| {
             self.io_error(
@@ -130,6 +133,7 @@ impl ClusterStorage {
     }
 
     /// Delete metadata value.
+    #[allow(clippy::result_large_err)]
     fn delete_meta(&self, key: &[u8]) -> Result<(), StorageError<NodeId>> {
         let cf = self.cf_meta();
         self.db
@@ -147,7 +151,7 @@ impl ClusterStorage {
         StorageError::from_io_error(
             openraft::ErrorSubject::Store,
             verb,
-            std::io::Error::new(std::io::ErrorKind::Other, e.into()),
+            std::io::Error::other(e.into()),
         )
     }
 

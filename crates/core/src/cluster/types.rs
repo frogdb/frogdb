@@ -33,18 +33,13 @@ impl openraft::RaftTypeConfig for TypeConfig {
 }
 
 /// Role of a node in the cluster.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeRole {
     /// Primary node - handles reads and writes for its slots.
+    #[default]
     Primary,
     /// Replica node - replicates data from a primary.
     Replica,
-}
-
-impl Default for NodeRole {
-    fn default() -> Self {
-        NodeRole::Primary
-    }
 }
 
 impl std::fmt::Display for NodeRole {

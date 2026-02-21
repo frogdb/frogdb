@@ -43,7 +43,7 @@ pub enum InternalAction {
     /// Signal that a Raft cluster command needs to be executed.
     RaftNeeded {
         /// The Raft cluster operation to execute.
-        op: RaftClusterOp,
+        op: Box<RaftClusterOp>,
         /// For AddNode: register in NetworkFactory after commit.
         register_node: Option<(u64, std::net::SocketAddr)>,
         /// For RemoveNode: unregister from NetworkFactory after commit.
@@ -637,7 +637,7 @@ impl Response {
                 register_node,
                 unregister_node,
             } => Err(InternalAction::RaftNeeded {
-                op,
+                op: Box::new(op),
                 register_node,
                 unregister_node,
             }),
@@ -944,11 +944,11 @@ mod tests {
 
     #[test]
     fn test_double_to_resp3_frame() {
-        let resp = Response::Double(3.14159);
+        let resp = Response::Double(3.125);
         let frame = resp.into_wire().unwrap().to_resp3_frame();
         match frame {
             Resp3BytesFrame::Double { data, attributes } => {
-                assert!((data - 3.14159).abs() < f64::EPSILON);
+                assert!((data - 3.125).abs() < f64::EPSILON);
                 assert!(attributes.is_none());
             }
             _ => panic!("Expected Double frame, got {:?}", frame),
@@ -957,14 +957,14 @@ mod tests {
 
     #[test]
     fn test_double_to_resp2_string() {
-        let resp = Response::Double(3.14159);
+        let resp = Response::Double(3.125);
         let frame = resp.into_wire().unwrap().to_resp2_frame();
         match frame {
             Resp2BytesFrame::BulkString(data) => {
                 let s = String::from_utf8(data.to_vec()).unwrap();
                 // Should be a valid float string
                 let parsed: f64 = s.parse().unwrap();
-                assert!((parsed - 3.14159).abs() < 1e-10);
+                assert!((parsed - 3.125).abs() < 1e-10);
             }
             _ => panic!("Expected BulkString frame, got {:?}", frame),
         }
@@ -1146,7 +1146,7 @@ mod tests {
             Response::bulk("hello"),
             Response::null(),
             Response::Null,
-            Response::Double(3.14),
+            Response::Double(3.125),
             Response::Boolean(true),
         ];
 
@@ -1207,7 +1207,7 @@ mod tests {
 
         match result {
             Err(InternalAction::RaftNeeded { op, .. }) => {
-                assert!(matches!(op, RaftClusterOp::IncrementEpoch));
+                assert!(matches!(*op, RaftClusterOp::IncrementEpoch));
             }
             _ => panic!("Expected InternalAction::RaftNeeded"),
         }
@@ -1297,11 +1297,11 @@ mod tests {
     #[test]
     fn test_wire_response_to_resp3_frame() {
         // This should NOT panic - WireResponse only contains safe types
-        let wire = WireResponse::Double(3.14);
+        let wire = WireResponse::Double(3.125);
         let frame = wire.to_resp3_frame();
         match frame {
             Resp3BytesFrame::Double { data, .. } => {
-                assert!((data - 3.14).abs() < f64::EPSILON);
+                assert!((data - 3.125).abs() < f64::EPSILON);
             }
             _ => panic!("Expected double"),
         }
@@ -1346,7 +1346,7 @@ mod tests {
     #[test]
     fn test_try_to_resp3_frame() {
         // Wire-serializable type should return Some
-        let resp = Response::Double(3.14);
+        let resp = Response::Double(3.125);
         let frame = resp.try_to_resp3_frame();
         assert!(frame.is_some());
 

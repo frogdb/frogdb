@@ -25,6 +25,7 @@ pub enum RestorePolicy {
 
 impl RestorePolicy {
     /// Parse a policy from a string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self, FunctionError> {
         match s.to_uppercase().as_str() {
             "APPEND" => Ok(RestorePolicy::Append),

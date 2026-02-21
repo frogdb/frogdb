@@ -1018,7 +1018,7 @@ impl Server {
 
         // Start admin server if enabled
         let admin_server_handle = if self.config.admin.enabled {
-            use crate::admin::{server::AdminState, AdminServer};
+            use crate::admin::server::AdminState;
 
             let admin_state = AdminState {
                 cluster_state: self.cluster_state.clone(),

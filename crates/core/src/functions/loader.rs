@@ -285,15 +285,15 @@ fn parse_flags_value(value: &Value) -> LuaResult<FunctionFlags> {
 
             // Also check for table-style flags: {["no-writes"] = true}
             for pair in t.pairs::<String, bool>() {
-                if let Ok((key, value)) = pair {
-                    if value {
-                        match key.as_str() {
-                            "no-writes" => flags |= FunctionFlags::NO_WRITES,
-                            "allow-oom" => flags |= FunctionFlags::ALLOW_OOM,
-                            "allow-stale" => flags |= FunctionFlags::ALLOW_STALE,
-                            "no-cluster" => flags |= FunctionFlags::NO_CLUSTER,
-                            _ => {} // Ignore non-flag keys or already processed array items
-                        }
+                if let Ok((key, value)) = pair
+                    && value
+                {
+                    match key.as_str() {
+                        "no-writes" => flags |= FunctionFlags::NO_WRITES,
+                        "allow-oom" => flags |= FunctionFlags::ALLOW_OOM,
+                        "allow-stale" => flags |= FunctionFlags::ALLOW_STALE,
+                        "no-cluster" => flags |= FunctionFlags::NO_CLUSTER,
+                        _ => {} // Ignore non-flag keys or already processed array items
                     }
                 }
             }

@@ -86,7 +86,7 @@ impl Model for RegisterModel {
                 if args.is_empty() {
                     return None;
                 }
-                let is_ok = result.map_or(false, |r| r.as_ref() == b"OK");
+                let is_ok = result.is_some_and(|r| r.as_ref() == b"OK");
                 if is_ok {
                     Some(RegisterState {
                         value: Some(args[0].clone()),
@@ -108,7 +108,7 @@ impl Model for RegisterModel {
 
                 if cas_succeeds {
                     // CAS should succeed and return OK
-                    let is_ok = result.map_or(false, |r| r.as_ref() == b"OK");
+                    let is_ok = result.is_some_and(|r| r.as_ref() == b"OK");
                     if is_ok {
                         Some(RegisterState {
                             value: Some(new_val.clone()),
@@ -175,7 +175,7 @@ impl Model for KVModel {
                 }
                 let key = &args[0];
                 let value = &args[1];
-                let is_ok = result.map_or(false, |r| r.as_ref() == b"OK");
+                let is_ok = result.is_some_and(|r| r.as_ref() == b"OK");
                 if is_ok {
                     let mut new_state = state.clone();
                     new_state.store.insert(key.clone(), value.clone());
@@ -191,7 +191,7 @@ impl Model for KVModel {
                 let key = &args[0];
                 let existed = state.store.contains_key(key);
                 let expected_result = if existed { b"1" as &[u8] } else { b"0" };
-                let result_matches = result.map_or(false, |r| r.as_ref() == expected_result);
+                let result_matches = result.is_some_and(|r| r.as_ref() == expected_result);
                 if result_matches {
                     let mut new_state = state.clone();
                     new_state.store.remove(key);
@@ -212,7 +212,7 @@ impl Model for KVModel {
                 let cas_succeeds = current == Some(expected_val);
 
                 if cas_succeeds {
-                    let is_ok = result.map_or(false, |r| r.as_ref() == b"OK");
+                    let is_ok = result.is_some_and(|r| r.as_ref() == b"OK");
                     if is_ok {
                         let mut new_state = state.clone();
                         new_state.store.insert(key.clone(), new_val.clone());
@@ -222,7 +222,7 @@ impl Model for KVModel {
                     }
                 } else {
                     // CAS fails - state unchanged, result should indicate failure
-                    let is_fail = result.map_or(false, |r| r.as_ref() == b"FAIL");
+                    let is_fail = result.is_some_and(|r| r.as_ref() == b"FAIL");
                     if is_fail {
                         Some(state.clone())
                     } else {
@@ -272,10 +272,10 @@ impl Model for KVModel {
             }
             "mset" => {
                 // MSET sets multiple keys
-                if args.len() < 2 || args.len() % 2 != 0 {
+                if args.len() < 2 || !args.len().is_multiple_of(2) {
                     return None;
                 }
-                let is_ok = result.map_or(false, |r| r.as_ref() == b"OK");
+                let is_ok = result.is_some_and(|r| r.as_ref() == b"OK");
                 if is_ok {
                     let mut new_state = state.clone();
                     let mut i = 0;
@@ -302,7 +302,7 @@ impl Model for KVModel {
                 let new_value = current + 1;
 
                 // Result should be the new value
-                let result_matches = result.map_or(false, |r| {
+                let result_matches = result.is_some_and(|r| {
                     String::from_utf8_lossy(r).parse::<i64>().ok() == Some(new_value)
                 });
                 if result_matches {
@@ -326,7 +326,7 @@ impl Model for KVModel {
                 let num_cmds: usize = String::from_utf8_lossy(&args[0]).parse().unwrap_or(0);
                 if num_cmds == 0 {
                     // Empty transaction returns empty array
-                    let is_empty = result.map_or(true, |r| r.is_empty() || r.as_ref() == b"");
+                    let is_empty = result.is_none_or(|r| r.is_empty() || r.as_ref() == b"");
                     return if is_empty { Some(state.clone()) } else { None };
                 }
 
@@ -470,8 +470,7 @@ mod tests {
 
     #[test]
     fn test_register_cas() {
-        let mut state = RegisterState::default();
-        state.value = Some(Bytes::from("old"));
+        let state = RegisterState { value: Some(Bytes::from("old")) };
 
         // CAS with correct expected value should succeed
         let new_state = RegisterModel::step(
