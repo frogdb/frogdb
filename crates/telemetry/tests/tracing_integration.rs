@@ -4,7 +4,7 @@
 //! 1. Behavior tests - verify spans are created with correct content
 //! 2. Config tests - verify config flags control span emission
 
-use frogdb_metrics::{ScatterGatherSpan, TestTracer, TracingConfig};
+use frogdb_telemetry::{ScatterGatherSpan, TestTracer, TracingConfig};
 use std::collections::HashMap;
 
 // =============================================================================

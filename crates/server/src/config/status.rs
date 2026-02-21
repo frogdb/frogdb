@@ -53,8 +53,8 @@ impl Default for StatusConfig {
 
 impl StatusConfig {
     /// Convert to StatusCollectorConfig.
-    pub fn to_collector_config(&self) -> frogdb_metrics::StatusCollectorConfig {
-        frogdb_metrics::StatusCollectorConfig {
+    pub fn to_collector_config(&self) -> frogdb_telemetry::StatusCollectorConfig {
+        frogdb_telemetry::StatusCollectorConfig {
             memory_warning_percent: self.memory_warning_percent,
             connection_warning_percent: self.connection_warning_percent,
             durability_lag_warning_ms: self.durability_lag_warning_ms,
@@ -104,8 +104,8 @@ impl Default for HotShardsConfig {
 
 impl HotShardsConfig {
     /// Convert to HotShardConfig for the metrics crate.
-    pub fn to_collector_config(&self) -> frogdb_metrics::HotShardConfig {
-        frogdb_metrics::HotShardConfig {
+    pub fn to_collector_config(&self) -> frogdb_debug::HotShardConfig {
+        frogdb_debug::HotShardConfig {
             hot_threshold_percent: self.hot_threshold_percent,
             warm_threshold_percent: self.warm_threshold_percent,
             default_period_secs: self.default_period_secs,

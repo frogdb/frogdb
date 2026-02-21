@@ -4,9 +4,9 @@
 //! work correctly without requiring an actual OTLP collector.
 
 use frogdb_core::{MetricsRecorder, NoopMetricsRecorder};
-use frogdb_metrics::config::MetricsConfig;
-use frogdb_metrics::otlp::{CompositeRecorder, OtlpRecorder};
-use frogdb_metrics::prometheus_recorder::PrometheusRecorder;
+use frogdb_telemetry::config::MetricsConfig;
+use frogdb_telemetry::otlp::{CompositeRecorder, OtlpRecorder};
+use frogdb_telemetry::prometheus_recorder::PrometheusRecorder;
 use std::sync::Arc;
 
 /// Test that OTLP recorder returns None when disabled.

@@ -43,13 +43,13 @@ impl ConnectionHandler {
 
     /// Handle MEMORY DOCTOR - diagnose memory issues.
     async fn handle_memory_doctor(&self) -> Response {
-        let collector = frogdb_metrics::MemoryDiagCollector::new(
+        let collector = frogdb_debug::MemoryDiagCollector::new(
             self.shard_senders.clone(),
             self.memory_diag_config.clone(),
         );
 
         let report = collector.collect().await;
-        let formatted = frogdb_metrics::format_memory_report(&report);
+        let formatted = frogdb_debug::format_memory_report(&report);
 
         Response::bulk(Bytes::from(formatted))
     }

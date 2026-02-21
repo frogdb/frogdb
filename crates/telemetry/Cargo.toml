@@ -1,11 +1,11 @@
 [package]
-name = "frogdb-metrics"
+name = "frogdb-telemetry"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Metrics and observability for FrogDB"
+description = "Telemetry, metrics, and observability for FrogDB"
 
 [features]
 default = []
@@ -23,10 +23,9 @@ opentelemetry = { version = "0.27", features = ["metrics"] }
 opentelemetry_sdk = { version = "0.27", features = ["metrics", "rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["metrics", "grpc-tonic"] }
 
-# HTTP server
+# HTTP response types (for handler functions)
 hyper = { version = "1", features = ["http1", "server"] }
 http-body-util = "0.1"
-hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 
 # Async runtime
 tokio = { workspace = true }
@@ -48,25 +47,11 @@ serde_json = { workspace = true }
 # Bytes
 bytes = { workspace = true }
 
-# Debug web UI
-rust-embed = { version = "8", features = ["compression"] }
-mime_guess = "2"
-
-# ZIP archive support for debug bundles
-zip = { version = "2", default-features = false, features = ["deflate"] }
-
 # HTTP client for testing (optional)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tempfile = "3"
-frogdb-server = { path = "../server" }
-frogdb-protocol = { path = "../protocol" }
-redis-protocol = "5"
-futures = "0.3"
-tokio-util = { version = "0.7", features = ["codec"] }
 bytes = { workspace = true }
-frogdb-metrics = { path = ".", features = ["testing"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+frogdb-telemetry = { path = ".", features = ["testing"] }

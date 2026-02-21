@@ -4,8 +4,8 @@ mod common;
 
 use bytes::Bytes;
 use common::test_server::TestServer;
-use frogdb_metrics::testing::get_counter;
 use frogdb_protocol::Response;
+use frogdb_telemetry::testing::get_counter;
 use std::time::Duration;
 
 #[tokio::test]

@@ -5,7 +5,7 @@ members = [
     "crates/core",
     "crates/debug",
     "crates/server",
-    "crates/metrics",
+    "crates/telemetry",
     "crates/metrics-derive",
     "crates/testing",
     "crates/browser-tests",
@@ -94,7 +94,7 @@ jsonpath-rust = "0.7"
 frogdb-protocol = { path = "crates/protocol" }
 frogdb-core = { path = "crates/core" }
 frogdb-debug = { path = "crates/debug" }
-frogdb-metrics = { path = "crates/metrics" }
+frogdb-telemetry = { path = "crates/telemetry" }
 frogdb-metrics-derive = { path = "crates/metrics-derive" }
 frogdb-testing = { path = "crates/testing" }
 

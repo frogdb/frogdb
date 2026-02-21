@@ -6,8 +6,8 @@ mod common;
 
 use bytes::Bytes;
 use common::test_server::TestServer;
-use frogdb_metrics::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
 use frogdb_protocol::Response;
+use frogdb_telemetry::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
 use std::time::Duration;
 
 // =============================================================================

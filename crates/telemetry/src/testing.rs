@@ -5,7 +5,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use frogdb_metrics::testing::*;
+//! use frogdb_telemetry::testing::*;
 //!
 //! let metrics = fetch_metrics().await;
 //! let count = get_counter(&metrics, "frogdb_commands_total", &[("command", "SET")]);
@@ -17,7 +17,7 @@
 //! For before/after comparisons, use `MetricsSnapshot` and `MetricsDelta`:
 //!
 //! ```rust,ignore
-//! use frogdb_metrics::testing::{MetricsSnapshot, MetricsDelta};
+//! use frogdb_telemetry::testing::{MetricsSnapshot, MetricsDelta};
 //!
 //! let before = MetricsSnapshot::new(server.fetch_metrics().await);
 //! // ... perform operations ...
@@ -49,7 +49,7 @@ pub struct MetricSample {
 /// # Example
 ///
 /// ```
-/// use frogdb_metrics::testing::parse_prometheus;
+/// use frogdb_telemetry::testing::parse_prometheus;
 ///
 /// let text = r#"
 /// # HELP my_counter A counter metric
@@ -247,7 +247,7 @@ pub fn find_metric<'a>(
 /// # Example
 ///
 /// ```
-/// use frogdb_metrics::testing::get_counter;
+/// use frogdb_telemetry::testing::get_counter;
 ///
 /// let text = r#"my_counter{cmd="GET"} 42"#;
 /// let value = get_counter(text, "my_counter", &[("cmd", "GET")]);
@@ -274,7 +274,7 @@ pub fn get_gauge(text: &str, name: &str, labels: &[(&str, &str)]) -> f64 {
 /// # Example
 ///
 /// ```
-/// use frogdb_metrics::testing::get_histogram_count;
+/// use frogdb_telemetry::testing::get_histogram_count;
 ///
 /// let text = r#"
 /// my_histogram_count{cmd="GET"} 100
@@ -467,7 +467,7 @@ pub struct MetricsSnapshot {
 /// # Example
 ///
 /// ```rust,ignore
-/// use frogdb_metrics::testing::fetch_metrics;
+/// use frogdb_telemetry::testing::fetch_metrics;
 ///
 /// let metrics = fetch_metrics(server.metrics_addr).await;
 /// ```
@@ -497,7 +497,7 @@ impl MetricsSnapshot {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use frogdb_metrics::testing::MetricsSnapshot;
+    /// use frogdb_telemetry::testing::MetricsSnapshot;
     ///
     /// let snapshot = MetricsSnapshot::fetch(server.metrics_addr).await;
     /// ```

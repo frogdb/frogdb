@@ -8,7 +8,7 @@
 //!
 //! # Example Usage
 //! ```ignore
-//! use frogdb_metrics::definitions::CommandsTotal;
+//! use frogdb_telemetry::definitions::CommandsTotal;
 //!
 //! CommandsTotal::inc(&*recorder, "GET");
 //! ```

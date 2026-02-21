@@ -86,9 +86,9 @@ impl TracingConfig {
         Ok(())
     }
 
-    /// Convert to frogdb_metrics::TracingConfig.
-    pub fn to_metrics_config(&self) -> frogdb_metrics::TracingConfig {
-        frogdb_metrics::TracingConfig {
+    /// Convert to frogdb_telemetry::TracingConfig.
+    pub fn to_metrics_config(&self) -> frogdb_telemetry::TracingConfig {
+        frogdb_telemetry::TracingConfig {
             enabled: self.enabled,
             otlp_endpoint: self.otlp_endpoint.clone(),
             sampling_rate: self.sampling_rate,

@@ -131,8 +131,8 @@ impl MemoryConfig {
     }
 
     /// Convert to MemoryDiagConfig for the metrics crate.
-    pub fn to_diag_config(&self) -> frogdb_metrics::MemoryDiagConfig {
-        frogdb_metrics::MemoryDiagConfig {
+    pub fn to_diag_config(&self) -> frogdb_debug::MemoryDiagConfig {
+        frogdb_debug::MemoryDiagConfig {
             big_key_threshold_bytes: self.doctor_big_key_threshold as usize,
             max_big_keys_per_shard: self.doctor_max_big_keys,
             imbalance_threshold_percent: self.doctor_imbalance_threshold,

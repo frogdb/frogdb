@@ -7,18 +7,14 @@
 //! - System metrics collection (CPU, memory, uptime)
 //! - Typed metrics with compile-time safety
 
-pub mod bundle;
 pub mod config;
-pub mod debug;
 pub mod definitions;
 pub mod health;
-pub mod hotshards;
+pub mod http_handlers;
 pub mod labels;
 pub mod latency_bands;
-pub mod memorydiag;
 pub mod otlp;
 pub mod prometheus_recorder;
-pub mod server;
 pub mod status;
 pub mod system;
 pub mod tracing;
@@ -30,25 +26,14 @@ pub mod testing;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub use bundle::{
-    BundleConfig, BundleGenerator, BundleInfo, BundleManifest, BundleStore, ClusterStateJson,
-    DiagnosticCollector, DiagnosticData, ShardMemoryJson, SlowlogEntryJson, TraceEntryJson,
-};
 pub use config::MetricsConfig;
 pub use config::TracingConfig;
-pub use debug::{ConfigEntry, DebugState, ServerInfo};
 pub use health::HealthChecker;
-pub use hotshards::{
-    format_hotshards_info, format_hotshards_report, HotShardCollector, HotShardConfig,
-    HotShardReport, ShardStats, ShardStatus,
+pub use http_handlers::{
+    handle_health_live, handle_health_ready, handle_metrics, handle_status_json,
 };
 pub use latency_bands::LatencyBandTracker;
-pub use memorydiag::{
-    calculate_variance, format_report as format_memory_report, MemoryDiagCollector,
-    MemoryDiagConfig, MemoryDiagReport, MemorySummary, ShardMemoryVariance,
-};
 pub use prometheus_recorder::PrometheusRecorder;
-pub use server::MetricsServer;
 pub use status::{ServerStatus, StatusCollector, StatusCollectorConfig};
 pub use system::SystemMetricsCollector;
 pub use tracing::{

@@ -8,7 +8,7 @@
 //! not necessarily the typed metric struct usage. Both the old-style
 //! `metric_names::*` constants and new typed metrics count as usage.
 
-use frogdb_metrics::ALL_METRICS;
+use frogdb_telemetry::ALL_METRICS;
 use std::process::Command;
 
 /// Check that all defined metrics are referenced somewhere in the codebase.
@@ -34,7 +34,7 @@ fn all_metrics_are_used() {
         let usage_count = files
             .lines()
             .filter(|f| {
-                !f.contains("definitions.rs") && !f.contains("metrics/src/lib.rs")
+                !f.contains("definitions.rs") && !f.contains("telemetry/src/lib.rs")
                 // metric_names module
             })
             .count();
@@ -56,7 +56,7 @@ fn all_metrics_are_used() {
 /// Verify the ALL_METRICS registry is populated correctly.
 #[test]
 fn metrics_registry_is_populated() {
-    use frogdb_metrics::METRICS_COUNT;
+    use frogdb_telemetry::METRICS_COUNT;
 
     // We should have a reasonable number of metrics defined
     assert!(

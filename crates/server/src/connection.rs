@@ -51,8 +51,8 @@ use frogdb_core::{
     MetricsRecorder, PauseMode, PubSubMessage, PubSubSender, ReplicationTrackerImpl, ShardMessage,
     SharedFunctionRegistry,
 };
-use frogdb_metrics::SharedTracer;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
+use frogdb_telemetry::SharedTracer;
 use futures::{SinkExt, StreamExt};
 use redis_protocol::codec::Resp2;
 use tokio::io::AsyncWriteExt;
@@ -148,13 +148,13 @@ pub struct ConnectionHandler {
     admin_enabled: bool,
 
     /// Hot shard detection configuration.
-    hotshards_config: frogdb_metrics::HotShardConfig,
+    hotshards_config: frogdb_debug::HotShardConfig,
 
     /// Memory diagnostics configuration.
-    memory_diag_config: frogdb_metrics::MemoryDiagConfig,
+    memory_diag_config: frogdb_debug::MemoryDiagConfig,
 
     /// Optional latency band tracker for SLO monitoring.
-    band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
+    band_tracker: Option<Arc<frogdb_telemetry::LatencyBandTracker>>,
 
     /// Optional Raft instance (only when cluster mode is enabled).
     raft: Option<Arc<ClusterRaft>>,
@@ -283,9 +283,9 @@ impl ConnectionHandler {
         node_id: Option<u64>,
         is_admin: bool,
         admin_enabled: bool,
-        hotshards_config: frogdb_metrics::HotShardConfig,
-        memory_diag_config: frogdb_metrics::MemoryDiagConfig,
-        band_tracker: Option<Arc<frogdb_metrics::LatencyBandTracker>>,
+        hotshards_config: frogdb_debug::HotShardConfig,
+        memory_diag_config: frogdb_debug::MemoryDiagConfig,
+        band_tracker: Option<Arc<frogdb_telemetry::LatencyBandTracker>>,
         raft: Option<Arc<ClusterRaft>>,
         network_factory: Option<Arc<ClusterNetworkFactory>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
@@ -468,7 +468,7 @@ impl ConnectionHandler {
                     // Start timing for both metrics and slowlog
                     let start_time = std::time::Instant::now();
                     let cmd_name_for_metrics = String::from_utf8_lossy(&cmd.name).to_uppercase();
-                    let timer = frogdb_metrics::CommandTimer::with_band_tracker(
+                    let timer = frogdb_telemetry::CommandTimer::with_band_tracker(
                         cmd_name_for_metrics.clone(),
                         self.metrics_recorder.clone(),
                         self.band_tracker.clone(),
