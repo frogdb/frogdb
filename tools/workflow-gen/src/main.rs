@@ -9,7 +9,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod helpers;
 mod types;
@@ -53,7 +53,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn generate_files(output_dir: &PathBuf) -> Result<()> {
+fn generate_files(output_dir: &Path) -> Result<()> {
     fs::create_dir_all(output_dir)?;
 
     // Generate test.yml
@@ -84,7 +84,7 @@ fn generate_files(output_dir: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn check_files(output_dir: &PathBuf) -> Result<()> {
+fn check_files(output_dir: &Path) -> Result<()> {
     let mut has_diff = false;
 
     // Check test.yml
@@ -125,7 +125,7 @@ fn check_files(output_dir: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn check_file(path: &PathBuf, expected: &str) -> Result<bool> {
+fn check_file(path: &Path, expected: &str) -> Result<bool> {
     if !path.exists() {
         eprintln!("Missing: {}", path.display());
         return Ok(true);

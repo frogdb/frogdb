@@ -51,7 +51,7 @@ use figment::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Main configuration struct.

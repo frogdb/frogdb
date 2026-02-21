@@ -76,6 +76,7 @@ pub fn setup_helm() -> Step<Use> {
 }
 
 /// Creates a setup kubectl step.
+#[allow(dead_code)]
 pub fn setup_kubectl() -> Step<Use> {
     Step::new("Install kubectl").uses("azure", "setup-kubectl", SETUP_KUBECTL_VERSION)
 }
@@ -88,6 +89,7 @@ pub fn setup_zig() -> Step<Use> {
 }
 
 /// Creates a setup Terraform step.
+#[allow(dead_code)]
 pub fn setup_terraform() -> Step<Use> {
     Step::new("Setup Terraform")
         .uses("hashicorp", "setup-terraform", SETUP_TERRAFORM_VERSION)
@@ -183,6 +185,7 @@ pub fn download_all_artifacts(path: &str) -> Step<Use> {
 }
 
 /// Creates an AWS credentials configuration step.
+#[allow(dead_code)]
 pub fn configure_aws_credentials() -> Step<Use> {
     Step::new("Configure AWS credentials")
         .uses(
@@ -196,6 +199,7 @@ pub fn configure_aws_credentials() -> Step<Use> {
 }
 
 /// Creates a GCP authentication step.
+#[allow(dead_code)]
 pub fn authenticate_gcp() -> Step<Use> {
     Step::new("Authenticate to Google Cloud")
         .uses("google-github-actions", "auth", GCP_AUTH_VERSION)
@@ -208,6 +212,7 @@ pub fn authenticate_gcp() -> Step<Use> {
 }
 
 /// Creates an Azure login step.
+#[allow(dead_code)]
 pub fn azure_login() -> Step<Use> {
     Step::new("Azure Login")
         .uses("azure", "login", AZURE_LOGIN_VERSION)

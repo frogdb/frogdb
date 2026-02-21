@@ -11,6 +11,7 @@ use super::{KeyLockState, LockMode};
 
 /// An intent to access a key.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct KeyIntent {
     /// Transaction ID.
     pub txid: u64,

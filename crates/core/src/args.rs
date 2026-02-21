@@ -75,6 +75,7 @@ impl<'a> ArgParser<'a> {
     /// Get the next argument, consuming it.
     ///
     /// Returns `None` if no more arguments.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<&'a Bytes> {
         if self.pos < self.args.len() {
             let arg = &self.args[self.pos];
@@ -627,12 +628,12 @@ mod tests {
 
     #[test]
     fn test_numeric_parsing() {
-        let args = bytes_vec(&["42", "-10", "3.14"]);
+        let args = bytes_vec(&["42", "-10", "3.15"]);
         let mut parser = ArgParser::new(&args);
 
         assert_eq!(parser.next_u64().unwrap(), 42);
         assert_eq!(parser.next_i64().unwrap(), -10);
-        assert!((parser.next_f64().unwrap() - 3.14_f64).abs() < 0.001);
+        assert!((parser.next_f64().unwrap() - 3.15_f64).abs() < 0.001);
     }
 
     #[test]

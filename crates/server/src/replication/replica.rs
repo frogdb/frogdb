@@ -61,7 +61,7 @@ pub struct ReplicaConnection {
     stream: TcpStream,
 
     /// Primary address
-    primary_addr: SocketAddr,
+    _primary_addr: SocketAddr,
 
     /// Replication state
     state: Arc<RwLock<ReplicationState>>,
@@ -170,7 +170,7 @@ impl ReplicaReplicationHandler {
 
         let mut conn = ReplicaConnection {
             stream,
-            primary_addr: self.primary_addr,
+            _primary_addr: self.primary_addr,
             state: self.state.clone(),
             connection_state: ConnectionState::Connected,
             data_dir: self.data_dir.clone(),

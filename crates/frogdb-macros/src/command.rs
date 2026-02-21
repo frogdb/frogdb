@@ -21,19 +21,15 @@ enum AritySpec {
 }
 
 /// Parse the #[keys(...)] attribute.
+#[derive(Default)]
 enum KeysSpec {
+    #[default]
     First,
     All,
     None,
     Range(String),
     Step(usize),
     Custom,
-}
-
-impl Default for KeysSpec {
-    fn default() -> Self {
-        KeysSpec::First
-    }
 }
 
 pub fn derive_command_impl(input: TokenStream) -> TokenStream {
@@ -302,7 +298,7 @@ fn generate_keys_impl(spec: &KeysSpec) -> TokenStream2 {
                 }
             } else if range_str.contains("..") {
                 let parts: Vec<&str> = range_str.split("..").collect();
-                let start: usize = parts.get(0).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let start: usize = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
                 let end: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
                 quote! {
                     args.get(#start..#end).map(|slice| {

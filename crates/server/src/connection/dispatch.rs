@@ -8,7 +8,7 @@ use bytes::Bytes;
 use frogdb_core::{ConnectionLevelOp, ExecutionStrategy};
 use frogdb_protocol::Response;
 
-use crate::connection::router::{self, ConnectionLevelHandler};
+use crate::connection::router::ConnectionLevelHandler;
 use crate::connection::ConnectionHandler;
 
 impl ConnectionHandler {
