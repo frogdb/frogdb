@@ -83,3 +83,30 @@ just jepsen-down
 ```
 
 Or run the full suite with: `just jepsen-all`
+
+## Code Generation
+
+Three code generation tools derive files from source definitions. Re-run them when their inputs change:
+
+- `just helm-gen` - Regenerates Helm chart (`values.yaml`, `Chart.yaml`, `values.schema.json`) from server config structs. Run after changing `frogdb-server` config.
+- `just dashboard-gen` - Regenerates Grafana dashboard JSON from `frogdb-metrics` metric definitions. Run after adding/modifying metrics.
+- `just workflow-gen` - Regenerates GitHub Actions workflows. Run after changing CI/workflow logic.
+- `just generate` - Runs all three.
+- `just generate-check` - Validates all generated files are up to date (used in CI).
+
+## Design Documentation
+
+The `spec/` directory contains design documentation. Consult it before making architectural changes. Key docs:
+
+- `INDEX.md` - Master design overview
+- `ARCHITECTURE.md` - Component relationships and boundaries
+- `CONCURRENCY.md` - Shard worker architecture, scatter-gather
+- `CONSISTENCY.md` - Linearizability and consistency guarantees
+- `PERSISTENCE.md` - Storage engine and durability
+- `REPLICATION.md` - Replication protocol
+- `CLUSTER.md` - Clustering design
+- `TESTING.md` - Test strategy
+
+## Redis Compatibility Tests (Conditional)
+
+Run `just redis-compat` when changes modify command behavior, argument parsing, or error responses. This validates compatibility with the Redis protocol and expected command semantics.
