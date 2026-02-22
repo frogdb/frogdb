@@ -1,3 +1,6 @@
+# libclang is required by bindgen (used by librocksdb-sys). macOS: brew install llvm
+export LIBCLANG_PATH := "/opt/homebrew/opt/llvm/lib"
+
 # System RocksDB env vars for faster builds (macOS: brew install rocksdb)
 system-rocksdb-env := "ROCKSDB_LIB_DIR=/opt/homebrew/lib SNAPPY_LIB_DIR=/opt/homebrew/lib LZ4_LIB_DIR=/opt/homebrew/lib ZSTD_LIB_DIR=/opt/homebrew/lib"
 
@@ -20,6 +23,10 @@ release:
 # Run all tests
 test:
     cargo test --all
+
+# Test with system RocksDB (faster, requires: brew install rocksdb)
+test-fast:
+    {{system-rocksdb-env}} cargo test --all
 
 # Run tests for a specific crate
 test-crate crate:
@@ -61,6 +68,10 @@ fmt-check:
 # Run clippy lints
 lint:
     cargo clippy --all-targets --all-features -- -D warnings
+
+# Lint with system RocksDB (faster, requires: brew install rocksdb)
+lint-fast:
+    {{system-rocksdb-env}} cargo clippy --all-targets --all-features -- -D warnings
 
 # Run cargo-deny (license/security audit)
 deny:
