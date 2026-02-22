@@ -5,7 +5,12 @@
 
 use bytes::Bytes;
 use frogdb_server::{Config, Server};
+<<<<<<< HEAD
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
+||||||| parent of 670778b (more fixing stuff?)
+=======
+use frogdb_telemetry::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
+>>>>>>> 670778b (more fixing stuff?)
 use futures::{SinkExt, StreamExt};
 use redis_protocol::codec::{Resp2, Resp3};
 use redis_protocol::resp2::types::BytesFrame as Resp2Frame;

@@ -1,3 +1,6 @@
+# System RocksDB env vars for faster builds (macOS: brew install rocksdb)
+system-rocksdb-env := "ROCKSDB_LIB_DIR=/opt/homebrew/lib SNAPPY_LIB_DIR=/opt/homebrew/lib LZ4_LIB_DIR=/opt/homebrew/lib ZSTD_LIB_DIR=/opt/homebrew/lib"
+
 # Default recipe - show available commands
 default:
     @just --list
@@ -5,6 +8,10 @@ default:
 # Build debug
 build:
     cargo build
+
+# Build with system RocksDB (faster, requires: brew install rocksdb)
+build-fast:
+    {{system-rocksdb-env}} cargo build
 
 # Build release
 release:

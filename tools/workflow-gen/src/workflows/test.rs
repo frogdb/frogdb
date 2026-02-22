@@ -1,6 +1,6 @@
 //! Test workflow definition (test.yml).
 
-use gh_workflow::{Event, Job, PullRequest, Push, Step, Workflow};
+use gh_workflow::{Event, Job, Step, Workflow, WorkflowDispatch};
 
 use crate::helpers::{
     cargo_cache, checkout, rust_toolchain, rust_toolchain_with_components, setup_helm,
@@ -9,9 +9,7 @@ use crate::helpers::{
 /// Creates the test workflow.
 pub fn test_workflow() -> Workflow {
     Workflow::new("Test")
-        .on(Event::default()
-            .push(Push::default().add_branch("main"))
-            .pull_request(PullRequest::default().add_branch("main")))
+        .on(Event::default().workflow_dispatch(WorkflowDispatch::default()))
         .add_env(("CARGO_TERM_COLOR", "always"))
         .add_job("lint", lint_job())
         .add_job("unit-tests", unit_tests_job())

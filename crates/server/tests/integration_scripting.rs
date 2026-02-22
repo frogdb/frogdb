@@ -7,7 +7,12 @@ mod common;
 use bytes::Bytes;
 use common::test_server::TestServer;
 use frogdb_protocol::Response;
+<<<<<<< HEAD
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
+||||||| parent of 670778b (more fixing stuff?)
+=======
+use frogdb_telemetry::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
+>>>>>>> 670778b (more fixing stuff?)
 use std::time::Duration;
 
 // =============================================================================

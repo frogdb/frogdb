@@ -257,6 +257,7 @@ fn bench_response_to_frame_resp2(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
     group.bench_function("nested_array", |b| {
         b.iter(|| {
+<<<<<<< HEAD
             black_box(
                 nested_response
                     .clone()
@@ -264,6 +265,11 @@ fn bench_response_to_frame_resp2(c: &mut Criterion) {
                     .unwrap()
                     .to_resp2_frame(),
             );
+||||||| parent of 670778b (more fixing stuff?)
+            black_box(nested_response.clone().to_resp2_frame());
+=======
+            black_box(nested_response.clone().into_wire().unwrap().to_resp2_frame());
+>>>>>>> 670778b (more fixing stuff?)
         });
     });
 
@@ -322,6 +328,7 @@ fn bench_response_to_frame_resp3(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
     group.bench_function("complex_map", |b| {
         b.iter(|| {
+<<<<<<< HEAD
             black_box(
                 nested_response
                     .clone()
@@ -329,6 +336,11 @@ fn bench_response_to_frame_resp3(c: &mut Criterion) {
                     .unwrap()
                     .to_resp3_frame(),
             );
+||||||| parent of 670778b (more fixing stuff?)
+            black_box(nested_response.clone().to_resp3_frame());
+=======
+            black_box(nested_response.clone().into_wire().unwrap().to_resp3_frame());
+>>>>>>> 670778b (more fixing stuff?)
         });
     });
 

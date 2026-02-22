@@ -1,6 +1,6 @@
 //! Release workflow definition (release.yml).
 
-use gh_workflow::{Event, Expression, Job, Level, Permissions, Push, Step, Workflow};
+use gh_workflow::{Event, Expression, Job, Level, Permissions, Step, Workflow, WorkflowDispatch};
 
 use crate::helpers::{
     checkout, checkout_with_depth, docker_build_push, docker_login_ghcr, docker_metadata,
@@ -11,7 +11,7 @@ use crate::helpers::{
 /// Creates the release workflow.
 pub fn release_workflow() -> Workflow {
     Workflow::new("Release")
-        .on(Event::default().push(Push::default().add_tag("v*")))
+        .on(Event::default().workflow_dispatch(WorkflowDispatch::default()))
         .add_env(("CARGO_TERM_COLOR", "always"))
         .add_env(("REGISTRY", "ghcr.io"))
         .add_env(("IMAGE_NAME", "${{ github.repository }}"))

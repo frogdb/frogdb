@@ -69,6 +69,7 @@ pub struct PrimaryReplicationHandler {
 }
 
 /// Handle to a replica connection.
+#[allow(dead_code)]
 struct ReplicaConnectionHandle {
     /// Replica ID
     _replica_id: u64,
