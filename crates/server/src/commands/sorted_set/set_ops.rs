@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    shard_for_key, Arity, Command, CommandContext, CommandError, CommandFlags, SortedSetValue,
-    Value,
+    Arity, Command, CommandContext, CommandError, CommandFlags, SortedSetValue, Value,
+    shard_for_key,
 };
 use frogdb_protocol::Response;
 use std::collections::HashMap;

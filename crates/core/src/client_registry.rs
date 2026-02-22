@@ -263,15 +263,14 @@ impl ClientStats {
                 }
             } else {
                 // Insert new command type with LRU eviction
-                if self.command_counts.len() >= MAX_COMMAND_TYPES {
-                    if let Some(min_key) = self
+                if self.command_counts.len() >= MAX_COMMAND_TYPES
+                    && let Some(min_key) = self
                         .command_counts
                         .iter()
                         .min_by_key(|(_, stats)| stats.count)
                         .map(|(k, _)| k.clone())
-                    {
-                        self.command_counts.remove(&min_key);
-                    }
+                {
+                    self.command_counts.remove(&min_key);
                 }
                 self.command_counts.insert(
                     cmd_name.clone(),
@@ -453,33 +452,32 @@ impl KillFilter {
     /// Check if a client matches this filter.
     pub fn matches(&self, id: u64, info: &ClientInfo) -> bool {
         // Check SKIPME
-        if self.skip_me {
-            if let Some(current_id) = self.current_conn_id {
-                if id == current_id {
-                    return false;
-                }
-            }
+        if self.skip_me
+            && let Some(current_id) = self.current_conn_id
+            && id == current_id
+        {
+            return false;
         }
 
         // Check ID filter
-        if let Some(filter_id) = self.id {
-            if id != filter_id {
-                return false;
-            }
+        if let Some(filter_id) = self.id
+            && id != filter_id
+        {
+            return false;
         }
 
         // Check ADDR filter
-        if let Some(ref filter_addr) = self.addr {
-            if info.addr != *filter_addr {
-                return false;
-            }
+        if let Some(ref filter_addr) = self.addr
+            && info.addr != *filter_addr
+        {
+            return false;
         }
 
         // Check LADDR filter
-        if let Some(ref filter_laddr) = self.laddr {
-            if info.local_addr.as_ref() != Some(filter_laddr) {
-                return false;
-            }
+        if let Some(ref filter_laddr) = self.laddr
+            && info.local_addr.as_ref() != Some(filter_laddr)
+        {
+            return false;
         }
 
         // Check TYPE filter
@@ -857,11 +855,11 @@ impl ClientRegistry {
 
         // Pause expired, clear it
         let mut pause_state = self.pause_state.write().unwrap();
-        if let Some(unpause_at) = pause_state.unpause_at {
-            if Instant::now() >= unpause_at {
-                pause_state.mode = None;
-                pause_state.unpause_at = None;
-            }
+        if let Some(unpause_at) = pause_state.unpause_at
+            && Instant::now() >= unpause_at
+        {
+            pause_state.mode = None;
+            pause_state.unpause_at = None;
         }
         None
     }
@@ -1175,7 +1173,7 @@ mod tests {
 
         // p99 of 1-100 should be 99 (99th percentile)
         let p99 = stats.p99_latency_us();
-        assert!(p99 >= 99 && p99 <= 100, "p99 was {}", p99);
+        assert!((99..=100).contains(&p99), "p99 was {}", p99);
     }
 
     #[test]

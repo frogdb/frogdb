@@ -115,43 +115,41 @@ impl ShardWorker {
 
     /// Check if a list key has non-empty data.
     fn list_is_non_empty(&self, key: &Bytes) -> bool {
-        if let Some(value) = self.store.get(key) {
-            if let Some(list) = value.as_list() {
-                return !list.is_empty();
-            }
+        if let Some(value) = self.store.get(key)
+            && let Some(list) = value.as_list()
+        {
+            return !list.is_empty();
         }
         false
     }
 
     /// Check if a sorted set key has non-empty data.
     fn zset_is_non_empty(&self, key: &Bytes) -> bool {
-        if let Some(value) = self.store.get(key) {
-            if let Some(zset) = value.as_sorted_set() {
-                return !zset.is_empty();
-            }
+        if let Some(value) = self.store.get(key)
+            && let Some(zset) = value.as_sorted_set()
+        {
+            return !zset.is_empty();
         }
         false
     }
 
     /// Clean up an empty list key.
     fn cleanup_empty_list(&mut self, key: &Bytes) {
-        if let Some(value) = self.store.get(key) {
-            if let Some(list) = value.as_list() {
-                if list.is_empty() {
-                    self.store.delete(key);
-                }
-            }
+        if let Some(value) = self.store.get(key)
+            && let Some(list) = value.as_list()
+            && list.is_empty()
+        {
+            self.store.delete(key);
         }
     }
 
     /// Clean up an empty sorted set key.
     fn cleanup_empty_zset(&mut self, key: &Bytes) {
-        if let Some(value) = self.store.get(key) {
-            if let Some(zset) = value.as_sorted_set() {
-                if zset.is_empty() {
-                    self.store.delete(key);
-                }
-            }
+        if let Some(value) = self.store.get(key)
+            && let Some(zset) = value.as_sorted_set()
+            && zset.is_empty()
+        {
+            self.store.delete(key);
         }
     }
 

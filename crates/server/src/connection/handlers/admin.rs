@@ -86,10 +86,10 @@ impl AdminHandler {
         }
 
         // Simple implementation: kill by ID
-        if let Ok(id) = frogdb_core::parse_u64(&args[0]) {
-            if self.client_registry.kill_by_id(id) {
-                return Response::Integer(1);
-            }
+        if let Ok(id) = frogdb_core::parse_u64(&args[0])
+            && self.client_registry.kill_by_id(id)
+        {
+            return Response::Integer(1);
         }
 
         Response::Integer(0)
@@ -135,7 +135,7 @@ impl AdminHandler {
             "CLIENT HELP",
             "    Show this help.",
         ];
-        Response::Array(help.into_iter().map(|s| Response::bulk(s)).collect())
+        Response::Array(help.into_iter().map(Response::bulk).collect())
     }
 
     /// Handle CONFIG command.
@@ -175,7 +175,7 @@ impl AdminHandler {
     }
 
     fn handle_config_set(&self, args: &[Bytes]) -> Response {
-        if args.len() < 2 || args.len() % 2 != 0 {
+        if args.len() < 2 || !args.len().is_multiple_of(2) {
             return Response::error("ERR wrong number of arguments for 'config set' command");
         }
 
@@ -204,7 +204,7 @@ impl AdminHandler {
             "CONFIG HELP",
             "    Show this help.",
         ];
-        Response::Array(help.into_iter().map(|s| Response::bulk(s)).collect())
+        Response::Array(help.into_iter().map(Response::bulk).collect())
     }
 
     /// Handle DEBUG command.
@@ -237,7 +237,7 @@ impl AdminHandler {
             "DEBUG HELP",
             "    Show this help.",
         ];
-        Response::Array(help.into_iter().map(|s| Response::bulk(s)).collect())
+        Response::Array(help.into_iter().map(Response::bulk).collect())
     }
 
     /// Handle MEMORY command.
@@ -294,7 +294,7 @@ impl AdminHandler {
             "MEMORY HELP",
             "    Show this help.",
         ];
-        Response::Array(help.into_iter().map(|s| Response::bulk(s)).collect())
+        Response::Array(help.into_iter().map(Response::bulk).collect())
     }
 
     /// Handle SLOWLOG command.
@@ -325,7 +325,7 @@ impl AdminHandler {
             "SLOWLOG HELP",
             "    Show this help.",
         ];
-        Response::Array(help.into_iter().map(|s| Response::bulk(s)).collect())
+        Response::Array(help.into_iter().map(Response::bulk).collect())
     }
 
     /// Handle LATENCY command.
@@ -365,7 +365,7 @@ impl AdminHandler {
             "LATENCY HELP",
             "    Show this help.",
         ];
-        Response::Array(help.into_iter().map(|s| Response::bulk(s)).collect())
+        Response::Array(help.into_iter().map(Response::bulk).collect())
     }
 }
 

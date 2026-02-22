@@ -4,8 +4,8 @@
 //! Global monotonic IDs are shared across shards for consistent ordering.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::Bytes;
 

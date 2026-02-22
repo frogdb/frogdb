@@ -21,7 +21,7 @@ use common::replication_helpers::{
 };
 use common::response_helpers::assert_ok;
 use common::test_server::{
-    is_error, parse_integer, parse_simple_string, TestServer, TestServerConfig,
+    TestServer, TestServerConfig, is_error, parse_integer, parse_simple_string,
 };
 use frogdb_protocol::Response;
 use rstest::rstest;
@@ -287,7 +287,7 @@ async fn test_write_propagation(#[case] persistence: bool) {
     assert_ok(&set_response);
 
     // Wait for replication with WAIT (or timeout)
-    let acked = wait_for_replication(&primary, 5000).await;
+    let _acked = wait_for_replication(&primary, 5000).await;
 
     // Read from replica
     let get_response = replica.send("GET", &["test_key"]).await;
@@ -304,7 +304,9 @@ async fn test_write_propagation(#[case] persistence: bool) {
         }
         Response::Bulk(None) => {
             // Replication might not be fully connected yet - this is acceptable for now
-            eprintln!("Note: Replication not yet propagating data (expected during initial implementation)");
+            eprintln!(
+                "Note: Replication not yet propagating data (expected during initial implementation)"
+            );
         }
         _ => {
             panic!("Unexpected response from replica GET: {:?}", get_response);
@@ -1260,10 +1262,10 @@ async fn test_fullresync_data_integrity(#[case] persistence: bool) {
         let key = format!("fullsync_key_{}", i);
         let expected = format!("fullsync_value_{}", i);
         let response = replica.send("GET", &[&key]).await;
-        if let Response::Bulk(Some(value)) = response {
-            if value.as_ref() == expected.as_bytes() {
-                verified += 1;
-            }
+        if let Response::Bulk(Some(value)) = response
+            && value.as_ref() == expected.as_bytes()
+        {
+            verified += 1;
         }
     }
 
@@ -1553,7 +1555,9 @@ async fn test_wal_overflow_triggers_full_resync(#[case] persistence: bool) {
     // We document the observed behavior without strict assertions
 
     if has_post && overflow_found > 0 {
-        eprintln!("Replica successfully recovered data after WAL overflow (full or partial resync worked)");
+        eprintln!(
+            "Replica successfully recovered data after WAL overflow (full or partial resync worked)"
+        );
     } else if has_marker {
         eprintln!(
             "Replica has pre-disconnect data but missing post-overflow data (partial sync issue)"
@@ -1805,7 +1809,9 @@ async fn test_fullresync_interrupted_resume(#[case] persistence: bool) {
             true
         } else {
             // Note: Replication may not be fully connected yet
-            eprintln!("Note: Replica not yet reporting as slave (replication may not be fully implemented)");
+            eprintln!(
+                "Note: Replica not yet reporting as slave (replication may not be fully implemented)"
+            );
             false
         }
     } else {
@@ -1822,10 +1828,10 @@ async fn test_fullresync_interrupted_resume(#[case] persistence: bool) {
         let key = format!("initial_key_{}", i);
         let expected = format!("initial_value_{}", i);
         let response = replica2.send("GET", &[&key]).await;
-        if let Response::Bulk(Some(value)) = response {
-            if value.as_ref() == expected.as_bytes() {
-                initial_verified += 1;
-            }
+        if let Response::Bulk(Some(value)) = response
+            && value.as_ref() == expected.as_bytes()
+        {
+            initial_verified += 1;
         }
     }
     eprintln!(
@@ -1844,10 +1850,10 @@ async fn test_fullresync_interrupted_resume(#[case] persistence: bool) {
         let key = format!("while_down_key_{}", i);
         let expected = format!("while_down_value_{}", i);
         let response = replica2.send("GET", &[&key]).await;
-        if let Response::Bulk(Some(value)) = response {
-            if value.as_ref() == expected.as_bytes() {
-                additional_verified += 1;
-            }
+        if let Response::Bulk(Some(value)) = response
+            && value.as_ref() == expected.as_bytes()
+        {
+            additional_verified += 1;
         }
     }
     eprintln!(
@@ -1877,7 +1883,9 @@ async fn test_fullresync_interrupted_resume(#[case] persistence: bool) {
     if is_replica && (initial_verified > 0 || additional_verified > 0 || has_final_key) {
         eprintln!("SUCCESS: Replica recovered after FULLRESYNC interruption with data");
     } else if !is_replica {
-        eprintln!("Note: Replication infrastructure test passed, but replication connection not established (expected during initial implementation)");
+        eprintln!(
+            "Note: Replication infrastructure test passed, but replication connection not established (expected during initial implementation)"
+        );
     } else {
         eprintln!("Replica recovered but no data was replicated yet");
     }

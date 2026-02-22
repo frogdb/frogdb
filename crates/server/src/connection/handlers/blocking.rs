@@ -7,12 +7,12 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, ReplicationTracker, ShardMessage};
+use frogdb_core::{ReplicationTracker, ShardMessage, shard_for_key};
 use frogdb_protocol::Response;
 
+use crate::connection::ConnectionHandler;
 use crate::connection::state::BlockedState;
 use crate::connection::util::convert_blocking_op;
-use crate::connection::ConnectionHandler;
 
 impl ConnectionHandler {
     /// Handle a blocking command wait.

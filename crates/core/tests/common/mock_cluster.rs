@@ -28,6 +28,7 @@ impl Value {
 /// This models the connection → multi-shard execution flow in FrogDB,
 /// where cross-shard MSET/MGET operations use scatter-gather that is
 /// NOT atomic across shards.
+#[allow(clippy::type_complexity)]
 pub struct TestCluster {
     shards: Vec<Arc<Mutex<HashMap<Vec<u8>, Value>>>>,
     num_shards: usize,
@@ -72,6 +73,7 @@ impl TestCluster {
     /// This simulates the real behavior where each shard commits independently.
     pub fn mset(&self, pairs: &[(Vec<u8>, Vec<u8>)]) {
         // Group by shard
+        #[allow(clippy::type_complexity)]
         let mut by_shard: HashMap<usize, Vec<(Vec<u8>, Vec<u8>)>> = HashMap::new();
         for (k, v) in pairs {
             let shard_id = self.shard_for_key_with_tag(k);

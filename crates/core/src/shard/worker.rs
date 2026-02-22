@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
@@ -373,11 +373,12 @@ impl ShardWorker {
     ///
     /// When a continuation lock is held, only the lock owner can execute commands.
     /// Returns Ok(()) if execution is allowed, Err(Response) otherwise.
+    #[allow(clippy::result_large_err)]
     pub(crate) fn can_execute_during_lock(&self, conn_id: u64) -> Result<(), Response> {
-        if let Some(ref lock) = self.continuation_lock {
-            if lock.conn_id != conn_id {
-                return Err(Response::error("ERR shard busy with continuation lock"));
-            }
+        if let Some(ref lock) = self.continuation_lock
+            && lock.conn_id != conn_id
+        {
+            return Err(Response::error("ERR shard busy with continuation lock"));
         }
         Ok(())
     }

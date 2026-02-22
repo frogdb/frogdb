@@ -25,33 +25,33 @@ impl ShardWorker {
 
     /// Persist a key's current state to WAL after a write operation.
     pub(crate) async fn persist_key_to_wal(&self, key: &[u8]) {
-        if let Some(ref wal) = self.wal_writer {
-            if let Some(value) = self.store.get(key) {
-                let metadata = self
-                    .store
-                    .get_metadata(key)
-                    .unwrap_or_else(|| crate::types::KeyMetadata::new(value.memory_size()));
-                if let Err(e) = wal.write_set(key, &value, &metadata).await {
-                    tracing::error!(
-                        key = %String::from_utf8_lossy(key),
-                        error = %e,
-                        "Failed to persist key to WAL"
-                    );
-                }
+        if let Some(ref wal) = self.wal_writer
+            && let Some(value) = self.store.get(key)
+        {
+            let metadata = self
+                .store
+                .get_metadata(key)
+                .unwrap_or_else(|| crate::types::KeyMetadata::new(value.memory_size()));
+            if let Err(e) = wal.write_set(key, &value, &metadata).await {
+                tracing::error!(
+                    key = %String::from_utf8_lossy(key),
+                    error = %e,
+                    "Failed to persist key to WAL"
+                );
             }
         }
     }
 
     /// Persist a deletion to WAL.
     pub(crate) async fn persist_delete_to_wal(&self, key: &[u8]) {
-        if let Some(ref wal) = self.wal_writer {
-            if let Err(e) = wal.write_delete(key).await {
-                tracing::error!(
-                    key = %String::from_utf8_lossy(key),
-                    error = %e,
-                    "Failed to persist delete to WAL"
-                );
-            }
+        if let Some(ref wal) = self.wal_writer
+            && let Err(e) = wal.write_delete(key).await
+        {
+            tracing::error!(
+                key = %String::from_utf8_lossy(key),
+                error = %e,
+                "Failed to persist delete to WAL"
+            );
         }
     }
 

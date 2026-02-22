@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use frogdb_server::{latency_test, Config, Server};
+use frogdb_server::{Config, Server, latency_test};
 use tracing::info;
 
 #[derive(Parser, Debug)]

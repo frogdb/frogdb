@@ -12,14 +12,14 @@ mod serialization;
 mod snapshot;
 mod wal;
 
-pub use recovery::{recover_all_shards, recover_shard, RecoveryStats};
+pub use recovery::{RecoveryStats, recover_all_shards, recover_shard};
 pub use rocks::{CompressionType, RocksConfig, RocksStore};
-pub use serialization::{deserialize, serialize, SerializationError, HEADER_SIZE};
+pub use serialization::{HEADER_SIZE, SerializationError, deserialize, serialize};
 pub use snapshot::{
     NoopSnapshotCoordinator, OnWriteHook, RocksSnapshotCoordinator, SnapshotConfig,
     SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata, SnapshotMetadataFile,
 };
-pub use wal::{spawn_periodic_sync, DurabilityMode, RocksWalWriter, WalConfig, WalLagStats};
+pub use wal::{DurabilityMode, RocksWalWriter, WalConfig, WalLagStats, spawn_periodic_sync};
 
 #[cfg(test)]
 mod tests;

@@ -14,7 +14,7 @@ pub mod primary;
 pub mod replica;
 
 pub use crate::commands::replication::*;
-pub use executor::{consume_frames, ReplicaCommandExecutor, ReplicationError};
+pub use executor::{ReplicaCommandExecutor, ReplicationError, consume_frames};
 pub use fullsync::FullSyncState;
 pub use primary::PrimaryReplicationHandler;
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};

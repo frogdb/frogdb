@@ -3,6 +3,8 @@
 //! This module provides a TestServer abstraction for spawning FrogDB servers
 //! in tests with dynamic port allocation and proper cleanup.
 
+#![allow(dead_code)]
+
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use frogdb_server::{Config, Server};
@@ -100,8 +102,10 @@ impl TestServer {
 
     /// Start a standalone server with security (password required).
     pub async fn start_with_security(requirepass: &str) -> Self {
-        let mut config = TestServerConfig::default();
-        config.requirepass = Some(requirepass.to_string());
+        let config = TestServerConfig {
+            requirepass: Some(requirepass.to_string()),
+            ..Default::default()
+        };
         Self::start_standalone_with_config(config).await
     }
 
@@ -320,8 +324,10 @@ impl TestServer {
 
     /// Start standalone server with admin port enabled.
     pub async fn start_with_admin_port() -> Self {
-        let mut config = TestServerConfig::default();
-        config.admin_enabled = true;
+        let config = TestServerConfig {
+            admin_enabled: true,
+            ..Default::default()
+        };
         Self::start_standalone_with_config(config).await
     }
 

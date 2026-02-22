@@ -92,11 +92,9 @@ impl FunctionRegistry {
         }
 
         // If replacing, first remove old library's function index entries
-        if replace {
-            if let Some(old_lib) = self.libraries.get(&lib_name) {
-                for func_name in old_lib.functions.keys() {
-                    self.function_index.remove(func_name);
-                }
+        if replace && let Some(old_lib) = self.libraries.get(&lib_name) {
+            for func_name in old_lib.functions.keys() {
+                self.function_index.remove(func_name);
             }
         }
 

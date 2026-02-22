@@ -702,7 +702,7 @@ async fn test_json_get_formatting() {
         Response::Bulk(Some(b)) => {
             let s = String::from_utf8_lossy(&b);
             // Should have some formatting structure
-            assert!(s.len() > 0);
+            assert!(!s.is_empty());
         }
         _ => panic!("Expected bulk string, got {:?}", response),
     }

@@ -46,13 +46,13 @@ pub use vll::VllConfig;
 
 use anyhow::{Context, Result};
 use figment::{
-    providers::{Env, Format, Serialized, Toml},
     Figment,
+    providers::{Env, Format, Serialized, Toml},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 /// Main configuration struct.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -227,6 +227,7 @@ impl Config {
     /// 2. Environment variables (FROGDB_ prefix)
     /// 3. TOML config file
     /// 4. Built-in defaults
+    #[allow(clippy::too_many_arguments)]
     pub fn load(
         config_path: Option<&Path>,
         bind: Option<String>,
@@ -310,9 +311,9 @@ impl Config {
 
         // Apply admin CLI overrides
         // --admin-port implies admin.enabled=true
-        if admin_port.is_some() {
+        if let Some(port) = admin_port {
             config.admin.enabled = true;
-            config.admin.port = admin_port.unwrap();
+            config.admin.port = port;
         }
         if let Some(ref bind) = admin_bind {
             config.admin.bind = bind.clone();
@@ -901,34 +902,42 @@ mod tests {
         // Hostname starting with hyphen
         let result = validate_bind_address("-invalid", "test");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("cannot start or end with hyphen"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot start or end with hyphen")
+        );
 
         // Hostname ending with hyphen
         let result = validate_bind_address("invalid-", "test");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("cannot start or end with hyphen"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot start or end with hyphen")
+        );
 
         // Invalid characters
         let result = validate_bind_address("host_name", "test");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("invalid characters"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid characters")
+        );
 
         // Empty label (consecutive dots)
         let result = validate_bind_address("host..name", "test");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("labels must be 1-63 chars"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("labels must be 1-63 chars")
+        );
     }
 
     // ===== Path Validation Tests =====
@@ -957,10 +966,12 @@ mod tests {
             None,
         );
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("config file not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("config file not found")
+        );
     }
 
     // ===== Unknown Fields Rejection Tests =====

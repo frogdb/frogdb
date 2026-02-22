@@ -9,7 +9,7 @@ use std::sync::Arc;
 use openraft::storage::{LogFlushed, LogState, RaftLogStorage};
 use openraft::{Entry, LogId, OptionalSend, RaftLogReader, StorageError, Vote};
 use parking_lot::RwLock;
-use rocksdb::{ColumnFamilyDescriptor, Options, DB};
+use rocksdb::{ColumnFamilyDescriptor, DB, Options};
 use serde::{Deserialize, Serialize};
 
 use super::types::{NodeId, TypeConfig};
@@ -177,7 +177,7 @@ impl ClusterStorage {
         let mut cache = self.log_cache.write();
         let keys_to_remove: Vec<_> = cache
             .keys()
-            .filter(|&&idx| idx >= start && end.map_or(true, |e| idx <= e))
+            .filter(|&&idx| idx >= start && end.is_none_or(|e| idx <= e))
             .copied()
             .collect();
         for key in keys_to_remove {
@@ -217,10 +217,10 @@ impl RaftLogReader<TypeConfig> for ClusterStorage {
 
             let index = Self::decode_log_key(&key);
 
-            if let Some(end_index) = end {
-                if index > end_index {
-                    break;
-                }
+            if let Some(end_index) = end
+                && index > end_index
+            {
+                break;
             }
 
             // Try cache first

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tempfile::TempDir;
 
-use super::recovery::{recover_all_shards, RecoveryStats};
+use super::recovery::{RecoveryStats, recover_all_shards};
 use super::rocks::{RocksConfig, RocksStore};
 use super::serialization::serialize;
 use super::wal::{DurabilityMode, RocksWalWriter, WalConfig};
@@ -209,12 +209,11 @@ impl CrashTestHarness {
 
     /// Verify that a key exists and has the expected string value.
     pub fn verify_string_key(&self, shard_id: usize, key: &[u8], expected: &str) -> bool {
-        if let Some(data) = self.rocks().get(shard_id, key).expect("Failed to get") {
-            if let Ok((value, _)) = super::serialization::deserialize(&data) {
-                if let Some(sv) = value.as_string() {
-                    return sv.as_bytes().as_ref() == expected.as_bytes();
-                }
-            }
+        if let Some(data) = self.rocks().get(shard_id, key).expect("Failed to get")
+            && let Ok((value, _)) = super::serialization::deserialize(&data)
+            && let Some(sv) = value.as_string()
+        {
+            return sv.as_bytes().as_ref() == expected.as_bytes();
         }
         false
     }
@@ -280,7 +279,7 @@ pub fn find_files_with_extension(dir: &Path, ext: &str) -> Vec<PathBuf> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && path.extension().map_or(false, |e| e == ext) {
+            if path.is_file() && path.extension().is_some_and(|e| e == ext) {
                 results.push(path);
             } else if path.is_dir() {
                 results.extend(find_files_with_extension(&path, ext));
@@ -471,10 +470,10 @@ pub fn verify_string_value(
     if shard_id >= stores.len() {
         return false;
     }
-    if let Some(value) = stores[shard_id].0.get(key) {
-        if let Some(sv) = value.as_string() {
-            return sv.as_bytes().as_ref() == expected.as_bytes();
-        }
+    if let Some(value) = stores[shard_id].0.get(key)
+        && let Some(sv) = value.as_string()
+    {
+        return sv.as_bytes().as_ref() == expected.as_bytes();
     }
     false
 }
@@ -501,10 +500,10 @@ pub fn verify_sorted_set(
     if shard_id >= stores.len() {
         return false;
     }
-    if let Some(value) = stores[shard_id].0.get(key) {
-        if let Some(zset) = value.as_sorted_set() {
-            return zset.len() == expected_len;
-        }
+    if let Some(value) = stores[shard_id].0.get(key)
+        && let Some(zset) = value.as_sorted_set()
+    {
+        return zset.len() == expected_len;
     }
     false
 }

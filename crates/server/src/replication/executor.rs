@@ -6,7 +6,7 @@
 //! to prevent re-broadcast.
 
 use bytes::BytesMut;
-use frogdb_core::{shard_for_key, ReplicationFrame, ShardMessage, REPLICA_INTERNAL_CONN_ID};
+use frogdb_core::{REPLICA_INTERNAL_CONN_ID, ReplicationFrame, ShardMessage, shard_for_key};
 use frogdb_protocol::{ParsedCommand, ProtocolVersion};
 use redis_protocol::resp2::decode::decode_bytes_mut;
 use std::sync::Arc;

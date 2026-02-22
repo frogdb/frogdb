@@ -182,11 +182,11 @@ async fn test_debug_bundle_list_after_generate() {
                 if !entries.is_empty() {
                     // Try to find the generated bundle
                     let found = entries.iter().any(|entry| {
-                        if let Response::Array(fields) = entry {
-                            if let Some(Response::Bulk(Some(id))) = fields.first() {
-                                let id_str = String::from_utf8_lossy(id);
-                                return id_str == generated_id_str;
-                            }
+                        if let Response::Array(fields) = entry
+                            && let Some(Response::Bulk(Some(id))) = fields.first()
+                        {
+                            let id_str = String::from_utf8_lossy(id);
+                            return id_str == generated_id_str;
                         }
                         false
                     });
@@ -216,37 +216,37 @@ async fn test_debug_bundle_list_entry_structure() {
     // If generation succeeded, verify list entry structure
     if let Response::Bulk(Some(_)) = generate_response {
         let list_response = client.command(&["DEBUG", "BUNDLE", "LIST"]).await;
-        if let Response::Array(entries) = list_response {
-            if let Some(first_entry) = entries.first() {
-                match first_entry {
-                    Response::Array(fields) => {
-                        // Entry should have [id, timestamp, size] format
-                        assert!(
-                            fields.len() >= 3,
-                            "Entry should have at least 3 fields (id, timestamp, size), got {}",
-                            fields.len()
-                        );
+        if let Response::Array(entries) = list_response
+            && let Some(first_entry) = entries.first()
+        {
+            match first_entry {
+                Response::Array(fields) => {
+                    // Entry should have [id, timestamp, size] format
+                    assert!(
+                        fields.len() >= 3,
+                        "Entry should have at least 3 fields (id, timestamp, size), got {}",
+                        fields.len()
+                    );
 
-                        // First field should be bundle ID (bulk string)
-                        assert!(
-                            matches!(&fields[0], Response::Bulk(Some(_))),
-                            "First field (id) should be bulk string"
-                        );
+                    // First field should be bundle ID (bulk string)
+                    assert!(
+                        matches!(&fields[0], Response::Bulk(Some(_))),
+                        "First field (id) should be bulk string"
+                    );
 
-                        // Second field should be timestamp (integer)
-                        assert!(
-                            matches!(&fields[1], Response::Integer(_)),
-                            "Second field (timestamp) should be integer"
-                        );
+                    // Second field should be timestamp (integer)
+                    assert!(
+                        matches!(&fields[1], Response::Integer(_)),
+                        "Second field (timestamp) should be integer"
+                    );
 
-                        // Third field should be size (integer)
-                        assert!(
-                            matches!(&fields[2], Response::Integer(_)),
-                            "Third field (size) should be integer"
-                        );
-                    }
-                    _ => panic!("List entry should be an array, got {:?}", first_entry),
+                    // Third field should be size (integer)
+                    assert!(
+                        matches!(&fields[2], Response::Integer(_)),
+                        "Third field (size) should be integer"
+                    );
                 }
+                _ => panic!("List entry should be an array, got {:?}", first_entry),
             }
         }
     }

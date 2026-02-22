@@ -4,13 +4,13 @@
 //! - Raft cluster operations (MEET, FORGET, ADDSLOTS, etc.)
 //! - CLUSTER FAILOVER
 
-use frogdb_core::cluster::{ClusterCommand, NodeRole};
 use frogdb_core::ClusterRaft;
+use frogdb_core::cluster::{ClusterCommand, NodeRole};
 use frogdb_protocol::{RaftClusterOp, Response};
 use openraft::error::{ClientWriteError, RaftError};
 
-use crate::connection::util::convert_raft_cluster_op;
 use crate::connection::ConnectionHandler;
+use crate::connection::util::convert_raft_cluster_op;
 
 impl ConnectionHandler {
     /// Handle a Raft cluster command asynchronously.
@@ -52,15 +52,15 @@ impl ConnectionHandler {
         match raft.client_write(cmd).await {
             Ok(_) => {
                 // Update NetworkFactory after successful Raft commit
-                if let Some((node_id, addr)) = register_node {
-                    if let Some(ref factory) = self.network_factory {
-                        factory.register_node(node_id, addr);
-                    }
+                if let Some((node_id, addr)) = register_node
+                    && let Some(ref factory) = self.network_factory
+                {
+                    factory.register_node(node_id, addr);
                 }
-                if let Some(node_id) = unregister_node {
-                    if let Some(ref factory) = self.network_factory {
-                        factory.remove_node(node_id);
-                    }
+                if let Some(node_id) = unregister_node
+                    && let Some(ref factory) = self.network_factory
+                {
+                    factory.remove_node(node_id);
                 }
                 Response::ok()
             }
@@ -68,16 +68,15 @@ impl ConnectionHandler {
                 // Check if this is a ForwardToLeader error
                 if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
                     // Try to get the leader's client address from ClusterState
-                    if let Some(leader_id) = forward.leader_id {
-                        if let Some(ref cluster_state) = self.cluster_state {
-                            if let Some(leader_info) = cluster_state.get_node(leader_id) {
-                                // Return redirect error with leader's client address
-                                return Response::error(format!(
-                                    "REDIRECT {} {}",
-                                    leader_id, leader_info.addr
-                                ));
-                            }
-                        }
+                    if let Some(leader_id) = forward.leader_id
+                        && let Some(ref cluster_state) = self.cluster_state
+                        && let Some(leader_info) = cluster_state.get_node(leader_id)
+                    {
+                        // Return redirect error with leader's client address
+                        return Response::error(format!(
+                            "REDIRECT {} {}",
+                            leader_id, leader_info.addr
+                        ));
                     }
                     // Leader unknown - return error with whatever info we have
                     return Response::error(format!(

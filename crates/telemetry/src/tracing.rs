@@ -8,14 +8,13 @@
 
 use crate::config::TracingConfig;
 use opentelemetry::{
-    global,
+    Context, KeyValue, global,
     trace::{SpanKind, Status, TraceContextExt, Tracer, TracerProvider as _},
-    Context, KeyValue,
 };
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
-    trace::{RandomIdGenerator, Sampler, TracerProvider},
     Resource,
+    trace::{RandomIdGenerator, Sampler, TracerProvider},
 };
 use parking_lot::RwLock;
 use std::collections::VecDeque;
@@ -311,7 +310,7 @@ impl RequestSpan {
 
     /// Start a child span for shard execution.
     pub fn start_shard_span(&self, shard_id: usize) -> ShardSpan {
-        if let (Some(ref ctx), Some(ref tracer)) = (&self.context, &self.tracer) {
+        if let (Some(ctx), Some(tracer)) = (&self.context, &self.tracer) {
             let _guard = ctx.clone().attach();
             let span = tracer
                 .span_builder(format!("frogdb.shard.{}", shard_id))
@@ -378,7 +377,7 @@ impl ShardSpan {
 
     /// Start a child span for a store operation.
     pub fn start_store_span(&self, operation: &str) -> StoreSpan {
-        if let (Some(ref ctx), Some(ref tracer)) = (&self.context, &self.tracer) {
+        if let (Some(ctx), Some(tracer)) = (&self.context, &self.tracer) {
             let _guard = ctx.clone().attach();
             let span = tracer
                 .span_builder(format!("frogdb.store.{}", operation.to_lowercase()))
@@ -486,7 +485,7 @@ impl ScatterGatherSpan {
 
     /// Start a child span for a specific shard in the scatter-gather.
     pub fn start_shard_span(&self, shard_id: usize, key_count: usize) -> ShardSpan {
-        if let (Some(ref ctx), Some(ref tracer)) = (&self.context, &self.tracer) {
+        if let (Some(ctx), Some(tracer)) = (&self.context, &self.tracer) {
             let _guard = ctx.clone().attach();
             let span = tracer
                 .span_builder(format!("frogdb.scatter.shard_{}", shard_id))

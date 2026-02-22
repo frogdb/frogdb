@@ -735,16 +735,18 @@ mod tests {
         assert!(user.verify_password(&hash_password("password")));
         assert!(!user.root_permissions.all_keys);
         assert_eq!(user.root_permissions.key_patterns.len(), 1);
-        assert!(user
-            .root_permissions
-            .commands
-            .allowed_categories
-            .contains(&CommandCategory::Read));
-        assert!(user
-            .root_permissions
-            .commands
-            .denied_categories
-            .contains(&CommandCategory::Write));
+        assert!(
+            user.root_permissions
+                .commands
+                .allowed_categories
+                .contains(&CommandCategory::Read)
+        );
+        assert!(
+            user.root_permissions
+                .commands
+                .denied_categories
+                .contains(&CommandCategory::Write)
+        );
     }
 
     #[test]

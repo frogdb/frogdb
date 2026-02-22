@@ -10,7 +10,7 @@
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, ShardMessage, TransactionResult};
+use frogdb_core::{ShardMessage, TransactionResult, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -18,7 +18,7 @@ use tracing::debug;
 
 use crate::connection::state::TransactionTarget;
 use crate::connection::{
-    extract_subcommand, key_access_type_for_flags, ConnectionHandler, TransactionState,
+    ConnectionHandler, TransactionState, extract_subcommand, key_access_type_for_flags,
 };
 
 impl ConnectionHandler {
@@ -325,22 +325,17 @@ impl ConnectionHandler {
         // Check key permissions with command context
         // For selectors to work correctly, we must check that BOTH the command
         // AND the key are allowed within the same permission context
-        if let Some(user) = self.state.auth.user() {
-            if !keys.is_empty() {
-                let access_type = key_access_type_for_flags(handler.flags());
-                let cmd_name = handler.name();
-                let subcommand = extract_subcommand(cmd_name, &cmd.args);
-                for key in &keys {
-                    if !user.check_command_with_key(
-                        cmd_name,
-                        subcommand.as_deref(),
-                        key,
-                        access_type,
-                    ) {
-                        return Response::error(
-                            "NOPERM this user has no permissions to access one of the keys used as arguments",
-                        );
-                    }
+        if let Some(user) = self.state.auth.user()
+            && !keys.is_empty()
+        {
+            let access_type = key_access_type_for_flags(handler.flags());
+            let cmd_name = handler.name();
+            let subcommand = extract_subcommand(cmd_name, &cmd.args);
+            for key in &keys {
+                if !user.check_command_with_key(cmd_name, subcommand.as_deref(), key, access_type) {
+                    return Response::error(
+                        "NOPERM this user has no permissions to access one of the keys used as arguments",
+                    );
                 }
             }
         }

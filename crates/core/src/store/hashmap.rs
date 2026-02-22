@@ -79,17 +79,17 @@ impl HashMapStore {
     ///
     /// Returns true if the key was expired and deleted.
     fn check_and_delete_expired(&mut self, key: &[u8]) -> bool {
-        if let Some(entry) = self.data.get(key) {
-            if entry.metadata.is_expired() {
-                debug!(key_len = key.len(), "Key expired via lazy deletion");
-                // Remove from both data and expiry index
-                if let Some(entry) = self.data.remove(key) {
-                    let size = Self::entry_memory_size(key, &entry.value);
-                    self.memory_used = self.memory_used.saturating_sub(size);
-                }
-                self.expiry_index.remove(key);
-                return true;
+        if let Some(entry) = self.data.get(key)
+            && entry.metadata.is_expired()
+        {
+            debug!(key_len = key.len(), "Key expired via lazy deletion");
+            // Remove from both data and expiry index
+            if let Some(entry) = self.data.remove(key) {
+                let size = Self::entry_memory_size(key, &entry.value);
+                self.memory_used = self.memory_used.saturating_sub(size);
             }
+            self.expiry_index.remove(key);
+            return true;
         }
         false
     }
@@ -331,12 +331,12 @@ impl Store for HashMapStore {
     }
 
     fn persist(&mut self, key: &[u8]) -> bool {
-        if let Some(entry) = self.data.get_mut(key) {
-            if entry.metadata.expires_at.is_some() {
-                entry.metadata.expires_at = None;
-                self.expiry_index.remove(key);
-                return true;
-            }
+        if let Some(entry) = self.data.get_mut(key)
+            && entry.metadata.expires_at.is_some()
+        {
+            entry.metadata.expires_at = None;
+            self.expiry_index.remove(key);
+            return true;
         }
         false
     }

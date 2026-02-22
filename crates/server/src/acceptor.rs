@@ -3,11 +3,11 @@
 use anyhow::Result;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use frogdb_core::{
-    persistence::SnapshotCoordinator, shard::NewConnection, AclManager, ClientRegistry,
-    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry, MetricsRecorder,
-    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
+    MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    persistence::SnapshotCoordinator, shard::NewConnection,
 };
-use frogdb_telemetry::{metric_names, SharedTracer};
+use frogdb_telemetry::{SharedTracer, metric_names};
 use std::sync::atomic::AtomicI64;
 
 use crate::config::TracingConfig;
@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::connection::ConnectionHandler;
-use crate::net::{spawn, TcpListener};
+use crate::net::{TcpListener, spawn};
 use crate::runtime_config::ConfigManager;
 use crate::server::next_conn_id;
 

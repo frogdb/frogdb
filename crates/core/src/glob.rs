@@ -83,10 +83,11 @@ fn glob_match_impl<'a>(
                             if let Some(&c) = pattern.next() {
                                 if in_range {
                                     // Range: prev_char-c
-                                    if let Some(start) = prev_char {
-                                        if k >= start && k <= c {
-                                            matched = true;
-                                        }
+                                    if let Some(start) = prev_char
+                                        && k >= start
+                                        && k <= c
+                                    {
+                                        matched = true;
                                     }
                                     in_range = false;
                                 } else if k == c {
@@ -104,10 +105,11 @@ fn glob_match_impl<'a>(
                         Some(&c) => {
                             if in_range {
                                 // Range: prev_char-c
-                                if let Some(start) = prev_char {
-                                    if k >= start && k <= c {
-                                        matched = true;
-                                    }
+                                if let Some(start) = prev_char
+                                    && k >= start
+                                    && k <= c
+                                {
+                                    matched = true;
                                 }
                                 in_range = false;
                             } else if k == c {

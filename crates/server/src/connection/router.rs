@@ -168,7 +168,7 @@ impl CommandRouter {
                 RouteResult::ConnectionLevel(Self::op_to_handler(op))
             }
             ExecutionStrategy::Blocking { default_timeout } => RouteResult::Blocking {
-                default_timeout: default_timeout.clone(),
+                default_timeout: *default_timeout,
             },
             ExecutionStrategy::ScatterGather { merge } => RouteResult::ScatterGather {
                 strategy: merge.clone().into(),

@@ -1,8 +1,8 @@
 use bytes::Bytes;
-use frogdb_core::{impl_keys_first, Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
-use crate::commands::utils::{format_float, get_or_create_zset, parse_f64, ZaddOptions};
+use crate::commands::utils::{ZaddOptions, format_float, get_or_create_zset, parse_f64};
 
 // ============================================================================
 // ZADD - Add members to sorted set
@@ -37,7 +37,7 @@ impl Command for ZaddCommand {
 
         // Parse score-member pairs
         let remaining = &args[i..];
-        if remaining.len() % 2 != 0 || remaining.is_empty() {
+        if !remaining.len().is_multiple_of(2) || remaining.is_empty() {
             return Err(CommandError::SyntaxError);
         }
 

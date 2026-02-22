@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 use frogdb_core::{ClusterState, ReplicationTrackerImpl};
 use tokio::net::TcpListener;
 use tracing::{error, info};

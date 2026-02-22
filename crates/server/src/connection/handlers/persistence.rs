@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, PartialResult, ScatterOp, ShardMessage};
+use frogdb_core::{PartialResult, ScatterOp, ShardMessage, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
 
 use crate::connection::ConnectionHandler;
@@ -48,17 +48,17 @@ impl ConnectionHandler {
             };
 
         // Authenticate if needed
-        if let Some(ref auth) = migrate_args.auth {
-            if let Err(e) = client.auth(&auth.password, auth.username.as_deref()).await {
-                return Response::error(format!("ERR Target authentication error: {}", e));
-            }
+        if let Some(ref auth) = migrate_args.auth
+            && let Err(e) = client.auth(&auth.password, auth.username.as_deref()).await
+        {
+            return Response::error(format!("ERR Target authentication error: {}", e));
         }
 
         // Select database if not 0
-        if migrate_args.dest_db != 0 {
-            if let Err(e) = client.select_db(migrate_args.dest_db).await {
-                return Response::error(format!("ERR Target database error: {}", e));
-            }
+        if migrate_args.dest_db != 0
+            && let Err(e) = client.select_db(migrate_args.dest_db).await
+        {
+            return Response::error(format!("ERR Target database error: {}", e));
         }
 
         // Process each key
@@ -244,23 +244,23 @@ impl ConnectionHandler {
         {
             Ok(c) => c,
             Err(MigrateError::Timeout) => {
-                return Response::error("IOERR timeout connecting to target")
+                return Response::error("IOERR timeout connecting to target");
             }
             Err(e) => return Response::error(format!("IOERR error connecting to target: {}", e)),
         };
 
         // Authenticate if needed
-        if let Some(ref auth) = parsed.auth {
-            if let Err(e) = client.auth(&auth.password, auth.username.as_deref()).await {
-                return Response::error(format!("IOERR authentication failed: {}", e));
-            }
+        if let Some(ref auth) = parsed.auth
+            && let Err(e) = client.auth(&auth.password, auth.username.as_deref()).await
+        {
+            return Response::error(format!("IOERR authentication failed: {}", e));
         }
 
         // Select destination database
-        if parsed.dest_db != 0 {
-            if let Err(e) = client.select_db(parsed.dest_db).await {
-                return Response::error(format!("IOERR error selecting database: {}", e));
-            }
+        if parsed.dest_db != 0
+            && let Err(e) = client.select_db(parsed.dest_db).await
+        {
+            return Response::error(format!("IOERR error selecting database: {}", e));
         }
 
         // RESTORE each key on target
@@ -275,11 +275,7 @@ impl ConnectionHandler {
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
                     let remaining = expires_ms - now_ms;
-                    if remaining > 0 {
-                        remaining
-                    } else {
-                        0
-                    }
+                    if remaining > 0 { remaining } else { 0 }
                 } else {
                     0 // No expiry
                 }

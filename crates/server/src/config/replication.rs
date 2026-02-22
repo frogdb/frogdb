@@ -241,16 +241,20 @@ mod tests {
 
     #[test]
     fn test_replication_config_validate_invalid_role() {
-        let mut config = ReplicationConfigSection::default();
-        config.role = "invalid".to_string();
+        let config = ReplicationConfigSection {
+            role: "invalid".to_string(),
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_replication_config_validate_valid_roles() {
         for role in ["standalone", "primary", "replica"] {
-            let mut config = ReplicationConfigSection::default();
-            config.role = role.to_string();
+            let mut config = ReplicationConfigSection {
+                role: role.to_string(),
+                ..Default::default()
+            };
             if role == "replica" {
                 config.primary_host = "127.0.0.1".to_string();
             }
@@ -260,30 +264,38 @@ mod tests {
 
     #[test]
     fn test_replication_config_validate_replica_without_host() {
-        let mut config = ReplicationConfigSection::default();
-        config.role = "replica".to_string();
-        config.primary_host = String::new();
+        let config = ReplicationConfigSection {
+            role: "replica".to_string(),
+            primary_host: String::new(),
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_replication_config_validate_zero_fullsync_timeout() {
-        let mut config = ReplicationConfigSection::default();
-        config.fullsync_timeout_secs = 0;
+        let config = ReplicationConfigSection {
+            fullsync_timeout_secs: 0,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_replication_config_validate_zero_fullsync_memory() {
-        let mut config = ReplicationConfigSection::default();
-        config.fullsync_max_memory_mb = 0;
+        let config = ReplicationConfigSection {
+            fullsync_max_memory_mb: 0,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_replication_config_validate_zero_ack_interval() {
-        let mut config = ReplicationConfigSection::default();
-        config.ack_interval_ms = 0;
+        let config = ReplicationConfigSection {
+            ack_interval_ms: 0,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
@@ -295,9 +307,11 @@ mod tests {
         assert!(matches!(core, frogdb_core::ReplicationConfig::Standalone));
 
         // Test primary
-        let mut config = ReplicationConfigSection::default();
-        config.role = "primary".to_string();
-        config.min_replicas_to_write = 2;
+        let config = ReplicationConfigSection {
+            role: "primary".to_string(),
+            min_replicas_to_write: 2,
+            ..Default::default()
+        };
         let core = config.to_core_config();
         assert!(matches!(
             core,
@@ -307,10 +321,12 @@ mod tests {
         ));
 
         // Test replica
-        let mut config = ReplicationConfigSection::default();
-        config.role = "replica".to_string();
-        config.primary_host = "192.168.1.1".to_string();
-        config.primary_port = 6380;
+        let config = ReplicationConfigSection {
+            role: "replica".to_string(),
+            primary_host: "192.168.1.1".to_string(),
+            primary_port: 6380,
+            ..Default::default()
+        };
         let core = config.to_core_config();
         if let frogdb_core::ReplicationConfig::Replica { primary_addr } = core {
             assert_eq!(primary_addr, "192.168.1.1:6380");

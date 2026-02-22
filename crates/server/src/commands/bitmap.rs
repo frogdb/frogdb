@@ -9,8 +9,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    bitop, Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, Command,
-    CommandContext, CommandError, CommandFlags, OverflowMode, StringValue, Value,
+    Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, Command, CommandContext,
+    CommandError, CommandFlags, OverflowMode, StringValue, Value, bitop,
 };
 use frogdb_protocol::Response;
 
@@ -338,11 +338,7 @@ impl Command for BitposCommand {
             }
             None => {
                 // For empty/non-existent key, looking for 0 returns 0, looking for 1 returns -1
-                if bit == 0 {
-                    Some(0)
-                } else {
-                    None
-                }
+                if bit == 0 { Some(0) } else { None }
             }
         };
 

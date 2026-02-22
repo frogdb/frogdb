@@ -302,7 +302,7 @@ fn build_stats_info(ctx: &mut CommandContext) -> String {
 
 fn build_replication_info(ctx: &CommandContext) -> String {
     // Check if we have a replication tracker (running as primary)
-    if let Some(ref tracker) = ctx.replication_tracker {
+    if let Some(tracker) = ctx.replication_tracker {
         let replicas = tracker.get_streaming_replicas();
         let repl_offset = tracker.current_offset();
         let connected_slaves = replicas.len();

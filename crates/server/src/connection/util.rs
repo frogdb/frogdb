@@ -5,8 +5,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    cluster::{ClusterCommand, NodeInfo, NodeRole, SlotRange},
     CommandFlags, KeyAccessType, StreamId,
+    cluster::{ClusterCommand, NodeInfo, NodeRole, SlotRange},
 };
 use frogdb_protocol::{ParsedCommand, RaftClusterOp};
 
@@ -89,7 +89,7 @@ pub(crate) fn estimate_resp2_frame_size(frame: &redis_protocol::resp2::types::By
     use redis_protocol::resp2::types::BytesFrame;
     match frame {
         BytesFrame::SimpleString(s) => 1 + s.len() + 2, // +, string, CRLF
-        BytesFrame::Error(e) => 1 + e.as_bytes().len() + 2, // -, message, CRLF
+        BytesFrame::Error(e) => 1 + e.len() + 2,        // -, message, CRLF
         BytesFrame::Integer(i) => 1 + format!("{}", i).len() + 2, // :, number, CRLF
         BytesFrame::BulkString(bs) => {
             1 + format!("{}", bs.len()).len() + 2 + bs.len() + 2 // $, len, CRLF, data, CRLF

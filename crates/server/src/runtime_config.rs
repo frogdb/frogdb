@@ -9,10 +9,10 @@
 use std::fmt;
 use std::sync::{Arc, RwLock};
 
-use frogdb_core::{glob_match, EvictionConfig, EvictionPolicy, ShardMessage};
+use frogdb_core::{EvictionConfig, EvictionPolicy, ShardMessage, glob_match};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
-use tracing_subscriber::{reload, EnvFilter};
+use tracing_subscriber::{EnvFilter, reload};
 
 use crate::config::Config;
 

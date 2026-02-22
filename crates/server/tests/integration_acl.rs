@@ -1546,10 +1546,10 @@ async fn test_acl_clearselectors() {
     let selectors_idx = arr
         .iter()
         .position(|r| matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("selectors")));
-    if let Some(idx) = selectors_idx {
-        if let Some(Response::Array(selectors)) = arr.get(idx + 1) {
-            assert!(!selectors.is_empty(), "Should have at least one selector");
-        }
+    if let Some(idx) = selectors_idx
+        && let Some(Response::Array(selectors)) = arr.get(idx + 1)
+    {
+        assert!(!selectors.is_empty(), "Should have at least one selector");
     }
 
     // Clear selectors
@@ -1563,10 +1563,10 @@ async fn test_acl_clearselectors() {
     let selectors_idx = arr
         .iter()
         .position(|r| matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("selectors")));
-    if let Some(idx) = selectors_idx {
-        if let Some(Response::Array(selectors)) = arr.get(idx + 1) {
-            assert!(selectors.is_empty(), "Selectors should be cleared");
-        }
+    if let Some(idx) = selectors_idx
+        && let Some(Response::Array(selectors)) = arr.get(idx + 1)
+    {
+        assert!(selectors.is_empty(), "Selectors should be cleared");
     }
 
     server.shutdown().await;

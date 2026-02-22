@@ -8,7 +8,7 @@
 use bytes::Bytes;
 use proptest::prelude::*;
 
-use frogdb_core::{deserialize, serialize, SerializationError, HEADER_SIZE};
+use frogdb_core::{HEADER_SIZE, SerializationError, deserialize, serialize};
 use frogdb_core::{
     HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec,
     StreamValue, StringValue, Value,

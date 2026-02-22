@@ -62,7 +62,9 @@ pub enum AclError {
     FileError { message: String },
 
     /// ACL file not configured.
-    #[error("ERR This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (if you have a Redis config file) in order to store users in the Redis configuration.")]
+    #[error(
+        "ERR This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (if you have a Redis config file) in order to store users in the Redis configuration."
+    )]
     NoAclFile,
 
     /// Internal error.

@@ -44,6 +44,7 @@ impl LatencyEvent {
     }
 
     /// Parse an event type from a string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "command" => Some(Self::Command),
@@ -228,10 +229,10 @@ impl LatencyMonitor {
     pub fn latest(&self) -> Vec<(LatencyEvent, LatencySample)> {
         let mut result = Vec::new();
         for event in LatencyEvent::all() {
-            if let Some(history) = self.histories.get(event) {
-                if let Some(sample) = history.latest() {
-                    result.push((*event, sample));
-                }
+            if let Some(history) = self.histories.get(event)
+                && let Some(sample) = history.latest()
+            {
+                result.push((*event, sample));
             }
         }
         result
@@ -381,7 +382,7 @@ impl CommandHistogram {
         self.buckets
             .iter()
             .enumerate()
-            .filter(|(_, &count)| count > 0)
+            .filter(|&(_, &count)| count > 0)
             .map(|(idx, &count)| {
                 let lower = if idx == 0 { 0 } else { 1u64 << (idx - 1) };
                 let upper = 1u64 << idx;

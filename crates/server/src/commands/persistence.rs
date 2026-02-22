@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    deserialize, serialize, Arity, Command, CommandContext, CommandError, CommandFlags, KeyMetadata,
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyMetadata, deserialize, serialize,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};

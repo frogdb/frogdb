@@ -3,6 +3,8 @@
 //! Extracts the RESP encoding/decoding utilities and FrogDB server
 //! bootstrap functions used across simulation tests.
 
+#![allow(dead_code)]
+
 use bytes::{Bytes, BytesMut};
 
 use super::sim_harness::OperationResult;

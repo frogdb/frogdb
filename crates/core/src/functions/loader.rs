@@ -7,7 +7,7 @@ use mlua::{Lua, MultiValue, Result as LuaResult, StdLib, Value};
 use super::error::FunctionError;
 use super::function::FunctionFlags;
 use super::library::FunctionLibrary;
-use super::parser::{parse_shebang, CapturedRegistration, ParsedLibrary};
+use super::parser::{CapturedRegistration, ParsedLibrary, parse_shebang};
 use crate::sync::{LockError, MutexExt};
 
 /// Helper to convert lock errors to Lua errors.
@@ -139,7 +139,7 @@ fn setup_register_function_binding(
                 _ => {
                     return Err(mlua::Error::RuntimeError(
                         "First argument must be a string or table".to_string(),
-                    ))
+                    ));
                 }
             };
 
@@ -277,7 +277,7 @@ fn parse_flags_value(value: &Value) -> LuaResult<FunctionFlags> {
                         return Err(mlua::Error::RuntimeError(format!(
                             "Unknown flag: {}",
                             other
-                        )))
+                        )));
                     }
                 }
                 idx += 1;

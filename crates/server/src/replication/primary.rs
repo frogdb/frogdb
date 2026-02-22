@@ -8,8 +8,9 @@
 
 use bytes::{Bytes, BytesMut};
 use frogdb_core::{
-    replication::tracker::ReplicaState, serialize_command_to_resp, ReplicationBroadcaster,
-    ReplicationFrame, ReplicationState, ReplicationTracker, ReplicationTrackerImpl, RocksStore,
+    ReplicationBroadcaster, ReplicationFrame, ReplicationState, ReplicationTracker,
+    ReplicationTrackerImpl, RocksStore, replication::tracker::ReplicaState,
+    serialize_command_to_resp,
 };
 use sha2::Digest;
 use std::collections::HashMap;
@@ -21,10 +22,10 @@ use std::time::Instant;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{RwLock, broadcast, mpsc};
 
 use crate::replication::fullsync::{
-    calculate_file_checksum, stream_file_to_writer, FullSyncMetadata, FullSyncState,
+    FullSyncMetadata, FullSyncState, calculate_file_checksum, stream_file_to_writer,
 };
 
 // ============================================================================
@@ -205,7 +206,7 @@ impl PrimaryReplicationHandler {
             let checkpoint_result =
                 tokio::task::spawn_blocking(move || rocks_clone.create_checkpoint(&path_clone))
                     .await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    .map_err(io::Error::other)?;
 
             if let Err(e) = checkpoint_result {
                 tracing::error!(error = %e, "Failed to create checkpoint for FULLRESYNC");
@@ -342,7 +343,7 @@ impl PrimaryReplicationHandler {
         for (file_name, _, file_path) in &files {
             let file_hash = calculate_file_checksum(file_path).await?;
             Digest::update(&mut combined_hash, file_name.as_bytes());
-            Digest::update(&mut combined_hash, &file_hash);
+            Digest::update(&mut combined_hash, file_hash);
         }
         let final_hash = Digest::finalize(combined_hash);
         let mut checksum = [0u8; 32];

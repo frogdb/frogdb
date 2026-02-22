@@ -85,10 +85,10 @@ impl ShardWaitQueue {
         // Check per-key limits
         if self.max_waiters_per_key > 0 {
             for key in &entry.keys {
-                if let Some(waiters) = self.waiters_by_key.get(key) {
-                    if waiters.len() >= self.max_waiters_per_key {
-                        return Err("ERR max waiters per key limit reached".to_string());
-                    }
+                if let Some(waiters) = self.waiters_by_key.get(key)
+                    && waiters.len() >= self.max_waiters_per_key
+                {
+                    return Err("ERR max waiters per key limit reached".to_string());
                 }
             }
         }
@@ -195,10 +195,10 @@ impl ShardWaitQueue {
         self.waiter_count -= 1;
 
         // Clean up empty key entry for the primary key
-        if let Some(waiters) = self.waiters_by_key.get(key) {
-            if waiters.is_empty() {
-                self.waiters_by_key.remove(key);
-            }
+        if let Some(waiters) = self.waiters_by_key.get(key)
+            && waiters.is_empty()
+        {
+            self.waiters_by_key.remove(key);
         }
 
         Some(entry)
@@ -212,12 +212,11 @@ impl ShardWaitQueue {
 
         // Find all expired entries
         for (idx, entry) in self.entries.iter().enumerate() {
-            if let Some(ref e) = entry {
-                if let Some(deadline) = e.deadline {
-                    if deadline <= now {
-                        expired_indices.push(idx);
-                    }
-                }
+            if let Some(e) = entry
+                && let Some(deadline) = e.deadline
+                && deadline <= now
+            {
+                expired_indices.push(idx);
             }
         }
 

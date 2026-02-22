@@ -92,7 +92,7 @@ impl ChaosConfig {
             return true;
         }
         use rand::Rng;
-        rand::thread_rng().gen::<f64>() < self.connection_reset_probability
+        rand::thread_rng().r#gen::<f64>() < self.connection_reset_probability
     }
 
     /// Check if any failure injection is configured.

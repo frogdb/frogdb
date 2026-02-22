@@ -738,7 +738,7 @@ async fn test_asking_command_bypasses_migration_check() {
         let key = key_for_slot(200);
 
         // First, try without ASKING - should get redirect or error
-        let response_without_asking = target_node.send("GET", &[&key]).await;
+        let _response_without_asking = target_node.send("GET", &[&key]).await;
 
         // Now connect and use ASKING + GET in sequence
         let mut client = target_node.connect().await;
@@ -1136,20 +1136,20 @@ async fn test_partition_via_shutdown() {
 
     // Check that surviving nodes are at least responsive
     for &node_id in &surviving_nodes {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let response = node.send("PING", &[]).await;
-                if !is_error(&response) {
-                    majority_responsive = true;
-                }
-                // Also log cluster state for debugging
-                let info_resp = node.send("CLUSTER", &["INFO"]).await;
-                if let Ok(info) = parse_cluster_info(&info_resp) {
-                    eprintln!(
-                        "Node {} after partition: cluster_state={}, known_nodes={}",
-                        node_id, info.cluster_state, info.cluster_known_nodes
-                    );
-                }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let response = node.send("PING", &[]).await;
+            if !is_error(&response) {
+                majority_responsive = true;
+            }
+            // Also log cluster state for debugging
+            let info_resp = node.send("CLUSTER", &["INFO"]).await;
+            if let Ok(info) = parse_cluster_info(&info_resp) {
+                eprintln!(
+                    "Node {} after partition: cluster_state={}, known_nodes={}",
+                    node_id, info.cluster_state, info.cluster_known_nodes
+                );
             }
         }
     }
@@ -1173,15 +1173,15 @@ async fn test_partition_via_shutdown() {
         .unwrap();
 
     for node_id in harness.node_ids() {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let info = harness.get_cluster_info(node_id).await.unwrap();
-                assert_eq!(
-                    info.cluster_state, "ok",
-                    "Node {} should be ok after recovery",
-                    node_id
-                );
-            }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let info = harness.get_cluster_info(node_id).await.unwrap();
+            assert_eq!(
+                info.cluster_state, "ok",
+                "Node {} should be ok after recovery",
+                node_id
+            );
         }
     }
 
@@ -1234,15 +1234,15 @@ async fn test_asymmetric_node_failure() {
         .collect();
 
     for &node_id in &remaining_nodes {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let response = node.send("PING", &[]).await;
-                assert!(
-                    !is_error(&response),
-                    "Node {} should respond to PING",
-                    node_id
-                );
-            }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let response = node.send("PING", &[]).await;
+            assert!(
+                !is_error(&response),
+                "Node {} should respond to PING",
+                node_id
+            );
         }
     }
 
@@ -1352,12 +1352,12 @@ async fn test_seven_node_cluster() {
     let mut operational_count = 0;
 
     for &node_id in &surviving {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let response = node.send("PING", &[]).await;
-                if !is_error(&response) {
-                    operational_count += 1;
-                }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let response = node.send("PING", &[]).await;
+            if !is_error(&response) {
+                operational_count += 1;
             }
         }
     }
@@ -1374,16 +1374,16 @@ async fn test_seven_node_cluster() {
     // With 3/7 nodes, cluster should report failure (no quorum)
     let final_surviving: Vec<u64> = node_ids[4..].to_vec();
     for &node_id in &final_surviving {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let response = node.send("CLUSTER", &["INFO"]).await;
-                if let Ok(info) = parse_cluster_info(&response) {
-                    // Document observed state
-                    eprintln!(
-                        "Node {} with 3/7 nodes: cluster_state={}",
-                        node_id, info.cluster_state
-                    );
-                }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let response = node.send("CLUSTER", &["INFO"]).await;
+            if let Ok(info) = parse_cluster_info(&response) {
+                // Document observed state
+                eprintln!(
+                    "Node {} with 3/7 nodes: cluster_state={}",
+                    node_id, info.cluster_state
+                );
             }
         }
     }
@@ -1470,33 +1470,24 @@ async fn test_concurrent_operations_during_migration() {
         let handle = tokio::spawn(async move {
             // Connect and try to write
             let stream = tokio::net::TcpStream::connect(&addr).await;
-            match stream {
-                Ok(stream) => {
-                    let mut framed =
-                        tokio_util::codec::Framed::new(stream, redis_protocol::codec::Resp2);
+            if let Ok(stream) = stream {
+                let mut framed =
+                    tokio_util::codec::Framed::new(stream, redis_protocol::codec::Resp2);
 
-                    // Try SET
-                    let frame = redis_protocol::resp2::types::BytesFrame::Array(vec![
-                        redis_protocol::resp2::types::BytesFrame::BulkString(bytes::Bytes::from(
-                            "SET",
-                        )),
-                        redis_protocol::resp2::types::BytesFrame::BulkString(bytes::Bytes::from(
-                            key,
-                        )),
-                        redis_protocol::resp2::types::BytesFrame::BulkString(bytes::Bytes::from(
-                            value,
-                        )),
-                    ]);
+                // Try SET
+                let frame = redis_protocol::resp2::types::BytesFrame::Array(vec![
+                    redis_protocol::resp2::types::BytesFrame::BulkString(bytes::Bytes::from("SET")),
+                    redis_protocol::resp2::types::BytesFrame::BulkString(bytes::Bytes::from(key)),
+                    redis_protocol::resp2::types::BytesFrame::BulkString(bytes::Bytes::from(value)),
+                ]);
 
-                    use futures::{SinkExt, StreamExt};
-                    if framed.send(frame).await.is_ok() {
-                        if let Some(Ok(_response)) = framed.next().await {
-                            // Response could be OK, MOVED, or ASK - all valid during migration
-                            return true;
-                        }
-                    }
+                use futures::{SinkExt, StreamExt};
+                if framed.send(frame).await.is_ok()
+                    && let Some(Ok(_response)) = framed.next().await
+                {
+                    // Response could be OK, MOVED, or ASK - all valid during migration
+                    return true;
                 }
-                Err(_) => {}
             }
             false
         });
@@ -1563,7 +1554,7 @@ async fn test_split_brain_writes_fail_on_minority() {
     let node_ids = harness.node_ids();
 
     // First verify cluster is healthy before partition
-    let pre_partition_node = harness.node(node_ids[3]).unwrap();
+    let _pre_partition_node = harness.node(node_ids[3]).unwrap();
     let info = harness.get_cluster_info(node_ids[3]).await.unwrap();
     eprintln!(
         "Pre-partition cluster state: {} (known_nodes: {})",
@@ -1589,45 +1580,45 @@ async fn test_split_brain_writes_fail_on_minority() {
     let minority_nodes = &node_ids[3..5];
 
     for &node_id in minority_nodes {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                // Check cluster state
-                let info_resp = node.send("CLUSTER", &["INFO"]).await;
-                if let Ok(info) = parse_cluster_info(&info_resp) {
-                    eprintln!(
-                        "Minority node {} cluster_state: {} (known_nodes: {})",
-                        node_id, info.cluster_state, info.cluster_known_nodes
-                    );
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            // Check cluster state
+            let info_resp = node.send("CLUSTER", &["INFO"]).await;
+            if let Ok(info) = parse_cluster_info(&info_resp) {
+                eprintln!(
+                    "Minority node {} cluster_state: {} (known_nodes: {})",
+                    node_id, info.cluster_state, info.cluster_known_nodes
+                );
 
-                    // Cluster should be in "fail" state due to quorum loss
-                    assert_eq!(
-                        info.cluster_state, "fail",
-                        "Minority node {} should detect quorum loss",
-                        node_id
-                    );
-                }
+                // Cluster should be in "fail" state due to quorum loss
+                assert_eq!(
+                    info.cluster_state, "fail",
+                    "Minority node {} should detect quorum loss",
+                    node_id
+                );
+            }
 
-                // Attempt a write - should be rejected with CLUSTERDOWN
-                let key = format!("splitbrain_test_{}", node_id);
-                let write_resp = node.send("SET", &[&key, "value"]).await;
+            // Attempt a write - should be rejected with CLUSTERDOWN
+            let key = format!("splitbrain_test_{}", node_id);
+            let write_resp = node.send("SET", &[&key, "value"]).await;
 
-                // Verify write is rejected
-                if is_cluster_down(&write_resp) {
-                    eprintln!(
-                        "Minority node {} correctly rejected write with CLUSTERDOWN",
-                        node_id
-                    );
-                } else if is_error(&write_resp) {
-                    // Other errors (like MOVED to a dead node) are also acceptable
-                    let msg = get_error_message(&write_resp).unwrap_or("unknown");
-                    eprintln!("Minority node {} rejected write with: {}", node_id, msg);
-                } else {
-                    // Write succeeded - this is split-brain behavior we want to prevent
-                    panic!(
-                        "Split-brain detected: minority node {} accepted write! Response: {:?}",
-                        node_id, write_resp
-                    );
-                }
+            // Verify write is rejected
+            if is_cluster_down(&write_resp) {
+                eprintln!(
+                    "Minority node {} correctly rejected write with CLUSTERDOWN",
+                    node_id
+                );
+            } else if is_error(&write_resp) {
+                // Other errors (like MOVED to a dead node) are also acceptable
+                let msg = get_error_message(&write_resp).unwrap_or("unknown");
+                eprintln!("Minority node {} rejected write with: {}", node_id, msg);
+            } else {
+                // Write succeeded - this is split-brain behavior we want to prevent
+                panic!(
+                    "Split-brain detected: minority node {} accepted write! Response: {:?}",
+                    node_id, write_resp
+                );
             }
         }
     }
@@ -1646,15 +1637,15 @@ async fn test_split_brain_writes_fail_on_minority() {
 
     // Verify cluster recovers to healthy state
     for &node_id in &node_ids {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let info = harness.get_cluster_info(node_id).await.unwrap();
-                assert_eq!(
-                    info.cluster_state, "ok",
-                    "Node {} should recover after majority restored",
-                    node_id
-                );
-            }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let info = harness.get_cluster_info(node_id).await.unwrap();
+            assert_eq!(
+                info.cluster_state, "ok",
+                "Node {} should recover after majority restored",
+                node_id
+            );
         }
     }
 
@@ -1966,15 +1957,15 @@ async fn test_concurrent_failover_attempts() {
             }
 
             // Check cluster info - the node that sees itself as having quorum
-            if let Ok(info) = harness.get_cluster_info(node_id).await {
-                if info.cluster_state == "ok" {
-                    // This node believes it can serve requests
-                    // In a healthy cluster, all nodes should agree on state
-                    eprintln!(
-                        "Node {} reports: state={}, known_nodes={}",
-                        node_id, info.cluster_state, info.cluster_known_nodes
-                    );
-                }
+            if let Ok(info) = harness.get_cluster_info(node_id).await
+                && info.cluster_state == "ok"
+            {
+                // This node believes it can serve requests
+                // In a healthy cluster, all nodes should agree on state
+                eprintln!(
+                    "Node {} reports: state={}, known_nodes={}",
+                    node_id, info.cluster_state, info.cluster_known_nodes
+                );
             }
         }
     }
@@ -2057,12 +2048,12 @@ async fn test_data_survives_leader_failover() {
         if let Some((_slot, addr)) = is_moved_redirect(&set_resp) {
             // Find node with this address and write there
             for &node_id in &harness.node_ids() {
-                if let Some(node) = harness.node(node_id) {
-                    if node.client_addr() == addr {
-                        let retry_resp = node.send("SET", &[test_key, test_value]).await;
-                        eprintln!("Retry SET response: {:?}", retry_resp);
-                        break;
-                    }
+                if let Some(node) = harness.node(node_id)
+                    && node.client_addr() == addr
+                {
+                    let retry_resp = node.send("SET", &[test_key, test_value]).await;
+                    eprintln!("Retry SET response: {:?}", retry_resp);
+                    break;
                 }
             }
         }
@@ -2197,11 +2188,11 @@ async fn test_data_survives_non_leader_failover() {
     // Verify remaining follower can also access data
     if followers.len() > 1 {
         let remaining_follower = followers[1];
-        if let Some(follower_node) = harness.node(remaining_follower) {
-            if follower_node.is_running() {
-                let follower_resp = follower_node.send("GET", &[test_key]).await;
-                eprintln!("GET from remaining follower: {:?}", follower_resp);
-            }
+        if let Some(follower_node) = harness.node(remaining_follower)
+            && follower_node.is_running()
+        {
+            let follower_resp = follower_node.send("GET", &[test_key]).await;
+            eprintln!("GET from remaining follower: {:?}", follower_resp);
         }
     }
 
@@ -2361,15 +2352,15 @@ async fn test_multiple_writes_survive_failover() {
                 } else if let Some((_slot, addr)) = is_moved_redirect(&resp) {
                     // Follow redirect
                     for &other_id in &harness.node_ids() {
-                        if let Some(other) = harness.node(other_id) {
-                            if other.client_addr() == addr {
-                                let retry = other.send("SET", &[&key, &value]).await;
-                                if !is_error(&retry) {
-                                    written = true;
-                                    written_keys.push((key.clone(), value.clone()));
-                                }
-                                break;
+                        if let Some(other) = harness.node(other_id)
+                            && other.client_addr() == addr
+                        {
+                            let retry = other.send("SET", &[&key, &value]).await;
+                            if !is_error(&retry) {
+                                written = true;
+                                written_keys.push((key.clone(), value.clone()));
                             }
+                            break;
                         }
                     }
                     break;
@@ -2420,24 +2411,25 @@ async fn test_multiple_writes_survive_failover() {
                         break;
                     }
                     frogdb_protocol::Response::Error(e) => {
-                        let err = String::from_utf8_lossy(e);
+                        let _err = String::from_utf8_lossy(e);
                         if let Some((_slot, addr)) = is_moved_redirect(&resp) {
                             // Follow redirect
                             for &other_id in &harness.node_ids() {
                                 if other_id == original_leader {
                                     continue;
                                 }
-                                if let Some(other) = harness.node(other_id) {
-                                    if other.client_addr() == addr && other.is_running() {
-                                        let retry = other.send("GET", &[key]).await;
-                                        if let frogdb_protocol::Response::Bulk(Some(v)) = &retry {
-                                            let retrieved = String::from_utf8_lossy(v);
-                                            if retrieved == *expected_value {
-                                                readable_count += 1;
-                                            }
+                                if let Some(other) = harness.node(other_id)
+                                    && other.client_addr() == addr
+                                    && other.is_running()
+                                {
+                                    let retry = other.send("GET", &[key]).await;
+                                    if let frogdb_protocol::Response::Bulk(Some(v)) = &retry {
+                                        let retrieved = String::from_utf8_lossy(v);
+                                        if retrieved == *expected_value {
+                                            readable_count += 1;
                                         }
-                                        break;
                                     }
+                                    break;
                                 }
                             }
                         }
@@ -2525,10 +2517,9 @@ async fn test_read_your_writes_consistency() {
                                         // Read back from same node
                                         let get_resp = other.send("GET", &[&key]).await;
                                         if let frogdb_protocol::Response::Bulk(Some(v)) = &get_resp
+                                            && String::from_utf8_lossy(v) == value
                                         {
-                                            if String::from_utf8_lossy(v) == value {
-                                                success_count += 1;
-                                            }
+                                            success_count += 1;
                                         }
                                     }
                                     break;
@@ -2714,12 +2705,12 @@ async fn test_replica_catches_up_after_delay() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Check if follower has caught up (in Raft, this happens via log replication)
-    if let Some(follower_node) = harness.node(follower) {
-        if follower_node.is_running() {
-            let get_resp = follower_node.send("GET", &[test_key]).await;
-            eprintln!("GET on restarted follower: {:?}", get_resp);
-            // The follower should have the data after catching up
-        }
+    if let Some(follower_node) = harness.node(follower)
+        && follower_node.is_running()
+    {
+        let get_resp = follower_node.send("GET", &[test_key]).await;
+        eprintln!("GET on restarted follower: {:?}", get_resp);
+        // The follower should have the data after catching up
     }
 
     harness.shutdown_all().await;
@@ -2815,8 +2806,6 @@ async fn test_promoted_replica_has_all_data() {
 /// This is a key split-brain prevention test.
 #[tokio::test]
 async fn test_minority_rejects_writes() {
-    use common::cluster_helpers::is_cluster_down;
-
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(5).await.unwrap();
 
@@ -2845,21 +2834,21 @@ async fn test_minority_rejects_writes() {
     let mut writes_rejected = 0;
 
     for &node_id in minority {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let key = format!("minority_write_{}", node_id);
-                let resp = node.send("SET", &[&key, "value"]).await;
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let key = format!("minority_write_{}", node_id);
+            let resp = node.send("SET", &[&key, "value"]).await;
 
-                if is_error(&resp) {
-                    writes_rejected += 1;
-                    let err = get_error_message(&resp).unwrap_or("unknown");
-                    eprintln!("Node {} rejected write: {}", node_id, err);
-                } else {
-                    eprintln!(
-                        "WARNING: Node {} accepted write (split-brain risk)",
-                        node_id
-                    );
-                }
+            if is_error(&resp) {
+                writes_rejected += 1;
+                let err = get_error_message(&resp).unwrap_or("unknown");
+                eprintln!("Node {} rejected write: {}", node_id, err);
+            } else {
+                eprintln!(
+                    "WARNING: Node {} accepted write (split-brain risk)",
+                    node_id
+                );
             }
         }
     }
@@ -2916,25 +2905,25 @@ async fn test_majority_accepts_writes_during_partition() {
     let mut cluster_down_count = 0;
 
     for &node_id in &majority {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let key = format!("majority_write_{}", node_id);
-                let resp = node.send("SET", &[&key, "value"]).await;
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let key = format!("majority_write_{}", node_id);
+            let resp = node.send("SET", &[&key, "value"]).await;
 
-                if !is_error(&resp) {
+            if !is_error(&resp) {
+                writes_accepted += 1;
+                eprintln!("Node {} accepted write", node_id);
+            } else {
+                let err = get_error_message(&resp).unwrap_or("unknown");
+                // MOVED is acceptable - just means different slot owner
+                if err.starts_with("MOVED") {
                     writes_accepted += 1;
-                    eprintln!("Node {} accepted write", node_id);
-                } else {
-                    let err = get_error_message(&resp).unwrap_or("unknown");
-                    // MOVED is acceptable - just means different slot owner
-                    if err.starts_with("MOVED") {
-                        writes_accepted += 1;
-                    } else if err.starts_with("CLUSTERDOWN") {
-                        // Expected in cluster without manual slot assignment
-                        cluster_down_count += 1;
-                    }
-                    eprintln!("Node {} response: {}", node_id, err);
+                } else if err.starts_with("CLUSTERDOWN") {
+                    // Expected in cluster without manual slot assignment
+                    cluster_down_count += 1;
                 }
+                eprintln!("Node {} response: {}", node_id, err);
             }
         }
     }
@@ -2993,12 +2982,12 @@ async fn test_partition_heals_cluster_recovers() {
     let during_key = "during_partition_key";
     let during_value = "during_partition_value";
     for &node_id in &node_ids[2..5] {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let resp = node.send("SET", &[during_key, during_value]).await;
-                if !is_error(&resp) {
-                    break;
-                }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let resp = node.send("SET", &[during_key, during_value]).await;
+            if !is_error(&resp) {
+                break;
             }
         }
     }
@@ -3016,15 +3005,15 @@ async fn test_partition_heals_cluster_recovers() {
 
     // Verify all nodes eventually see healthy state
     for &node_id in &node_ids {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let info = harness.get_cluster_info(node_id).await.unwrap();
-                eprintln!("Node {} after heal: state={}", node_id, info.cluster_state);
-                assert_eq!(
-                    info.cluster_state, "ok",
-                    "All nodes should be ok after partition heals"
-                );
-            }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let info = harness.get_cluster_info(node_id).await.unwrap();
+            eprintln!("Node {} after heal: state={}", node_id, info.cluster_state);
+            assert_eq!(
+                info.cluster_state, "ok",
+                "All nodes should be ok after partition heals"
+            );
         }
     }
 
@@ -3067,21 +3056,21 @@ async fn test_zombie_leader_detection() {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Check if zombie leader detects quorum loss
-    if let Some(leader_node) = harness.node(leader) {
-        if leader_node.is_running() {
-            let info = harness.get_cluster_info(leader).await.unwrap();
-            eprintln!(
-                "Zombie leader state: {} (known_nodes: {})",
-                info.cluster_state, info.cluster_known_nodes
-            );
+    if let Some(leader_node) = harness.node(leader)
+        && leader_node.is_running()
+    {
+        let info = harness.get_cluster_info(leader).await.unwrap();
+        eprintln!(
+            "Zombie leader state: {} (known_nodes: {})",
+            info.cluster_state, info.cluster_known_nodes
+        );
 
-            // Leader should report fail state since it lost quorum
-            // Note: Depends on implementation - may still report "ok" until timeout
-            if info.cluster_state == "fail" {
-                eprintln!("SUCCESS: Zombie leader correctly detected quorum loss");
-            } else {
-                eprintln!("Leader still reports ok - may need longer timeout");
-            }
+        // Leader should report fail state since it lost quorum
+        // Note: Depends on implementation - may still report "ok" until timeout
+        if info.cluster_state == "fail" {
+            eprintln!("SUCCESS: Zombie leader correctly detected quorum loss");
+        } else {
+            eprintln!("Leader still reports ok - may need longer timeout");
         }
     }
 
@@ -3124,25 +3113,25 @@ async fn test_client_follows_moved_redirect() {
 
             // Find the target node and follow redirect
             for &node_id in &node_ids {
-                if let Some(node) = harness.node(node_id) {
-                    if node.client_addr() == target_addr {
-                        // Write data via the correct node
-                        let set_resp = node.send("SET", &[&key, "test_value"]).await;
-                        eprintln!("SET via redirect target: {:?}", set_resp);
+                if let Some(node) = harness.node(node_id)
+                    && node.client_addr() == target_addr
+                {
+                    // Write data via the correct node
+                    let set_resp = node.send("SET", &[&key, "test_value"]).await;
+                    eprintln!("SET via redirect target: {:?}", set_resp);
 
-                        if !is_error(&set_resp) {
-                            // Read back
-                            let get_resp = node.send("GET", &[&key]).await;
-                            eprintln!("GET via redirect target: {:?}", get_resp);
+                    if !is_error(&set_resp) {
+                        // Read back
+                        let get_resp = node.send("GET", &[&key]).await;
+                        eprintln!("GET via redirect target: {:?}", get_resp);
 
-                            if let frogdb_protocol::Response::Bulk(Some(v)) = &get_resp {
-                                let retrieved = String::from_utf8_lossy(v);
-                                assert_eq!(retrieved, "test_value");
-                                found_redirect = true;
-                            }
+                        if let frogdb_protocol::Response::Bulk(Some(v)) = &get_resp {
+                            let retrieved = String::from_utf8_lossy(v);
+                            assert_eq!(retrieved, "test_value");
+                            found_redirect = true;
                         }
-                        break;
                     }
+                    break;
                 }
             }
             break;
@@ -3228,19 +3217,19 @@ async fn test_client_follows_ask_redirect() {
 
         // Follow ASK redirect: send ASKING, then command
         for &node_id in &node_ids {
-            if let Some(node) = harness.node(node_id) {
-                if node.client_addr() == ask_addr {
-                    let mut client = node.connect().await;
+            if let Some(node) = harness.node(node_id)
+                && node.client_addr() == ask_addr
+            {
+                let mut client = node.connect().await;
 
-                    // Send ASKING
-                    let asking_resp = client.command(&["ASKING"]).await;
-                    assert!(!is_error(&asking_resp), "ASKING should succeed");
+                // Send ASKING
+                let asking_resp = client.command(&["ASKING"]).await;
+                assert!(!is_error(&asking_resp), "ASKING should succeed");
 
-                    // Now send the actual command
-                    let get_resp = client.command(&["GET", &test_key]).await;
-                    eprintln!("GET after ASKING: {:?}", get_resp);
-                    break;
-                }
+                // Now send the actual command
+                let get_resp = client.command(&["GET", &test_key]).await;
+                eprintln!("GET after ASKING: {:?}", get_resp);
+                break;
             }
         }
     }
@@ -3302,12 +3291,12 @@ async fn test_redirect_loop_detection() {
                 // Find node with target address
                 let mut found = false;
                 for &nid in &node_ids {
-                    if let Some(n) = harness.node(nid) {
-                        if n.client_addr() == target_addr {
-                            current_node_id = nid;
-                            found = true;
-                            break;
-                        }
+                    if let Some(n) = harness.node(nid)
+                        && n.client_addr() == target_addr
+                    {
+                        current_node_id = nid;
+                        found = true;
+                        break;
                     }
                 }
                 if !found {
@@ -3542,10 +3531,10 @@ async fn test_concurrent_reads_during_migration() {
                     ]);
 
                     use futures::{SinkExt, StreamExt};
-                    if framed.send(frame).await.is_ok() {
-                        if let Some(Ok(_)) = framed.next().await {
-                            return true;
-                        }
+                    if framed.send(frame).await.is_ok()
+                        && let Some(Ok(_)) = framed.next().await
+                    {
+                        return true;
                     }
                 }
                 false
@@ -3771,16 +3760,16 @@ async fn test_source_dies_during_migration() {
         .collect();
 
     for &node_id in &surviving_nodes {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                // Clean up migration state
-                let _ = node
-                    .send("CLUSTER", &["SETSLOT", &test_slot.to_string(), "STABLE"])
-                    .await;
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            // Clean up migration state
+            let _ = node
+                .send("CLUSTER", &["SETSLOT", &test_slot.to_string(), "STABLE"])
+                .await;
 
-                let info = harness.get_cluster_info(node_id).await;
-                eprintln!("Node {} after source death: {:?}", node_id, info);
-            }
+            let info = harness.get_cluster_info(node_id).await;
+            eprintln!("Node {} after source death: {:?}", node_id, info);
         }
     }
 
@@ -3972,11 +3961,11 @@ async fn test_cluster_forget_removes_node() {
 
     // Send CLUSTER FORGET from remaining nodes
     for &node_id in &node_ids[..2] {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let forget_resp = node.send("CLUSTER", &["FORGET", &victim_cluster_id]).await;
-                eprintln!("Node {} FORGET response: {:?}", node_id, forget_resp);
-            }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let forget_resp = node.send("CLUSTER", &["FORGET", &victim_cluster_id]).await;
+            eprintln!("Node {} FORGET response: {:?}", node_id, forget_resp);
         }
     }
 
@@ -4167,8 +4156,8 @@ async fn test_simultaneous_node_restarts() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Restart both in parallel
-    let restart_results: Vec<_> = futures::future::join_all(victims.iter().map(|&victim| {
-        let mut harness_ref = &harness;
+    let _restart_results: Vec<_> = futures::future::join_all(victims.iter().map(|&_victim| {
+        let _harness_ref = &harness;
         async move {
             // Note: Can't actually restart in parallel due to &mut self
             // This is a sequential restart that simulates simultaneous timing
@@ -4197,11 +4186,11 @@ async fn test_simultaneous_node_restarts() {
         .unwrap();
 
     for &node_id in &node_ids {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let info = harness.get_cluster_info(node_id).await.unwrap();
-                assert_eq!(info.cluster_state, "ok");
-            }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let info = harness.get_cluster_info(node_id).await.unwrap();
+            assert_eq!(info.cluster_state, "ok");
         }
     }
 
@@ -4264,16 +4253,16 @@ async fn test_node_restart_preserves_raft_state() {
     // Verify no split-brain (only one leader)
     let mut leaders: Vec<u64> = Vec::new();
     for &node_id in &node_ids {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let nodes_resp = node.send("CLUSTER", &["NODES"]).await;
-                if let Ok(nodes) = parse_cluster_nodes(&nodes_resp) {
-                    for n in &nodes {
-                        if n.is_myself() && n.is_master() {
-                            // This node thinks it's a master
-                            // In Raft terms, this could indicate it's the leader
-                            leaders.push(node_id);
-                        }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let nodes_resp = node.send("CLUSTER", &["NODES"]).await;
+            if let Ok(nodes) = parse_cluster_nodes(&nodes_resp) {
+                for n in &nodes {
+                    if n.is_myself() && n.is_master() {
+                        // This node thinks it's a master
+                        // In Raft terms, this could indicate it's the leader
+                        leaders.push(node_id);
                     }
                 }
             }
@@ -4332,10 +4321,10 @@ async fn test_high_write_load_during_failover() {
                 ]);
 
                 use futures::{SinkExt, StreamExt};
-                if framed.send(frame).await.is_ok() {
-                    if let Some(Ok(_)) = framed.next().await {
-                        successful += 1;
-                    }
+                if framed.send(frame).await.is_ok()
+                    && let Some(Ok(_)) = framed.next().await
+                {
+                    successful += 1;
                 }
             }
             // Small delay between writes
@@ -4422,18 +4411,18 @@ async fn test_flapping_node() {
         .unwrap();
 
     for &node_id in &node_ids {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let info = harness.get_cluster_info(node_id).await.unwrap();
-                eprintln!(
-                    "Node {} after flapping: state={}",
-                    node_id, info.cluster_state
-                );
-                assert_eq!(
-                    info.cluster_state, "ok",
-                    "Cluster should remain healthy despite flapping"
-                );
-            }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let info = harness.get_cluster_info(node_id).await.unwrap();
+            eprintln!(
+                "Node {} after flapping: state={}",
+                node_id, info.cluster_state
+            );
+            assert_eq!(
+                info.cluster_state, "ok",
+                "Cluster should remain healthy despite flapping"
+            );
         }
     }
 
@@ -4585,7 +4574,7 @@ async fn test_raft_snapshot_during_migration() {
     harness.kill_node(leader);
 
     // Wait for new leader election
-    let new_leader = match harness.wait_for_leader(Duration::from_secs(15)).await {
+    let _new_leader = match harness.wait_for_leader(Duration::from_secs(15)).await {
         Ok(l) => {
             eprintln!("New leader elected: {}", l);
             l
@@ -4664,12 +4653,12 @@ async fn test_raft_snapshot_during_migration() {
 
     // Try to clean up migration state
     for &node_id in &surviving_ids {
-        if let Some(node) = harness.node(node_id) {
-            if node.is_running() {
-                let _ = node
-                    .send("CLUSTER", &["SETSLOT", &test_slot.to_string(), "STABLE"])
-                    .await;
-            }
+        if let Some(node) = harness.node(node_id)
+            && node.is_running()
+        {
+            let _ = node
+                .send("CLUSTER", &["SETSLOT", &test_slot.to_string(), "STABLE"])
+                .await;
         }
     }
 

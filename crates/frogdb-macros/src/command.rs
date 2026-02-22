@@ -3,7 +3,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, Attribute, DeriveInput, LitStr};
+use syn::{Attribute, DeriveInput, LitStr, parse_macro_input};
 
 /// Parse the #[command(...)] attribute.
 struct CommandAttr {
@@ -244,26 +244,23 @@ fn generate_flags_impl(flags: &[String]) -> TokenStream2 {
 
     let flag_tokens: Vec<TokenStream2> = flags
         .iter()
-        .map(|f| {
-            let flag_name = match f.to_lowercase().as_str() {
-                "write" => quote! { ::frogdb_core::CommandFlags::WRITE },
-                "readonly" => quote! { ::frogdb_core::CommandFlags::READONLY },
-                "fast" => quote! { ::frogdb_core::CommandFlags::FAST },
-                "blocking" => quote! { ::frogdb_core::CommandFlags::BLOCKING },
-                "multi_key" | "multikey" => quote! { ::frogdb_core::CommandFlags::MULTI_KEY },
-                "pubsub" => quote! { ::frogdb_core::CommandFlags::PUBSUB },
-                "script" => quote! { ::frogdb_core::CommandFlags::SCRIPT },
-                "noscript" => quote! { ::frogdb_core::CommandFlags::NOSCRIPT },
-                "loading" => quote! { ::frogdb_core::CommandFlags::LOADING },
-                "stale" => quote! { ::frogdb_core::CommandFlags::STALE },
-                "skip_slowlog" => quote! { ::frogdb_core::CommandFlags::SKIP_SLOWLOG },
-                "random" => quote! { ::frogdb_core::CommandFlags::RANDOM },
-                "admin" => quote! { ::frogdb_core::CommandFlags::ADMIN },
-                "nondeterministic" => quote! { ::frogdb_core::CommandFlags::NONDETERMINISTIC },
-                "no_propagate" => quote! { ::frogdb_core::CommandFlags::NO_PROPAGATE },
-                _ => quote! { ::frogdb_core::CommandFlags::empty() },
-            };
-            flag_name
+        .map(|f| match f.to_lowercase().as_str() {
+            "write" => quote! { ::frogdb_core::CommandFlags::WRITE },
+            "readonly" => quote! { ::frogdb_core::CommandFlags::READONLY },
+            "fast" => quote! { ::frogdb_core::CommandFlags::FAST },
+            "blocking" => quote! { ::frogdb_core::CommandFlags::BLOCKING },
+            "multi_key" | "multikey" => quote! { ::frogdb_core::CommandFlags::MULTI_KEY },
+            "pubsub" => quote! { ::frogdb_core::CommandFlags::PUBSUB },
+            "script" => quote! { ::frogdb_core::CommandFlags::SCRIPT },
+            "noscript" => quote! { ::frogdb_core::CommandFlags::NOSCRIPT },
+            "loading" => quote! { ::frogdb_core::CommandFlags::LOADING },
+            "stale" => quote! { ::frogdb_core::CommandFlags::STALE },
+            "skip_slowlog" => quote! { ::frogdb_core::CommandFlags::SKIP_SLOWLOG },
+            "random" => quote! { ::frogdb_core::CommandFlags::RANDOM },
+            "admin" => quote! { ::frogdb_core::CommandFlags::ADMIN },
+            "nondeterministic" => quote! { ::frogdb_core::CommandFlags::NONDETERMINISTIC },
+            "no_propagate" => quote! { ::frogdb_core::CommandFlags::NO_PROPAGATE },
+            _ => quote! { ::frogdb_core::CommandFlags::empty() },
         })
         .collect();
 

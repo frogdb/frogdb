@@ -399,12 +399,12 @@ impl StringValue {
     pub fn new(data: impl Into<Bytes>) -> Self {
         let bytes = data.into();
         // Try to parse as integer for efficient storage
-        if let Ok(s) = std::str::from_utf8(&bytes) {
-            if let Ok(i) = s.parse::<i64>() {
-                return Self {
-                    data: StringData::Integer(i),
-                };
-            }
+        if let Ok(s) = std::str::from_utf8(&bytes)
+            && let Ok(i) = s.parse::<i64>()
+        {
+            return Self {
+                data: StringData::Integer(i),
+            };
         }
         Self {
             data: StringData::Raw(bytes),
@@ -545,9 +545,15 @@ impl StringValue {
     /// Returns the new value or an error if not a valid float.
     pub fn increment_float(&mut self, delta: f64) -> Result<f64, IncrementError> {
         let current = self.as_float().ok_or(IncrementError::NotFloat)?;
+
+        // Reject stored values that are already infinite or NaN (e.g. "inf", "nan")
+        if current.is_infinite() || current.is_nan() {
+            return Err(IncrementError::NotFloat);
+        }
+
         let new_val = current + delta;
 
-        // Check for infinity or NaN
+        // Check for infinity or NaN result
         if new_val.is_infinite() || new_val.is_nan() {
             return Err(IncrementError::Overflow);
         }
@@ -1917,11 +1923,11 @@ impl ListValue {
     ///
     /// Returns true if the index was valid and the element was set.
     pub fn set(&mut self, index: i64, value: Bytes) -> bool {
-        if let Some(i) = self.normalize_index(index) {
-            if let Some(elem) = self.data.get_mut(i) {
-                *elem = value;
-                return true;
-            }
+        if let Some(i) = self.normalize_index(index)
+            && let Some(elem) = self.data.get_mut(i)
+        {
+            *elem = value;
+            return true;
         }
         false
     }
@@ -2991,7 +2997,10 @@ impl std::fmt::Display for StreamAddError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StreamAddError::IdTooSmall => {
-                write!(f, "ERR The ID specified in XADD is equal or smaller than the target stream top item")
+                write!(
+                    f,
+                    "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+                )
             }
         }
     }

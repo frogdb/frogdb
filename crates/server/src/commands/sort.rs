@@ -5,7 +5,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    shard_for_key, Arity, Command, CommandContext, CommandError, CommandFlags, Value,
+    Arity, Command, CommandContext, CommandError, CommandFlags, Value, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -246,11 +246,7 @@ impl SortKey {
             _ => Ordering::Equal,
         };
 
-        if ascending {
-            ord
-        } else {
-            ord.reverse()
-        }
+        if ascending { ord } else { ord.reverse() }
     }
 }
 

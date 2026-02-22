@@ -833,7 +833,7 @@ impl Command for MsetCommand {
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        if args.len() % 2 != 0 {
+        if !args.len().is_multiple_of(2) {
             return Err(CommandError::WrongArity { command: "MSET" });
         }
 
@@ -870,7 +870,7 @@ impl Command for MsetnxCommand {
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        if args.len() % 2 != 0 {
+        if !args.len().is_multiple_of(2) {
             return Err(CommandError::WrongArity { command: "MSETNX" });
         }
 
@@ -907,6 +907,7 @@ impl Command for MsetnxCommand {
 pub struct LcsCommand;
 
 /// Options for the LCS command.
+#[derive(Default)]
 struct LcsOptions {
     /// Return only the length of the LCS, not the string.
     len_only: bool,
@@ -916,17 +917,6 @@ struct LcsOptions {
     min_match_len: usize,
     /// Include match lengths in output (for IDX mode).
     with_match_len: bool,
-}
-
-impl Default for LcsOptions {
-    fn default() -> Self {
-        Self {
-            len_only: false,
-            idx: false,
-            min_match_len: 0,
-            with_match_len: false,
-        }
-    }
 }
 
 /// Represents a match in the IDX output.

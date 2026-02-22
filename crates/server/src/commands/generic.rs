@@ -9,8 +9,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    extract_hash_tag, shard_for_key, slot_for_key, Arity, Command, CommandContext, CommandError,
-    CommandFlags, ConnectionLevelOp, ExecutionStrategy, MergeStrategy, ServerWideOp, Value,
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy, MergeStrategy, ServerWideOp, Value, extract_hash_tag, shard_for_key,
+    slot_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -347,11 +348,7 @@ impl Command for ObjectCommand {
                             }
                             Value::HyperLogLog(hll) => {
                                 // HyperLogLog can be sparse or dense
-                                if hll.is_sparse() {
-                                    "sparse"
-                                } else {
-                                    "dense"
-                                }
+                                if hll.is_sparse() { "sparse" } else { "dense" }
                             }
                             Value::TimeSeries(_) => {
                                 // TimeSeries uses Gorilla compression

@@ -162,10 +162,10 @@ async fn test_xread_block_dollar_resolution() {
     match response {
         Response::Array(streams) => {
             assert_eq!(streams.len(), 1);
-            if let Response::Array(ref stream_data) = streams[0] {
-                if let Response::Array(ref entries) = stream_data[1] {
-                    assert_eq!(entries.len(), 1, "Should have exactly one new entry");
-                }
+            if let Response::Array(ref stream_data) = streams[0]
+                && let Response::Array(ref entries) = stream_data[1]
+            {
+                assert_eq!(entries.len(), 1, "Should have exactly one new entry");
             }
         }
         _ => panic!("Expected array, got {:?}", response),

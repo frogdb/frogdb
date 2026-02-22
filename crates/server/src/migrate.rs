@@ -150,8 +150,8 @@ impl MigrateArgs {
                 }
                 b"KEYS" => {
                     // All remaining arguments are keys
-                    for j in (i + 1)..args.len() {
-                        keys.push(args[j].clone());
+                    for arg in args[(i + 1)..].iter() {
+                        keys.push(arg.clone());
                     }
                     break;
                 }
@@ -293,11 +293,7 @@ impl MigrateClient {
             Response::Error(e) => {
                 let err_msg = String::from_utf8_lossy(&e).to_string();
                 // If BUSYKEY and no REPLACE, that's expected (key exists)
-                if err_msg.contains("BUSYKEY") && !replace {
-                    Err(MigrateError::TargetError(err_msg))
-                } else {
-                    Err(MigrateError::TargetError(err_msg))
-                }
+                Err(MigrateError::TargetError(err_msg))
             }
             _ => Err(MigrateError::ProtocolError(
                 "unexpected RESTORE response".to_string(),

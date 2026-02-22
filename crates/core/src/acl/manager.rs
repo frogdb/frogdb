@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLock};
 
 use super::error::AclError;
 use super::log::{AclLog, DEFAULT_ACL_LOG_MAX_LEN};
-use super::parser::{hash_password, parse_acl_line, AclRule};
+use super::parser::{AclRule, hash_password, parse_acl_line};
 use super::user::{AuthenticatedUser, User, UserPermissions};
 use crate::sync::RwLockExt;
 

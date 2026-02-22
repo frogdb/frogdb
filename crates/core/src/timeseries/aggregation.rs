@@ -200,10 +200,10 @@ pub fn aggregate_by_bucket(
 
         if sample_bucket != bucket_start {
             // Emit the current bucket
-            if !bucket_samples.is_empty() {
-                if let Some(agg_val) = aggregate(&bucket_samples, agg) {
-                    result.push((bucket_start, agg_val));
-                }
+            if !bucket_samples.is_empty()
+                && let Some(agg_val) = aggregate(&bucket_samples, agg)
+            {
+                result.push((bucket_start, agg_val));
             }
             bucket_start = sample_bucket;
             bucket_samples.clear();
@@ -213,10 +213,10 @@ pub fn aggregate_by_bucket(
     }
 
     // Emit the last bucket
-    if !bucket_samples.is_empty() {
-        if let Some(agg_val) = aggregate(&bucket_samples, agg) {
-            result.push((bucket_start, agg_val));
-        }
+    if !bucket_samples.is_empty()
+        && let Some(agg_val) = aggregate(&bucket_samples, agg)
+    {
+        result.push((bucket_start, agg_val));
     }
 
     result

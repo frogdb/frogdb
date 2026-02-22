@@ -174,14 +174,18 @@ mod tests {
 
     #[test]
     fn test_validate_invalid_compression() {
-        let mut config = PersistenceConfig::default();
-        config.compression = "invalid".to_string();
+        let config = PersistenceConfig {
+            compression: "invalid".to_string(),
+            ..Default::default()
+        };
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("invalid compression type"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid compression type")
+        );
     }
 
     #[test]
@@ -189,8 +193,10 @@ mod tests {
         for compression in [
             "none", "snappy", "lz4", "zstd", "NONE", "Snappy", "LZ4", "ZSTD",
         ] {
-            let mut config = PersistenceConfig::default();
-            config.compression = compression.to_string();
+            let config = PersistenceConfig {
+                compression: compression.to_string(),
+                ..Default::default()
+            };
             assert!(
                 config.validate().is_ok(),
                 "Compression {} should be valid",
@@ -201,21 +207,27 @@ mod tests {
 
     #[test]
     fn test_validate_invalid_durability_mode() {
-        let mut config = PersistenceConfig::default();
-        config.durability_mode = "invalid".to_string();
+        let config = PersistenceConfig {
+            durability_mode: "invalid".to_string(),
+            ..Default::default()
+        };
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("invalid durability_mode"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid durability_mode")
+        );
     }
 
     #[test]
     fn test_validate_valid_durability_modes() {
         for mode in ["async", "periodic", "sync", "ASYNC", "Periodic", "SYNC"] {
-            let mut config = PersistenceConfig::default();
-            config.durability_mode = mode.to_string();
+            let config = PersistenceConfig {
+                durability_mode: mode.to_string(),
+                ..Default::default()
+            };
             assert!(
                 config.validate().is_ok(),
                 "Durability mode {} should be valid",
@@ -226,10 +238,12 @@ mod tests {
 
     #[test]
     fn test_validate_persistence_disabled_skips_validation() {
-        let mut config = PersistenceConfig::default();
-        config.enabled = false;
-        config.compression = "invalid".to_string();
-        config.durability_mode = "invalid".to_string();
+        let config = PersistenceConfig {
+            enabled: false,
+            compression: "invalid".to_string(),
+            durability_mode: "invalid".to_string(),
+            ..Default::default()
+        };
         // Should pass because persistence is disabled
         assert!(config.validate().is_ok());
     }

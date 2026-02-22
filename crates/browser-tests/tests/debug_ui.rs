@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{chromedriver_available, BrowserSession, TestServer};
+use common::{BrowserSession, TestServer, chromedriver_available};
 use std::time::Duration;
 use thirtyfour::prelude::*;
 
@@ -294,11 +294,11 @@ async fn test_charts_container_exists() {
 
     let mut found_chart_elements = false;
     for selector in chart_selectors {
-        if let Ok(elements) = browser.driver.find_all(By::Css(selector)).await {
-            if !elements.is_empty() {
-                found_chart_elements = true;
-                break;
-            }
+        if let Ok(elements) = browser.driver.find_all(By::Css(selector)).await
+            && !elements.is_empty()
+        {
+            found_chart_elements = true;
+            break;
         }
     }
 

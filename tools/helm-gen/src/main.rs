@@ -112,7 +112,7 @@ fn generate_files(output_dir: &PathBuf, version: &str) -> Result<()> {
     Ok(())
 }
 
-fn check_files(output_dir: &PathBuf, version: &str) -> Result<()> {
+fn check_files(output_dir: &std::path::Path, version: &str) -> Result<()> {
     let mut has_diff = false;
 
     // Check Chart.yaml

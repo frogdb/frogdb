@@ -1238,19 +1238,23 @@ mod tests {
         assert!(!Response::Array(vec![]).is_internal());
 
         // Internal action types are internal
-        assert!(Response::BlockingNeeded {
-            keys: vec![],
-            timeout: 0.0,
-            op: BlockingOp::BLPop,
-        }
-        .is_internal());
+        assert!(
+            Response::BlockingNeeded {
+                keys: vec![],
+                timeout: 0.0,
+                op: BlockingOp::BLPop,
+            }
+            .is_internal()
+        );
 
-        assert!(Response::RaftNeeded {
-            op: RaftClusterOp::IncrementEpoch,
-            register_node: None,
-            unregister_node: None,
-        }
-        .is_internal());
+        assert!(
+            Response::RaftNeeded {
+                op: RaftClusterOp::IncrementEpoch,
+                register_node: None,
+                unregister_node: None,
+            }
+            .is_internal()
+        );
 
         assert!(Response::MigrateNeeded { args: vec![] }.is_internal());
     }

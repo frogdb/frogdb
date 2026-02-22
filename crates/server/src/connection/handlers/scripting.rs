@@ -10,13 +10,13 @@
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, RwLockExt, ShardMessage, ShardReadyResult};
+use frogdb_core::{RwLockExt, ShardMessage, ShardReadyResult, shard_for_key};
 use frogdb_protocol::Response;
 use std::path::PathBuf;
 use tokio::sync::oneshot;
 use tracing::warn;
 
-use crate::connection::{next_txid, ConnectionHandler};
+use crate::connection::{ConnectionHandler, next_txid};
 
 // ============================================================================
 // EVAL / EVALSHA handlers
@@ -484,7 +484,9 @@ impl ConnectionHandler {
                 b"ASYNC" => true,
                 b"SYNC" => false,
                 _ => {
-                    return Response::error("ERR SCRIPT FLUSH only supports ASYNC and SYNC options")
+                    return Response::error(
+                        "ERR SCRIPT FLUSH only supports ASYNC and SYNC options",
+                    );
                 }
             }
         } else {
@@ -700,6 +702,7 @@ impl ConnectionHandler {
     }
 
     /// Handle FUNCTION LIST [LIBRARYNAME pattern] [WITHCODE].
+    #[allow(clippy::vec_init_then_push)]
     fn handle_function_list(&self, args: &[Bytes]) -> Response {
         let mut pattern: Option<&str> = None;
         let mut with_code = false;
@@ -838,6 +841,7 @@ impl ConnectionHandler {
     }
 
     /// Handle FUNCTION STATS.
+    #[allow(clippy::vec_init_then_push)]
     fn handle_function_stats(&self) -> Response {
         let registry = match self.function_registry.try_read_err() {
             Ok(r) => r,
@@ -929,7 +933,7 @@ impl ConnectionHandler {
                         return Response::error(format!(
                             "ERR Failed to load library '{}': {}",
                             name, e
-                        ))
+                        ));
                     }
                 };
 
@@ -1042,7 +1046,7 @@ impl ConnectionHandler {
                 Err(e) if e.contains("UNKILLABLE") => {
                     return Response::error(
                         "UNKILLABLE The busy script was not running in read-only mode.",
-                    )
+                    );
                 }
                 Err(_) => {} // NOTBUSY - continue checking other shards
             }
@@ -1058,6 +1062,7 @@ impl ConnectionHandler {
 // ============================================================================
 
 /// Parse SCRIPT subcommand and return the subcommand name.
+#[allow(clippy::result_large_err)]
 pub fn parse_script_subcommand(args: &[Bytes]) -> Result<(&str, &[Bytes]), Response> {
     if args.is_empty() {
         return Err(Response::error(
@@ -1118,6 +1123,7 @@ pub fn function_help() -> Response {
 /// Parse SCRIPT FLUSH arguments.
 ///
 /// Returns true for SYNC mode, false for ASYNC mode.
+#[allow(clippy::result_large_err)]
 pub fn parse_script_flush_mode(args: &[Bytes]) -> Result<bool, Response> {
     if args.is_empty() {
         return Ok(true); // Default to SYNC
@@ -1136,6 +1142,7 @@ pub fn parse_script_flush_mode(args: &[Bytes]) -> Result<bool, Response> {
 /// Parse FUNCTION LOAD arguments.
 ///
 /// Returns (replace: bool, code_index: usize).
+#[allow(clippy::result_large_err)]
 pub fn parse_function_load_args(args: &[Bytes]) -> Result<(bool, usize), Response> {
     if args.is_empty() {
         return Err(Response::error(
@@ -1171,6 +1178,7 @@ pub struct FunctionListOptions<'a> {
 }
 
 /// Parse FUNCTION LIST arguments.
+#[allow(clippy::result_large_err)]
 pub fn parse_function_list_args(args: &[Bytes]) -> Result<FunctionListOptions<'_>, Response> {
     let mut opts = FunctionListOptions::default();
     let mut i = 0;
@@ -1205,6 +1213,7 @@ pub fn parse_function_list_args(args: &[Bytes]) -> Result<FunctionListOptions<'_
 }
 
 /// Parse FUNCTION RESTORE policy.
+#[allow(clippy::result_large_err)]
 pub fn parse_function_restore_policy(args: &[Bytes]) -> Result<&str, Response> {
     if args.len() <= 1 {
         return Ok("APPEND"); // Default policy

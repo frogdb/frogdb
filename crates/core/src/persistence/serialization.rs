@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 use crate::bloom::{BloomFilterValue, BloomLayer};
-use crate::hyperloglog::{HyperLogLogValue, HLL_DENSE_SIZE};
+use crate::hyperloglog::{HLL_DENSE_SIZE, HyperLogLogValue};
 use crate::json::JsonValue;
 use crate::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
 use crate::types::{
@@ -176,13 +176,12 @@ fn serialize_string(sv: &StringValue) -> (u8, Vec<u8>) {
     if let Some(i) = sv.as_integer() {
         // Verify it's actually stored as integer (not a string that happens to parse as int)
         let bytes = sv.as_bytes();
-        if let Ok(s) = std::str::from_utf8(&bytes) {
-            if let Ok(parsed) = s.parse::<i64>() {
-                if parsed == i {
-                    // It's integer-encoded
-                    return (TYPE_STRING_INT, i.to_le_bytes().to_vec());
-                }
-            }
+        if let Ok(s) = std::str::from_utf8(&bytes)
+            && let Ok(parsed) = s.parse::<i64>()
+            && parsed == i
+        {
+            // It's integer-encoded
+            return (TYPE_STRING_INT, i.to_le_bytes().to_vec());
         }
     }
 
@@ -1293,7 +1292,7 @@ mod unit_tests {
     fn test_deserialize_unknown_type() {
         let mut data = vec![0u8; HEADER_SIZE];
         data[0] = 255; // Unknown type
-                       // Set payload_len to 0
+        // Set payload_len to 0
         data[16..24].copy_from_slice(&0u64.to_le_bytes());
 
         let result = deserialize(&data);

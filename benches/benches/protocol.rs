@@ -6,7 +6,7 @@
 //! - Bulk array handling
 
 use bytes::{Bytes, BytesMut};
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use frogdb_protocol::Response;
 use redis_protocol::resp2::encode::extend_encode as resp2_encode;
 use redis_protocol::resp3::encode::complete::extend_encode as resp3_encode;
@@ -19,7 +19,7 @@ fn bench_encode_simple_string(c: &mut Criterion) {
     let mut group = c.benchmark_group("protocol/resp2/encode/simple");
 
     let response = Response::ok();
-    let frame = response.to_resp2_frame();
+    let frame = response.into_wire().unwrap().to_resp2_frame();
 
     group.throughput(Throughput::Elements(1));
     group.bench_function("ok", |b| {
@@ -38,7 +38,7 @@ fn bench_encode_integer(c: &mut Criterion) {
 
     for value in [0i64, 42, 1_000_000, i64::MAX] {
         let response = Response::Integer(value);
-        let frame = response.to_resp2_frame();
+        let frame = response.into_wire().unwrap().to_resp2_frame();
 
         group.throughput(Throughput::Elements(1));
         group.bench_with_input(BenchmarkId::new("value", value), &value, |b, _| {
@@ -59,7 +59,7 @@ fn bench_encode_bulk_string(c: &mut Criterion) {
     for size in [16, 128, 1024, 8192] {
         let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
         let response = Response::bulk(Bytes::from(data));
-        let frame = response.to_resp2_frame();
+        let frame = response.into_wire().unwrap().to_resp2_frame();
 
         group.throughput(Throughput::Bytes(size as u64));
         group.bench_with_input(BenchmarkId::new("bytes", size), &size, |b, _| {
@@ -82,7 +82,7 @@ fn bench_encode_array(c: &mut Criterion) {
             .map(|i| Response::bulk(Bytes::from(format!("item:{}", i))))
             .collect();
         let response = Response::Array(items);
-        let frame = response.to_resp2_frame();
+        let frame = response.into_wire().unwrap().to_resp2_frame();
 
         group.throughput(Throughput::Elements(array_size as u64));
         group.bench_with_input(
@@ -105,7 +105,7 @@ fn bench_encode_null(c: &mut Criterion) {
     let mut group = c.benchmark_group("protocol/resp2/encode/null");
 
     let response = Response::null();
-    let frame = response.to_resp2_frame();
+    let frame = response.into_wire().unwrap().to_resp2_frame();
 
     group.throughput(Throughput::Elements(1));
     group.bench_function("null", |b| {
@@ -123,7 +123,7 @@ fn bench_encode_error(c: &mut Criterion) {
     let mut group = c.benchmark_group("protocol/resp2/encode/error");
 
     let response = Response::error("ERR unknown command 'FOO'");
-    let frame = response.to_resp2_frame();
+    let frame = response.into_wire().unwrap().to_resp2_frame();
 
     group.throughput(Throughput::Elements(1));
     group.bench_function("error", |b| {
@@ -154,7 +154,7 @@ fn bench_encode_resp3_map(c: &mut Criterion) {
             })
             .collect();
         let response = Response::Map(pairs);
-        let frame = response.to_resp3_frame();
+        let frame = response.into_wire().unwrap().to_resp3_frame();
 
         group.throughput(Throughput::Elements(map_size as u64));
         group.bench_with_input(BenchmarkId::new("pairs", map_size), &map_size, |b, _| {
@@ -177,7 +177,7 @@ fn bench_encode_resp3_set(c: &mut Criterion) {
             .map(|i| Response::bulk(Bytes::from(format!("member:{}", i))))
             .collect();
         let response = Response::Set(items);
-        let frame = response.to_resp3_frame();
+        let frame = response.into_wire().unwrap().to_resp3_frame();
 
         group.throughput(Throughput::Elements(set_size as u64));
         group.bench_with_input(BenchmarkId::new("members", set_size), &set_size, |b, _| {
@@ -195,9 +195,9 @@ fn bench_encode_resp3_set(c: &mut Criterion) {
 fn bench_encode_resp3_double(c: &mut Criterion) {
     let mut group = c.benchmark_group("protocol/resp3/encode/double");
 
-    for value in [0.0, 3.14159, f64::MAX, f64::INFINITY] {
+    for value in [0.0, std::f64::consts::PI, f64::MAX, f64::INFINITY] {
         let response = Response::Double(value);
-        let frame = response.to_resp3_frame();
+        let frame = response.into_wire().unwrap().to_resp3_frame();
 
         group.throughput(Throughput::Elements(1));
         group.bench_with_input(
@@ -221,7 +221,7 @@ fn bench_encode_resp3_boolean(c: &mut Criterion) {
 
     for value in [true, false] {
         let response = Response::Boolean(value);
-        let frame = response.to_resp3_frame();
+        let frame = response.into_wire().unwrap().to_resp3_frame();
 
         group.throughput(Throughput::Elements(1));
         group.bench_with_input(BenchmarkId::new("value", value), &value, |b, _| {
@@ -257,7 +257,13 @@ fn bench_response_to_frame_resp2(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
     group.bench_function("nested_array", |b| {
         b.iter(|| {
-            black_box(nested_response.clone().to_resp2_frame());
+            black_box(
+                nested_response
+                    .clone()
+                    .into_wire()
+                    .unwrap()
+                    .to_resp2_frame(),
+            );
         });
     });
 
@@ -275,7 +281,7 @@ fn bench_response_to_frame_resp2(c: &mut Criterion) {
 
     group.bench_function("map_flatten", |b| {
         b.iter(|| {
-            black_box(map_response.clone().to_resp2_frame());
+            black_box(map_response.clone().into_wire().unwrap().to_resp2_frame());
         });
     });
 
@@ -297,7 +303,7 @@ fn bench_response_to_frame_resp3(c: &mut Criterion) {
         ),
         (
             Response::bulk(Bytes::from("double")),
-            Response::Double(3.14159),
+            Response::Double(std::f64::consts::PI),
         ),
         (
             Response::bulk(Bytes::from("boolean")),
@@ -316,7 +322,13 @@ fn bench_response_to_frame_resp3(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1));
     group.bench_function("complex_map", |b| {
         b.iter(|| {
-            black_box(nested_response.clone().to_resp3_frame());
+            black_box(
+                nested_response
+                    .clone()
+                    .into_wire()
+                    .unwrap()
+                    .to_resp3_frame(),
+            );
         });
     });
 

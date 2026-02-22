@@ -811,8 +811,8 @@ mod tests {
 
     #[allow(unused_imports)]
     use crate::{
-        parse_u64, Arity, Command, CommandContext, CommandError, CommandFlags, CommandMetadata,
-        ConnectionLevelOp, ExecutionStrategy, MergeStrategy,
+        Arity, Command, CommandContext, CommandError, CommandFlags, CommandMetadata,
+        ConnectionLevelOp, ExecutionStrategy, MergeStrategy, parse_u64,
     };
 
     // Test basic command definition

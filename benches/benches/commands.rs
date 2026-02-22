@@ -8,7 +8,7 @@
 //! - Sorted Set: ZADD, ZRANGE, ZRANGEBYSCORE
 
 use bytes::Bytes;
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use frogdb_core::store::{HashMapStore, Store};
 use frogdb_core::types::{
     HashValue, ListValue, ScoreBound, SetValue, SortedSetValue, StringValue, Value,
@@ -178,7 +178,8 @@ fn bench_list_lpush(c: &mut Criterion) {
                 }
 
                 b.iter(|| {
-                    black_box(list.push_front(Bytes::from("newelem")));
+                    list.push_front(Bytes::from("newelem"));
+                    black_box(());
                 });
             },
         );
@@ -202,7 +203,8 @@ fn bench_list_rpush(c: &mut Criterion) {
                 }
 
                 b.iter(|| {
-                    black_box(list.push_back(Bytes::from("newelem")));
+                    list.push_back(Bytes::from("newelem"));
+                    black_box(());
                 });
             },
         );
@@ -387,7 +389,7 @@ fn bench_zset_zadd(c: &mut Criterion) {
                 let mut rng = rand::thread_rng();
                 b.iter(|| {
                     let member = Bytes::from(format!("newmember:{}", counter));
-                    let score: f64 = rng.gen();
+                    let score: f64 = rng.r#gen();
                     counter += 1;
                     black_box(zset.add(member, score));
                 });

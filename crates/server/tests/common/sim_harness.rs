@@ -3,6 +3,8 @@
 //! This module provides utilities for running FrogDB under Turmoil's
 //! deterministic network simulation, enabling testing of:
 //! - Scatter-gather operations under network delays
+
+#![allow(dead_code)]
 //! - Message ordering and timing
 //! - Future: Network partitions and fault injection
 

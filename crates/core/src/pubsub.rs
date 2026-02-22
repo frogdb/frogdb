@@ -439,11 +439,7 @@ impl ShardSubscriptions {
             .iter()
             .filter_map(
                 |(p, _, c, _)| {
-                    if *c == conn_id {
-                        Some(p.clone())
-                    } else {
-                        None
-                    }
+                    if *c == conn_id { Some(p.clone()) } else { None }
                 },
             )
             .collect()

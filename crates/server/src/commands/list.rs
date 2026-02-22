@@ -542,7 +542,7 @@ impl Command for LsetCommand {
             None => {
                 return Err(CommandError::InvalidArgument {
                     message: "no such key".to_string(),
-                })
+                });
             }
         }
 
@@ -886,10 +886,10 @@ impl Command for LmoveCommand {
         }
 
         // Check dest is correct type if it exists
-        if let Some(v) = ctx.store.get(dest) {
-            if v.as_list().is_none() {
-                return Err(CommandError::WrongType);
-            }
+        if let Some(v) = ctx.store.get(dest)
+            && v.as_list().is_none()
+        {
+            return Err(CommandError::WrongType);
         }
 
         // Pop from source

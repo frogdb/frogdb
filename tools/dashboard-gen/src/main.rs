@@ -5,8 +5,8 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use frogdb_telemetry::{MetricDefinition, MetricType, ALL_METRICS};
-use serde_json::{json, Value};
+use frogdb_telemetry::{ALL_METRICS, MetricDefinition, MetricType};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
@@ -499,6 +499,7 @@ fn create_histogram_panel(
 }
 
 /// Create a stat panel for overview metrics.
+#[allow(clippy::too_many_arguments)]
 fn create_stat_panel(
     id: i32,
     title: &str,

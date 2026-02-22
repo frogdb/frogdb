@@ -11,9 +11,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    shard_for_key, GlobPattern, IntrospectionRequest, IntrospectionResponse, ShardMessage,
+    GlobPattern, IntrospectionRequest, IntrospectionResponse,
     MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SUBSCRIPTIONS_PER_CONNECTION, ShardMessage, shard_for_key,
 };
 use frogdb_protocol::Response;
 use std::collections::{HashMap, HashSet};
@@ -54,18 +54,18 @@ impl ConnectionHandler {
                 "Subscribed to channel"
             );
 
-            // Send to all shards
-            for sender in self.shard_senders.iter() {
-                let (response_tx, _response_rx) = oneshot::channel();
-                let _ = sender
-                    .send(ShardMessage::Subscribe {
-                        channels: vec![channel.clone()],
-                        conn_id: self.state.id,
-                        sender: self.pubsub_tx.clone(),
-                        response_tx,
-                    })
-                    .await;
-            }
+            // Broadcast pub/sub uses shard 0 as the coordinator so each
+            // subscriber is registered exactly once and PUBLISH delivers
+            // each message exactly once.
+            let (response_tx, _response_rx) = oneshot::channel();
+            let _ = self.shard_senders[0]
+                .send(ShardMessage::Subscribe {
+                    channels: vec![channel.clone()],
+                    conn_id: self.state.id,
+                    sender: self.pubsub_tx.clone(),
+                    response_tx,
+                })
+                .await;
 
             // Build subscription confirmation response
             let count = self.state.pubsub.sub_count();
@@ -103,17 +103,15 @@ impl ConnectionHandler {
             // Remove from local tracking
             self.state.pubsub.subscriptions.remove(&channel);
 
-            // Send to all shards
-            for sender in self.shard_senders.iter() {
-                let (response_tx, _response_rx) = oneshot::channel();
-                let _ = sender
-                    .send(ShardMessage::Unsubscribe {
-                        channels: vec![channel.clone()],
-                        conn_id: self.state.id,
-                        response_tx,
-                    })
-                    .await;
-            }
+            // Broadcast pub/sub uses shard 0 as the coordinator.
+            let (response_tx, _response_rx) = oneshot::channel();
+            let _ = self.shard_senders[0]
+                .send(ShardMessage::Unsubscribe {
+                    channels: vec![channel.clone()],
+                    conn_id: self.state.id,
+                    response_tx,
+                })
+                .await;
 
             // Build unsubscription confirmation response
             let count = self.state.pubsub.sub_count();
@@ -147,18 +145,16 @@ impl ConnectionHandler {
             // Add to local tracking
             self.state.pubsub.patterns.insert(pattern.clone());
 
-            // Send to all shards
-            for sender in self.shard_senders.iter() {
-                let (response_tx, _response_rx) = oneshot::channel();
-                let _ = sender
-                    .send(ShardMessage::PSubscribe {
-                        patterns: vec![pattern.clone()],
-                        conn_id: self.state.id,
-                        sender: self.pubsub_tx.clone(),
-                        response_tx,
-                    })
-                    .await;
-            }
+            // Broadcast pub/sub uses shard 0 as the coordinator.
+            let (response_tx, _response_rx) = oneshot::channel();
+            let _ = self.shard_senders[0]
+                .send(ShardMessage::PSubscribe {
+                    patterns: vec![pattern.clone()],
+                    conn_id: self.state.id,
+                    sender: self.pubsub_tx.clone(),
+                    response_tx,
+                })
+                .await;
 
             // Build subscription confirmation response
             let count = self.state.pubsub.sub_count();
@@ -196,17 +192,15 @@ impl ConnectionHandler {
             // Remove from local tracking
             self.state.pubsub.patterns.remove(&pattern);
 
-            // Send to all shards
-            for sender in self.shard_senders.iter() {
-                let (response_tx, _response_rx) = oneshot::channel();
-                let _ = sender
-                    .send(ShardMessage::PUnsubscribe {
-                        patterns: vec![pattern.clone()],
-                        conn_id: self.state.id,
-                        response_tx,
-                    })
-                    .await;
-            }
+            // Broadcast pub/sub uses shard 0 as the coordinator.
+            let (response_tx, _response_rx) = oneshot::channel();
+            let _ = self.shard_senders[0]
+                .send(ShardMessage::PUnsubscribe {
+                    patterns: vec![pattern.clone()],
+                    conn_id: self.state.id,
+                    response_tx,
+                })
+                .await;
 
             // Build unsubscription confirmation response
             let count = self.state.pubsub.sub_count();
@@ -229,29 +223,19 @@ impl ConnectionHandler {
         let channel = &args[0];
         let message = &args[1];
 
-        // Scatter to all shards and sum subscriber counts
-        let mut total_count = 0usize;
-        let mut handles = Vec::with_capacity(self.num_shards);
+        // Broadcast pub/sub uses shard 0 as the coordinator so the count
+        // reflects actual unique subscribers rather than being multiplied by
+        // the number of shards.
+        let (response_tx, response_rx) = oneshot::channel();
+        let _ = self.shard_senders[0]
+            .send(ShardMessage::Publish {
+                channel: channel.clone(),
+                message: message.clone(),
+                response_tx,
+            })
+            .await;
 
-        for sender in self.shard_senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            let _ = sender
-                .send(ShardMessage::Publish {
-                    channel: channel.clone(),
-                    message: message.clone(),
-                    response_tx,
-                })
-                .await;
-            handles.push(response_rx);
-        }
-
-        // Gather results
-        for rx in handles {
-            if let Ok(count) = rx.await {
-                total_count += count;
-            }
-        }
-
+        let total_count = response_rx.await.unwrap_or(0);
         Response::Integer(total_count as i64)
     }
 

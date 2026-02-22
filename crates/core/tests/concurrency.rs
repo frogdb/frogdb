@@ -13,7 +13,6 @@ use common::mock_snapshot::*;
 use common::mock_streams::*;
 use common::mock_watch::*;
 use common::{assert_all_unique, spawn_collect};
-use serde_json;
 use shuttle::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use shuttle::sync::{Arc, Mutex};
 use shuttle::{check_pct, check_random, thread};
@@ -497,7 +496,7 @@ fn test_concurrent_list_pop() {
             assert_eq!(popped.len(), 8, "Should pop all elements");
 
             // Check uniqueness
-            assert_all_unique(&*popped);
+            assert_all_unique(&popped);
         },
         1000,
     );
@@ -628,7 +627,7 @@ fn test_concurrent_spop() {
             assert_eq!(popped.len(), 8, "Should pop all elements");
 
             // Check uniqueness
-            assert_all_unique(&*popped);
+            assert_all_unique(&popped);
         },
         1000,
     );
@@ -1564,12 +1563,10 @@ fn test_xadd_satisfies_single_waiter() {
                 let queue = queue.clone();
                 let satisfied_flag = waiter_satisfied.clone();
                 producer_handles.push(thread::spawn(move || {
-                    if queue.has_waiters() {
-                        if let Some(_) = queue.satisfy_oldest() {
-                            // This producer satisfied the waiter
-                            satisfied_flag.store(true, Ordering::SeqCst);
-                            return Some(producer_id);
-                        }
+                    if queue.has_waiters() && queue.satisfy_oldest().is_some() {
+                        // This producer satisfied the waiter
+                        satisfied_flag.store(true, Ordering::SeqCst);
+                        return Some(producer_id);
                     }
                     None
                 }));
@@ -1577,7 +1574,7 @@ fn test_xadd_satisfies_single_waiter() {
 
             let mut satisfier_count = 0;
             for h in producer_handles {
-                if let Some(_) = h.join().unwrap() {
+                if h.join().unwrap().is_some() {
                     satisfier_count += 1;
                 }
             }
@@ -1620,10 +1617,8 @@ fn test_concurrent_xadd_xread() {
                         queue.add_waiter(i);
                     } else {
                         // Writer: try to satisfy a waiter
-                        if queue.has_waiters() {
-                            if let Some(_) = queue.satisfy_oldest() {
-                                satisfied.fetch_add(1, Ordering::SeqCst);
-                            }
+                        if queue.has_waiters() && queue.satisfy_oldest().is_some() {
+                            satisfied.fetch_add(1, Ordering::SeqCst);
                         }
                         adds.fetch_add(1, Ordering::SeqCst);
                     }

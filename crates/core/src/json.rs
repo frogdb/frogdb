@@ -936,12 +936,12 @@ fn expand_path_segments(
 
     match pattern {
         PathPattern::Key(key) => {
-            if let JsonData::Object(obj) = data {
-                if let Some(value) = obj.get(key) {
-                    let mut new_path = current_path.to_vec();
-                    new_path.push(PathSegment::Key(key.clone()));
-                    return expand_path_segments(rest, value, &new_path);
-                }
+            if let JsonData::Object(obj) = data
+                && let Some(value) = obj.get(key)
+            {
+                let mut new_path = current_path.to_vec();
+                new_path.push(PathSegment::Key(key.clone()));
+                return expand_path_segments(rest, value, &new_path);
             }
             Ok(vec![])
         }
@@ -1172,11 +1172,7 @@ fn create_path(data: &mut JsonData, path: &str, value: JsonData) -> Result<bool,
 
 /// Normalize an array index, handling negative indices.
 fn normalize_array_index(idx: i64, len: i64) -> i64 {
-    if idx < 0 {
-        (len + idx).max(0)
-    } else {
-        idx
-    }
+    if idx < 0 { (len + idx).max(0) } else { idx }
 }
 
 /// Apply RFC 7396 JSON Merge Patch.

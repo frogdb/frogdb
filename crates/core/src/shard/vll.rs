@@ -139,16 +139,16 @@ impl ShardWorker {
     /// Handle VLL abort - cleanup a failed operation.
     pub(crate) fn handle_vll_abort(&mut self, txid: u64) {
         // Remove from queue
-        if let Some(tx_queue) = self.tx_queue.as_mut() {
-            if let Some(op) = tx_queue.dequeue(txid) {
-                // Release any held locks and remove intents
-                if let Some(intent_table) = self.intent_table.as_mut() {
-                    if op.state == crate::vll::PendingOpState::Ready {
-                        // Was holding locks
-                        intent_table.release_locks(&op.keys, op.mode);
-                    }
-                    intent_table.remove_all_intents(&op.keys, txid);
+        if let Some(tx_queue) = self.tx_queue.as_mut()
+            && let Some(op) = tx_queue.dequeue(txid)
+        {
+            // Release any held locks and remove intents
+            if let Some(intent_table) = self.intent_table.as_mut() {
+                if op.state == crate::vll::PendingOpState::Ready {
+                    // Was holding locks
+                    intent_table.release_locks(&op.keys, op.mode);
                 }
+                intent_table.remove_all_intents(&op.keys, txid);
             }
         }
     }

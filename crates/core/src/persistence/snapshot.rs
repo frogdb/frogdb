@@ -496,12 +496,12 @@ impl RocksSnapshotCoordinator {
             let name_str = name.to_string_lossy();
 
             // Only consider snapshot directories (snapshot_XXXXX format)
-            if name_str.starts_with("snapshot_") && entry.file_type()?.is_dir() {
-                if let Some(epoch_str) = name_str.strip_prefix("snapshot_") {
-                    if let Ok(epoch) = epoch_str.parse::<u64>() {
-                        entries.push((epoch, entry.path()));
-                    }
-                }
+            if name_str.starts_with("snapshot_")
+                && entry.file_type()?.is_dir()
+                && let Some(epoch_str) = name_str.strip_prefix("snapshot_")
+                && let Ok(epoch) = epoch_str.parse::<u64>()
+            {
+                entries.push((epoch, entry.path()));
             }
         }
 
@@ -814,8 +814,8 @@ mod tests {
 
     #[test]
     fn test_snapshot_handle_complete() {
-        use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
 
         let completed = Arc::new(AtomicBool::new(false));
         let completed_clone = completed.clone();

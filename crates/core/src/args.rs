@@ -171,11 +171,11 @@ impl<'a> ArgParser<'a> {
     ///
     /// Returns `true` and consumes the argument if it matches.
     pub fn try_flag(&mut self, flag: &[u8]) -> bool {
-        if let Some(arg) = self.peek() {
-            if arg.eq_ignore_ascii_case(flag) {
-                self.pos += 1;
-                return true;
-            }
+        if let Some(arg) = self.peek()
+            && arg.eq_ignore_ascii_case(flag)
+        {
+            self.pos += 1;
+            return true;
         }
         false
     }
