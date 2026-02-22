@@ -52,22 +52,21 @@ impl Command for BlpopCommand {
                 if value.key_type() != frogdb_core::KeyType::List {
                     return Err(CommandError::WrongType);
                 }
-                if let Some(list) = value.as_list() {
-                    if !list.is_empty() {
-                        // Pop from left
-                        if let Some(list_mut) = ctx.store.get_mut(key).and_then(|v| v.as_list_mut())
-                        {
-                            if let Some(elem) = list_mut.pop_front() {
-                                // Delete empty list
-                                if list_mut.is_empty() {
-                                    ctx.store.delete(key);
-                                }
-                                return Ok(Response::Array(vec![
-                                    Response::bulk(key.clone()),
-                                    Response::bulk(elem),
-                                ]));
-                            }
+                if let Some(list) = value.as_list()
+                    && !list.is_empty()
+                {
+                    // Pop from left
+                    if let Some(list_mut) = ctx.store.get_mut(key).and_then(|v| v.as_list_mut())
+                        && let Some(elem) = list_mut.pop_front()
+                    {
+                        // Delete empty list
+                        if list_mut.is_empty() {
+                            ctx.store.delete(key);
                         }
+                        return Ok(Response::Array(vec![
+                            Response::bulk(key.clone()),
+                            Response::bulk(elem),
+                        ]));
                     }
                 }
             }
@@ -139,22 +138,21 @@ impl Command for BrpopCommand {
                 if value.key_type() != frogdb_core::KeyType::List {
                     return Err(CommandError::WrongType);
                 }
-                if let Some(list) = value.as_list() {
-                    if !list.is_empty() {
-                        // Pop from right
-                        if let Some(list_mut) = ctx.store.get_mut(key).and_then(|v| v.as_list_mut())
-                        {
-                            if let Some(elem) = list_mut.pop_back() {
-                                // Delete empty list
-                                if list_mut.is_empty() {
-                                    ctx.store.delete(key);
-                                }
-                                return Ok(Response::Array(vec![
-                                    Response::bulk(key.clone()),
-                                    Response::bulk(elem),
-                                ]));
-                            }
+                if let Some(list) = value.as_list()
+                    && !list.is_empty()
+                {
+                    // Pop from right
+                    if let Some(list_mut) = ctx.store.get_mut(key).and_then(|v| v.as_list_mut())
+                        && let Some(elem) = list_mut.pop_back()
+                    {
+                        // Delete empty list
+                        if list_mut.is_empty() {
+                            ctx.store.delete(key);
                         }
+                        return Ok(Response::Array(vec![
+                            Response::bulk(key.clone()),
+                            Response::bulk(elem),
+                        ]));
                     }
                 }
             }
@@ -225,45 +223,43 @@ impl Command for BlmoveCommand {
             if value.key_type() != frogdb_core::KeyType::List {
                 return Err(CommandError::WrongType);
             }
-            if let Some(list) = value.as_list() {
-                if !list.is_empty() {
-                    // Pop from source
-                    let elem = if let Some(list_mut) =
-                        ctx.store.get_mut(source).and_then(|v| v.as_list_mut())
-                    {
-                        match src_dir {
-                            Direction::Left => list_mut.pop_front(),
-                            Direction::Right => list_mut.pop_back(),
-                        }
-                    } else {
-                        None
-                    };
-
-                    if let Some(elem) = elem {
-                        // Delete empty source list
-                        delete_if_empty_list(ctx, source);
-
-                        // Create destination list if needed
-                        if ctx.store.get(dest).is_none() {
-                            ctx.store.set(dest.clone(), frogdb_core::Value::list());
-                        } else if let Some(v) = ctx.store.get(dest) {
-                            if v.key_type() != frogdb_core::KeyType::List {
-                                return Err(CommandError::WrongType);
-                            }
-                        }
-
-                        // Push to destination
-                        if let Some(dest_list) =
-                            ctx.store.get_mut(dest).and_then(|v| v.as_list_mut())
-                        {
-                            match dest_dir {
-                                Direction::Left => dest_list.push_front(elem.clone()),
-                                Direction::Right => dest_list.push_back(elem.clone()),
-                            }
-                        }
-
-                        return Ok(Response::bulk(elem));
+            if let Some(list) = value.as_list()
+                && !list.is_empty()
+            {
+                // Pop from source
+                let elem = if let Some(list_mut) =
+                    ctx.store.get_mut(source).and_then(|v| v.as_list_mut())
+                {
+                    match src_dir {
+                        Direction::Left => list_mut.pop_front(),
+                        Direction::Right => list_mut.pop_back(),
                     }
+                } else {
+                    None
+                };
+
+                if let Some(elem) = elem {
+                    // Delete empty source list
+                    delete_if_empty_list(ctx, source);
+
+                    // Create destination list if needed
+                    if ctx.store.get(dest).is_none() {
+                        ctx.store.set(dest.clone(), frogdb_core::Value::list());
+                    } else if let Some(v) = ctx.store.get(dest)
+                        && v.key_type() != frogdb_core::KeyType::List
+                    {
+                        return Err(CommandError::WrongType);
+                    }
+
+                    // Push to destination
+                    if let Some(dest_list) = ctx.store.get_mut(dest).and_then(|v| v.as_list_mut()) {
+                        match dest_dir {
+                            Direction::Left => dest_list.push_front(elem.clone()),
+                            Direction::Right => dest_list.push_back(elem.clone()),
+                        }
+                    }
+
+                    return Ok(Response::bulk(elem));
                 }
             }
         }
@@ -368,33 +364,32 @@ impl Command for BlmpopCommand {
                 if value.key_type() != frogdb_core::KeyType::List {
                     return Err(CommandError::WrongType);
                 }
-                if let Some(list) = value.as_list() {
-                    if !list.is_empty() {
-                        let mut elements = Vec::new();
+                if let Some(list) = value.as_list()
+                    && !list.is_empty()
+                {
+                    let mut elements = Vec::new();
 
-                        if let Some(list_mut) = ctx.store.get_mut(key).and_then(|v| v.as_list_mut())
-                        {
-                            for _ in 0..count {
-                                let elem = match direction {
-                                    Direction::Left => list_mut.pop_front(),
-                                    Direction::Right => list_mut.pop_back(),
-                                };
-                                match elem {
-                                    Some(e) => elements.push(Response::bulk(e)),
-                                    None => break,
-                                }
+                    if let Some(list_mut) = ctx.store.get_mut(key).and_then(|v| v.as_list_mut()) {
+                        for _ in 0..count {
+                            let elem = match direction {
+                                Direction::Left => list_mut.pop_front(),
+                                Direction::Right => list_mut.pop_back(),
+                            };
+                            match elem {
+                                Some(e) => elements.push(Response::bulk(e)),
+                                None => break,
                             }
                         }
+                    }
 
-                        if !elements.is_empty() {
-                            // Delete empty list
-                            delete_if_empty_list(ctx, key);
+                    if !elements.is_empty() {
+                        // Delete empty list
+                        delete_if_empty_list(ctx, key);
 
-                            return Ok(Response::Array(vec![
-                                Response::bulk(key.clone()),
-                                Response::Array(elements),
-                            ]));
-                        }
+                        return Ok(Response::Array(vec![
+                            Response::bulk(key.clone()),
+                            Response::Array(elements),
+                        ]));
                     }
                 }
             }
@@ -473,24 +468,22 @@ impl Command for BzpopminCommand {
                 if value.key_type() != frogdb_core::KeyType::SortedSet {
                     return Err(CommandError::WrongType);
                 }
-                if let Some(zset) = value.as_sorted_set() {
-                    if !zset.is_empty() {
-                        if let Some(zset_mut) =
-                            ctx.store.get_mut(key).and_then(|v| v.as_sorted_set_mut())
-                        {
-                            let popped = zset_mut.pop_min(1);
-                            if let Some((member, score)) = popped.into_iter().next() {
-                                // Delete empty zset
-                                if zset_mut.is_empty() {
-                                    ctx.store.delete(key);
-                                }
-                                return Ok(Response::Array(vec![
-                                    Response::bulk(key.clone()),
-                                    Response::bulk(member),
-                                    Response::bulk(Bytes::from(score.to_string())),
-                                ]));
-                            }
+                if let Some(zset) = value.as_sorted_set()
+                    && !zset.is_empty()
+                    && let Some(zset_mut) =
+                        ctx.store.get_mut(key).and_then(|v| v.as_sorted_set_mut())
+                {
+                    let popped = zset_mut.pop_min(1);
+                    if let Some((member, score)) = popped.into_iter().next() {
+                        // Delete empty zset
+                        if zset_mut.is_empty() {
+                            ctx.store.delete(key);
                         }
+                        return Ok(Response::Array(vec![
+                            Response::bulk(key.clone()),
+                            Response::bulk(member),
+                            Response::bulk(Bytes::from(score.to_string())),
+                        ]));
                     }
                 }
             }
@@ -562,24 +555,22 @@ impl Command for BzpopmaxCommand {
                 if value.key_type() != frogdb_core::KeyType::SortedSet {
                     return Err(CommandError::WrongType);
                 }
-                if let Some(zset) = value.as_sorted_set() {
-                    if !zset.is_empty() {
-                        if let Some(zset_mut) =
-                            ctx.store.get_mut(key).and_then(|v| v.as_sorted_set_mut())
-                        {
-                            let popped = zset_mut.pop_max(1);
-                            if let Some((member, score)) = popped.into_iter().next() {
-                                // Delete empty zset
-                                if zset_mut.is_empty() {
-                                    ctx.store.delete(key);
-                                }
-                                return Ok(Response::Array(vec![
-                                    Response::bulk(key.clone()),
-                                    Response::bulk(member),
-                                    Response::bulk(Bytes::from(score.to_string())),
-                                ]));
-                            }
+                if let Some(zset) = value.as_sorted_set()
+                    && !zset.is_empty()
+                    && let Some(zset_mut) =
+                        ctx.store.get_mut(key).and_then(|v| v.as_sorted_set_mut())
+                {
+                    let popped = zset_mut.pop_max(1);
+                    if let Some((member, score)) = popped.into_iter().next() {
+                        // Delete empty zset
+                        if zset_mut.is_empty() {
+                            ctx.store.delete(key);
                         }
+                        return Ok(Response::Array(vec![
+                            Response::bulk(key.clone()),
+                            Response::bulk(member),
+                            Response::bulk(Bytes::from(score.to_string())),
+                        ]));
                     }
                 }
             }
@@ -686,35 +677,35 @@ impl Command for BzmpopCommand {
                 if value.key_type() != frogdb_core::KeyType::SortedSet {
                     return Err(CommandError::WrongType);
                 }
-                if let Some(zset) = value.as_sorted_set() {
-                    if !zset.is_empty() {
-                        let mut elements = Vec::new();
+                if let Some(zset) = value.as_sorted_set()
+                    && !zset.is_empty()
+                {
+                    let mut elements = Vec::new();
 
-                        if let Some(zset_mut) =
-                            ctx.store.get_mut(key).and_then(|v| v.as_sorted_set_mut())
-                        {
-                            let popped = if min {
-                                zset_mut.pop_min(count)
-                            } else {
-                                zset_mut.pop_max(count)
-                            };
-                            for (member, score) in popped {
-                                elements.push(Response::Array(vec![
-                                    Response::bulk(member),
-                                    Response::bulk(Bytes::from(score.to_string())),
-                                ]));
-                            }
-                        }
-
-                        if !elements.is_empty() {
-                            // Delete empty zset
-                            delete_if_empty_zset(ctx, key);
-
-                            return Ok(Response::Array(vec![
-                                Response::bulk(key.clone()),
-                                Response::Array(elements),
+                    if let Some(zset_mut) =
+                        ctx.store.get_mut(key).and_then(|v| v.as_sorted_set_mut())
+                    {
+                        let popped = if min {
+                            zset_mut.pop_min(count)
+                        } else {
+                            zset_mut.pop_max(count)
+                        };
+                        for (member, score) in popped {
+                            elements.push(Response::Array(vec![
+                                Response::bulk(member),
+                                Response::bulk(Bytes::from(score.to_string())),
                             ]));
                         }
+                    }
+
+                    if !elements.is_empty() {
+                        // Delete empty zset
+                        delete_if_empty_zset(ctx, key);
+
+                        return Ok(Response::Array(vec![
+                            Response::bulk(key.clone()),
+                            Response::Array(elements),
+                        ]));
                     }
                 }
             }
@@ -792,39 +783,37 @@ impl Command for BrpoplpushCommand {
             if value.key_type() != frogdb_core::KeyType::List {
                 return Err(CommandError::WrongType);
             }
-            if let Some(list) = value.as_list() {
-                if !list.is_empty() {
-                    // Pop from right of source
-                    let elem = if let Some(list_mut) =
-                        ctx.store.get_mut(source).and_then(|v| v.as_list_mut())
+            if let Some(list) = value.as_list()
+                && !list.is_empty()
+            {
+                // Pop from right of source
+                let elem = if let Some(list_mut) =
+                    ctx.store.get_mut(source).and_then(|v| v.as_list_mut())
+                {
+                    list_mut.pop_back()
+                } else {
+                    None
+                };
+
+                if let Some(elem) = elem {
+                    // Delete empty source list
+                    delete_if_empty_list(ctx, source);
+
+                    // Create destination list if needed
+                    if ctx.store.get(dest).is_none() {
+                        ctx.store.set(dest.clone(), frogdb_core::Value::list());
+                    } else if let Some(v) = ctx.store.get(dest)
+                        && v.key_type() != frogdb_core::KeyType::List
                     {
-                        list_mut.pop_back()
-                    } else {
-                        None
-                    };
-
-                    if let Some(elem) = elem {
-                        // Delete empty source list
-                        delete_if_empty_list(ctx, source);
-
-                        // Create destination list if needed
-                        if ctx.store.get(dest).is_none() {
-                            ctx.store.set(dest.clone(), frogdb_core::Value::list());
-                        } else if let Some(v) = ctx.store.get(dest) {
-                            if v.key_type() != frogdb_core::KeyType::List {
-                                return Err(CommandError::WrongType);
-                            }
-                        }
-
-                        // Push to left of destination
-                        if let Some(dest_list) =
-                            ctx.store.get_mut(dest).and_then(|v| v.as_list_mut())
-                        {
-                            dest_list.push_front(elem.clone());
-                        }
-
-                        return Ok(Response::bulk(elem));
+                        return Err(CommandError::WrongType);
                     }
+
+                    // Push to left of destination
+                    if let Some(dest_list) = ctx.store.get_mut(dest).and_then(|v| v.as_list_mut()) {
+                        dest_list.push_front(elem.clone());
+                    }
+
+                    return Ok(Response::bulk(elem));
                 }
             }
         }
@@ -881,22 +870,20 @@ fn parse_int(arg: &[u8]) -> Result<i64, CommandError> {
 
 /// Delete a list key if it's empty.
 fn delete_if_empty_list(ctx: &mut CommandContext, key: &Bytes) {
-    if let Some(value) = ctx.store.get(key) {
-        if let Some(list) = value.as_list() {
-            if list.is_empty() {
-                ctx.store.delete(key);
-            }
-        }
+    if let Some(value) = ctx.store.get(key)
+        && let Some(list) = value.as_list()
+        && list.is_empty()
+    {
+        ctx.store.delete(key);
     }
 }
 
 /// Delete a sorted set key if it's empty.
 fn delete_if_empty_zset(ctx: &mut CommandContext, key: &Bytes) {
-    if let Some(value) = ctx.store.get(key) {
-        if let Some(zset) = value.as_sorted_set() {
-            if zset.is_empty() {
-                ctx.store.delete(key);
-            }
-        }
+    if let Some(value) = ctx.store.get(key)
+        && let Some(zset) = value.as_sorted_set()
+        && zset.is_empty()
+    {
+        ctx.store.delete(key);
     }
 }

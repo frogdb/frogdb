@@ -1,5 +1,5 @@
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
@@ -81,7 +81,7 @@ impl ShardClusterDeps {
 }
 
 /// Configuration for shard behavior.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ShardConfig {
     /// Eviction configuration.
     pub eviction: EvictionConfig,
@@ -91,16 +91,6 @@ pub struct ShardConfig {
 
     /// Enable VLL (Virtual Lock Loom) for transaction coordination.
     pub enable_vll: bool,
-}
-
-impl Default for ShardConfig {
-    fn default() -> Self {
-        Self {
-            eviction: EvictionConfig::default(),
-            scripting: ScriptingConfig::default(),
-            enable_vll: false,
-        }
-    }
 }
 
 // ============================================================================
@@ -156,7 +146,7 @@ pub struct BigKeysScanResponse {
 }
 
 /// Response for WAL lag statistics query.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct WalLagStatsResponse {
     /// Shard identifier.
     pub shard_id: usize,
@@ -164,16 +154,6 @@ pub struct WalLagStatsResponse {
     pub persistence_enabled: bool,
     /// Lag statistics (None if persistence is disabled).
     pub lag_stats: Option<crate::persistence::WalLagStats>,
-}
-
-impl Default for WalLagStatsResponse {
-    fn default() -> Self {
-        Self {
-            shard_id: 0,
-            persistence_enabled: false,
-            lag_stats: None,
-        }
-    }
 }
 
 /// Response for VLL queue info query.

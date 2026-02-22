@@ -24,13 +24,14 @@ async fn test_debug_index_loads() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("text/html"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("text/html")
+    );
 
     let body = resp.text().await.unwrap();
     assert!(body.contains("FrogDB"), "Page should contain FrogDB title");
@@ -54,13 +55,14 @@ async fn test_debug_index_trailing_slash() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("text/html"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("text/html")
+    );
 
     let body = resp.text().await.unwrap();
     assert!(body.contains("FrogDB"), "Page should contain FrogDB title");
@@ -250,13 +252,14 @@ async fn test_api_cluster() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("application/json"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("application/json")
+    );
 
     let json: serde_json::Value = resp.json().await.unwrap();
     assert!(json.get("role").is_some(), "Should have role field");
@@ -289,13 +292,14 @@ async fn test_api_config() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("application/json"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("application/json")
+    );
 
     let json: serde_json::Value = resp.json().await.unwrap();
     assert!(json.get("entries").is_some(), "Should have entries field");
@@ -330,13 +334,14 @@ async fn test_api_metrics() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("application/json"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("application/json")
+    );
 
     let json: serde_json::Value = resp.json().await.unwrap();
     assert!(
@@ -370,13 +375,14 @@ async fn test_api_slowlog() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("application/json"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("application/json")
+    );
 
     let json: serde_json::Value = resp.json().await.unwrap();
     assert!(json.get("entries").is_some(), "Should have entries field");
@@ -396,13 +402,14 @@ async fn test_api_latency() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("application/json"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("application/json")
+    );
 
     let json: serde_json::Value = resp.json().await.unwrap();
     assert!(json.get("data").is_some(), "Should have data field");
@@ -426,13 +433,14 @@ async fn test_partial_cluster() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("text/html"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("text/html")
+    );
 
     let body = resp.text().await.unwrap();
     assert!(
@@ -458,13 +466,14 @@ async fn test_partial_config() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("text/html"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("text/html")
+    );
 
     let body = resp.text().await.unwrap();
     assert!(
@@ -490,13 +499,14 @@ async fn test_partial_metrics() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("text/html"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("text/html")
+    );
 
     let body = resp.text().await.unwrap();
     assert!(
@@ -518,13 +528,14 @@ async fn test_partial_slowlog() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("text/html"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("text/html")
+    );
 
     let body = resp.text().await.unwrap();
     assert!(
@@ -546,13 +557,14 @@ async fn test_partial_latency() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("text/html"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("text/html")
+    );
 
     let body = resp.text().await.unwrap();
     assert!(
@@ -738,13 +750,14 @@ async fn test_api_bundle_list() {
     }
 
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("application/json"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("application/json")
+    );
 
     let json: serde_json::Value = resp.json().await.unwrap();
     assert!(json.get("bundles").is_some(), "Should have bundles field");
@@ -799,13 +812,14 @@ async fn test_api_bundle_generate_instant() {
 
     // Should return OK with ZIP content
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("application/zip"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("application/zip")
+    );
 
     // Verify ZIP data is valid
     let data = resp.bytes().await.unwrap();
@@ -835,13 +849,14 @@ async fn test_api_bundle_generate_with_duration() {
 
     // Should return OK with ZIP content
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("application/zip"));
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("application/zip")
+    );
 
     // Verify ZIP data is valid
     let data = resp.bytes().await.unwrap();
@@ -960,13 +975,15 @@ async fn test_api_bundle_download_by_id() {
             StatusCode::OK,
             "Should be able to download bundle by ID"
         );
-        assert!(download_resp
-            .headers()
-            .get("content-type")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .contains("application/zip"));
+        assert!(
+            download_resp
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("application/zip")
+        );
 
         let data = download_resp.bytes().await.unwrap();
         assert!(!data.is_empty(), "Downloaded ZIP should not be empty");

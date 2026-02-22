@@ -1,8 +1,8 @@
 //! Health check endpoints.
 
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Health status response.
 #[derive(Debug, Clone, Serialize)]

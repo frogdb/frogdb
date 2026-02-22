@@ -3,9 +3,11 @@
 //! Provides types and utilities for testing multi-node cluster operations:
 //! - ClusterNodeConfig: Configuration for individual cluster nodes
 //! - ClusterTestNode: Wrapper for a single cluster node
+
+#![allow(dead_code)]
 //! - ClusterTestHarness: Orchestrates multi-node cluster testing
 
-use super::cluster_helpers::{parse_cluster_info, ClusterError, ClusterInfo};
+use super::cluster_helpers::{ClusterError, ClusterInfo, parse_cluster_info};
 use super::test_server::TestClient;
 use frogdb_protocol::Response;
 use frogdb_server::{Config, Server};
@@ -13,8 +15,8 @@ use redis_protocol::codec::Resp2;
 use std::collections::HashMap;
 use std::net::TcpListener as StdTcpListener;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -596,18 +598,7 @@ impl ClusterTestHarness {
                                             {
                                                 return Ok(node_id);
                                             }
-                                            frogdb_protocol::Response::Error(e2) => {
-                                                last_error = Some(format!(
-                                                    "CLUSTER MEET failed on leader: {}",
-                                                    String::from_utf8_lossy(e2)
-                                                ));
-                                            }
-                                            _ => {
-                                                last_error = Some(format!(
-                                                    "Unexpected response from leader: {:?}",
-                                                    retry_response
-                                                ));
-                                            }
+                                            _ => {} // will set last_error below
                                         }
                                         break;
                                     }
@@ -683,14 +674,14 @@ impl ClusterTestHarness {
         // In a Raft cluster, we'd query for the leader
         // For now, return the first running node as a placeholder
         for &node_id in &self.node_order {
-            if let Some(node) = self.nodes.get(&node_id) {
-                if node.is_running() {
-                    // Try to get cluster info to verify node is responsive
-                    if let Ok(info) = self.get_cluster_info(node_id).await {
-                        if info.cluster_state == "ok" {
-                            return Some(node_id);
-                        }
-                    }
+            if let Some(node) = self.nodes.get(&node_id)
+                && node.is_running()
+            {
+                // Try to get cluster info to verify node is responsive
+                if let Ok(info) = self.get_cluster_info(node_id).await
+                    && info.cluster_state == "ok"
+                {
+                    return Some(node_id);
                 }
             }
         }

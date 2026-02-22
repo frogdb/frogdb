@@ -56,8 +56,8 @@ impl Command for MigrateCommand {
         let mut i = 5;
         while i < args.len() {
             if args[i].to_ascii_uppercase() == b"KEYS" {
-                for j in (i + 1)..args.len() {
-                    keys.push(args[j].as_ref());
+                for arg in args[(i + 1)..].iter() {
+                    keys.push(arg.as_ref());
                 }
                 break;
             }

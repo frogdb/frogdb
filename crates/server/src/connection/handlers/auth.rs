@@ -97,7 +97,7 @@ impl ConnectionHandler {
                     None => {
                         return Response::error(
                             "ERR Protocol version is not an integer or out of range",
-                        )
+                        );
                     }
                 }
             } else {

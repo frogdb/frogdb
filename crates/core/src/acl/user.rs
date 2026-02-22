@@ -755,7 +755,9 @@ mod tests {
         let perms = UserPermissions::from_user(&user);
         assert!(perms.check_command("GET", None));
         assert!(!perms.check_command("SET", None));
-        assert!(perms.check_key_access(b"user:123", super::super::permissions::KeyAccessType::Read));
+        assert!(
+            perms.check_key_access(b"user:123", super::super::permissions::KeyAccessType::Read)
+        );
         assert!(
             !perms.check_key_access(b"data:123", super::super::permissions::KeyAccessType::Read)
         );

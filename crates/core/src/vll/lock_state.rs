@@ -120,11 +120,7 @@ impl KeyLockState {
     /// Get the current reader count (0 if write-locked or unlocked).
     pub fn reader_count(&self) -> u8 {
         let s = self.state.load(Ordering::Acquire);
-        if s == WRITE_LOCKED {
-            0
-        } else {
-            s
-        }
+        if s == WRITE_LOCKED { 0 } else { s }
     }
 
     /// Try to acquire a lock with the specified mode.

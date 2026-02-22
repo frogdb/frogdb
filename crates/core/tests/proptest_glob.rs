@@ -222,7 +222,7 @@ proptest! {
     /// Pattern with many stars should not cause exponential blowup.
     #[test]
     fn many_stars_doesnt_hang(n in 1usize..20) {
-        let pattern: Vec<u8> = std::iter::repeat(b'*').take(n).collect();
+        let pattern: Vec<u8> = std::iter::repeat_n(b'*', n).collect();
         let key = b"short";
         // This should complete quickly
         prop_assert!(glob_match(&pattern, key));

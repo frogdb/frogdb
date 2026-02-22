@@ -8,8 +8,8 @@ use bytes::Bytes;
 use frogdb_core::{ConnectionLevelOp, ExecutionStrategy};
 use frogdb_protocol::Response;
 
-use crate::connection::router::ConnectionLevelHandler;
 use crate::connection::ConnectionHandler;
+use crate::connection::router::ConnectionLevelHandler;
 
 impl ConnectionHandler {
     /// Determine the connection-level handler for a command by looking up its
@@ -136,10 +136,10 @@ impl ConnectionHandler {
             }
             "PUNSUBSCRIBE" => Some(self.handle_punsubscribe(args).await),
             "PUBLISH" => {
-                if !args.is_empty() {
-                    if let Err(err) = self.validate_channel_access(&args[..1]) {
-                        return Some(vec![err]);
-                    }
+                if !args.is_empty()
+                    && let Err(err) = self.validate_channel_access(&args[..1])
+                {
+                    return Some(vec![err]);
                 }
                 Some(vec![self.handle_publish(args).await])
             }
@@ -164,10 +164,10 @@ impl ConnectionHandler {
             }
             "SUNSUBSCRIBE" => Some(self.handle_sunsubscribe(args).await),
             "SPUBLISH" => {
-                if !args.is_empty() {
-                    if let Err(err) = self.validate_channel_access(&args[..1]) {
-                        return Some(vec![err]);
-                    }
+                if !args.is_empty()
+                    && let Err(err) = self.validate_channel_access(&args[..1])
+                {
+                    return Some(vec![err]);
                 }
                 Some(vec![self.handle_spublish(args).await])
             }
@@ -295,13 +295,12 @@ impl ConnectionHandler {
 
         // Category-based dispatch using registry-driven handler lookup
         // This handles: pub/sub, transactions, scripting, functions, admin commands
-        if let Some(handler) = self.connection_level_handler_for(&cmd_name_str) {
-            if let Some(responses) = self
+        if let Some(handler) = self.connection_level_handler_for(&cmd_name_str)
+            && let Some(responses) = self
                 .dispatch_connection_level(handler, &cmd_name_str, &cmd.args)
                 .await
-            {
-                return responses;
-            }
+        {
+            return responses;
         }
 
         // Handle persistence commands (need snapshot coordinator)

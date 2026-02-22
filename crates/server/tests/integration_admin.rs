@@ -496,7 +496,10 @@ async fn test_memory_stats() {
     let items = unwrap_array(response);
     assert!(!items.is_empty(), "MEMORY STATS should not be empty");
     // Should have pairs (key, value)
-    assert!(items.len() % 2 == 0, "Should have even number of items");
+    assert!(
+        items.len().is_multiple_of(2),
+        "Should have even number of items"
+    );
 
     server.shutdown().await;
 }

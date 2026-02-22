@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::test_server::{get_error_message, is_error, is_ok, TestServer, TestServerConfig};
+use common::test_server::{TestServer, get_error_message, is_error, is_ok};
 
 // ============================================================================
 // Admin port enabled - blocking tests

@@ -1,5 +1,5 @@
-use shuttle::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use shuttle::sync::Mutex;
+use shuttle::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Simulates snapshot mutual exclusion using CAS.
 ///

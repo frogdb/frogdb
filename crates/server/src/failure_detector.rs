@@ -44,7 +44,7 @@ impl Default for FailureDetectorConfig {
 }
 
 /// Per-node health tracking.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct NodeHealth {
     /// Last time the node was successfully reached. None if never reached.
     last_seen: Option<Instant>,
@@ -52,16 +52,6 @@ struct NodeHealth {
     failure_count: u32,
     /// Whether we've already marked this node as FAIL via Raft.
     is_marked_fail: bool,
-}
-
-impl Default for NodeHealth {
-    fn default() -> Self {
-        Self {
-            last_seen: None, // None = never successfully reached
-            failure_count: 0,
-            is_marked_fail: false,
-        }
-    }
 }
 
 /// Leader-only failure detector.
@@ -152,12 +142,13 @@ impl FailureDetector {
         let health = self.health.read().unwrap();
         let check_interval = Duration::from_millis(self.config.check_interval_ms);
         // Consider a node unreachable if not seen in N check intervals
-        let stale_threshold = check_interval * (self.config.fail_threshold as u32 + 2);
+        let stale_threshold = check_interval * (self.config.fail_threshold + 2);
 
         let all_nodes = self.cluster_state.get_all_nodes();
 
         // Count reachable nodes: self + nodes with recent successful checks
-        let reachable_count = all_nodes
+
+        all_nodes
             .iter()
             .filter(|node| {
                 if node.id == self.self_node_id {
@@ -182,9 +173,7 @@ impl FailureDetector {
                     false
                 }
             })
-            .count();
-
-        reachable_count
+            .count()
     }
 
     /// Check if this node can form a quorum with reachable nodes.

@@ -4,7 +4,7 @@
 // This module provides additional routing utilities for future use.
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, CommandError};
+use frogdb_core::{CommandError, shard_for_key};
 
 /// Error returned when keys hash to different shards.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

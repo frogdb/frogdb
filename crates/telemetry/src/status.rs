@@ -260,6 +260,7 @@ pub struct StatusCollector {
 
 impl StatusCollector {
     /// Create a new status collector.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: StatusCollectorConfig,
         health_checker: HealthChecker,
@@ -318,7 +319,7 @@ impl StatusCollector {
                 id,
                 keys: stats.keys,
                 memory_bytes: stats.data_memory as u64,
-                peak_memory_bytes: stats.peak_memory as u64,
+                peak_memory_bytes: stats.peak_memory,
             })
             .collect();
 
@@ -497,7 +498,7 @@ impl StatusCollector {
     /// Build memory status from shard stats.
     fn build_memory_status(&self, shard_stats: &[ShardMemoryStats]) -> MemoryStatus {
         let used_bytes: u64 = shard_stats.iter().map(|s| s.data_memory as u64).sum();
-        let peak_bytes: u64 = shard_stats.iter().map(|s| s.peak_memory as u64).sum();
+        let peak_bytes: u64 = shard_stats.iter().map(|s| s.peak_memory).sum();
 
         // Try to get RSS from system metrics
         let rss_bytes = get_process_rss();
@@ -566,7 +567,7 @@ impl StatusCollector {
         }
 
         // Check durability lag (persistence health)
-        if let Some(ref lag) = wal_lag {
+        if let Some(lag) = wal_lag {
             if lag.max_durability_lag_ms >= self.config.durability_lag_critical_ms {
                 issues.push(HealthIssue {
                     severity: "critical".to_string(),

@@ -745,14 +745,18 @@ mod integration {
         assert_eq!(entry.fields.len(), 20);
 
         // Verify some fields
-        assert!(entry
-            .fields
-            .iter()
-            .any(|(k, v)| k.as_ref() == b"field0" && v.as_ref() == b"value0"));
-        assert!(entry
-            .fields
-            .iter()
-            .any(|(k, v)| k.as_ref() == b"field19" && v.as_ref() == b"value19"));
+        assert!(
+            entry
+                .fields
+                .iter()
+                .any(|(k, v)| k.as_ref() == b"field0" && v.as_ref() == b"value0")
+        );
+        assert!(
+            entry
+                .fields
+                .iter()
+                .any(|(k, v)| k.as_ref() == b"field19" && v.as_ref() == b"value19")
+        );
     }
 
     #[test]

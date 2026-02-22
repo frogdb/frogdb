@@ -4,8 +4,8 @@
 //! and potential future optimizations like shard-specific tuning.
 
 use rocksdb::{
-    BoundColumnFamily, ColumnFamilyDescriptor, DBCompressionType, DBWithThreadMode, MultiThreaded,
-    Options, WriteBatch, WriteOptions, DB,
+    BoundColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, DBWithThreadMode,
+    MultiThreaded, Options, WriteBatch, WriteOptions,
 };
 use std::path::Path;
 use std::sync::Arc as StdArc;

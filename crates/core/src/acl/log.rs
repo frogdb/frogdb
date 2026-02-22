@@ -189,11 +189,11 @@ impl AclLog {
         let mut entries = self.entries.lock_or_panic("AclLog::log");
 
         // Check if we can collapse with the most recent entry
-        if let Some(last) = entries.front_mut() {
-            if last.can_collapse(entry_type, reason, username, object) {
-                last.increment();
-                return;
-            }
+        if let Some(last) = entries.front_mut()
+            && last.can_collapse(entry_type, reason, username, object)
+        {
+            last.increment();
+            return;
         }
 
         // Create new entry

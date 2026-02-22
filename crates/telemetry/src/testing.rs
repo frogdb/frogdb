@@ -174,11 +174,11 @@ fn parse_labels_str(s: &str) -> HashMap<String, String> {
 /// Returns the unescaped value and the remaining string.
 fn parse_quoted_value(s: &str) -> (String, &str) {
     let mut value = String::new();
-    let mut chars = s.char_indices();
+    let chars = s.char_indices();
     let mut prev_backslash = false;
     let mut end_pos = s.len();
 
-    while let Some((i, c)) = chars.next() {
+    for (i, c) in chars {
         if prev_backslash {
             // Handle escape sequences
             match c {
@@ -665,7 +665,12 @@ impl MetricsDelta {
         assert!(
             actual_increase >= min_count,
             "Histogram {} with labels {:?} expected >= {} new observations, got {} (before={}, after={})",
-            name, labels, min_count, actual_increase, before, after
+            name,
+            labels,
+            min_count,
+            actual_increase,
+            before,
+            after
         );
         self
     }
@@ -967,6 +972,7 @@ my_histogram_bucket{cmd="SET",le="1.0"} 20
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_assert_gauge_eq_macro() {
         let text = r#"my_gauge 3.14"#;
         assert_gauge_eq!(&text, "my_gauge", &[], 3.14);
@@ -1015,6 +1021,7 @@ my_metric_neg -Inf
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_metrics_snapshot_gauge() {
         let text = r#"my_gauge 3.14"#.to_string();
         let snapshot = MetricsSnapshot::new(text);

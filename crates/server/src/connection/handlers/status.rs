@@ -7,8 +7,8 @@
 use bytes::Bytes;
 use frogdb_protocol::Response;
 
-use crate::connection::util::format_timestamp_iso;
 use crate::connection::ConnectionHandler;
+use crate::connection::util::format_timestamp_iso;
 
 impl ConnectionHandler {
     /// Handle STATUS command and dispatch to subcommands.
@@ -56,7 +56,7 @@ impl ConnectionHandler {
         // Calculate totals from shard stats
         let total_keys: usize = shard_stats.iter().map(|s| s.keys).sum();
         let used_bytes: u64 = shard_stats.iter().map(|s| s.data_memory as u64).sum();
-        let peak_bytes: u64 = shard_stats.iter().map(|s| s.peak_memory as u64).sum();
+        let peak_bytes: u64 = shard_stats.iter().map(|s| s.peak_memory).sum();
 
         // Build shards array
         let shards: Vec<serde_json::Value> = shard_stats

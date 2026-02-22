@@ -1,9 +1,9 @@
 //! Matrix strategy helpers for GitHub Actions workflows.
 
 use gh_workflow::Strategy;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::types::{targets_to_matrix_include, RustTarget};
+use crate::types::{RustTarget, targets_to_matrix_include};
 
 /// Creates a matrix strategy with include entries.
 pub fn matrix_with_includes(includes: Vec<Value>) -> Strategy {

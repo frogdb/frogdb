@@ -29,7 +29,7 @@ impl ShardWorker {
                 return Response::error(format!(
                     "ERR unknown command '{}', with args beginning with:",
                     cmd_name_str
-                ))
+                ));
             }
         };
 
@@ -45,10 +45,8 @@ impl ShardWorker {
         let is_write = handler
             .flags()
             .contains(crate::command::CommandFlags::WRITE);
-        if is_write {
-            if let Err(err) = self.check_memory_for_write() {
-                return err.to_response();
-            }
+        if is_write && let Err(err) = self.check_memory_for_write() {
+            return err.to_response();
         }
 
         // Create command context
@@ -223,10 +221,10 @@ impl ShardWorker {
                     // Persist delete to WAL if enabled
                     if deleted {
                         any_deleted = true;
-                        if let Some(ref wal) = self.wal_writer {
-                            if let Err(e) = wal.write_delete(key).await {
-                                tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist DEL");
-                            }
+                        if let Some(ref wal) = self.wal_writer
+                            && let Err(e) = wal.write_delete(key).await
+                        {
+                            tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist DEL");
                         }
                     }
 
@@ -359,11 +357,11 @@ impl ShardWorker {
                         self.store.set(dest_key.clone(), value.clone());
 
                         // Set expiry if provided
-                        if let Some(ms) = expiry_ms {
-                            if *ms > 0 {
-                                let expires_at = Instant::now() + Duration::from_millis(*ms as u64);
-                                self.store.set_expiry(dest_key, expires_at);
-                            }
+                        if let Some(ms) = expiry_ms
+                            && *ms > 0
+                        {
+                            let expires_at = Instant::now() + Duration::from_millis(*ms as u64);
+                            self.store.set_expiry(dest_key, expires_at);
                         }
 
                         // Persist to WAL if enabled

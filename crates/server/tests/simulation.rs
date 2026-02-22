@@ -34,19 +34,19 @@ mod common;
 
 use bytes::Bytes;
 use common::chaos_configs::ChaosPreset;
-use common::sim_harness::{shard_for_key, OperationHistory, OperationResult};
+use common::sim_harness::{OperationHistory, OperationResult};
 use common::sim_helpers::{
-    encode_command, parse_simple_response, real_frogdb_server, real_frogdb_server_with_chaos,
-    SERVER_HOST, SERVER_PORT,
+    SERVER_HOST, SERVER_PORT, encode_command, parse_simple_response, real_frogdb_server,
+    real_frogdb_server_with_chaos,
 };
 use frogdb_server::config::ChaosConfig;
-use frogdb_testing::{check_linearizability, KVModel};
+use frogdb_testing::{KVModel, check_linearizability};
 use rstest::rstest;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use turmoil::net::{TcpListener, TcpStream};
 use turmoil::Builder;
+use turmoil::net::{TcpListener, TcpStream};
 
 type BoxError = Box<dyn Error + 'static>;
 

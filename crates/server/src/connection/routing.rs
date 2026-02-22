@@ -6,13 +6,13 @@
 //! - `execute_on_shard` - Send a command to a specific shard
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, ScatterOp, ShardMessage};
+use frogdb_core::{ScatterOp, ShardMessage, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 
-use crate::connection::util::{extract_subcommand, key_access_type_for_flags};
 use crate::connection::ConnectionHandler;
-use crate::scatter::{strategy_for_op, ScatterGatherExecutor};
+use crate::connection::util::{extract_subcommand, key_access_type_for_flags};
+use crate::scatter::{ScatterGatherExecutor, strategy_for_op};
 use crate::server::next_txid;
 
 impl ConnectionHandler {
@@ -28,7 +28,7 @@ impl ConnectionHandler {
                 return Response::error(format!(
                     "ERR unknown command '{}', with args beginning with:",
                     cmd_name_str
-                ))
+                ));
             }
         };
 
@@ -46,29 +46,27 @@ impl ConnectionHandler {
         // Check key permissions with command context
         // For selectors to work correctly, we must check that BOTH the command
         // AND the key are allowed within the same permission context
-        if let Some(user) = self.state.auth.user() {
-            if !keys.is_empty() {
-                let access_type = key_access_type_for_flags(handler.flags());
-                let subcommand = extract_subcommand(&cmd_name_str, &cmd.args);
-                for key in &keys {
-                    if !user.check_command_with_key(
-                        &cmd_name_str,
-                        subcommand.as_deref(),
-                        key,
-                        access_type,
-                    ) {
-                        let client_info =
-                            format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                        let key_str = String::from_utf8_lossy(key);
-                        self.acl_manager.log().log_key_denied(
-                            &user.username,
-                            &client_info,
-                            &key_str,
-                        );
-                        return Response::error(
-                            "NOPERM this user has no permissions to access one of the keys used as arguments"
-                        );
-                    }
+        if let Some(user) = self.state.auth.user()
+            && !keys.is_empty()
+        {
+            let access_type = key_access_type_for_flags(handler.flags());
+            let subcommand = extract_subcommand(&cmd_name_str, &cmd.args);
+            for key in &keys {
+                if !user.check_command_with_key(
+                    &cmd_name_str,
+                    subcommand.as_deref(),
+                    key,
+                    access_type,
+                ) {
+                    let client_info =
+                        format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
+                    let key_str = String::from_utf8_lossy(key);
+                    self.acl_manager
+                        .log()
+                        .log_key_denied(&user.username, &client_info, &key_str);
+                    return Response::error(
+                        "NOPERM this user has no permissions to access one of the keys used as arguments",
+                    );
                 }
             }
         }

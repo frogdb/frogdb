@@ -35,11 +35,7 @@ pub fn extract_hash_tag(key: &[u8]) -> Option<&[u8]> {
     let open = key.iter().position(|&b| b == b'{')?;
     let close_offset = key[open + 1..].iter().position(|&b| b == b'}')?;
     let tag = &key[open + 1..open + 1 + close_offset];
-    if tag.is_empty() {
-        None
-    } else {
-        Some(tag)
-    }
+    if tag.is_empty() { None } else { Some(tag) }
 }
 
 /// Number of Redis cluster hash slots.

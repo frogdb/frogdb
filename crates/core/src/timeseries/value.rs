@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::timeseries::aggregation::{aggregate_by_bucket, Aggregation};
+use crate::timeseries::aggregation::{Aggregation, aggregate_by_bucket};
 use crate::timeseries::chunk::CompressedChunk;
 
 /// Default chunk size (samples before compression).
@@ -209,10 +209,10 @@ impl TimeSeriesValue {
         }
 
         // Enforce retention
-        if self.retention_ms > 0 {
-            if let Some(last_ts) = self.last_timestamp {
-                self.enforce_retention(last_ts);
-            }
+        if self.retention_ms > 0
+            && let Some(last_ts) = self.last_timestamp
+        {
+            self.enforce_retention(last_ts);
         }
 
         Ok(timestamp)

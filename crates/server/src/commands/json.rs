@@ -80,7 +80,7 @@ impl Command for JsonSetCommand {
                 _ => {
                     return Err(CommandError::InvalidArgument {
                         message: format!("unknown option: {}", arg_upper),
-                    })
+                    });
                 }
             }
         }
@@ -639,7 +639,7 @@ impl Command for JsonStrAppendCommand {
             _ => {
                 return Err(CommandError::InvalidArgument {
                     message: "value must be a JSON string".to_string(),
-                })
+                });
             }
         };
 

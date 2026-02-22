@@ -108,8 +108,7 @@ impl ReplicationState {
 
         // Write atomically using a temp file
         let temp_path = path.with_extension("tmp");
-        let contents = serde_json::to_string_pretty(self)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let contents = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
         fs::write(&temp_path, contents)?;
         fs::rename(temp_path, path)?;
 
@@ -129,10 +128,10 @@ impl ReplicationState {
         }
 
         // Check secondary ID if present
-        if let Some(ref secondary) = self.secondary_id {
-            if !is_valid_replication_id(secondary) {
-                return false;
-            }
+        if let Some(ref secondary) = self.secondary_id
+            && !is_valid_replication_id(secondary)
+        {
+            return false;
         }
 
         true
@@ -165,13 +164,12 @@ impl ReplicationState {
         }
 
         // Check secondary ID (for failover continuity)
-        if let Some(ref secondary) = self.secondary_id {
-            if requested_id == secondary
-                && self.secondary_offset >= 0
-                && requested_offset <= self.secondary_offset as u64
-            {
-                return true;
-            }
+        if let Some(ref secondary) = self.secondary_id
+            && requested_id == secondary
+            && self.secondary_offset >= 0
+            && requested_offset <= self.secondary_offset as u64
+        {
+            return true;
         }
 
         false

@@ -3,6 +3,8 @@
 //! Provides utility functions for cluster testing including:
 //! - Slot calculation and key generation
 //! - Response parsing for CLUSTER commands
+
+#![allow(dead_code)]
 //! - Redirect detection (MOVED/ASK)
 
 use bytes::Bytes;
@@ -264,10 +266,10 @@ pub fn is_ask_redirect(response: &Response) -> Option<(u16, String)> {
 
 /// Check if response is a CLUSTERDOWN error.
 pub fn is_cluster_down(response: &Response) -> bool {
-    if let Response::Error(e) = response {
-        if let Ok(msg) = std::str::from_utf8(e) {
-            return msg.starts_with("CLUSTERDOWN ");
-        }
+    if let Response::Error(e) = response
+        && let Ok(msg) = std::str::from_utf8(e)
+    {
+        return msg.starts_with("CLUSTERDOWN ");
     }
     false
 }

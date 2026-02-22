@@ -7,7 +7,7 @@ mod common;
 use bytes::Bytes;
 use common::test_server::TestServer;
 use frogdb_protocol::Response;
-use frogdb_telemetry::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
+use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
 use std::time::Duration;
 
 // =============================================================================
@@ -84,8 +84,12 @@ async fn test_eval_redis_call_multiple_commands() {
         return {redis.call('GET', KEYS[1]), redis.call('GET', KEYS[2])}
     "#;
 
+    // Use hash tags to force both keys to the same slot (required for
+    // multi-shard standalone mode where cross-slot operations are rejected).
     let response = client
-        .command(&["EVAL", script, "2", "key1", "key2", "value1", "value2"])
+        .command(&[
+            "EVAL", script, "2", "{k}key1", "{k}key2", "value1", "value2",
+        ])
         .await;
 
     assert_eq!(
@@ -282,14 +286,18 @@ async fn test_eval_write_tracking() {
         return 'done'
     "#;
 
-    let response = client.command(&["EVAL", script, "2", "key1", "key2"]).await;
+    // Use hash tags to force both keys to the same slot (required for
+    // multi-shard standalone mode where cross-slot operations are rejected).
+    let response = client
+        .command(&["EVAL", script, "2", "{k}key1", "{k}key2"])
+        .await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("done"))));
 
     // Verify the writes actually happened
-    let response = client.command(&["GET", "key1"]).await;
+    let response = client.command(&["GET", "{k}key1"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("value1"))));
 
-    let response = client.command(&["GET", "key2"]).await;
+    let response = client.command(&["GET", "{k}key2"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("value2"))));
 
     server.shutdown().await;

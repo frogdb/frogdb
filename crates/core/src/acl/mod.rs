@@ -54,7 +54,7 @@ pub use error::AclError;
 pub use log::{AclLog, AclLogEntry, AclLogEntryType, AclLogValue, DEFAULT_ACL_LOG_MAX_LEN};
 pub use manager::{AclConfig, AclManager};
 pub use parser::{
-    generate_password, hash_password, parse_acl_line, parse_and_apply_rules, AclRule,
+    AclRule, generate_password, hash_password, parse_acl_line, parse_and_apply_rules,
 };
 pub use permissions::{
     ChannelPattern, CommandPermissions, KeyAccessType, KeyPattern, PermissionSet, SubcommandRule,

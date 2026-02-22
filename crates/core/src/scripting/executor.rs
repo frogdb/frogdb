@@ -1,7 +1,7 @@
 //! Script executor that orchestrates Lua script execution.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -13,7 +13,7 @@ use super::bindings::{
     extract_keys_from_command, is_forbidden_in_script, is_write_command, lua_args_to_command,
     response_to_lua, validate_key_access,
 };
-use super::cache::{hex_to_sha, sha_to_hex, ScriptCache, ScriptSha};
+use super::cache::{ScriptCache, ScriptSha, hex_to_sha, sha_to_hex};
 use super::config::ScriptingConfig;
 use super::error::ScriptError;
 use super::lua_vm::{CommandExecutionContext, LuaVm};
@@ -419,6 +419,7 @@ impl ScriptExecutor {
     /// Execute a function from a library.
     ///
     /// This loads the library code, then calls the named function with the given keys and args.
+    #[allow(clippy::too_many_arguments)]
     pub fn execute_function(
         &mut self,
         function_name: &str,
@@ -581,7 +582,7 @@ return fn(KEYS, ARGV)
                             _ => {
                                 return Err(mlua::Error::RuntimeError(
                                     "Second argument must be a function".to_string(),
-                                ))
+                                ));
                             }
                         };
 

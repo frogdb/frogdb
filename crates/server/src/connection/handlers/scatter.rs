@@ -14,7 +14,7 @@ use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 use tracing::warn;
 
-use crate::connection::{next_txid, ConnectionHandler};
+use crate::connection::{ConnectionHandler, next_txid};
 
 impl ConnectionHandler {
     /// Handle SCAN command - scan keys across all shards with cursor.
@@ -65,7 +65,7 @@ impl ConnectionHandler {
                     {
                         Some(c) => c,
                         None => {
-                            return Response::error("ERR value is not an integer or out of range")
+                            return Response::error("ERR value is not an integer or out of range");
                         }
                     };
                 }
@@ -86,7 +86,7 @@ impl ConnectionHandler {
                             return Response::error(format!(
                                 "ERR unknown type: {}",
                                 String::from_utf8_lossy(&type_str)
-                            ))
+                            ));
                         }
                     };
                 }
@@ -502,10 +502,8 @@ impl ScatterHandler {
     /// Select a random key from shard results.
     pub fn merge_randomkey_results(&self, results: Vec<Option<Bytes>>) -> Response {
         // Find first non-null result
-        for result in results {
-            if let Some(key) = result {
-                return Response::bulk(key);
-            }
+        if let Some(key) = results.into_iter().flatten().next() {
+            return Response::bulk(key);
         }
         Response::Null
     }

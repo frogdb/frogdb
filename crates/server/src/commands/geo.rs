@@ -11,14 +11,14 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    geohash_decode, geohash_encode, geohash_to_score, geohash_to_string, haversine_distance,
-    is_within_box, score_to_geohash, Arity, BoundingBox, Command, CommandContext, CommandError,
-    CommandFlags, Coordinates, DistanceUnit, SortedSetValue, Value,
+    Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags, Coordinates,
+    DistanceUnit, SortedSetValue, Value, geohash_decode, geohash_encode, geohash_to_score,
+    geohash_to_string, haversine_distance, is_within_box, score_to_geohash,
 };
 use frogdb_protocol::Response;
 
 use super::utils::{
-    format_float, get_or_create_zset as get_or_create_geo, parse_f64, parse_usize, NxXxOptions,
+    NxXxOptions, format_float, get_or_create_zset as get_or_create_geo, parse_f64, parse_usize,
 };
 
 /// Search result with member and optional distance/hash/coordinates.
@@ -62,7 +62,7 @@ impl Command for GeoaddCommand {
             if let Some(new_opts) = nx_xx.try_parse(arg)? {
                 nx_xx = new_opts;
                 i += 1;
-            } else if arg.to_ascii_uppercase() == b"CH" {
+            } else if arg.eq_ignore_ascii_case(b"CH") {
                 ch = true;
                 i += 1;
             } else {
@@ -74,7 +74,7 @@ impl Command for GeoaddCommand {
 
         // Parse coordinate-member triplets
         let remaining = &args[i..];
-        if remaining.len() < 3 || remaining.len() % 3 != 0 {
+        if remaining.len() < 3 || !remaining.len().is_multiple_of(3) {
             return Err(CommandError::WrongArity { command: "GEOADD" });
         }
 
@@ -929,25 +929,25 @@ fn format_geosearch_results(
             if need_array {
                 let mut items = vec![Response::bulk(r.member.clone())];
 
-                if let Some(dist) = r.dist {
-                    if opts.with_dist {
-                        items.push(Response::bulk(Bytes::from(format_float(dist))));
-                    }
+                if let Some(dist) = r.dist
+                    && opts.with_dist
+                {
+                    items.push(Response::bulk(Bytes::from(format_float(dist))));
                 }
 
-                if let Some(hash) = r.hash {
-                    if opts.with_hash {
-                        items.push(Response::Integer(hash as i64));
-                    }
+                if let Some(hash) = r.hash
+                    && opts.with_hash
+                {
+                    items.push(Response::Integer(hash as i64));
                 }
 
-                if let Some((lon, lat)) = r.coords {
-                    if opts.with_coord {
-                        items.push(Response::Array(vec![
-                            Response::bulk(Bytes::from(format_float(lon))),
-                            Response::bulk(Bytes::from(format_float(lat))),
-                        ]));
-                    }
+                if let Some((lon, lat)) = r.coords
+                    && opts.with_coord
+                {
+                    items.push(Response::Array(vec![
+                        Response::bulk(Bytes::from(format_float(lon))),
+                        Response::bulk(Bytes::from(format_float(lat))),
+                    ]));
                 }
 
                 Response::Array(items)

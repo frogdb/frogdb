@@ -3,12 +3,14 @@
 //! Extracts the primary+replica startup, WAIT-based sync, and INFO
 //! replication parsing patterns that repeat across replication tests.
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::time::Duration;
 
 use frogdb_protocol::Response;
 
-use super::test_server::{parse_integer, TestServer, TestServerConfig};
+use super::test_server::{TestServer, TestServerConfig, parse_integer};
 
 /// Start a primary and a replica that connects to it, then wait for
 /// the replication handshake to complete.

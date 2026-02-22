@@ -340,9 +340,9 @@ mod atomicity {
 
         // All shards should have their key, or none should
         let mut found_count = 0;
-        for shard_id in 0..4 {
+        for (shard_id, store) in stores.iter().enumerate().take(4) {
             let key = format!("shard_{}_key", shard_id);
-            if stores[shard_id].0.get(key.as_bytes()).is_some() {
+            if store.0.get(key.as_bytes()).is_some() {
                 found_count += 1;
             }
         }

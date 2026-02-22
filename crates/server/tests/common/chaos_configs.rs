@@ -3,6 +3,8 @@
 //! This module provides named chaos configurations for parameterized testing,
 //! enabling Cartesian products of delay values and failure modes.
 
+#![allow(dead_code)]
+
 use frogdb_server::config::ChaosConfig;
 use std::collections::{HashMap, HashSet};
 
@@ -56,7 +58,7 @@ impl ChaosPreset {
     ///
     /// # Arguments
     /// * `num_shards` - Total number of shards in the server (used for failure injection)
-    pub fn to_config(&self, num_shards: usize) -> ChaosConfig {
+    pub fn to_config(self, num_shards: usize) -> ChaosConfig {
         self.to_config_with_shard(num_shards, 0)
     }
 
@@ -65,29 +67,29 @@ impl ChaosPreset {
     /// # Arguments
     /// * `num_shards` - Total number of shards in the server
     /// * `target_shard` - Which shard to target for failure injection
-    pub fn to_config_with_shard(&self, _num_shards: usize, target_shard: usize) -> ChaosConfig {
+    pub fn to_config_with_shard(self, _num_shards: usize, target_shard: usize) -> ChaosConfig {
         match self {
             ChaosPreset::None => ChaosConfig::default(),
 
             ChaosPreset::ScatterDelay(ms) => ChaosConfig {
-                scatter_inter_send_delay_ms: *ms,
+                scatter_inter_send_delay_ms: ms,
                 ..Default::default()
             },
 
             ChaosPreset::SingleShardDelay(ms) => ChaosConfig {
-                single_shard_delay_ms: *ms,
+                single_shard_delay_ms: ms,
                 ..Default::default()
             },
 
             ChaosPreset::TransactionDelay(ms) => ChaosConfig {
-                transaction_delay_ms: *ms,
+                transaction_delay_ms: ms,
                 ..Default::default()
             },
 
             ChaosPreset::AllDelays(ms) => ChaosConfig {
-                scatter_inter_send_delay_ms: *ms,
-                single_shard_delay_ms: *ms,
-                transaction_delay_ms: *ms,
+                scatter_inter_send_delay_ms: ms,
+                single_shard_delay_ms: ms,
+                transaction_delay_ms: ms,
                 ..Default::default()
             },
 

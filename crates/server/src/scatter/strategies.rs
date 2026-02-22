@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, LockMode, ScatterOp};
+use frogdb_core::{LockMode, ScatterOp, shard_for_key};
 use frogdb_protocol::Response;
 
 use super::{PartitionResult, ScatterGatherStrategy};
@@ -479,7 +479,7 @@ mod tests {
         assert_eq!(result.key_order.len(), 3);
 
         // Should have operations for each shard with keys
-        for (&shard_id, _) in &result.shard_keys {
+        for &shard_id in result.shard_keys.keys() {
             assert!(result.shard_operations.contains_key(&shard_id));
         }
     }
@@ -546,7 +546,7 @@ mod tests {
         let result = strategy.partition(&[], 4);
 
         // Each shard operation should be MSet with only that shard's pairs
-        for (_, op) in &result.shard_operations {
+        for op in result.shard_operations.values() {
             assert!(matches!(op, ScatterOp::MSet { .. }));
         }
     }

@@ -141,14 +141,14 @@ fn encode_timestamp_dod(bits: &mut BitVec<u8, Msb0>, dod: i64) {
     } else if (-63..=64).contains(&dod) {
         bits.push(true); // 1
         bits.push(false); // 0
-                          // Write 7 bits (biased by 63)
+        // Write 7 bits (biased by 63)
         let biased = (dod + 63) as u64;
         write_bits(bits, biased, 7);
     } else if (-255..=256).contains(&dod) {
         bits.push(true); // 1
         bits.push(true); // 1
         bits.push(false); // 0
-                          // Write 9 bits (biased by 255)
+        // Write 9 bits (biased by 255)
         let biased = (dod + 255) as u64;
         write_bits(bits, biased, 9);
     } else if (-2047..=2048).contains(&dod) {
@@ -156,7 +156,7 @@ fn encode_timestamp_dod(bits: &mut BitVec<u8, Msb0>, dod: i64) {
         bits.push(true); // 1
         bits.push(true); // 1
         bits.push(false); // 0
-                          // Write 12 bits (biased by 2047)
+        // Write 12 bits (biased by 2047)
         let biased = (dod + 2047) as u64;
         write_bits(bits, biased, 12);
     } else {
@@ -164,7 +164,7 @@ fn encode_timestamp_dod(bits: &mut BitVec<u8, Msb0>, dod: i64) {
         bits.push(true); // 1
         bits.push(true); // 1
         bits.push(true); // 1
-                         // Write full 32 bits
+        // Write full 32 bits
         write_bits(bits, dod as u64, 32);
     }
 }
@@ -385,7 +385,7 @@ mod tests {
             .collect();
         let encoded = encode_samples(&samples);
         let uncompressed_size = samples.len() * 16; // 8 bytes ts + 8 bytes value
-                                                    // Should achieve some compression
+        // Should achieve some compression
         assert!(encoded.len() < uncompressed_size);
     }
 

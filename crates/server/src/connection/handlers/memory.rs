@@ -11,7 +11,7 @@
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
-use frogdb_core::{shard_for_key, ShardMemoryStats, ShardMessage};
+use frogdb_core::{ShardMemoryStats, ShardMessage, shard_for_key};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
@@ -230,10 +230,9 @@ impl ConnectionHandler {
                 .send(ShardMessage::MemoryStats { response_tx })
                 .await
                 .is_ok()
+                && let Ok(shard_stats) = response_rx.await
             {
-                if let Ok(shard_stats) = response_rx.await {
-                    stats.push(shard_stats);
-                }
+                stats.push(shard_stats);
             }
         }
 

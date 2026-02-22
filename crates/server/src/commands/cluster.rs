@@ -14,7 +14,7 @@
 use std::net::SocketAddr;
 
 use bytes::Bytes;
-use frogdb_core::{slot_for_key, Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, slot_for_key};
 use frogdb_protocol::{RaftClusterOp, Response};
 
 // ============================================================================
@@ -158,7 +158,7 @@ impl Command for ClusterCommand {
 /// CLUSTER INFO - Returns cluster state information.
 fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
     // Use ClusterState if available, otherwise return standalone mode info
-    if let Some(ref cluster_state) = ctx.cluster_state {
+    if let Some(cluster_state) = ctx.cluster_state {
         let snapshot = cluster_state.snapshot();
         let slots_assigned = snapshot.slot_assignment.len() as u16;
         let known_nodes = snapshot.nodes.len();
@@ -187,11 +187,9 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
         // Check if we can form a quorum with reachable nodes (local perspective)
         let has_local_quorum = ctx.quorum_checker.map(|qc| qc.has_quorum()).unwrap_or(true); // If no quorum checker, assume healthy
 
-        let cluster_state_str = if has_failed_primary {
-            "fail" // A primary is marked as failed
-        } else if !has_local_quorum {
-            "fail" // Cannot form quorum with reachable nodes
-        } else if let Some(ref raft) = ctx.raft {
+        let cluster_state_str = if has_failed_primary || !has_local_quorum {
+            "fail"
+        } else if let Some(raft) = ctx.raft {
             use openraft::ServerState;
             let metrics = raft.metrics().borrow().clone();
 
@@ -269,7 +267,7 @@ total_cluster_links_buffer_limit_exceeded:0\r\n";
 /// CLUSTER NODES - Returns the cluster nodes configuration.
 fn cluster_nodes(ctx: &mut CommandContext) -> Result<Response, CommandError> {
     // Format: <id> <ip:port@cport> <flags> <master> <ping-sent> <pong-recv> <config-epoch> <link-state> <slot> <slot> ... <slot>
-    if let Some(ref cluster_state) = ctx.cluster_state {
+    if let Some(cluster_state) = ctx.cluster_state {
         let snapshot = cluster_state.snapshot();
         let my_id = ctx.node_id.unwrap_or(0);
 
@@ -363,7 +361,7 @@ fn cluster_myid(ctx: &mut CommandContext) -> Result<Response, CommandError> {
 /// CLUSTER SLOTS - Returns slot to node mappings (deprecated, use CLUSTER SHARDS).
 fn cluster_slots(ctx: &mut CommandContext) -> Result<Response, CommandError> {
     // Format: [[start, end, [ip, port, id], [replica_ip, replica_port, replica_id], ...], ...]
-    if let Some(ref cluster_state) = ctx.cluster_state {
+    if let Some(cluster_state) = ctx.cluster_state {
         let snapshot = cluster_state.snapshot();
         let mut slot_info = Vec::new();
 
@@ -437,7 +435,7 @@ fn cluster_slots(ctx: &mut CommandContext) -> Result<Response, CommandError> {
 
 /// CLUSTER SHARDS - Returns information about cluster shards (Redis 7.0+).
 fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
-    if let Some(ref cluster_state) = ctx.cluster_state {
+    if let Some(cluster_state) = ctx.cluster_state {
         let snapshot = cluster_state.snapshot();
         let mut shards = Vec::new();
 
@@ -1112,21 +1110,20 @@ fn cluster_setslot(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response,
             })?;
 
             // Check if there's an active migration to complete
-            if let Some(ref cluster_state) = ctx.cluster_state {
-                if let Some(migration) = cluster_state.get_slot_migration(slot) {
-                    if migration.target_node == target_node {
-                        // Complete the migration
-                        return Ok(Response::RaftNeeded {
-                            op: RaftClusterOp::CompleteSlotMigration {
-                                slot,
-                                source_node: migration.source_node,
-                                target_node,
-                            },
-                            register_node: None,
-                            unregister_node: None,
-                        });
-                    }
-                }
+            if let Some(cluster_state) = ctx.cluster_state
+                && let Some(migration) = cluster_state.get_slot_migration(slot)
+                && migration.target_node == target_node
+            {
+                // Complete the migration
+                return Ok(Response::RaftNeeded {
+                    op: RaftClusterOp::CompleteSlotMigration {
+                        slot,
+                        source_node: migration.source_node,
+                        target_node,
+                    },
+                    register_node: None,
+                    unregister_node: None,
+                });
             }
 
             // No migration in progress, just assign the slot

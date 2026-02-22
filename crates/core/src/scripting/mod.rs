@@ -15,7 +15,7 @@ mod executor;
 mod lua_vm;
 mod router;
 
-pub use cache::{compute_sha, hex_to_sha, sha_to_hex, CachedScript, ScriptCache, ScriptSha};
+pub use cache::{CachedScript, ScriptCache, ScriptSha, compute_sha, hex_to_sha, sha_to_hex};
 pub use config::ScriptingConfig;
 pub use error::ScriptError;
 pub use executor::ScriptExecutor;

@@ -7,11 +7,14 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use frogdb_core::cluster::{handle_rpc_request, parse_rpc_message, send_rpc_response, ClusterRaft};
-use crate::net::TcpStream;
+use frogdb_core::cluster::ClusterRaft;
+#[cfg(not(feature = "turmoil"))]
+use frogdb_core::cluster::{handle_rpc_request, parse_rpc_message, send_rpc_response};
 
 use crate::net::tcp_listener_reusable;
-use tracing::{debug, error, info, warn};
+#[cfg(not(feature = "turmoil"))]
+use tracing::warn;
+use tracing::{debug, error, info};
 
 /// Run the cluster bus TCP server.
 ///
@@ -36,10 +39,13 @@ pub async fn run(addr: SocketAddr, raft: Arc<ClusterRaft>) -> std::io::Result<()
                 let raft = raft.clone();
                 tokio::spawn(async move {
                     debug!(%peer, "Cluster bus connection accepted");
+                    #[cfg(not(feature = "turmoil"))]
                     if let Err(e) = handle_connection(stream, &raft).await {
                         // Connection errors are expected when nodes disconnect
                         debug!(%peer, error = %e, "Cluster bus connection closed");
                     }
+                    #[cfg(feature = "turmoil")]
+                    drop((stream, raft));
                 });
             }
             Err(e) => {
@@ -53,7 +59,11 @@ pub async fn run(addr: SocketAddr, raft: Arc<ClusterRaft>) -> std::io::Result<()
 ///
 /// Reads RPC requests in a loop, processes them via Raft, and sends responses.
 /// The connection is kept open for multiple requests (connection reuse).
-async fn handle_connection(mut stream: TcpStream, raft: &ClusterRaft) -> std::io::Result<()> {
+#[cfg(not(feature = "turmoil"))]
+async fn handle_connection(
+    mut stream: tokio::net::TcpStream,
+    raft: &ClusterRaft,
+) -> std::io::Result<()> {
     loop {
         // Parse the incoming RPC request
         let request = match parse_rpc_message(&mut stream).await {

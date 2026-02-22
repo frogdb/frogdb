@@ -40,6 +40,7 @@ use frogdb_protocol::Response;
 ///
 /// This trait is implemented by connection state to allow handlers to
 /// check permissions before executing commands.
+#[allow(clippy::result_large_err)]
 pub trait AclChecker {
     /// Check if a command is allowed for the current user.
     fn check_command_permission(&self, cmd_name: &str) -> Result<(), Response>;

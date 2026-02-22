@@ -3,12 +3,13 @@
 //! Benchmarks for HashMapStore operations at various store sizes and value sizes.
 
 use bytes::Bytes;
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use frogdb_core::store::{HashMapStore, Store};
 use frogdb_core::types::Value;
 use rand::Rng;
 
 /// Generate a random key of the given length.
+#[allow(dead_code)]
 fn random_key(len: usize) -> Bytes {
     let mut rng = rand::thread_rng();
     let key: Vec<u8> = (0..len).map(|_| rng.gen_range(b'a'..=b'z')).collect();
@@ -18,7 +19,7 @@ fn random_key(len: usize) -> Bytes {
 /// Generate a random value of the given size.
 fn random_value(size: usize) -> Value {
     let mut rng = rand::thread_rng();
-    let data: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
+    let data: Vec<u8> = (0..size).map(|_| rng.r#gen()).collect();
     Value::string(Bytes::from(data))
 }
 

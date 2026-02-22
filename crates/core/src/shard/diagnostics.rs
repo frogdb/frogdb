@@ -78,18 +78,17 @@ impl ShardWorker {
         let mut big_keys = Vec::new();
 
         for key in all_keys {
-            if let Some(memory) = self.calculate_key_memory_usage(&key) {
-                if memory >= threshold_bytes {
-                    if let Some(value) = self.store.get(&key) {
-                        big_keys.push(BigKeyInfo {
-                            key: key.clone(),
-                            key_type: value.key_type().as_str().to_string(),
-                            memory_bytes: memory,
-                        });
-                        if big_keys.len() >= max_keys {
-                            break;
-                        }
-                    }
+            if let Some(memory) = self.calculate_key_memory_usage(&key)
+                && memory >= threshold_bytes
+                && let Some(value) = self.store.get(&key)
+            {
+                big_keys.push(BigKeyInfo {
+                    key: key.clone(),
+                    key_type: value.key_type().as_str().to_string(),
+                    memory_bytes: memory,
+                });
+                if big_keys.len() >= max_keys {
+                    break;
                 }
             }
         }

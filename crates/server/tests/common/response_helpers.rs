@@ -4,6 +4,8 @@
 //! (`parse_simple_string`, `parse_bulk_string`, etc.) with panicking
 //! variants that produce clear test-failure messages.
 
+#![allow(dead_code)]
+
 use frogdb_protocol::Response;
 
 /// Panics unless `response` is `Response::Simple("OK")`.

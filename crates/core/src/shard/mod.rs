@@ -50,7 +50,7 @@ pub use builder::{ShardBuilderError, ShardWorkerBuilder};
 pub use connection::NewConnection;
 pub use counters::{HotShardStatsResponse, OperationBucket, OperationCounters};
 pub use helpers::{
-    extract_hash_tag, shard_for_key, slot_for_key, REDIS_CLUSTER_SLOTS, REPLICA_INTERNAL_CONN_ID,
+    REDIS_CLUSTER_SLOTS, REPLICA_INTERNAL_CONN_ID, extract_hash_tag, shard_for_key, slot_for_key,
 };
 pub use message::{ScatterOp, ShardMessage};
 pub use types::{

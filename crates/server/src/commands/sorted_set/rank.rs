@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use frogdb_core::{impl_keys_first, Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
 // ============================================================================

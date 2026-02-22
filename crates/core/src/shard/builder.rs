@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 use tokio::sync::mpsc;
 

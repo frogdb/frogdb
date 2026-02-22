@@ -725,10 +725,10 @@ impl Command for SintercardCommand {
         let result = first.intersection(others.iter());
         let mut count = result.len();
 
-        if let Some(l) = limit {
-            if l > 0 {
-                count = count.min(l);
-            }
+        if let Some(l) = limit
+            && l > 0
+        {
+            count = count.min(l);
         }
 
         Ok(Response::Integer(count as i64))
@@ -938,10 +938,10 @@ impl Command for SmoveCommand {
         }
 
         // Check dest is correct type if it exists
-        if let Some(v) = ctx.store.get(dest) {
-            if v.as_set().is_none() {
-                return Err(CommandError::WrongType);
-            }
+        if let Some(v) = ctx.store.get(dest)
+            && v.as_set().is_none()
+        {
+            return Err(CommandError::WrongType);
         }
 
         // Remove from source

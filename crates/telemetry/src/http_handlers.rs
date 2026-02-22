@@ -119,13 +119,15 @@ mod tests {
 
         let response = handle_metrics(recorder, None);
         assert_eq!(response.status(), StatusCode::OK);
-        assert!(response
-            .headers()
-            .get("content-type")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .contains("text/plain"));
+        assert!(
+            response
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("text/plain")
+        );
     }
 
     #[test]

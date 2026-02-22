@@ -13,7 +13,7 @@
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
-use frogdb_core::{generate_latency_graph, LatencyEvent, LatencySample, ShardMessage};
+use frogdb_core::{LatencyEvent, LatencySample, ShardMessage, generate_latency_graph};
 use frogdb_protocol::Response;
 use std::collections::HashMap;
 use tokio::sync::oneshot;
@@ -281,19 +281,18 @@ impl ConnectionHandler {
                 .send(ShardMessage::LatencyLatest { response_tx })
                 .await
                 .is_ok()
+                && let Ok(samples) = response_rx.await
             {
-                if let Ok(samples) = response_rx.await {
-                    for (event, sample) in samples {
-                        // Keep the most recent sample for each event
-                        latest_by_event
-                            .entry(event)
-                            .and_modify(|existing| {
-                                if sample.timestamp > existing.timestamp {
-                                    *existing = sample;
-                                }
-                            })
-                            .or_insert(sample);
-                    }
+                for (event, sample) in samples {
+                    // Keep the most recent sample for each event
+                    latest_by_event
+                        .entry(event)
+                        .and_modify(|existing| {
+                            if sample.timestamp > existing.timestamp {
+                                *existing = sample;
+                            }
+                        })
+                        .or_insert(sample);
                 }
             }
         }
@@ -311,10 +310,9 @@ impl ConnectionHandler {
                 .send(ShardMessage::LatencyHistory { event, response_tx })
                 .await
                 .is_ok()
+                && let Ok(samples) = response_rx.await
             {
-                if let Ok(samples) = response_rx.await {
-                    all_samples.extend(samples);
-                }
+                all_samples.extend(samples);
             }
         }
 

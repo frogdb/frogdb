@@ -36,7 +36,7 @@ impl Command for HsetCommand {
         let key = &args[0];
 
         // Must have even number of field-value pairs
-        if (args.len() - 1) % 2 != 0 {
+        if !(args.len() - 1).is_multiple_of(2) {
             return Err(CommandError::InvalidArgument {
                 message: "wrong number of arguments for 'hset' command".to_string(),
             });
@@ -235,7 +235,7 @@ impl Command for HmsetCommand {
         let key = &args[0];
 
         // Must have even number of field-value pairs
-        if (args.len() - 1) % 2 != 0 {
+        if !(args.len() - 1).is_multiple_of(2) {
             return Err(CommandError::InvalidArgument {
                 message: "wrong number of arguments for 'hmset' command".to_string(),
             });

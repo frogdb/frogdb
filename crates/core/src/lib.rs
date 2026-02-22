@@ -37,17 +37,17 @@ pub mod types;
 pub mod vll;
 
 pub use acl::{
-    generate_password, hash_password, AclChecker, AclConfig, AclError, AclLog, AclManager,
-    AllowAllChecker, AuthenticatedUser, CommandCategory, FullAclChecker, KeyAccessType,
-    PermissionResult, User, UserPermissions,
+    AclChecker, AclConfig, AclError, AclLog, AclManager, AllowAllChecker, AuthenticatedUser,
+    CommandCategory, FullAclChecker, KeyAccessType, PermissionResult, User, UserPermissions,
+    generate_password, hash_password,
 };
 pub use args::{
-    parse_f64, parse_from_bytes, parse_i64, parse_u64, parse_usize, ArgParser, CompareCondition,
-    ExpiryOption, ScanOptions,
+    ArgParser, CompareCondition, ExpiryOption, ScanOptions, parse_f64, parse_from_bytes, parse_i64,
+    parse_u64, parse_usize,
 };
 pub use bitmap::{
-    bitcount, bitfield_get, bitfield_incrby, bitfield_set, bitop, bitpos, getbit, setbit, BitOp,
-    BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, OverflowMode,
+    BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, OverflowMode, bitcount,
+    bitfield_get, bitfield_incrby, bitfield_set, bitop, bitpos, getbit, setbit,
 };
 pub use bloom::{BloomFilterValue, BloomLayer};
 pub use client_registry::{
@@ -55,41 +55,41 @@ pub use client_registry::{
     CommandTypeStats, KillFilter, PauseMode, UnblockMode,
 };
 pub use cluster::{
-    handle_rpc_request, parse_rpc_message, send_rpc_response, ClusterCommand, ClusterConfig,
-    ClusterError, ClusterNetwork, ClusterNetworkFactory, ClusterRaft, ClusterResponse,
-    ClusterRpcRequest, ClusterRpcResponse, ClusterSnapshot, ClusterState, ClusterStateMachine,
-    ClusterStorage, ConfigEpoch, NodeId, NodeInfo, NodeRole, SharedClusterRaft, SlotRange,
-    TypeConfig, CLUSTER_SLOTS,
+    CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterNetwork,
+    ClusterNetworkFactory, ClusterRaft, ClusterResponse, ClusterRpcRequest, ClusterRpcResponse,
+    ClusterSnapshot, ClusterState, ClusterStateMachine, ClusterStorage, ConfigEpoch, NodeId,
+    NodeInfo, NodeRole, SharedClusterRaft, SlotRange, TypeConfig, handle_rpc_request,
+    parse_rpc_message, send_rpc_response,
 };
 pub use command::{
-    get_or_create, Arity, ClusterContextRef, Command, CommandContext, CommandContextCore,
-    CommandFlags, CommandMetadata, ConnectionLevelOp, ExecutionStrategy, MergeStrategy,
-    QuorumChecker, ReplicationContextRef, ServerWideOp,
+    Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
+    CommandMetadata, ConnectionLevelOp, ExecutionStrategy, MergeStrategy, QuorumChecker,
+    ReplicationContextRef, ServerWideOp, get_or_create,
 };
 pub use error::{CommandError, FrogDbError, RespError};
 pub use eviction::{
-    lfu_decay, lfu_log_incr, EvictionCandidate, EvictionConfig, EvictionPolicy, EvictionPool,
     DEFAULT_LFU_DECAY_TIME, DEFAULT_LFU_LOG_FACTOR, DEFAULT_MAXMEMORY_SAMPLES, EVICTION_POOL_SIZE,
+    EvictionCandidate, EvictionConfig, EvictionPolicy, EvictionPool, lfu_decay, lfu_log_incr,
 };
 pub use functions::{
-    dump_libraries, load_from_file, load_library, new_shared_registry, parse_shebang,
-    restore_libraries, save_to_file, validate_library, CapturedRegistration, FunctionError,
-    FunctionFlags, FunctionLibrary, FunctionRegistry, FunctionStats, ParsedLibrary,
-    RegisteredFunction, RestorePolicy, RunningFunctionInfo, SharedFunctionRegistry, ShebangInfo,
+    CapturedRegistration, FunctionError, FunctionFlags, FunctionLibrary, FunctionRegistry,
+    FunctionStats, ParsedLibrary, RegisteredFunction, RestorePolicy, RunningFunctionInfo,
+    SharedFunctionRegistry, ShebangInfo, dump_libraries, load_from_file, load_library,
+    new_shared_registry, parse_shebang, restore_libraries, save_to_file, validate_library,
 };
 pub use geo::{
-    geohash_decode, geohash_encode, geohash_range_for_bbox, geohash_to_score, geohash_to_string,
-    haversine_distance, is_within_box, is_within_radius, score_to_geohash, BoundingBox,
-    Coordinates, DistanceUnit, EARTH_RADIUS_M, GEOHASH_BITS, LAT_MAX, LAT_MIN, LON_MAX, LON_MIN,
+    BoundingBox, Coordinates, DistanceUnit, EARTH_RADIUS_M, GEOHASH_BITS, LAT_MAX, LAT_MIN,
+    LON_MAX, LON_MIN, geohash_decode, geohash_encode, geohash_range_for_bbox, geohash_to_score,
+    geohash_to_string, haversine_distance, is_within_box, is_within_radius, score_to_geohash,
 };
 pub use glob::glob_match;
-pub use hyperloglog::{HyperLogLogValue, HLL_DENSE_SIZE, HLL_REGISTERS};
+pub use hyperloglog::{HLL_DENSE_SIZE, HLL_REGISTERS, HyperLogLogValue};
 pub use json::{
-    JsonError, JsonLimits, JsonType, JsonValue, DEFAULT_JSON_MAX_DEPTH, DEFAULT_JSON_MAX_SIZE,
+    DEFAULT_JSON_MAX_DEPTH, DEFAULT_JSON_MAX_SIZE, JsonError, JsonLimits, JsonType, JsonValue,
 };
 pub use latency::{
-    generate_latency_graph, CommandHistogram, EventHistory, EventStats, LatencyEvent,
-    LatencyMonitor, LatencySample, DEFAULT_LATENCY_HISTORY_LEN, DEFAULT_LATENCY_THRESHOLD_MS,
+    CommandHistogram, DEFAULT_LATENCY_HISTORY_LEN, DEFAULT_LATENCY_THRESHOLD_MS, EventHistory,
+    EventStats, LatencyEvent, LatencyMonitor, LatencySample, generate_latency_graph,
 };
 pub use metrics::{
     HotShardDetector, HotShardReport, MemoryDiagnosticsCollector, MemoryReport, NoopObservability,
@@ -100,37 +100,37 @@ pub use noop::{
     NoopWalWriter, ReplicationConfig, ReplicationTracker, Tracer, WalOperation, WalWriter,
 };
 pub use persistence::{
-    deserialize, recover_all_shards, recover_shard, serialize, spawn_periodic_sync,
-    CompressionType, DurabilityMode, NoopSnapshotCoordinator, OnWriteHook, RecoveryStats,
-    RocksConfig, RocksSnapshotCoordinator, RocksStore, RocksWalWriter, SerializationError,
-    SnapshotConfig, SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata,
-    SnapshotMetadataFile, WalConfig, WalLagStats, HEADER_SIZE,
+    CompressionType, DurabilityMode, HEADER_SIZE, NoopSnapshotCoordinator, OnWriteHook,
+    RecoveryStats, RocksConfig, RocksSnapshotCoordinator, RocksStore, RocksWalWriter,
+    SerializationError, SnapshotConfig, SnapshotCoordinator, SnapshotError, SnapshotHandle,
+    SnapshotMetadata, SnapshotMetadataFile, WalConfig, WalLagStats, deserialize,
+    recover_all_shards, recover_shard, serialize, spawn_periodic_sync,
 };
 pub use pubsub::{
-    ConnId, GlobPattern, IntrospectionRequest, IntrospectionResponse, PubSubMessage, PubSubSender,
-    ShardSubscriptions, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
+    ConnId, GlobPattern, IntrospectionRequest, IntrospectionResponse,
+    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SUBSCRIPTIONS_PER_CONNECTION, PubSubMessage, PubSubSender, ShardSubscriptions,
 };
 pub use registry::{CommandEntry, CommandRegistry};
 pub use replication::{
-    serialize_command_to_resp, NoopBroadcaster, ReplicaInfo, ReplicationBroadcaster,
+    FRAME_MAGIC, FRAME_VERSION, NoopBroadcaster, ReplicaInfo, ReplicationBroadcaster,
     ReplicationFrame, ReplicationFrameCodec, ReplicationState, ReplicationTrackerImpl,
-    SharedBroadcaster, FRAME_MAGIC, FRAME_VERSION,
+    SharedBroadcaster, serialize_command_to_resp,
 };
 pub use scripting::{
     CachedScript, CrossShardRouter, LuaVm, ScriptCache, ScriptError, ScriptExecutor, ScriptRoute,
     ScriptRouter, ScriptingConfig, SingleShardRouter,
 };
 pub use shard::{
-    extract_hash_tag, shard_for_key, slot_for_key, BigKeyInfo, BigKeysScanResponse,
-    HotShardStatsResponse, PartialResult, ScatterOp, ShardBuilderError, ShardClusterDeps,
-    ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardMessage, ShardPersistenceDeps,
-    ShardWaitQueue, ShardWorker, ShardWorkerBuilder, TransactionResult, WaitEntry,
-    WalLagStatsResponse, REDIS_CLUSTER_SLOTS, REPLICA_INTERNAL_CONN_ID,
+    BigKeyInfo, BigKeysScanResponse, HotShardStatsResponse, PartialResult, REDIS_CLUSTER_SLOTS,
+    REPLICA_INTERNAL_CONN_ID, ScatterOp, ShardBuilderError, ShardClusterDeps, ShardConfig,
+    ShardCoreDeps, ShardMemoryStats, ShardMessage, ShardPersistenceDeps, ShardWaitQueue,
+    ShardWorker, ShardWorkerBuilder, TransactionResult, WaitEntry, WalLagStatsResponse,
+    extract_hash_tag, shard_for_key, slot_for_key,
 };
 pub use slowlog::{
-    SlowLog, SlowLogEntry, DEFAULT_SLOWLOG_LOG_SLOWER_THAN, DEFAULT_SLOWLOG_MAX_ARG_LEN,
-    DEFAULT_SLOWLOG_MAX_LEN,
+    DEFAULT_SLOWLOG_LOG_SLOWER_THAN, DEFAULT_SLOWLOG_MAX_ARG_LEN, DEFAULT_SLOWLOG_MAX_LEN, SlowLog,
+    SlowLogEntry,
 };
 pub use store::ValueType;
 pub use store::{HashMapStore, Store};

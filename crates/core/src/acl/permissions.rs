@@ -416,10 +416,10 @@ mod tests {
 
     #[test]
     fn test_subcommand_rule_priority() {
-        let mut perms = CommandPermissions::default();
-
-        // Allow all commands
-        perms.allow_all = true;
+        let mut perms = CommandPermissions {
+            allow_all: true,
+            ..Default::default()
+        };
 
         // But deny CONFIG|SET specifically
         perms.add_subcommand_rule(SubcommandRule {
@@ -482,8 +482,10 @@ mod tests {
 
     #[test]
     fn test_subcommand_case_insensitive() {
-        let mut perms = CommandPermissions::default();
-        perms.allow_all = true;
+        let mut perms = CommandPermissions {
+            allow_all: true,
+            ..Default::default()
+        };
 
         perms.add_subcommand_rule(SubcommandRule {
             command: "config".to_string(),

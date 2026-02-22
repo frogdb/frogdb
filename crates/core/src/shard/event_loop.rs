@@ -258,11 +258,10 @@ impl ShardWorker {
                         ShardMessage::Shutdown => {
                             tracing::info!(shard_id = self.shard_id, "Shard worker shutting down");
                             // Flush WAL before shutdown
-                            if let Some(ref wal) = self.wal_writer {
-                                if let Err(e) = wal.flush_async().await {
+                            if let Some(ref wal) = self.wal_writer
+                                && let Err(e) = wal.flush_async().await {
                                     tracing::error!(shard_id = self.shard_id, error = %e, "Failed to flush WAL on shutdown");
                                 }
-                            }
                             break;
                         }
                     }
@@ -301,10 +300,10 @@ impl ShardWorker {
         }
 
         // Final WAL flush
-        if let Some(ref wal) = self.wal_writer {
-            if let Err(e) = wal.flush_async().await {
-                tracing::error!(shard_id = self.shard_id, error = %e, "Failed to flush WAL on exit");
-            }
+        if let Some(ref wal) = self.wal_writer
+            && let Err(e) = wal.flush_async().await
+        {
+            tracing::error!(shard_id = self.shard_id, error = %e, "Failed to flush WAL on exit");
         }
     }
 

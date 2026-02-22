@@ -6,8 +6,8 @@
 //! - Sync: fsync every write (slowest, most durable)
 
 use rocksdb::{WriteBatch, WriteOptions};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, trace};

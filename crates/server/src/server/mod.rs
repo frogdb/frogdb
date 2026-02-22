@@ -8,8 +8,8 @@ pub use util::{next_conn_id, next_txid};
 
 use anyhow::Result;
 use frogdb_core::persistence::{
-    recover_all_shards, spawn_periodic_sync, NoopSnapshotCoordinator, RocksConfig,
-    RocksSnapshotCoordinator, RocksStore, SnapshotCoordinator,
+    NoopSnapshotCoordinator, RocksConfig, RocksSnapshotCoordinator, RocksStore,
+    SnapshotCoordinator, recover_all_shards, spawn_periodic_sync,
 };
 use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{
@@ -30,18 +30,19 @@ use tracing::{error, info, warn};
 use crate::acceptor::Acceptor;
 use crate::config::{Config, PersistenceConfig};
 use crate::failure_detector::{
-    spawn_failure_detector_task, FailureDetector, FailureDetectorConfig,
+    FailureDetector, FailureDetectorConfig, spawn_failure_detector_task,
 };
 use crate::latency_test::{self, LatencyTestResult};
-use crate::net::{spawn, tcp_listener_reusable, TcpListener};
+use crate::net::{TcpListener, spawn, tcp_listener_reusable};
 use crate::replication::{
-    consume_frames, PrimaryReplicationHandler, ReplicaCommandExecutor, ReplicaReplicationHandler,
+    PrimaryReplicationHandler, ReplicaCommandExecutor, ReplicaReplicationHandler, consume_frames,
 };
 use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
 
 use util::{
+    NEW_CONN_CHANNEL_CAPACITY, PersistenceInitResult, SHARD_CHANNEL_CAPACITY,
     build_eviction_config, build_wal_config, hash_addr_to_node_id, num_cpus, parse_compression,
-    shutdown_signal, PersistenceInitResult, NEW_CONN_CHANNEL_CAPACITY, SHARD_CHANNEL_CAPACITY,
+    shutdown_signal,
 };
 
 /// FrogDB server.
@@ -453,14 +454,11 @@ impl Server {
             network_factory.register_node(node_id, cluster_bus_addr);
 
             // Ensure this node is in initial_members
-            if !initial_members.contains_key(&node_id) {
-                initial_members.insert(
-                    node_id,
-                    openraft::BasicNode {
-                        addr: cluster_bus_addr.to_string(),
-                    },
-                );
-            }
+            initial_members
+                .entry(node_id)
+                .or_insert_with(|| openraft::BasicNode {
+                    addr: cluster_bus_addr.to_string(),
+                });
 
             // Determine if this node should bootstrap (lowest node_id)
             let should_bootstrap = initial_members.keys().next().copied() == Some(node_id);
@@ -572,36 +570,38 @@ impl Server {
         };
 
         // Create failure detector early so we can pass it to shards
-        let (failure_detector, failure_detector_handle) =
-            if let (Some(ref raft_arc), Some(ref state_arc), Some(nid)) =
-                (&raft, &cluster_state, node_id)
-            {
-                let detector_config = FailureDetectorConfig {
-                    check_interval_ms: config.cluster.heartbeat_interval_ms,
-                    connect_timeout_ms: config.cluster.heartbeat_interval_ms / 2,
-                    fail_threshold: config.cluster.fail_threshold,
-                    auto_failover: config.cluster.auto_failover,
-                };
-
-                let detector = Arc::new(FailureDetector::new(
-                    nid,
-                    detector_config,
-                    state_arc.clone(),
-                    raft_arc.clone(),
-                ));
-
-                info!(
-                    node_id = nid,
-                    auto_failover = config.cluster.auto_failover,
-                    fail_threshold = config.cluster.fail_threshold,
-                    "Failure detector initialized"
-                );
-
-                let handle = spawn_failure_detector_task(detector.clone());
-                (Some(detector), Some(handle))
-            } else {
-                (None, None)
+        let (failure_detector, failure_detector_handle) = if let (
+            Some(raft_arc),
+            Some(state_arc),
+            Some(nid),
+        ) = (&raft, &cluster_state, node_id)
+        {
+            let detector_config = FailureDetectorConfig {
+                check_interval_ms: config.cluster.heartbeat_interval_ms,
+                connect_timeout_ms: config.cluster.heartbeat_interval_ms / 2,
+                fail_threshold: config.cluster.fail_threshold,
+                auto_failover: config.cluster.auto_failover,
             };
+
+            let detector = Arc::new(FailureDetector::new(
+                nid,
+                detector_config,
+                state_arc.clone(),
+                raft_arc.clone(),
+            ));
+
+            info!(
+                node_id = nid,
+                auto_failover = config.cluster.auto_failover,
+                fail_threshold = config.cluster.fail_threshold,
+                "Failure detector initialized"
+            );
+
+            let handle = spawn_failure_detector_task(detector.clone());
+            (Some(detector), Some(handle))
+        } else {
+            (None, None)
+        };
 
         for (shard_id, (msg_rx, conn_rx)) in shard_receivers
             .into_iter()

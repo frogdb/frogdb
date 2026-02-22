@@ -5,7 +5,7 @@
 
 use bytes::Bytes;
 use frogdb_server::{Config, Server};
-use frogdb_telemetry::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
+use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
 use futures::{SinkExt, StreamExt};
 use redis_protocol::codec::{Resp2, Resp3};
 use redis_protocol::resp2::types::BytesFrame as Resp2Frame;
@@ -536,6 +536,7 @@ async fn test_smembers_resp3_returns_set() {
 }
 
 #[tokio::test]
+#[allow(clippy::approx_constant)]
 async fn test_zscore_resp3_returns_double() {
     let server = TestServer::start().await;
     let mut client = server.connect_resp3().await;
@@ -566,6 +567,7 @@ async fn test_zscore_resp3_returns_double() {
 }
 
 #[tokio::test]
+#[allow(clippy::approx_constant)]
 async fn test_incrbyfloat_resp3_double() {
     let server = TestServer::start().await;
     let mut client = server.connect_resp3().await;

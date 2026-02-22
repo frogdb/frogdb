@@ -8,9 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use frogdb_core::{
-    persistence::SnapshotCoordinator, AclManager, ClientHandle, ClientRegistry,
-    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry, MetricsRecorder,
-    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
+    CommandRegistry, MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    persistence::SnapshotCoordinator,
 };
 use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
 use frogdb_telemetry::{LatencyBandTracker, SharedTracer};

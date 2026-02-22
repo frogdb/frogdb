@@ -37,8 +37,8 @@ pub use prometheus_recorder::PrometheusRecorder;
 pub use status::{ServerStatus, StatusCollector, StatusCollectorConfig};
 pub use system::SystemMetricsCollector;
 pub use tracing::{
-    create_tracer, OtelTracer, RecentTraceEntry, RequestSpan, ScatterGatherSpan, SharedTracer,
-    TracingStatus,
+    OtelTracer, RecentTraceEntry, RequestSpan, ScatterGatherSpan, SharedTracer, TracingStatus,
+    create_tracer,
 };
 
 // Re-export typed metrics system

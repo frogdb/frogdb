@@ -61,10 +61,9 @@ impl ConnectionHandler {
                 .send(ShardMessage::SlowlogGet { count, response_tx })
                 .await
                 .is_ok()
+                && let Ok(entries) = response_rx.await
             {
-                if let Ok(entries) = response_rx.await {
-                    all_entries.extend(entries);
-                }
+                all_entries.extend(entries);
             }
         }
 
@@ -102,10 +101,9 @@ impl ConnectionHandler {
                 .send(ShardMessage::SlowlogLen { response_tx })
                 .await
                 .is_ok()
+                && let Ok(len) = response_rx.await
             {
-                if let Ok(len) = response_rx.await {
-                    total_len += len;
-                }
+                total_len += len;
             }
         }
 
@@ -174,10 +172,10 @@ impl ConnectionHandler {
         // Check if command has SKIP_SLOWLOG flag
         let cmd_name = cmd.name_uppercase();
         let cmd_name_str = String::from_utf8_lossy(&cmd_name);
-        if let Some(handler) = self.registry.get(&cmd_name_str) {
-            if handler.flags().contains(CommandFlags::SKIP_SLOWLOG) {
-                return;
-            }
+        if let Some(handler) = self.registry.get(&cmd_name_str)
+            && handler.flags().contains(CommandFlags::SKIP_SLOWLOG)
+        {
+            return;
         }
 
         // Prepare command args for logging (including command name)

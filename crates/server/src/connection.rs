@@ -33,11 +33,11 @@ pub use deps::{
 // Re-export state types
 pub use state::{
     AuthState, BlockedState, ConnectionState, LocalClientStats, PubSubState, ReplyMode,
-    TransactionState, TransactionTarget, STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS,
+    STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS, TransactionState, TransactionTarget,
 };
 
 // Re-export builder
-pub use builder::{connection_builder, standalone_config, ConnectionHandlerBuilder};
+pub use builder::{ConnectionHandlerBuilder, connection_builder, standalone_config};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -46,10 +46,9 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::BytesMut;
 use frogdb_core::{
-    persistence::SnapshotCoordinator, AclManager, ClientHandle, ClientRegistry,
-    ClusterNetworkFactory, ClusterRaft, ClusterState, CommandFlags, CommandRegistry,
-    MetricsRecorder, PauseMode, PubSubMessage, PubSubSender, ReplicationTrackerImpl, ShardMessage,
-    SharedFunctionRegistry,
+    AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
+    CommandFlags, CommandRegistry, MetricsRecorder, PauseMode, PubSubMessage, PubSubSender,
+    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry, persistence::SnapshotCoordinator,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use frogdb_telemetry::SharedTracer;
@@ -69,8 +68,7 @@ pub use crate::server::next_txid;
 
 // Re-export utility functions used by handler submodules and internally
 pub(crate) use util::{
-    estimate_command_size, estimate_resp2_frame_size, extract_subcommand,
-    key_access_type_for_flags,
+    estimate_command_size, estimate_resp2_frame_size, extract_subcommand, key_access_type_for_flags,
 };
 
 /// Connection handler that processes client commands.
@@ -192,6 +190,7 @@ impl ConnectionHandler {
     ///     observability_deps,
     /// );
     /// ```
+    #[allow(clippy::too_many_arguments)]
     pub fn from_deps(
         socket: TcpStream,
         addr: SocketAddr,
@@ -565,7 +564,7 @@ impl ConnectionHandler {
             );
 
             // Get the primary replication handler
-            if let Some(ref handler) = self.primary_replication_handler {
+            if let Some(handler) = &self.primary_replication_handler {
                 // Extract the raw TcpStream from the Framed codec.
                 // into_inner() consumes the Framed and returns the underlying stream.
                 // crate::net::TcpStream is tokio::net::TcpStream (or turmoil::net::TcpStream in tests)
@@ -598,7 +597,7 @@ impl ConnectionHandler {
                         conn_id = self.state.id,
                         "PSYNC handoff not supported in turmoil simulation mode"
                     );
-                    let _ = stream; // Suppress unused warning
+                    let _ = (handler, stream);
                 }
             } else {
                 warn!(
@@ -639,14 +638,14 @@ impl ConnectionHandler {
         }
 
         // Unregister any blocking waits
-        if let Some(ref blocked) = self.state.blocked {
-            if let Some(sender) = self.shard_senders.get(blocked.shard_id) {
-                let _ = sender
-                    .send(ShardMessage::UnregisterWait {
-                        conn_id: self.state.id,
-                    })
-                    .await;
-            }
+        if let Some(ref blocked) = self.state.blocked
+            && let Some(sender) = self.shard_senders.get(blocked.shard_id)
+        {
+            let _ = sender
+                .send(ShardMessage::UnregisterWait {
+                    conn_id: self.state.id,
+                })
+                .await;
         }
     }
 
@@ -662,28 +661,26 @@ impl ConnectionHandler {
             return None;
         }
 
-        if let Response::Array(items) = &responses[0] {
-            if items.len() >= 3 {
-                // Check for PSYNC_HANDOFF marker
-                if let Response::Simple(marker) = &items[0] {
-                    if marker.as_ref() == b"PSYNC_HANDOFF" {
-                        // Extract replication_id
-                        let replication_id = match &items[1] {
-                            Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-                            _ => return None,
-                        };
+        if let Response::Array(items) = &responses[0]
+            && items.len() >= 3
+        {
+            // Check for PSYNC_HANDOFF marker
+            if let Response::Simple(marker) = &items[0]
+                && marker.as_ref() == b"PSYNC_HANDOFF"
+            {
+                // Extract replication_id
+                let replication_id = match &items[1] {
+                    Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+                    _ => return None,
+                };
 
-                        // Extract offset
-                        let offset = match &items[2] {
-                            Response::Bulk(Some(b)) => {
-                                String::from_utf8_lossy(b).parse::<i64>().ok()?
-                            }
-                            _ => return None,
-                        };
+                // Extract offset
+                let offset = match &items[2] {
+                    Response::Bulk(Some(b)) => String::from_utf8_lossy(b).parse::<i64>().ok()?,
+                    _ => return None,
+                };
 
-                        return Some((replication_id, offset));
-                    }
-                }
+                return Some((replication_id, offset));
             }
         }
 

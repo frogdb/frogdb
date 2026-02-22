@@ -10,8 +10,8 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use super::types::{
-    ClusterCommand, ClusterError, ClusterResponse, ClusterSnapshot, ConfigEpoch, MigrationState,
-    NodeId, NodeInfo, NodeRole, SlotMigration, SlotRange, TypeConfig, CLUSTER_SLOTS,
+    CLUSTER_SLOTS, ClusterCommand, ClusterError, ClusterResponse, ClusterSnapshot, ConfigEpoch,
+    MigrationState, NodeId, NodeInfo, NodeRole, SlotMigration, SlotRange, TypeConfig,
 };
 
 /// The cluster state, protected by a read-write lock for concurrent access.
@@ -110,7 +110,7 @@ impl ClusterState {
     pub fn add_node(&self, node: NodeInfo) {
         let mut inner = self.inner.write();
         let node_id = node.id;
-        let node_addr = node.addr.clone();
+        let node_addr = node.addr;
         inner.nodes.entry(node.id).or_insert_with(|| {
             tracing::info!(node_id = node_id, addr = %node_addr, "Adding node to local cluster state");
             node
@@ -175,13 +175,10 @@ impl ClusterState {
 
                 for range in &slots {
                     for slot in range.iter() {
-                        if let Some(&existing_owner) = inner.slot_assignment.get(&slot) {
-                            if existing_owner != node_id {
-                                return Err(ClusterError::SlotAlreadyAssigned(
-                                    slot,
-                                    existing_owner,
-                                ));
-                            }
+                        if let Some(&existing_owner) = inner.slot_assignment.get(&slot)
+                            && existing_owner != node_id
+                        {
+                            return Err(ClusterError::SlotAlreadyAssigned(slot, existing_owner));
                         }
                     }
                 }
@@ -198,10 +195,10 @@ impl ClusterState {
             ClusterCommand::RemoveSlots { node_id, slots } => {
                 for range in slots {
                     for slot in range.iter() {
-                        if let Some(&owner) = inner.slot_assignment.get(&slot) {
-                            if owner == node_id {
-                                inner.slot_assignment.remove(&slot);
-                            }
+                        if let Some(&owner) = inner.slot_assignment.get(&slot)
+                            && owner == node_id
+                        {
+                            inner.slot_assignment.remove(&slot);
                         }
                     }
                 }

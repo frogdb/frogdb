@@ -17,11 +17,11 @@ use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio::time::timeout;
 use tokio_util::codec::Decoder;
 
-use crate::replication::fullsync::{receive_to_file, FullSyncMetadata};
+use crate::replication::fullsync::{FullSyncMetadata, receive_to_file};
 
 /// Connection timeout for initial connection
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -367,12 +367,9 @@ impl ReplicaConnection {
             tracing::info!("Partial sync (CONTINUE) initiated");
 
             Ok(SyncType::PartialSync)
-        } else if line.starts_with("-") {
+        } else if let Some(rest) = line.strip_prefix('-') {
             // Error response
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("PSYNC error: {}", &line[1..]),
-            ))
+            Err(io::Error::other(format!("PSYNC error: {}", rest)))
         } else {
             Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -505,10 +502,10 @@ impl ReplicaConnection {
         let checkpoint_ready_dir = parent_dir.join("checkpoint_ready");
 
         // Remove any existing staged checkpoint
-        if checkpoint_ready_dir.exists() {
-            if let Err(e) = fs::remove_dir_all(&checkpoint_ready_dir).await {
-                tracing::warn!(error = %e, "Failed to remove old staged checkpoint");
-            }
+        if checkpoint_ready_dir.exists()
+            && let Err(e) = fs::remove_dir_all(&checkpoint_ready_dir).await
+        {
+            tracing::warn!(error = %e, "Failed to remove old staged checkpoint");
         }
 
         // Move the incoming checkpoint to the ready location
@@ -516,10 +513,10 @@ impl ReplicaConnection {
             tracing::error!(error = %e, "Failed to stage checkpoint for loading");
             // Clean up on failure
             let _ = fs::remove_dir_all(&checkpoint_dir).await;
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to stage checkpoint: {}", e),
-            ));
+            return Err(io::Error::other(format!(
+                "Failed to stage checkpoint: {}",
+                e
+            )));
         }
 
         // Write metadata to indicate replication state after loading
@@ -527,7 +524,7 @@ impl ReplicaConnection {
         let metadata_json = serde_json::json!({
             "replication_id": metadata.replication_id,
             "replication_offset": metadata.replication_offset,
-            "checksum": hex::encode(&metadata.checksum),
+            "checksum": hex::encode(metadata.checksum),
         });
         if let Err(e) = fs::write(&metadata_path, metadata_json.to_string()).await {
             tracing::warn!(error = %e, "Failed to write replication metadata");
@@ -562,10 +559,7 @@ impl ReplicaConnection {
 
         // Return error to break replication loop and trigger reconnection
         // On restart, the checkpoint will be loaded via RocksStore::load_staged_checkpoint()
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "checkpoint_received_restart_required",
-        ));
+        Err(io::Error::other("checkpoint_received_restart_required"))
     }
 
     /// Stream replication data from primary.
@@ -658,11 +652,8 @@ impl ReplicaConnection {
         let line = line.trim();
         if line == "+OK" {
             Ok(())
-        } else if line.starts_with("-") {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("error response: {}", &line[1..]),
-            ))
+        } else if let Some(rest) = line.strip_prefix('-') {
+            Err(io::Error::other(format!("error response: {}", rest)))
         } else {
             Err(io::Error::new(
                 io::ErrorKind::InvalidData,

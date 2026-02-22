@@ -3,6 +3,8 @@
 //! Extracts the repeated "start server with security, authenticate admin,
 //! create user, authenticate user" setup flow.
 
+#![allow(dead_code)]
+
 use frogdb_protocol::Response;
 
 use super::test_server::{TestClient, TestServer};

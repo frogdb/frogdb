@@ -7,8 +7,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    braced, bracketed, parse_macro_input, punctuated::Punctuated, DeriveInput, Expr, Ident, LitStr,
-    Token, Type,
+    DeriveInput, Expr, Ident, LitStr, Token, Type, braced, bracketed, parse_macro_input,
+    punctuated::Punctuated,
 };
 
 /// Derive macro for metric label enums.
@@ -121,16 +121,14 @@ impl syn::parse::Parse for MetricsInput {
             let attrs = syn::Attribute::parse_outer(input)?;
             let mut doc = None;
             for attr in &attrs {
-                if attr.path().is_ident("doc") {
-                    if let syn::Meta::NameValue(nv) = &attr.meta {
-                        if let Expr::Lit(syn::ExprLit {
-                            lit: syn::Lit::Str(s),
-                            ..
-                        }) = &nv.value
-                        {
-                            doc = Some(s.value().trim().to_string());
-                        }
-                    }
+                if attr.path().is_ident("doc")
+                    && let syn::Meta::NameValue(nv) = &attr.meta
+                    && let Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) = &nv.value
+                {
+                    doc = Some(s.value().trim().to_string());
                 }
             }
 

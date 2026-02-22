@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use frogdb_server::{Config, Server};
-use frogdb_telemetry::testing::{fetch_metrics, MetricsDelta, MetricsSnapshot};
+use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
 use futures::{SinkExt, StreamExt};
 use redis_protocol::codec::Resp2;
 use redis_protocol::resp2::types::BytesFrame;
@@ -527,17 +527,17 @@ async fn test_ts_info() {
             let mut found_retention = false;
             for chunk in arr.chunks(2) {
                 if let Response::Bulk(Some(key)) = &chunk[0] {
-                    if &**key == b"totalSamples" {
-                        if let Response::Integer(val) = &chunk[1] {
-                            assert_eq!(*val, 5);
-                            found_samples = true;
-                        }
+                    if &**key == b"totalSamples"
+                        && let Response::Integer(val) = &chunk[1]
+                    {
+                        assert_eq!(*val, 5);
+                        found_samples = true;
                     }
-                    if &**key == b"retentionTime" {
-                        if let Response::Integer(val) = &chunk[1] {
-                            assert_eq!(*val, 86400000);
-                            found_retention = true;
-                        }
+                    if &**key == b"retentionTime"
+                        && let Response::Integer(val) = &chunk[1]
+                    {
+                        assert_eq!(*val, 86400000);
+                        found_retention = true;
                     }
                 }
             }
@@ -575,13 +575,12 @@ async fn test_ts_alter() {
         Response::Array(arr) => {
             let mut found_retention = false;
             for chunk in arr.chunks(2) {
-                if let Response::Bulk(Some(key)) = &chunk[0] {
-                    if &**key == b"retentionTime" {
-                        if let Response::Integer(val) = &chunk[1] {
-                            assert_eq!(*val, 3600000);
-                            found_retention = true;
-                        }
-                    }
+                if let Response::Bulk(Some(key)) = &chunk[0]
+                    && &**key == b"retentionTime"
+                    && let Response::Integer(val) = &chunk[1]
+                {
+                    assert_eq!(*val, 3600000);
+                    found_retention = true;
                 }
             }
             assert!(found_retention, "Should find retention in INFO");

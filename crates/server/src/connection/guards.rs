@@ -10,12 +10,12 @@
 //! - `validate_cluster_slots` - Slot ownership validation for cluster mode
 
 use bytes::Bytes;
-use frogdb_core::{slot_for_key, CommandFlags, ConnectionLevelOp, ExecutionStrategy};
+use frogdb_core::{CommandFlags, ConnectionLevelOp, ExecutionStrategy, slot_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
 use tracing::warn;
 
-use crate::connection::util::extract_subcommand;
 use crate::connection::ConnectionHandler;
+use crate::connection::util::extract_subcommand;
 
 impl ConnectionHandler {
     /// Check if a command is a blocking command.
@@ -63,6 +63,7 @@ impl ConnectionHandler {
     ///
     /// Returns `Ok(())` if access is granted, or `Err(Response)` with NOPERM error
     /// if any channel is denied.
+    #[allow(clippy::result_large_err)]
     pub(crate) fn validate_channel_access(&self, channels: &[Bytes]) -> Result<(), Response> {
         let Some(user) = self.state.auth.user() else {
             return Ok(());
@@ -78,7 +79,7 @@ impl ConnectionHandler {
                     &channel_str,
                 );
                 return Err(Response::error(
-                    "NOPERM this user has no permissions to access one of the channels used as arguments"
+                    "NOPERM this user has no permissions to access one of the channels used as arguments",
                 ));
             }
         }
@@ -102,14 +103,14 @@ impl ConnectionHandler {
         }
 
         // Block admin commands on regular port when admin port is enabled
-        if self.admin_enabled && !self.is_admin {
-            if let Some(cmd_info) = self.registry.get(cmd_name) {
-                if cmd_info.flags().contains(CommandFlags::ADMIN) {
-                    return Some(Response::error(
-                        "NOADMIN Admin commands are disabled on this port. Use the admin port.",
-                    ));
-                }
-            }
+        if self.admin_enabled
+            && !self.is_admin
+            && let Some(cmd_info) = self.registry.get(cmd_name)
+            && cmd_info.flags().contains(CommandFlags::ADMIN)
+        {
+            return Some(Response::error(
+                "NOADMIN Admin commands are disabled on this port. Use the admin port.",
+            ));
         }
 
         // Check command ACL permission

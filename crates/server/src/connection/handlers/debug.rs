@@ -49,7 +49,7 @@ impl ConnectionHandler {
         match &self.shared_tracer {
             Some(tracer) => {
                 let status = tracer.get_status();
-                let lines = vec![
+                let lines = [
                     format!("enabled:{}", if status.enabled { "yes" } else { "no" }),
                     format!("sampling_rate:{}", status.sampling_rate),
                     format!("otlp_endpoint:{}", status.otlp_endpoint),

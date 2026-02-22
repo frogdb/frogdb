@@ -275,7 +275,7 @@ impl Decoder for ReplicationFrameCodec {
                     }
 
                     // Check magic
-                    if &src[0..4] != FRAME_MAGIC {
+                    if src[0..4] != FRAME_MAGIC {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             "invalid frame magic",

@@ -59,11 +59,14 @@ fn metrics_registry_is_populated() {
     use frogdb_telemetry::METRICS_COUNT;
 
     // We should have a reasonable number of metrics defined
-    assert!(
-        METRICS_COUNT > 40,
-        "Expected at least 40 metrics, found {}",
-        METRICS_COUNT
-    );
+    #[allow(clippy::assertions_on_constants)]
+    {
+        assert!(
+            METRICS_COUNT > 40,
+            "Expected at least 40 metrics, found {}",
+            METRICS_COUNT
+        );
+    }
     assert_eq!(ALL_METRICS.len(), METRICS_COUNT);
 
     // Each metric should have a non-empty name and valid type

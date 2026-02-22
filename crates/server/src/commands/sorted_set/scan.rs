@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use frogdb_core::{impl_keys_first, Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
 use crate::commands::utils::{format_float, parse_usize};
@@ -84,10 +84,10 @@ impl Command for ZscanCommand {
             }
 
             // Apply pattern match if specified
-            if let Some(pattern) = match_pattern {
-                if !simple_glob_match(pattern, &member) {
-                    continue;
-                }
+            if let Some(pattern) = match_pattern
+                && !simple_glob_match(pattern, &member)
+            {
+                continue;
             }
 
             result.push(Response::bulk(member));

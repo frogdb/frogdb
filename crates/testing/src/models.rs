@@ -223,11 +223,7 @@ impl Model for KVModel {
                 } else {
                     // CAS fails - state unchanged, result should indicate failure
                     let is_fail = result.is_some_and(|r| r.as_ref() == b"FAIL");
-                    if is_fail {
-                        Some(state.clone())
-                    } else {
-                        None
-                    }
+                    if is_fail { Some(state.clone()) } else { None }
                 }
             }
             "mget" => {
@@ -470,7 +466,9 @@ mod tests {
 
     #[test]
     fn test_register_cas() {
-        let state = RegisterState { value: Some(Bytes::from("old")) };
+        let state = RegisterState {
+            value: Some(Bytes::from("old")),
+        };
 
         // CAS with correct expected value should succeed
         let new_state = RegisterModel::step(

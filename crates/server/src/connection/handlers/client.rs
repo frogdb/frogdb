@@ -220,10 +220,10 @@ impl ConnectionHandler {
         let mut output = String::new();
         for info in clients {
             // Apply type filter
-            if let Some(ft) = filter_type {
-                if info.client_type() != ft {
-                    continue;
-                }
+            if let Some(ft) = filter_type
+                && info.client_type() != ft
+            {
+                continue;
             }
 
             output.push_str(&info.to_client_list_entry());

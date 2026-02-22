@@ -234,12 +234,16 @@ mod tests {
         let user = create_test_user(false, false, false);
 
         assert!(checker.check_command(&user, "GET", None).is_allowed());
-        assert!(checker
-            .check_key_access(&user, b"any:key", KeyAccessType::Read)
-            .is_allowed());
-        assert!(checker
-            .check_channel_access(&user, b"any:channel")
-            .is_allowed());
+        assert!(
+            checker
+                .check_key_access(&user, b"any:key", KeyAccessType::Read)
+                .is_allowed()
+        );
+        assert!(
+            checker
+                .check_channel_access(&user, b"any:channel")
+                .is_allowed()
+        );
         assert!(!checker.requires_auth());
     }
 
@@ -250,12 +254,16 @@ mod tests {
 
         assert!(checker.check_command(&user, "GET", None).is_allowed());
         assert!(checker.check_command(&user, "FLUSHALL", None).is_allowed());
-        assert!(checker
-            .check_key_access(&user, b"any:key", KeyAccessType::ReadWrite)
-            .is_allowed());
-        assert!(checker
-            .check_channel_access(&user, b"any:channel")
-            .is_allowed());
+        assert!(
+            checker
+                .check_key_access(&user, b"any:key", KeyAccessType::ReadWrite)
+                .is_allowed()
+        );
+        assert!(
+            checker
+                .check_channel_access(&user, b"any:channel")
+                .is_allowed()
+        );
         assert!(checker.requires_auth());
     }
 
@@ -277,9 +285,11 @@ mod tests {
         ));
 
         // Allowed keys
-        assert!(checker
-            .check_key_access(&user, b"user:123", KeyAccessType::Read)
-            .is_allowed());
+        assert!(
+            checker
+                .check_key_access(&user, b"user:123", KeyAccessType::Read)
+                .is_allowed()
+        );
 
         // Denied keys
         let result = checker.check_key_access(&user, b"admin:123", KeyAccessType::Read);
@@ -290,9 +300,11 @@ mod tests {
         ));
 
         // Allowed channels
-        assert!(checker
-            .check_channel_access(&user, b"chat:general")
-            .is_allowed());
+        assert!(
+            checker
+                .check_channel_access(&user, b"chat:general")
+                .is_allowed()
+        );
 
         // Denied channels
         let result = checker.check_channel_access(&user, b"private:123");

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::rocks::RocksStore;
-use super::serialization::{deserialize, SerializationError};
+use super::serialization::{SerializationError, deserialize};
 use crate::noop::ExpiryIndex;
 use crate::store::HashMapStore;
 
@@ -62,11 +62,11 @@ pub fn recover_shard(
         match deserialize(&value) {
             Ok((val, metadata)) => {
                 // Check if key is expired
-                if let Some(expires_at) = metadata.expires_at {
-                    if expires_at <= now {
-                        stats.keys_expired_skipped += 1;
-                        continue;
-                    }
+                if let Some(expires_at) = metadata.expires_at
+                    && expires_at <= now
+                {
+                    stats.keys_expired_skipped += 1;
+                    continue;
                 }
 
                 let key_bytes = Bytes::copy_from_slice(&key);

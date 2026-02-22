@@ -6,9 +6,9 @@
 use bytes::Bytes;
 use frogdb_debug::DebugState;
 use frogdb_telemetry::{
+    HealthChecker, LatencyBandTracker, MetricsConfig, PrometheusRecorder, StatusCollector,
     handle_health_live, handle_health_ready, handle_metrics, handle_status_json,
-    http_handlers::not_found, HealthChecker, LatencyBandTracker, MetricsConfig, PrometheusRecorder,
-    StatusCollector,
+    http_handlers::not_found,
 };
 use http_body_util::Full;
 use hyper::body::Incoming;
