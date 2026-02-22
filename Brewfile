@@ -23,3 +23,6 @@ cask "chromedriver"      # WebDriver for browser integration tests
 
 # Cross-compilation
 brew "zig"               # Cross-compiler toolchain (used by cargo-zigbuild)
+
+# Optional: System RocksDB for faster builds (see `just build-fast`)
+brew "rocksdb"

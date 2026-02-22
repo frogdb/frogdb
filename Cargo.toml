@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/protocol",
     "crates/core",
-    "crates/debug",
     "crates/server",
     "crates/telemetry",
     "crates/metrics-derive",
@@ -79,7 +78,7 @@ shuttle = { version = "0.8" }
 turmoil = { version = "0.6" }
 
 # Persistence
-rocksdb = { version = "0.22", features = ["multi-threaded-cf"] }
+rocksdb = { version = "0.24", default-features = false, features = ["multi-threaded-cf", "lz4", "snappy", "zstd"] }
 tempfile = "3"
 
 # Lua scripting
@@ -93,7 +92,6 @@ jsonpath-rust = "0.7"
 # Internal crates
 frogdb-protocol = { path = "crates/protocol" }
 frogdb-core = { path = "crates/core" }
-frogdb-debug = { path = "crates/debug" }
 frogdb-telemetry = { path = "crates/telemetry" }
 frogdb-metrics-derive = { path = "crates/metrics-derive" }
 frogdb-testing = { path = "crates/testing" }

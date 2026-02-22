@@ -1,6 +1,6 @@
 //! Build workflow definition (build.yml).
 
-use gh_workflow::{Event, Expression, Job, Level, Permissions, PullRequest, Push, Step, Workflow};
+use gh_workflow::{Event, Expression, Job, Level, Permissions, Step, Workflow, WorkflowDispatch};
 
 use crate::helpers::{
     cargo_cache_matrix, checkout, docker_build_push_with_cache, docker_login_ghcr, docker_metadata,
@@ -11,9 +11,7 @@ use crate::helpers::{
 /// Creates the build workflow.
 pub fn build_workflow() -> Workflow {
     Workflow::new("Build")
-        .on(Event::default()
-            .push(Push::default().add_branch("main"))
-            .pull_request(PullRequest::default().add_branch("main")))
+        .on(Event::default().workflow_dispatch(WorkflowDispatch::default()))
         .add_env(("CARGO_TERM_COLOR", "always"))
         .add_env(("REGISTRY", "ghcr.io"))
         .add_env(("IMAGE_NAME", "${{ github.repository }}"))

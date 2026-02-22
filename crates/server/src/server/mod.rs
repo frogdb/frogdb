@@ -454,11 +454,26 @@ impl Server {
             network_factory.register_node(node_id, cluster_bus_addr);
 
             // Ensure this node is in initial_members
+<<<<<<< HEAD
             initial_members
                 .entry(node_id)
                 .or_insert_with(|| openraft::BasicNode {
                     addr: cluster_bus_addr.to_string(),
                 });
+||||||| parent of 670778b (more fixing stuff?)
+            if !initial_members.contains_key(&node_id) {
+                initial_members.insert(
+                    node_id,
+                    openraft::BasicNode {
+                        addr: cluster_bus_addr.to_string(),
+                    },
+                );
+            }
+=======
+            initial_members.entry(node_id).or_insert_with(|| openraft::BasicNode {
+                addr: cluster_bus_addr.to_string(),
+            });
+>>>>>>> 670778b (more fixing stuff?)
 
             // Determine if this node should bootstrap (lowest node_id)
             let should_bootstrap = initial_members.keys().next().copied() == Some(node_id);

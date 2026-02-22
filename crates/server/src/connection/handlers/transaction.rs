@@ -10,16 +10,31 @@
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
+<<<<<<< HEAD
 use frogdb_core::{ShardMessage, TransactionResult, shard_for_key};
+||||||| parent of 670778b (more fixing stuff?)
+use frogdb_core::{shard_for_key, KeyAccessType, ShardMessage, TransactionResult};
+=======
+use frogdb_core::{shard_for_key, ShardMessage, TransactionResult};
+>>>>>>> 670778b (more fixing stuff?)
 use frogdb_protocol::{ParsedCommand, Response};
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::connection::state::TransactionTarget;
+<<<<<<< HEAD
 use crate::connection::{
     ConnectionHandler, TransactionState, extract_subcommand, key_access_type_for_flags,
 };
+||||||| parent of 670778b (more fixing stuff?)
+use crate::connection::{
+    extract_subcommand, key_access_type_for_flags, ConnectionHandler, TransactionState,
+};
+=======
+use crate::connection::util::key_access_type_for_flags;
+use crate::connection::{extract_subcommand, ConnectionHandler, TransactionState};
+>>>>>>> 670778b (more fixing stuff?)
 
 impl ConnectionHandler {
     /// Handle MULTI command - start a transaction.

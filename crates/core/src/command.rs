@@ -19,7 +19,13 @@ use crate::store::{Store, ValueType};
 ///
 /// This replaces string-based routing decisions with explicit, type-safe
 /// declarations of execution patterns.
+<<<<<<< HEAD
 #[derive(Debug, Clone, Default, PartialEq)]
+||||||| parent of 670778b (more fixing stuff?)
+#[derive(Debug, Clone, PartialEq)]
+=======
+#[derive(Debug, Clone, PartialEq, Default)]
+>>>>>>> 670778b (more fixing stuff?)
 pub enum ExecutionStrategy {
     /// Standard: route to shard based on key, execute, return response.
     /// This is the default for most commands.
@@ -76,6 +82,17 @@ pub enum ServerWideOp {
     Shutdown,
 }
 
+<<<<<<< HEAD
+||||||| parent of 670778b (more fixing stuff?)
+impl Default for ExecutionStrategy {
+    fn default() -> Self {
+        ExecutionStrategy::Standard
+    }
+}
+
+=======
+
+>>>>>>> 670778b (more fixing stuff?)
 /// Operations handled at the connection level (not routed to shards).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionLevelOp {

@@ -109,10 +109,20 @@ impl ClusterState {
     /// This bypasses Raft consensus and should only be used during node startup.
     pub fn add_node(&self, node: NodeInfo) {
         let mut inner = self.inner.write();
+<<<<<<< HEAD
         let node_id = node.id;
         let node_addr = node.addr;
         inner.nodes.entry(node.id).or_insert_with(|| {
             tracing::info!(node_id = node_id, addr = %node_addr, "Adding node to local cluster state");
+||||||| parent of 670778b (more fixing stuff?)
+        if !inner.nodes.contains_key(&node.id) {
+            tracing::info!(node_id = node.id, addr = %node.addr, "Adding node to local cluster state");
+            inner.nodes.insert(node.id, node);
+        }
+=======
+        inner.nodes.entry(node.id).or_insert_with(|| {
+            tracing::info!(node_id = node.id, addr = %node.addr, "Adding node to local cluster state");
+>>>>>>> 670778b (more fixing stuff?)
             node
         });
     }

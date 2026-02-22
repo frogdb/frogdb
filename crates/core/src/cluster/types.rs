@@ -33,7 +33,13 @@ impl openraft::RaftTypeConfig for TypeConfig {
 }
 
 /// Role of a node in the cluster.
+<<<<<<< HEAD
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+||||||| parent of 670778b (more fixing stuff?)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+=======
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+>>>>>>> 670778b (more fixing stuff?)
 pub enum NodeRole {
     /// Primary node - handles reads and writes for its slots.
     #[default]

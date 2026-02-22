@@ -72,5 +72,8 @@ Thumbs.db
 # Proptest regression files
 *.proptest-regressions
 
+# direnv (used for system RocksDB env vars)
+.envrc
+
 # Insta snapshot testing (pending snapshots)
 *.snap.new

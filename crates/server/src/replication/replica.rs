@@ -61,7 +61,14 @@ pub struct ReplicaConnection {
     stream: TcpStream,
 
     /// Primary address
+<<<<<<< HEAD
     _primary_addr: SocketAddr,
+||||||| parent of 670778b (more fixing stuff?)
+    primary_addr: SocketAddr,
+=======
+    #[allow(dead_code)]
+    primary_addr: SocketAddr,
+>>>>>>> 670778b (more fixing stuff?)
 
     /// Replication state
     state: Arc<RwLock<ReplicationState>>,
@@ -367,9 +374,24 @@ impl ReplicaConnection {
             tracing::info!("Partial sync (CONTINUE) initiated");
 
             Ok(SyncType::PartialSync)
+<<<<<<< HEAD
         } else if let Some(rest) = line.strip_prefix('-') {
+||||||| parent of 670778b (more fixing stuff?)
+        } else if line.starts_with("-") {
+=======
+        } else if let Some(stripped) = line.strip_prefix("-") {
+>>>>>>> 670778b (more fixing stuff?)
             // Error response
+<<<<<<< HEAD
             Err(io::Error::other(format!("PSYNC error: {}", rest)))
+||||||| parent of 670778b (more fixing stuff?)
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("PSYNC error: {}", &line[1..]),
+            ))
+=======
+            Err(io::Error::other(format!("PSYNC error: {}", stripped)))
+>>>>>>> 670778b (more fixing stuff?)
         } else {
             Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -652,8 +674,19 @@ impl ReplicaConnection {
         let line = line.trim();
         if line == "+OK" {
             Ok(())
+<<<<<<< HEAD
         } else if let Some(rest) = line.strip_prefix('-') {
             Err(io::Error::other(format!("error response: {}", rest)))
+||||||| parent of 670778b (more fixing stuff?)
+        } else if line.starts_with("-") {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("error response: {}", &line[1..]),
+            ))
+=======
+        } else if let Some(stripped) = line.strip_prefix("-") {
+            Err(io::Error::other(format!("error response: {}", stripped)))
+>>>>>>> 670778b (more fixing stuff?)
         } else {
             Err(io::Error::new(
                 io::ErrorKind::InvalidData,

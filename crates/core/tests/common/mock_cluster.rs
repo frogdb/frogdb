@@ -30,6 +30,7 @@ impl Value {
 /// NOT atomic across shards.
 #[allow(clippy::type_complexity)]
 pub struct TestCluster {
+    #[allow(clippy::type_complexity)]
     shards: Vec<Arc<Mutex<HashMap<Vec<u8>, Value>>>>,
     num_shards: usize,
 }

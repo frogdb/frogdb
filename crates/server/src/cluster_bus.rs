@@ -7,6 +7,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+<<<<<<< HEAD
 use frogdb_core::cluster::ClusterRaft;
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::{handle_rpc_request, parse_rpc_message, send_rpc_response};
@@ -15,6 +16,17 @@ use crate::net::tcp_listener_reusable;
 #[cfg(not(feature = "turmoil"))]
 use tracing::warn;
 use tracing::{debug, error, info};
+||||||| parent of 670778b (more fixing stuff?)
+use frogdb_core::cluster::{handle_rpc_request, parse_rpc_message, send_rpc_response, ClusterRaft};
+use tokio::net::TcpStream;
+
+use crate::net::tcp_listener_reusable;
+use tracing::{debug, error, info, warn};
+=======
+use frogdb_core::cluster::{handle_rpc_request, parse_rpc_message, send_rpc_response, ClusterRaft};
+use tokio::net::{TcpListener, TcpStream};
+use tracing::{debug, error, info, warn};
+>>>>>>> 670778b (more fixing stuff?)
 
 /// Run the cluster bus TCP server.
 ///
@@ -30,7 +42,7 @@ use tracing::{debug, error, info};
 ///
 /// This function runs indefinitely and only returns on error.
 pub async fn run(addr: SocketAddr, raft: Arc<ClusterRaft>) -> std::io::Result<()> {
-    let listener = tcp_listener_reusable(addr).await?;
+    let listener = TcpListener::bind(addr).await?;
     info!(%addr, "Cluster bus listening");
 
     loop {
@@ -103,6 +115,7 @@ async fn handle_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::tcp_listener_reusable;
 
     #[tokio::test]
     async fn test_cluster_bus_bind_fails_on_invalid_addr() {
@@ -111,7 +124,7 @@ mod tests {
 
         // We can't easily test run() without a real Raft instance,
         // but we can verify tcp_listener_reusable behavior
-        let result = tcp_listener_reusable(addr).await;
+        let result: std::io::Result<crate::net::TcpListener> = tcp_listener_reusable(addr).await;
         // This should fail due to permission denied or address in use
         assert!(result.is_err() || cfg!(target_os = "macos")); // macOS sometimes allows this
     }

@@ -739,18 +739,16 @@ impl ConnectionHandler {
 
         let mut result = Vec::new();
         for lib in libraries {
-            let mut lib_info = Vec::new();
-
-            // library_name
-            lib_info.push(Response::bulk(Bytes::from_static(b"library_name")));
-            lib_info.push(Response::bulk(Bytes::from(lib.name.clone())));
-
-            // engine
-            lib_info.push(Response::bulk(Bytes::from_static(b"engine")));
-            lib_info.push(Response::bulk(Bytes::from(lib.engine.clone())));
-
-            // functions
-            lib_info.push(Response::bulk(Bytes::from_static(b"functions")));
+            let mut lib_info = vec![
+                // library_name
+                Response::bulk(Bytes::from_static(b"library_name")),
+                Response::bulk(Bytes::from(lib.name.clone())),
+                // engine
+                Response::bulk(Bytes::from_static(b"engine")),
+                Response::bulk(Bytes::from(lib.engine.clone())),
+                // functions
+                Response::bulk(Bytes::from_static(b"functions")),
+            ];
             let mut funcs = Vec::new();
             for func in lib.functions.values() {
                 let mut func_info = Vec::new();
@@ -854,13 +852,14 @@ impl ConnectionHandler {
         // running_script
         result.push(Response::bulk(Bytes::from_static(b"running_script")));
         if let Some(ref running) = stats.running_function {
-            let mut script_info = Vec::new();
-            script_info.push(Response::bulk(Bytes::from_static(b"name")));
-            script_info.push(Response::bulk(Bytes::from(running.name.clone())));
-            script_info.push(Response::bulk(Bytes::from_static(b"command")));
-            script_info.push(Response::bulk(Bytes::from_static(b"fcall")));
-            script_info.push(Response::bulk(Bytes::from_static(b"duration_ms")));
-            script_info.push(Response::Integer(running.duration_ms as i64));
+            let script_info = vec![
+                Response::bulk(Bytes::from_static(b"name")),
+                Response::bulk(Bytes::from(running.name.clone())),
+                Response::bulk(Bytes::from_static(b"command")),
+                Response::bulk(Bytes::from_static(b"fcall")),
+                Response::bulk(Bytes::from_static(b"duration_ms")),
+                Response::Integer(running.duration_ms as i64),
+            ];
             result.push(Response::Array(script_info));
         } else {
             result.push(Response::Null);
@@ -868,14 +867,16 @@ impl ConnectionHandler {
 
         // engines
         result.push(Response::bulk(Bytes::from_static(b"engines")));
-        let mut engines = Vec::new();
-        let mut lua_info = Vec::new();
-        lua_info.push(Response::bulk(Bytes::from_static(b"libraries_count")));
-        lua_info.push(Response::Integer(stats.library_count as i64));
-        lua_info.push(Response::bulk(Bytes::from_static(b"functions_count")));
-        lua_info.push(Response::Integer(stats.function_count as i64));
-        engines.push(Response::bulk(Bytes::from_static(b"LUA")));
-        engines.push(Response::Array(lua_info));
+        let lua_info = vec![
+            Response::bulk(Bytes::from_static(b"libraries_count")),
+            Response::Integer(stats.library_count as i64),
+            Response::bulk(Bytes::from_static(b"functions_count")),
+            Response::Integer(stats.function_count as i64),
+        ];
+        let engines = vec![
+            Response::bulk(Bytes::from_static(b"LUA")),
+            Response::Array(lua_info),
+        ];
         result.push(Response::Array(engines));
 
         Response::Array(result)

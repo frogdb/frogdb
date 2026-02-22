@@ -4,9 +4,8 @@
 //! - test.yml (lint, unit tests, shuttle tests, turmoil tests, gen checks)
 //! - build.yml (multi-arch binary builds, Docker images)
 //! - release.yml (release binaries, Docker, Helm chart, GitHub release)
-//! - deploy.yml (Terraform + Helm deployment to cloud providers)
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -74,12 +73,6 @@ fn generate_files(output_dir: &Path) -> Result<()> {
     fs::write(&release_path, &release_yaml)?;
     println!("Generated: {}", release_path.display());
 
-    // Generate deploy.yml (using custom types since gh-workflow doesn't support options)
-    let deploy_yaml = generate_deploy_workflow_yaml()?;
-    let deploy_path = output_dir.join("deploy.yml");
-    fs::write(&deploy_path, &deploy_yaml)?;
-    println!("Generated: {}", deploy_path.display());
-
     println!("\nGitHub Actions workflow files generated successfully!");
     Ok(())
 }
@@ -105,13 +98,6 @@ fn check_files(output_dir: &Path) -> Result<()> {
     let release_yaml = generate_workflow_yaml(workflows::release::release_workflow())?;
     let release_path = output_dir.join("release.yml");
     if check_file(&release_path, &release_yaml)? {
-        has_diff = true;
-    }
-
-    // Check deploy.yml (using custom types since gh-workflow doesn't support options)
-    let deploy_yaml = generate_deploy_workflow_yaml()?;
-    let deploy_path = output_dir.join("deploy.yml");
-    if check_file(&deploy_path, &deploy_yaml)? {
         has_diff = true;
     }
 
@@ -144,15 +130,6 @@ fn generate_workflow_yaml(workflow: gh_workflow::Workflow) -> Result<String> {
     let yaml = workflow
         .to_string()
         .map_err(|e| anyhow::anyhow!("Failed to serialize workflow to YAML: {:?}", e))?;
-
-    Ok(format!("{GENERATED_HEADER}\n\n{yaml}"))
-}
-
-fn generate_deploy_workflow_yaml() -> Result<String> {
-    let workflow = workflows::deploy::deploy_workflow();
-    let yaml = workflow
-        .to_string()
-        .context("Failed to serialize deploy workflow to YAML")?;
 
     Ok(format!("{GENERATED_HEADER}\n\n{yaml}"))
 }

@@ -178,7 +178,13 @@ fn parse_quoted_value(s: &str) -> (String, &str) {
     let mut prev_backslash = false;
     let mut end_pos = s.len();
 
+<<<<<<< HEAD
     for (i, c) in chars {
+||||||| parent of 670778b (more fixing stuff?)
+    while let Some((i, c)) = chars.next() {
+=======
+    for (i, c) in chars.by_ref() {
+>>>>>>> 670778b (more fixing stuff?)
         if prev_backslash {
             // Handle escape sequences
             match c {

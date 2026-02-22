@@ -150,7 +150,14 @@ impl MigrateArgs {
                 }
                 b"KEYS" => {
                     // All remaining arguments are keys
+<<<<<<< HEAD
                     for arg in args[(i + 1)..].iter() {
+||||||| parent of 670778b (more fixing stuff?)
+                    for j in (i + 1)..args.len() {
+                        keys.push(args[j].clone());
+=======
+                    for arg in args.iter().skip(i + 1) {
+>>>>>>> 670778b (more fixing stuff?)
                         keys.push(arg.clone());
                     }
                     break;
@@ -292,7 +299,17 @@ impl MigrateClient {
             Response::Simple(s) if s == "OK" => Ok(()),
             Response::Error(e) => {
                 let err_msg = String::from_utf8_lossy(&e).to_string();
+<<<<<<< HEAD
                 // If BUSYKEY and no REPLACE, that's expected (key exists)
+||||||| parent of 670778b (more fixing stuff?)
+                // If BUSYKEY and no REPLACE, that's expected (key exists)
+                if err_msg.contains("BUSYKEY") && !replace {
+                    Err(MigrateError::TargetError(err_msg))
+                } else {
+                    Err(MigrateError::TargetError(err_msg))
+                }
+=======
+>>>>>>> 670778b (more fixing stuff?)
                 Err(MigrateError::TargetError(err_msg))
             }
             _ => Err(MigrateError::ProtocolError(
