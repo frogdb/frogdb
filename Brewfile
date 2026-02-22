@@ -21,6 +21,9 @@ brew "samply"            # CPU profiler with UI
 # Browser testing
 cask "chromedriver"      # WebDriver for browser integration tests
 
+# Build dependencies
+brew "llvm"              # Provides libclang for bindgen (used by librocksdb-sys)
+
 # Cross-compilation
 brew "zig"               # Cross-compiler toolchain (used by cargo-zigbuild)
 
