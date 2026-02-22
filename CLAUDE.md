@@ -16,9 +16,7 @@ just fmt                # cargo fmt --all
 just fmt-check          # cargo fmt --all -- --check
 just lint               # cargo clippy --all-targets --all-features -- -D warnings
 just check              # fmt-check + lint + deny + test
-just test-shuttle       # Shuttle concurrency tests
-just test-turmoil       # Turmoil simulation tests
-just test-dst           # Both Shuttle + Turmoil
+just concurrency        # Shuttle + Turmoil concurrency tests
 ```
 
 ## Verification Before Completing Code Changes
@@ -38,11 +36,8 @@ just lint
 # 4. Run all tests
 just test
 
-# 5. Run Shuttle concurrency tests
-just test-shuttle
-
-# 6. Run Turmoil simulation tests
-just test-turmoil
+# 5. Run concurrency tests (Shuttle + Turmoil)
+just concurrency
 ```
 
 If any command fails, fix the issue and re-run all commands before considering the task done.

@@ -26,20 +26,10 @@ test-one name:
 proptest:
     cargo test proptest --all
 
-# Run concurrency tests (requires shuttle feature)
+# Run concurrency tests (Shuttle + Turmoil)
 concurrency:
     cargo test -p frogdb-core --features shuttle --test concurrency
-
-# Run Shuttle concurrency tests (alias for concurrency)
-test-shuttle:
-    cargo test -p frogdb-core --features shuttle --test concurrency
-
-# Run Turmoil simulation tests
-test-turmoil:
     cargo test -p frogdb-server --features turmoil --test simulation
-
-# Run all deterministic simulation tests (Shuttle + Turmoil)
-test-dst: test-shuttle test-turmoil
 
 # Run browser integration tests (requires chromedriver running on port 9515)
 test-browser:
