@@ -14,8 +14,15 @@ pkgs.mkShell {
     cargo-deny
     cargo-watch
 
+    # Cross-compilation
+    zig
+
     # Testing
     redis
+
+    # Jepsen testing
+    jdk
+    leiningen
 
     # Profiling
     cargo-flamegraph
