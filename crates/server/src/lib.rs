@@ -24,4 +24,4 @@ pub mod server;
 pub use admin::AdminServer;
 pub use config::Config;
 pub use runtime_config::ConfigManager;
-pub use server::{Server, register_commands};
+pub use server::{Server, ServerListeners, register_commands};

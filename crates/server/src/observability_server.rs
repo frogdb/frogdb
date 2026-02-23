@@ -6,9 +6,8 @@
 use bytes::Bytes;
 use frogdb_debug::DebugState;
 use frogdb_telemetry::{
-    HealthChecker, LatencyBandTracker, MetricsConfig, PrometheusRecorder, StatusCollector,
-    handle_health_live, handle_health_ready, handle_metrics, handle_status_json,
-    http_handlers::not_found,
+    HealthChecker, LatencyBandTracker, PrometheusRecorder, StatusCollector, handle_health_live,
+    handle_health_ready, handle_metrics, handle_status_json, http_handlers::not_found,
 };
 use http_body_util::Full;
 use hyper::body::Incoming;
@@ -22,12 +21,15 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info};
 
+use crate::config::MetricsConfig;
+
 /// HTTP server for observability endpoints.
 ///
 /// Composes telemetry handlers (/metrics, /health/*, /status/json)
 /// with debug handlers (/debug/*).
 pub struct ObservabilityServer {
     config: MetricsConfig,
+    listener: Option<TcpListener>,
     recorder: Arc<PrometheusRecorder>,
     health: HealthChecker,
     debug_state: Option<DebugState>,
@@ -37,6 +39,9 @@ pub struct ObservabilityServer {
 
 impl ObservabilityServer {
     /// Create a new observability server.
+    ///
+    /// Call `with_listener()` to provide a pre-bound listener. If none is
+    /// provided, `run()` will bind from the `MetricsConfig`.
     pub fn new(
         config: MetricsConfig,
         recorder: Arc<PrometheusRecorder>,
@@ -44,12 +49,19 @@ impl ObservabilityServer {
     ) -> Self {
         Self {
             config,
+            listener: None,
             recorder,
             health,
             debug_state: None,
             status_collector: None,
             band_tracker: None,
         }
+    }
+
+    /// Provide a pre-bound `TcpListener` so the port is never released.
+    pub fn with_listener(mut self, listener: TcpListener) -> Self {
+        self.listener = Some(listener);
+        self
     }
 
     /// Set the debug state for the debug web UI.
@@ -74,8 +86,11 @@ impl ObservabilityServer {
     ///
     /// This runs in a loop accepting connections until shutdown.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let addr: SocketAddr = self.config.bind_addr().parse()?;
-        let listener = TcpListener::bind(addr).await?;
+        let listener = match self.listener {
+            Some(l) => l,
+            None => TcpListener::bind(self.config.bind_addr().parse::<SocketAddr>()?).await?,
+        };
+        let addr = listener.local_addr()?;
 
         info!(addr = %addr, "Observability server listening");
 

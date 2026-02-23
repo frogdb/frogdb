@@ -1,145 +1,19 @@
 //! Integration tests for Redis Functions (FUNCTION, FCALL, FCALL_RO).
 
+mod common;
+
 use bytes::Bytes;
+use common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
-use frogdb_server::{Config, Server};
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
-use futures::{SinkExt, StreamExt};
-use redis_protocol::codec::Resp2;
-use redis_protocol::resp2::types::BytesFrame;
-use std::net::SocketAddr;
 use std::time::Duration;
-use tempfile::TempDir;
-use tokio::net::TcpStream;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
-use tokio::time::timeout;
-use tokio_util::codec::Framed;
 
-/// Helper struct for managing a test server.
-struct TestServer {
-    addr: SocketAddr,
-    metrics_addr: SocketAddr,
-    shutdown_tx: oneshot::Sender<()>,
-    handle: JoinHandle<()>,
-    #[allow(dead_code)]
-    temp_dir: TempDir,
-}
-
-impl TestServer {
-    /// Start a new test server on an available port.
-    async fn start() -> Self {
-        let temp_dir = TempDir::new().unwrap();
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-
-        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let metrics_addr = metrics_listener.local_addr().unwrap();
-        drop(metrics_listener);
-
-        let mut config = Config::default();
-        config.server.bind = "127.0.0.1".to_string();
-        config.server.port = addr.port();
-        config.server.num_shards = 1;
-        config.logging.level = "warn".to_string();
-        config.persistence.data_dir = temp_dir.path().to_path_buf();
-        config.metrics.bind = "127.0.0.1".to_string();
-        config.metrics.port = metrics_addr.port();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        let handle = tokio::spawn(async move {
-            let server = Server::new(config).await.unwrap();
-
-            tokio::select! {
-                result = server.run() => {
-                    if let Err(e) = result {
-                        eprintln!("Server error: {}", e);
-                    }
-                }
-                _ = shutdown_rx => {}
-            }
-        });
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        TestServer {
-            addr,
-            metrics_addr,
-            shutdown_tx,
-            handle,
-            temp_dir,
-        }
-    }
-
-    async fn connect(&self) -> TestClient {
-        let stream = TcpStream::connect(self.addr).await.unwrap();
-        let framed = Framed::new(stream, Resp2);
-        TestClient { framed }
-    }
-
-    async fn shutdown(self) {
-        let _ = self.shutdown_tx.send(());
-        let _ = self.handle.await;
-    }
-}
-
-struct TestClient {
-    framed: Framed<TcpStream, Resp2>,
-}
-
-impl TestClient {
-    async fn command(&mut self, args: &[&str]) -> Response {
-        let frame = BytesFrame::Array(
-            args.iter()
-                .map(|s| BytesFrame::BulkString(Bytes::from(s.to_string())))
-                .collect(),
-        );
-
-        self.framed.send(frame).await.unwrap();
-
-        let response_frame = timeout(Duration::from_secs(5), self.framed.next())
-            .await
-            .expect("timeout")
-            .expect("connection closed")
-            .expect("frame error");
-
-        frame_to_response(response_frame)
-    }
-
-    /// Send a command with raw Bytes arguments (for binary data like DUMP output).
-    async fn command_raw(&mut self, args: &[&Bytes]) -> Response {
-        let frame = BytesFrame::Array(
-            args.iter()
-                .map(|b| BytesFrame::BulkString((*b).clone()))
-                .collect(),
-        );
-
-        self.framed.send(frame).await.unwrap();
-
-        let response_frame = timeout(Duration::from_secs(5), self.framed.next())
-            .await
-            .expect("timeout")
-            .expect("connection closed")
-            .expect("frame error");
-
-        frame_to_response(response_frame)
-    }
-}
-
-fn frame_to_response(frame: BytesFrame) -> Response {
-    match frame {
-        BytesFrame::SimpleString(s) => Response::Simple(s),
-        BytesFrame::Error(e) => Response::Error(e.into_inner()),
-        BytesFrame::Integer(n) => Response::Integer(n),
-        BytesFrame::BulkString(b) => Response::Bulk(Some(b)),
-        BytesFrame::Null => Response::Bulk(None),
-        BytesFrame::Array(items) => {
-            Response::Array(items.into_iter().map(frame_to_response).collect())
-        }
-    }
+async fn start_server() -> TestServer {
+    TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await
 }
 
 // =============================================================================
@@ -149,11 +23,11 @@ fn frame_to_response(frame: BytesFrame) -> Response {
 /// Test loading a simple function library.
 #[tokio::test]
 async fn test_function_load_and_list() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Get baseline metrics
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // Load a function library
     let code = r#"#!lua name=mylib
@@ -176,7 +50,7 @@ end)
 
     // Verify metrics
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after).assert_counter_increased_gte(
         "frogdb_commands_total",
         &[("command", "FUNCTION")],
@@ -193,7 +67,7 @@ end)
 /// Test calling a function.
 #[tokio::test]
 async fn test_fcall_simple() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Load a function library
@@ -206,7 +80,7 @@ end)
     client.command(&["FUNCTION", "LOAD", code]).await;
 
     // Get baseline metrics (after LOAD)
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // Call the function
     let response = client.command(&["FCALL", "add", "0", "5", "3"]).await;
@@ -214,7 +88,7 @@ end)
 
     // Verify metrics
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after).assert_counter_increased(
         "frogdb_commands_total",
         &[("command", "FCALL")],
@@ -227,7 +101,7 @@ end)
 /// Test calling a function with keys.
 #[tokio::test]
 async fn test_fcall_with_keys() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Set up some data
@@ -243,7 +117,7 @@ end)
     client.command(&["FUNCTION", "LOAD", code]).await;
 
     // Get baseline metrics (after LOAD)
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // Call the function with a key
     let response = client.command(&["FCALL", "getkey", "1", "mykey"]).await;
@@ -251,7 +125,7 @@ end)
 
     // Verify metrics
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after).assert_counter_increased(
         "frogdb_commands_total",
         &[("command", "FCALL")],
@@ -268,7 +142,7 @@ end)
 /// Test FCALL_RO with a read-only function.
 #[tokio::test]
 async fn test_fcall_ro_read_only() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Set up some data
@@ -288,7 +162,7 @@ redis.register_function{
     client.command(&["FUNCTION", "LOAD", code]).await;
 
     // Get baseline metrics (after LOAD)
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // FCALL_RO should work with read-only function
     let response = client
@@ -298,7 +172,7 @@ redis.register_function{
 
     // Verify metrics
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after).assert_counter_increased(
         "frogdb_commands_total",
         &[("command", "FCALL_RO")],
@@ -311,7 +185,7 @@ redis.register_function{
 /// Test FCALL_RO error when function doesn't have no-writes flag.
 #[tokio::test]
 async fn test_fcall_ro_rejects_write_function() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Load a function library WITHOUT no-writes flag
@@ -324,7 +198,7 @@ end)
     client.command(&["FUNCTION", "LOAD", code]).await;
 
     // Get baseline metrics (after LOAD)
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // FCALL_RO should fail for functions without no-writes flag
     let response = client.command(&["FCALL_RO", "write_func", "0"]).await;
@@ -342,7 +216,7 @@ end)
 
     // Verify metrics - command error should still be tracked
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     // FCALL_RO was called but failed
     MetricsDelta::new(before, after).assert_counter_increased(
         "frogdb_commands_total",
@@ -360,7 +234,7 @@ end)
 /// Test FUNCTION DELETE.
 #[tokio::test]
 async fn test_function_delete() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Load a library
@@ -400,7 +274,7 @@ end)
 /// Test FUNCTION FLUSH.
 #[tokio::test]
 async fn test_function_flush() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Load a library
@@ -433,7 +307,7 @@ end)
 /// Test FUNCTION LOAD with REPLACE.
 #[tokio::test]
 async fn test_function_load_replace() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Load initial version
@@ -482,7 +356,7 @@ end)
 /// Test FUNCTION DUMP and RESTORE.
 #[tokio::test]
 async fn test_function_dump_restore() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Load a library
@@ -514,7 +388,7 @@ end)
         _ => panic!("Expected error after flush"),
     }
 
-    // Restore from dump
+    // Restore from dump (uses command_raw for binary data)
     let func = Bytes::from("FUNCTION");
     let restore = Bytes::from("RESTORE");
     let response = client.command_raw(&[&func, &restore, &dump_data]).await;
@@ -534,7 +408,7 @@ end)
 /// Test FUNCTION STATS.
 #[tokio::test]
 async fn test_function_stats() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Load a library
@@ -566,7 +440,7 @@ end)
 /// Test FUNCTION LIST with LIBRARYNAME filter.
 #[tokio::test]
 async fn test_function_list_with_pattern() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Load multiple libraries
@@ -614,7 +488,7 @@ redis.register_function('func3', function(keys, args) return 3 end)
 /// Test function with multiple functions in one library.
 #[tokio::test]
 async fn test_multiple_functions_per_library() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Load a library with multiple functions
@@ -646,7 +520,7 @@ redis.register_function('func_c', function(keys, args) return 'C' end)
 /// Test function not found error.
 #[tokio::test]
 async fn test_function_not_found() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Try to call non-existent function
@@ -669,7 +543,7 @@ async fn test_function_not_found() {
 /// Test invalid library code.
 #[tokio::test]
 async fn test_invalid_library_code() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Missing shebang
@@ -730,14 +604,13 @@ local x = 1
 /// Test FUNCTION HELP command.
 #[tokio::test]
 async fn test_function_help() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     let response = client.command(&["FUNCTION", "HELP"]).await;
     match response {
         Response::Array(arr) => {
             assert!(!arr.is_empty());
-            // Should contain help text mentioning various subcommands
         }
         _ => panic!("Expected array response from FUNCTION HELP"),
     }
@@ -752,7 +625,7 @@ async fn test_function_help() {
 /// Test FUNCTION KILL when no function is running.
 #[tokio::test]
 async fn test_function_kill_not_busy() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // FUNCTION KILL when nothing is running should return NOTBUSY
@@ -777,12 +650,10 @@ async fn test_function_kill_not_busy() {
 // =============================================================================
 
 /// Test that functions are loaded from persistence file on startup.
-///
-/// This test creates a functions.fdb file manually and verifies
-/// that the server loads it on startup.
 #[tokio::test]
 async fn test_function_persistence_across_restart() {
     use frogdb_core::{FunctionFlags, FunctionLibrary, FunctionRegistry, RegisteredFunction};
+    use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
 
@@ -806,128 +677,47 @@ async fn test_function_persistence_across_restart() {
         frogdb_core::save_to_file(&registry, &functions_file).unwrap();
     }
 
-    // Start server with persistence enabled
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-
-    let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let metrics_addr = metrics_listener.local_addr().unwrap();
-    drop(metrics_listener);
-
-    let mut config = Config::default();
-    config.server.bind = "127.0.0.1".to_string();
-    config.server.port = addr.port();
-    config.server.num_shards = 1;
-    config.logging.level = "warn".to_string();
-    config.persistence.enabled = true;
-    config.persistence.data_dir = temp_dir.path().to_path_buf();
-    config.metrics.bind = "127.0.0.1".to_string();
-    config.metrics.port = metrics_addr.port();
-
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-    let handle = tokio::spawn(async move {
-        let server = Server::new(config).await.unwrap();
-        tokio::select! {
-            result = server.run() => {
-                if let Err(e) = result {
-                    eprintln!("Server error: {}", e);
-                }
-            }
-            _ = shutdown_rx => {}
-        }
-    });
-
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
-    // Connect and verify function was loaded from persistence
-    let stream = TcpStream::connect(addr).await.unwrap();
-    let mut framed = Framed::new(stream, Resp2);
+    // Start server with persistence enabled using shared TestServer
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        persistence: true,
+        data_dir: Some(temp_dir.path().to_path_buf()),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
 
     // Call the persisted function
-    let frame = BytesFrame::Array(vec![
-        BytesFrame::BulkString(Bytes::from("FCALL")),
-        BytesFrame::BulkString(Bytes::from("persist_func")),
-        BytesFrame::BulkString(Bytes::from("0")),
-    ]);
-    framed.send(frame).await.unwrap();
-    let response = timeout(Duration::from_secs(5), framed.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        frame_to_response(response),
-        Response::Bulk(Some(Bytes::from("persisted")))
-    );
+    let response = client.command(&["FCALL", "persist_func", "0"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("persisted"))));
 
     // Also verify the library is listed
-    let frame = BytesFrame::Array(vec![
-        BytesFrame::BulkString(Bytes::from("FUNCTION")),
-        BytesFrame::BulkString(Bytes::from("LIST")),
-    ]);
-    framed.send(frame).await.unwrap();
-    let response = timeout(Duration::from_secs(5), framed.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    match frame_to_response(response) {
+    let response = client.command(&["FUNCTION", "LIST"]).await;
+    match response {
         Response::Array(arr) => {
             assert_eq!(arr.len(), 1, "Should have exactly one library loaded");
         }
         other => panic!("Expected array from FUNCTION LIST, got: {:?}", other),
     }
 
-    // Cleanup
-    drop(framed);
-    let _ = shutdown_tx.send(());
-    handle.abort();
-    let _ = handle.await;
+    server.shutdown().await;
 }
 
 /// Test that FUNCTION DELETE updates persistence file.
 #[tokio::test]
 async fn test_function_persistence_after_delete() {
+    use tempfile::TempDir;
+
     let temp_dir = TempDir::new().unwrap();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-
-    let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let metrics_addr = metrics_listener.local_addr().unwrap();
-    drop(metrics_listener);
-
-    let mut config = Config::default();
-    config.server.bind = "127.0.0.1".to_string();
-    config.server.port = addr.port();
-    config.server.num_shards = 1;
-    config.logging.level = "warn".to_string();
-    config.persistence.enabled = true;
-    config.persistence.data_dir = temp_dir.path().to_path_buf();
-    config.metrics.bind = "127.0.0.1".to_string();
-    config.metrics.port = metrics_addr.port();
-
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-    let handle = tokio::spawn(async move {
-        let server = Server::new(config).await.unwrap();
-        tokio::select! {
-            result = server.run() => {
-                if let Err(e) = result {
-                    eprintln!("Server error: {}", e);
-                }
-            }
-            _ = shutdown_rx => {}
-        }
-    });
-
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
-    let stream = TcpStream::connect(addr).await.unwrap();
-    let mut framed = Framed::new(stream, Resp2);
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        persistence: true,
+        data_dir: Some(temp_dir.path().to_path_buf()),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
 
     // Load a function
     let code = r#"#!lua name=deletelib
@@ -936,17 +726,7 @@ redis.register_function('delete_func', function(keys, args)
 end)
 "#;
 
-    let frame = BytesFrame::Array(vec![
-        BytesFrame::BulkString(Bytes::from("FUNCTION")),
-        BytesFrame::BulkString(Bytes::from("LOAD")),
-        BytesFrame::BulkString(Bytes::from(code)),
-    ]);
-    framed.send(frame).await.unwrap();
-    let _ = timeout(Duration::from_secs(5), framed.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+    client.command(&["FUNCTION", "LOAD", code]).await;
 
     // Verify file exists with content
     let functions_file = temp_dir.path().join("functions.fdb");
@@ -954,17 +734,7 @@ end)
     let file_size_after_load = std::fs::metadata(&functions_file).unwrap().len();
 
     // Delete the library
-    let frame = BytesFrame::Array(vec![
-        BytesFrame::BulkString(Bytes::from("FUNCTION")),
-        BytesFrame::BulkString(Bytes::from("DELETE")),
-        BytesFrame::BulkString(Bytes::from("deletelib")),
-    ]);
-    framed.send(frame).await.unwrap();
-    let _ = timeout(Duration::from_secs(5), framed.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+    client.command(&["FUNCTION", "DELETE", "deletelib"]).await;
 
     // Verify file size decreased (empty registry has smaller dump)
     let file_size_after_delete = std::fs::metadata(&functions_file).unwrap().len();
@@ -975,54 +745,24 @@ end)
         file_size_after_load
     );
 
-    // Cleanup
-    drop(framed);
-    let _ = shutdown_tx.send(());
-    handle.abort();
-    let _ = handle.await;
+    server.shutdown().await;
 }
 
 /// Test that FUNCTION FLUSH updates persistence file.
 #[tokio::test]
 async fn test_function_persistence_after_flush() {
+    use tempfile::TempDir;
+
     let temp_dir = TempDir::new().unwrap();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-
-    let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let metrics_addr = metrics_listener.local_addr().unwrap();
-    drop(metrics_listener);
-
-    let mut config = Config::default();
-    config.server.bind = "127.0.0.1".to_string();
-    config.server.port = addr.port();
-    config.server.num_shards = 1;
-    config.logging.level = "warn".to_string();
-    config.persistence.enabled = true;
-    config.persistence.data_dir = temp_dir.path().to_path_buf();
-    config.metrics.bind = "127.0.0.1".to_string();
-    config.metrics.port = metrics_addr.port();
-
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-    let handle = tokio::spawn(async move {
-        let server = Server::new(config).await.unwrap();
-        tokio::select! {
-            result = server.run() => {
-                if let Err(e) = result {
-                    eprintln!("Server error: {}", e);
-                }
-            }
-            _ = shutdown_rx => {}
-        }
-    });
-
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
-    let stream = TcpStream::connect(addr).await.unwrap();
-    let mut framed = Framed::new(stream, Resp2);
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        persistence: true,
+        data_dir: Some(temp_dir.path().to_path_buf()),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
 
     // Load a function
     let code = r#"#!lua name=flushlib
@@ -1031,17 +771,7 @@ redis.register_function('flush_func', function(keys, args)
 end)
 "#;
 
-    let frame = BytesFrame::Array(vec![
-        BytesFrame::BulkString(Bytes::from("FUNCTION")),
-        BytesFrame::BulkString(Bytes::from("LOAD")),
-        BytesFrame::BulkString(Bytes::from(code)),
-    ]);
-    framed.send(frame).await.unwrap();
-    let _ = timeout(Duration::from_secs(5), framed.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+    client.command(&["FUNCTION", "LOAD", code]).await;
 
     // Verify file exists with content
     let functions_file = temp_dir.path().join("functions.fdb");
@@ -1049,16 +779,7 @@ end)
     let file_size_after_load = std::fs::metadata(&functions_file).unwrap().len();
 
     // Flush all functions
-    let frame = BytesFrame::Array(vec![
-        BytesFrame::BulkString(Bytes::from("FUNCTION")),
-        BytesFrame::BulkString(Bytes::from("FLUSH")),
-    ]);
-    framed.send(frame).await.unwrap();
-    let _ = timeout(Duration::from_secs(5), framed.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+    client.command(&["FUNCTION", "FLUSH"]).await;
 
     // Verify file size decreased (empty registry has smaller dump)
     let file_size_after_flush = std::fs::metadata(&functions_file).unwrap().len();
@@ -1069,9 +790,5 @@ end)
         file_size_after_load
     );
 
-    // Cleanup
-    drop(framed);
-    let _ = shutdown_tx.send(());
-    handle.abort();
-    let _ = handle.await;
+    server.shutdown().await;
 }

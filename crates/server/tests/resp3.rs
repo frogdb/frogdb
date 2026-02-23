@@ -3,150 +3,44 @@
 //! These tests verify RESP3 protocol negotiation via HELLO command and
 //! RESP3-specific response types (Map, Set, Double, Push).
 
+mod common;
+
 use bytes::Bytes;
-use frogdb_server::{Config, Server};
+use common::test_server::{TestServer, TestServerConfig};
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
 use futures::{SinkExt, StreamExt};
-use redis_protocol::codec::{Resp2, Resp3};
+use redis_protocol::codec::Resp2;
 use redis_protocol::resp2::types::BytesFrame as Resp2Frame;
 use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
-use std::net::SocketAddr;
 use std::time::Duration;
-use tempfile::TempDir;
 use tokio::net::TcpStream;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::codec::Framed;
 
-/// Helper struct for managing a test server.
-struct TestServer {
-    addr: SocketAddr,
-    metrics_addr: SocketAddr,
-    shutdown_tx: oneshot::Sender<()>,
-    handle: JoinHandle<()>,
-    #[allow(dead_code)]
-    temp_dir: TempDir,
+async fn start_server() -> TestServer {
+    TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await
 }
 
-impl TestServer {
-    /// Start a new test server on an available port.
-    async fn start() -> Self {
-        let temp_dir = TempDir::new().unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-
-        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let metrics_addr = metrics_listener.local_addr().unwrap();
-        drop(metrics_listener);
-
-        let mut config = Config::default();
-        config.server.bind = "127.0.0.1".to_string();
-        config.server.port = addr.port();
-        config.server.num_shards = 1;
-        config.logging.level = "warn".to_string();
-        config.persistence.data_dir = temp_dir.path().to_path_buf();
-        config.metrics.bind = "127.0.0.1".to_string();
-        config.metrics.port = metrics_addr.port();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        let handle = tokio::spawn(async move {
-            let server = Server::new(config).await.unwrap();
-            tokio::select! {
-                result = server.run() => {
-                    if let Err(e) = result {
-                        eprintln!("Server error: {}", e);
-                    }
-                }
-                _ = shutdown_rx => {}
-            }
-        });
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        TestServer {
-            addr,
-            metrics_addr,
-            shutdown_tx,
-            handle,
-            temp_dir,
-        }
-    }
-
-    /// Start a test server with requirepass configured.
-    async fn start_with_security(requirepass: &str) -> Self {
-        let temp_dir = TempDir::new().unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-
-        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let metrics_addr = metrics_listener.local_addr().unwrap();
-        drop(metrics_listener);
-
-        let mut config = Config::default();
-        config.server.bind = "127.0.0.1".to_string();
-        config.server.port = addr.port();
-        config.server.num_shards = 1;
-        config.logging.level = "warn".to_string();
-        config.persistence.data_dir = temp_dir.path().to_path_buf();
-        config.security.requirepass = requirepass.to_string();
-        config.metrics.bind = "127.0.0.1".to_string();
-        config.metrics.port = metrics_addr.port();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        let handle = tokio::spawn(async move {
-            let server = Server::new(config).await.unwrap();
-            tokio::select! {
-                result = server.run() => {
-                    if let Err(e) = result {
-                        eprintln!("Server error: {}", e);
-                    }
-                }
-                _ = shutdown_rx => {}
-            }
-        });
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        TestServer {
-            addr,
-            metrics_addr,
-            shutdown_tx,
-            handle,
-            temp_dir,
-        }
-    }
-
-    /// Connect to the test server with RESP2 protocol.
-    async fn connect_resp2(&self) -> Resp2Client {
-        let stream = TcpStream::connect(self.addr).await.unwrap();
-        let framed = Framed::new(stream, Resp2);
-        Resp2Client { framed }
-    }
-
-    /// Connect to the test server with RESP3 protocol (for reading RESP3 responses).
-    async fn connect_resp3(&self) -> Resp3Client {
-        let stream = TcpStream::connect(self.addr).await.unwrap();
-        let framed = Framed::new(stream, Resp3::default());
-        Resp3Client { framed }
-    }
-
-    async fn shutdown(self) {
-        let _ = self.shutdown_tx.send(());
-        let _ = self.handle.await;
-    }
+async fn start_server_with_security(requirepass: &str) -> TestServer {
+    TestServer::start_with_security(requirepass).await
 }
 
-/// Client using RESP2 codec (for initial connections).
+/// Client using RESP2 codec (returns raw Resp2Frame, not Response).
 struct Resp2Client {
     framed: Framed<TcpStream, Resp2>,
 }
 
 impl Resp2Client {
+    async fn connect(server: &TestServer) -> Self {
+        let stream = TcpStream::connect(server.socket_addr()).await.unwrap();
+        let framed = Framed::new(stream, Resp2);
+        Resp2Client { framed }
+    }
+
     async fn command(&mut self, args: &[&str]) -> Resp2Frame {
         let frame = Resp2Frame::Array(
             args.iter()
@@ -163,50 +57,14 @@ impl Resp2Client {
     }
 }
 
-/// Client using RESP3 codec (for connections after HELLO 3).
-struct Resp3Client {
-    framed: Framed<TcpStream, Resp3>,
-}
-
-impl Resp3Client {
-    /// Send a command as RESP3 array and receive RESP3 response.
-    async fn command(&mut self, args: &[&str]) -> Resp3Frame {
-        let frame = Resp3Frame::Array {
-            data: args
-                .iter()
-                .map(|s| Resp3Frame::BlobString {
-                    data: Bytes::from(s.to_string()),
-                    attributes: None,
-                })
-                .collect(),
-            attributes: None,
-        };
-        self.framed.send(frame).await.unwrap();
-
-        timeout(Duration::from_secs(5), self.framed.next())
-            .await
-            .expect("timeout")
-            .expect("connection closed")
-            .expect("frame error")
-    }
-
-    /// Read a pushed message for pub/sub.
-    async fn read_message(&mut self, timeout_duration: Duration) -> Option<Resp3Frame> {
-        match timeout(timeout_duration, self.framed.next()).await {
-            Ok(Some(Ok(frame))) => Some(frame),
-            _ => None,
-        }
-    }
-}
-
 // =============================================================================
 // 12.4.2 Integration tests for HELLO
 // =============================================================================
 
 #[tokio::test]
 async fn test_hello_no_args() {
-    let server = TestServer::start().await;
-    let mut client = server.connect_resp2().await;
+    let server = start_server().await;
+    let mut client = Resp2Client::connect(&server).await;
 
     // HELLO with no args should return server info as an array (RESP2 format)
     let response = client.command(&["HELLO"]).await;
@@ -230,11 +88,11 @@ async fn test_hello_no_args() {
 
 #[tokio::test]
 async fn test_hello_upgrade_to_resp3() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect_resp3().await;
 
     // Get baseline metrics
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // Send HELLO 3 to upgrade to RESP3
     let response = client.command(&["HELLO", "3"]).await;
@@ -261,7 +119,7 @@ async fn test_hello_upgrade_to_resp3() {
 
     // Verify metrics - HELLO command was tracked
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after).assert_counter_increased(
         "frogdb_commands_total",
         &[("command", "HELLO")],
@@ -273,8 +131,8 @@ async fn test_hello_upgrade_to_resp3() {
 
 #[tokio::test]
 async fn test_hello_stay_resp2() {
-    let server = TestServer::start().await;
-    let mut client = server.connect_resp2().await;
+    let server = start_server().await;
+    let mut client = Resp2Client::connect(&server).await;
 
     // HELLO 2 should stay in RESP2
     let response = client.command(&["HELLO", "2"]).await;
@@ -292,8 +150,8 @@ async fn test_hello_stay_resp2() {
 
 #[tokio::test]
 async fn test_hello_noproto() {
-    let server = TestServer::start().await;
-    let mut client = server.connect_resp2().await;
+    let server = start_server().await;
+    let mut client = Resp2Client::connect(&server).await;
 
     // HELLO 4 should return NOPROTO error
     let response = client.command(&["HELLO", "4"]).await;
@@ -314,7 +172,7 @@ async fn test_hello_noproto() {
 
 #[tokio::test]
 async fn test_hello_no_downgrade() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect_resp3().await;
 
     // First upgrade to RESP3
@@ -340,7 +198,7 @@ async fn test_hello_no_downgrade() {
 
 #[tokio::test]
 async fn test_hello_auth_success() {
-    let server = TestServer::start_with_security("testpass").await;
+    let server = start_server_with_security("testpass").await;
     let mut client = server.connect_resp3().await;
 
     // HELLO 3 AUTH default testpass
@@ -366,7 +224,7 @@ async fn test_hello_auth_success() {
 
 #[tokio::test]
 async fn test_hello_auth_failure() {
-    let server = TestServer::start_with_security("testpass").await;
+    let server = start_server_with_security("testpass").await;
     let mut client = server.connect_resp3().await;
 
     // HELLO 3 AUTH default wrongpassword
@@ -390,7 +248,7 @@ async fn test_hello_auth_failure() {
 
 #[tokio::test]
 async fn test_hello_setname() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect_resp3().await;
 
     // HELLO 3 SETNAME myclient
@@ -421,7 +279,7 @@ async fn test_hello_setname() {
 
 #[tokio::test]
 async fn test_hgetall_resp3_returns_map() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect_resp3().await;
 
     // Upgrade to RESP3
@@ -433,7 +291,7 @@ async fn test_hgetall_resp3_returns_map() {
         .await;
 
     // Get baseline metrics (after setup)
-    let before = MetricsSnapshot::fetch(server.metrics_addr).await;
+    let before = MetricsSnapshot::fetch(server.metrics_addr()).await;
 
     // HGETALL should return a Map in RESP3
     let response = client.command(&["HGETALL", "myhash"]).await;
@@ -449,7 +307,7 @@ async fn test_hgetall_resp3_returns_map() {
 
     // Verify metrics - HGETALL was tracked
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::fetch(server.metrics_addr).await;
+    let after = MetricsSnapshot::fetch(server.metrics_addr()).await;
     MetricsDelta::new(before, after).assert_counter_increased(
         "frogdb_commands_total",
         &[("command", "HGETALL")],
@@ -461,8 +319,8 @@ async fn test_hgetall_resp3_returns_map() {
 
 #[tokio::test]
 async fn test_hgetall_resp2_returns_array() {
-    let server = TestServer::start().await;
-    let mut client = server.connect_resp2().await;
+    let server = start_server().await;
+    let mut client = Resp2Client::connect(&server).await;
 
     // Set up some hash data
     client
@@ -470,7 +328,7 @@ async fn test_hgetall_resp2_returns_array() {
         .await;
 
     // Get baseline metrics (after setup)
-    let before = MetricsSnapshot::fetch(server.metrics_addr).await;
+    let before = MetricsSnapshot::fetch(server.metrics_addr()).await;
 
     // HGETALL should return a flattened Array in RESP2
     let response = client.command(&["HGETALL", "myhash"]).await;
@@ -487,7 +345,7 @@ async fn test_hgetall_resp2_returns_array() {
 
     // Verify metrics - HGETALL was tracked
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::fetch(server.metrics_addr).await;
+    let after = MetricsSnapshot::fetch(server.metrics_addr()).await;
     MetricsDelta::new(before, after).assert_counter_increased(
         "frogdb_commands_total",
         &[("command", "HGETALL")],
@@ -499,7 +357,7 @@ async fn test_hgetall_resp2_returns_array() {
 
 #[tokio::test]
 async fn test_smembers_resp3_returns_set() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect_resp3().await;
 
     // Upgrade to RESP3
@@ -509,7 +367,7 @@ async fn test_smembers_resp3_returns_set() {
     client.command(&["SADD", "myset", "a", "b", "c"]).await;
 
     // Get baseline metrics (after setup)
-    let before = MetricsSnapshot::fetch(server.metrics_addr).await;
+    let before = MetricsSnapshot::fetch(server.metrics_addr()).await;
 
     // SMEMBERS should return a Set in RESP3
     let response = client.command(&["SMEMBERS", "myset"]).await;
@@ -525,7 +383,7 @@ async fn test_smembers_resp3_returns_set() {
 
     // Verify metrics - SMEMBERS was tracked
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::fetch(server.metrics_addr).await;
+    let after = MetricsSnapshot::fetch(server.metrics_addr()).await;
     MetricsDelta::new(before, after).assert_counter_increased(
         "frogdb_commands_total",
         &[("command", "SMEMBERS")],
@@ -538,7 +396,7 @@ async fn test_smembers_resp3_returns_set() {
 #[tokio::test]
 #[allow(clippy::approx_constant)]
 async fn test_zscore_resp3_returns_double() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect_resp3().await;
 
     // Upgrade to RESP3
@@ -569,7 +427,7 @@ async fn test_zscore_resp3_returns_double() {
 #[tokio::test]
 #[allow(clippy::approx_constant)]
 async fn test_incrbyfloat_resp3_double() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect_resp3().await;
 
     // Upgrade to RESP3
@@ -596,7 +454,7 @@ async fn test_incrbyfloat_resp3_double() {
 
 #[tokio::test]
 async fn test_pubsub_message_resp3_push() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
 
     // Subscriber uses RESP3
     let mut subscriber = server.connect_resp3().await;
@@ -604,7 +462,7 @@ async fn test_pubsub_message_resp3_push() {
     subscriber.command(&["SUBSCRIBE", "test-channel"]).await;
 
     // Publisher
-    let mut publisher = server.connect_resp2().await;
+    let mut publisher = Resp2Client::connect(&server).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     publisher
         .command(&["PUBLISH", "test-channel", "hello"])
@@ -634,26 +492,22 @@ async fn test_pubsub_message_resp3_push() {
 
 #[tokio::test]
 async fn test_pubsub_message_resp2_array() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
 
     // Subscriber uses RESP2 (default)
-    let mut subscriber = server.connect_resp2().await;
+    let mut subscriber = Resp2Client::connect(&server).await;
     subscriber.command(&["SUBSCRIBE", "test-channel"]).await;
 
     // Publisher
-    let mut publisher = server.connect_resp2().await;
+    let mut publisher = Resp2Client::connect(&server).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     publisher
         .command(&["PUBLISH", "test-channel", "hello"])
         .await;
 
-    // Read the subscribe confirmation first, then the message
-    // (subscribe returns a confirmation, then messages come as push)
-    // In RESP2, messages come as arrays
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Note: In RESP2, pub/sub messages are arrays, not push types
+    // In RESP2, pub/sub messages are arrays, not push types
     // The server sends them as arrays, which is correct for RESP2
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     server.shutdown().await;
 }
@@ -664,11 +518,10 @@ async fn test_pubsub_message_resp2_array() {
 
 #[tokio::test]
 async fn test_default_is_resp2() {
-    let server = TestServer::start().await;
-    let mut client = server.connect_resp2().await;
+    let server = start_server().await;
+    let mut client = Resp2Client::connect(&server).await;
 
     // Without HELLO, the server should use RESP2
-    // Simple commands should work
     let response = client.command(&["PING"]).await;
     match response {
         Resp2Frame::SimpleString(s) => {
@@ -682,8 +535,8 @@ async fn test_default_is_resp2() {
 
 #[tokio::test]
 async fn test_existing_commands_work_resp2() {
-    let server = TestServer::start().await;
-    let mut client = server.connect_resp2().await;
+    let server = start_server().await;
+    let mut client = Resp2Client::connect(&server).await;
 
     // All basic commands should work without HELLO
     client.command(&["SET", "key1", "value1"]).await;
@@ -721,7 +574,7 @@ async fn test_existing_commands_work_resp2() {
 #[tokio::test]
 async fn test_resp2_after_server_restart() {
     // Test that protocol resets on reconnect
-    let server = TestServer::start().await;
+    let server = start_server().await;
 
     // First client upgrades to RESP3
     {
@@ -732,7 +585,7 @@ async fn test_resp2_after_server_restart() {
 
     // Second client should be RESP2 by default
     {
-        let mut client = server.connect_resp2().await;
+        let mut client = Resp2Client::connect(&server).await;
         let response = client.command(&["PING"]).await;
         // Should get RESP2 response
         match response {

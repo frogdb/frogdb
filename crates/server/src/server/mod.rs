@@ -45,6 +45,17 @@ use util::{
     shutdown_signal,
 };
 
+/// Optional pre-bound listeners for server subsystems.
+///
+/// When a listener is provided, `Server` uses it directly instead of binding
+/// from config. This eliminates TOCTOU port races: the caller can bind port 0,
+/// read the actual port, then hand the listener to Server.
+#[derive(Default)]
+pub struct ServerListeners {
+    /// Pre-bound cluster bus (Raft RPC) listener.
+    pub cluster_bus: Option<TcpListener>,
+}
+
 /// FrogDB server.
 pub struct Server {
     /// Server configuration.
@@ -55,6 +66,18 @@ pub struct Server {
 
     /// Optional TCP listener for admin connections.
     admin_listener: Option<TcpListener>,
+
+    /// Optional pre-bound TCP listener for the metrics/observability HTTP server.
+    /// Held here from `new()` so the port is never released before `run_until()`.
+    metrics_listener: Option<tokio::net::TcpListener>,
+
+    /// Optional pre-bound TCP listener for the admin HTTP API server.
+    /// Held here from `new()` so the port is never released before `run_until()`.
+    admin_http_listener: Option<tokio::net::TcpListener>,
+
+    /// Optional pre-bound TCP listener for the cluster bus (Raft RPC) server.
+    /// Uses `crate::net::TcpListener` so Turmoil can intercept it in simulations.
+    cluster_bus_listener: Option<TcpListener>,
 
     /// Command registry.
     registry: Arc<CommandRegistry>,
@@ -140,8 +163,17 @@ pub struct Server {
 }
 
 impl Server {
-    /// Create a new server instance.
+    /// Create a new server instance, binding all listeners from config.
     pub async fn new(config: Config) -> Result<Self> {
+        Self::with_listeners(config, ServerListeners::default()).await
+    }
+
+    /// Create a new server instance, optionally accepting pre-bound listeners.
+    ///
+    /// If a pre-bound listener is provided in `listeners`, Server uses it
+    /// directly instead of binding from config. This eliminates TOCTOU port
+    /// races for cluster bus addresses.
+    pub async fn with_listeners(config: Config, listeners: ServerListeners) -> Result<Self> {
         // Initialize metrics
         let health_checker = HealthChecker::new();
         let (metrics_recorder, prometheus_recorder): (
@@ -189,6 +221,50 @@ impl Server {
                 "Admin TCP listener bound"
             );
             Some(admin_listener)
+        } else {
+            None
+        };
+
+        // Bind metrics HTTP listener if metrics are enabled
+        let metrics_listener = if config.metrics.enabled {
+            let metrics_bind_addr: std::net::SocketAddr = config.metrics.bind_addr().parse()?;
+            let listener = tokio::net::TcpListener::bind(metrics_bind_addr).await?;
+            info!(
+                addr = %listener.local_addr()?,
+                "Metrics listener bound"
+            );
+            Some(listener)
+        } else {
+            None
+        };
+
+        // Bind admin HTTP listener if admin API is enabled
+        let admin_http_listener = if config.admin.enabled {
+            let admin_http_bind_addr: std::net::SocketAddr = config.admin.bind_addr().parse()?;
+            let listener = tokio::net::TcpListener::bind(admin_http_bind_addr).await?;
+            info!(
+                addr = %listener.local_addr()?,
+                "Admin HTTP listener bound"
+            );
+            Some(listener)
+        } else {
+            None
+        };
+
+        // Bind cluster bus listener if cluster mode is enabled.
+        // Uses crate::net::TcpListener (turmoil-compatible) so simulations can intercept it.
+        // If a pre-bound listener was provided via ServerListeners, use it directly.
+        let cluster_bus_listener = if let Some(l) = listeners.cluster_bus {
+            info!(addr = %l.local_addr()?, "Cluster bus using pre-bound listener");
+            Some(l)
+        } else if config.cluster.enabled {
+            let cluster_bus_addr = config.cluster.cluster_bus_socket_addr();
+            let listener = tcp_listener_reusable(cluster_bus_addr).await?;
+            info!(
+                addr = %listener.local_addr()?,
+                "Cluster bus listener bound"
+            );
+            Some(listener)
         } else {
             None
         };
@@ -722,6 +798,9 @@ impl Server {
             config,
             listener,
             admin_listener,
+            metrics_listener,
+            admin_http_listener,
+            cluster_bus_listener,
             registry,
             client_registry,
             config_manager,
@@ -910,15 +989,6 @@ impl Server {
 
         // Start metrics server if enabled
         let metrics_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
-            let metrics_config = frogdb_telemetry::MetricsConfig {
-                enabled: self.config.metrics.enabled,
-                bind: self.config.metrics.bind.clone(),
-                port: self.config.metrics.port,
-                otlp_enabled: self.config.metrics.otlp_enabled,
-                otlp_endpoint: self.config.metrics.otlp_endpoint.clone(),
-                otlp_interval_secs: self.config.metrics.otlp_interval_secs,
-            };
-
             // Create debug state for the debug web UI
             let config_entries = vec![
                 ConfigEntry {
@@ -978,11 +1048,26 @@ impl Server {
                 mode,
             ));
 
+            // SAFETY: metrics_listener is Some when prometheus_recorder is Some
+            // (both are gated on config.metrics.enabled in Server::new()).
+            let metrics_listener = self
+                .metrics_listener
+                .take()
+                .expect("metrics_listener must be set when metrics are enabled");
+            let metrics_bound_addr = metrics_listener.local_addr()?;
+
+            let metrics_config = crate::config::MetricsConfig {
+                bind: self.config.metrics.bind.clone(),
+                port: metrics_bound_addr.port(),
+                enabled: true,
+                ..Default::default()
+            };
             let mut server = ObservabilityServer::new(
                 metrics_config,
                 prometheus.clone(),
                 self.health_checker.clone(),
             )
+            .with_listener(metrics_listener)
             .with_debug_state(debug_state)
             .with_status_collector(status_collector);
 
@@ -992,9 +1077,9 @@ impl Server {
             }
 
             info!(
-                addr = %self.config.metrics.bind_addr(),
-                debug_ui = %format!("http://{}:{}/debug", self.config.metrics.bind, self.config.metrics.port),
-                status_json = %format!("http://{}:{}/status/json", self.config.metrics.bind, self.config.metrics.port),
+                addr = %metrics_bound_addr,
+                debug_ui = %format!("http://{}/debug", metrics_bound_addr),
+                status_json = %format!("http://{}/status/json", metrics_bound_addr),
                 "Metrics server starting"
             );
 
@@ -1032,8 +1117,16 @@ impl Server {
                 },
             };
 
+            // SAFETY: admin_http_listener is Some when config.admin.enabled is true
+            // (both are gated on the same condition in Server::new()).
+            let admin_http_listener = self
+                .admin_http_listener
+                .take()
+                .expect("admin_http_listener must be set when admin API is enabled");
+
             let admin_server =
-                crate::admin::AdminServer::new(self.config.admin.clone(), admin_state);
+                crate::admin::AdminServer::new(self.config.admin.clone(), admin_state)
+                    .with_listener(admin_http_listener);
 
             Some(spawn(async move {
                 if let Err(e) = admin_server.run().await {
@@ -1046,10 +1139,15 @@ impl Server {
 
         // Start cluster bus TCP server if cluster mode is enabled
         let cluster_bus_handle = if let Some(ref raft) = self.raft {
-            let addr = self.config.cluster.cluster_bus_socket_addr();
+            // SAFETY: cluster_bus_listener is Some when raft is Some
+            // (both gated on config.cluster.enabled in Server::new()).
+            let cluster_bus_listener = self
+                .cluster_bus_listener
+                .take()
+                .expect("cluster_bus_listener must be set when cluster is enabled");
             let raft = raft.clone();
             Some(spawn(async move {
-                if let Err(e) = crate::cluster_bus::run(addr, raft).await {
+                if let Err(e) = crate::cluster_bus::run(cluster_bus_listener, raft).await {
                     error!(error = %e, "Cluster bus server error");
                 }
             }))
@@ -1265,6 +1363,34 @@ impl Server {
     /// Get the snapshot coordinator.
     pub fn snapshot_coordinator(&self) -> &Arc<dyn SnapshotCoordinator> {
         &self.snapshot_coordinator
+    }
+
+    /// Get the local address of the RESP TCP listener.
+    ///
+    /// After `Server::new()`, the listener is bound and this returns the actual
+    /// address (including the OS-assigned port when `config.server.port` was 0).
+    pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+        self.listener.local_addr()
+    }
+
+    /// Get the local address of the admin RESP TCP listener, if enabled.
+    pub fn admin_resp_addr(&self) -> Option<std::io::Result<std::net::SocketAddr>> {
+        self.admin_listener.as_ref().map(|l| l.local_addr())
+    }
+
+    /// Get the local address of the metrics/observability HTTP listener, if enabled.
+    pub fn metrics_addr(&self) -> Option<std::io::Result<std::net::SocketAddr>> {
+        self.metrics_listener.as_ref().map(|l| l.local_addr())
+    }
+
+    /// Get the local address of the admin HTTP API listener, if enabled.
+    pub fn admin_http_addr(&self) -> Option<std::io::Result<std::net::SocketAddr>> {
+        self.admin_http_listener.as_ref().map(|l| l.local_addr())
+    }
+
+    /// Get the local address of the cluster bus listener, if cluster mode is enabled.
+    pub fn cluster_bus_addr(&self) -> Option<std::io::Result<std::net::SocketAddr>> {
+        self.cluster_bus_listener.as_ref().map(|l| l.local_addr())
     }
 
     /// Get the latency baseline result from startup test (if available).

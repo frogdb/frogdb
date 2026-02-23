@@ -27,39 +27,28 @@ impl TestServer {
     pub async fn start() -> Self {
         let temp_dir = TempDir::new().unwrap();
 
-        // Find available ports
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-
-        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let metrics_addr = metrics_listener.local_addr().unwrap();
-        drop(metrics_listener);
-
         let mut config = Config::default();
         config.server.bind = "127.0.0.1".to_string();
-        config.server.port = addr.port();
+        config.server.port = 0;
         config.server.num_shards = 4;
         config.logging.level = "warn".to_string();
         config.persistence.data_dir = temp_dir.path().to_path_buf();
         config.metrics.bind = "127.0.0.1".to_string();
-        config.metrics.port = metrics_addr.port();
+        config.metrics.port = 0;
+
+        // Construct server before spawning to read actual bound addresses (no TOCTOU)
+        let server = Server::new(config).await.unwrap();
+        let addr = server.local_addr().unwrap();
+        let metrics_addr = server.metrics_addr().unwrap().unwrap();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let handle = tokio::spawn(async move {
-            let server = Server::new(config).await.unwrap();
-
-            tokio::select! {
-                result = server.run() => {
-                    if let Err(e) = result {
-                        eprintln!("Server error: {}", e);
-                    }
-                }
-                _ = shutdown_rx => {
-                    // Shutdown requested
-                }
-            }
+            let _ = server
+                .run_until(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
         });
 
         // Wait for server to be ready
