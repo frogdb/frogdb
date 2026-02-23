@@ -19,6 +19,7 @@ use bytes::Bytes;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
+use bitvec::prelude::*;
 use frogdb_types::bloom::{BloomFilterValue, BloomLayer};
 use frogdb_types::hyperloglog::{HLL_DENSE_SIZE, HyperLogLogValue};
 use frogdb_types::json::JsonValue;
@@ -27,7 +28,6 @@ use frogdb_types::types::{
     HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec,
     StreamValue, StringValue, Value,
 };
-use bitvec::prelude::*;
 
 /// Size of the serialization header in bytes.
 pub const HEADER_SIZE: usize = 24;

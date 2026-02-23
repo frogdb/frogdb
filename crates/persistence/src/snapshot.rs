@@ -12,8 +12,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use frogdb_types::traits::MetricsRecorder;
 use crate::rocks::RocksStore;
+use frogdb_types::traits::MetricsRecorder;
 use frogdb_types::types::Value;
 
 /// Completion marker written to metadata files.

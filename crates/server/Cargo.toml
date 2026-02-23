@@ -16,6 +16,7 @@ turmoil = ["dep:turmoil"]
 [dependencies]
 frogdb-protocol.workspace = true
 frogdb-core.workspace = true
+frogdb-debug.workspace = true
 frogdb-telemetry.workspace = true
 frogdb-macros = { path = "../frogdb-macros" }
 bytes.workspace = true
