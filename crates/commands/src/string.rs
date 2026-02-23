@@ -81,17 +81,17 @@ impl Command for SetexCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = args[0].clone();
-        let seconds = parse_u64(&args[1])?;
+        let seconds = parse_i64(&args[1])?;
         let value = args[2].clone();
 
-        if seconds == 0 {
+        if seconds <= 0 {
             return Err(CommandError::InvalidArgument {
                 message: "invalid expire time in 'setex' command".to_string(),
             });
         }
 
         let opts = SetOptions {
-            expiry: Some(Expiry::Ex(seconds)),
+            expiry: Some(Expiry::Ex(seconds as u64)),
             ..Default::default()
         };
 
@@ -129,17 +129,17 @@ impl Command for PsetexCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = args[0].clone();
-        let ms = parse_u64(&args[1])?;
+        let ms = parse_i64(&args[1])?;
         let value = args[2].clone();
 
-        if ms == 0 {
+        if ms <= 0 {
             return Err(CommandError::InvalidArgument {
                 message: "invalid expire time in 'psetex' command".to_string(),
             });
         }
 
         let opts = SetOptions {
-            expiry: Some(Expiry::Px(ms)),
+            expiry: Some(Expiry::Px(ms as u64)),
             ..Default::default()
         };
 
@@ -663,11 +663,12 @@ impl Command for DecrbyCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let delta = parse_i64(&args[1])?;
+        let neg_delta = delta.checked_neg().ok_or(CommandError::NotInteger)?;
 
         // Decrement is just negative increment
         if let Some(existing) = ctx.store.get_mut(key) {
             if let Some(sv) = existing.as_string_mut() {
-                match sv.increment(-delta) {
+                match sv.increment(neg_delta) {
                     Ok(new_val) => Ok(Response::Integer(new_val)),
                     Err(IncrementError::NotInteger) => Err(CommandError::NotInteger),
                     Err(IncrementError::Overflow) => Err(CommandError::NotInteger),
@@ -680,9 +681,9 @@ impl Command for DecrbyCommand {
             // Key doesn't exist, create with value -delta
             ctx.store.set(
                 key.clone(),
-                Value::String(StringValue::from_integer(-delta)),
+                Value::String(StringValue::from_integer(neg_delta)),
             );
-            Ok(Response::Integer(-delta))
+            Ok(Response::Integer(neg_delta))
         }
     }
 
@@ -719,7 +720,9 @@ impl Command for IncrbyfloatCommand {
         let delta = parse_f64(&args[1])?;
 
         if delta.is_nan() || delta.is_infinite() {
-            return Err(CommandError::NotFloat);
+            return Err(CommandError::InvalidArgument {
+                message: "increment would produce NaN or Infinity".to_string(),
+            });
         }
 
         let is_resp3 = ctx.protocol_version.is_resp3();
@@ -736,7 +739,9 @@ impl Command for IncrbyfloatCommand {
                     }
                     Err(IncrementError::NotFloat) => Err(CommandError::NotFloat),
                     Err(IncrementError::NotInteger) => Err(CommandError::NotFloat),
-                    Err(IncrementError::Overflow) => Err(CommandError::NotFloat),
+                    Err(IncrementError::Overflow) => Err(CommandError::InvalidArgument {
+                        message: "increment would produce NaN or Infinity".to_string(),
+                    }),
                 }
             } else {
                 Err(CommandError::WrongType)
@@ -1157,4 +1162,57 @@ fn extract_lcs_matches(s1: &[u8], s2: &[u8], dp: &[Vec<usize>], min_len: usize) 
     }
 
     matches
+}
+
+// ============================================================================
+// GETSET - Set key to value and return old value (deprecated, use SET GET)
+// ============================================================================
+
+pub struct GetsetCommand;
+
+impl Command for GetsetCommand {
+    fn name(&self) -> &'static str {
+        "GETSET"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        let key = &args[0];
+        let new_value = args[1].clone();
+
+        // Get old value (must be a string if it exists)
+        let old = match ctx.store.get(key) {
+            Some(v) => {
+                if let Some(sv) = v.as_string() {
+                    Some(sv.as_bytes())
+                } else {
+                    return Err(CommandError::WrongType);
+                }
+            }
+            None => None,
+        };
+
+        // Set new value (unconditionally, clears any TTL)
+        ctx.store.set(key.clone(), Value::string(new_value));
+
+        match old {
+            Some(bytes) => Ok(Response::bulk(bytes)),
+            None => Ok(Response::null()),
+        }
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
+    }
 }

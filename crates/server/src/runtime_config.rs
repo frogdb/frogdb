@@ -406,6 +406,81 @@ impl ConfigManager {
                     Ok(())
                 }),
             },
+            // No-op mutable parameters (accept any value, return Redis defaults)
+            // These exist so that Redis test suites can CONFIG SET encoding thresholds
+            // without aborting.  FrogDB does not use these internally.
+            ParamMeta {
+                name: "save",
+                mutable: true,
+                getter: |_| "".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "set-max-intset-entries",
+                mutable: true,
+                getter: |_| "512".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "set-max-listpack-entries",
+                mutable: true,
+                getter: |_| "128".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "hash-max-ziplist-value",
+                mutable: true,
+                getter: |_| "64".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "hash-max-listpack-value",
+                mutable: true,
+                getter: |_| "64".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "list-max-listpack-size",
+                mutable: true,
+                getter: |_| "-2".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "list-compress-depth",
+                mutable: true,
+                getter: |_| "0".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "list-max-ziplist-size",
+                mutable: true,
+                getter: |_| "-2".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "latency-monitor-threshold",
+                mutable: true,
+                getter: |_| "0".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "hz",
+                mutable: true,
+                getter: |_| "10".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "activedefrag",
+                mutable: true,
+                getter: |_| "no".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "close-on-oom",
+                mutable: true,
+                getter: |_| "no".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
             // Immutable parameters
             ParamMeta {
                 name: "bind",

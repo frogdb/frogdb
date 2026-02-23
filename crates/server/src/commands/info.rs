@@ -57,11 +57,9 @@ impl Command for InfoCommand {
             Some(b"cpu") => build_cpu_info(),
             Some(b"keyspace") => build_keyspace_info(ctx),
             Some(b"latency_baseline") => build_latency_baseline_info(),
-            Some(other) => {
-                // Unknown section - return empty
-                return Err(CommandError::InvalidArgument {
-                    message: format!("Invalid section '{}'", String::from_utf8_lossy(other)),
-                });
+            Some(_) => {
+                // Unknown section - return empty string (matches Redis behavior)
+                String::new()
             }
         };
 
@@ -291,6 +289,7 @@ fn build_stats_info(ctx: &mut CommandContext) -> String {
          tracking_total_prefixes:0\r\n\
          unexpected_error_replies:0\r\n\
          total_error_replies:0\r\n\
+         rejected_calls:0\r\n\
          dump_payload_sanitizations:0\r\n\
          total_reads_processed:0\r\n\
          total_writes_processed:0\r\n\

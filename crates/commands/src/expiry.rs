@@ -85,7 +85,7 @@ fn instant_to_unix_ms(instant: Instant) -> i64 {
     }
 }
 
-use super::utils::{parse_i64, parse_u64};
+use super::utils::parse_i64;
 
 // ============================================================================
 // EXPIRE - Set key expiration in seconds
@@ -195,9 +195,15 @@ impl Command for ExpireatCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let timestamp = parse_u64(&args[1])?;
+        let timestamp = parse_i64(&args[1])?;
 
-        let expires_at = unix_secs_to_instant(timestamp).ok_or(CommandError::NotInteger)?;
+        // Negative timestamps mean already expired — delete the key
+        if timestamp < 0 {
+            let deleted = ctx.store.delete(key);
+            return Ok(Response::Integer(if deleted { 1 } else { 0 }));
+        }
+
+        let expires_at = unix_secs_to_instant(timestamp as u64).ok_or(CommandError::NotInteger)?;
 
         // If already expired, delete the key
         if expires_at <= Instant::now() {
@@ -239,9 +245,15 @@ impl Command for PexpireatCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let timestamp_ms = parse_u64(&args[1])?;
+        let timestamp_ms = parse_i64(&args[1])?;
 
-        let expires_at = unix_ms_to_instant(timestamp_ms).ok_or(CommandError::NotInteger)?;
+        // Negative timestamps mean already expired — delete the key
+        if timestamp_ms < 0 {
+            let deleted = ctx.store.delete(key);
+            return Ok(Response::Integer(if deleted { 1 } else { 0 }));
+        }
+
+        let expires_at = unix_ms_to_instant(timestamp_ms as u64).ok_or(CommandError::NotInteger)?;
 
         // If already expired, delete the key
         if expires_at <= Instant::now() {
@@ -297,7 +309,10 @@ impl Command for TtlCommand {
                     Ok(Response::Integer(-2))
                 } else {
                     let remaining = expires_at.duration_since(now);
-                    Ok(Response::Integer(remaining.as_secs() as i64))
+                    // Use ceiling division: any sub-second remainder rounds up
+                    let secs = remaining.as_secs() as i64;
+                    let subsec = remaining.subsec_nanos();
+                    Ok(Response::Integer(if subsec > 0 { secs + 1 } else { secs }))
                 }
             }
             None => Ok(Response::Integer(-1)), // Key exists but has no expiry

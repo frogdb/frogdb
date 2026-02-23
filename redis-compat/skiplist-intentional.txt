@@ -32,3 +32,15 @@ unit/bitfield
 # =============================================================================
 # FrogDB enforces strict key validation (all keys must be in KEYS array)
 unit/scripting
+
+# =============================================================================
+# INTEGRATION
+# =============================================================================
+# Requires redis-cli binary (not applicable to FrogDB)
+integration/redis-cli
+
+# =============================================================================
+# INDIVIDUAL TESTS
+# =============================================================================
+# FrogDB only supports RESP protocol, not inline commands
+Commands pipelining

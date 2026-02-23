@@ -737,13 +737,13 @@ impl Command for HscanCommand {
         let cursor = parse_usize(&args[1])?;
 
         // Parse options [MATCH pattern] [COUNT count]
-        let mut _match_pattern: Option<&[u8]> = None;
+        let mut match_pattern: Option<&[u8]> = None;
         let mut count: usize = 10;
         let mut parser = ArgParser::from_position(args, 2);
 
         while parser.has_more() {
             if let Some(value) = parser.try_flag_value(b"MATCH")? {
-                _match_pattern = Some(value.as_ref());
+                match_pattern = Some(value.as_ref());
             } else if let Some(value) = parser.try_flag_usize(b"COUNT")? {
                 count = value;
             } else {
@@ -754,30 +754,37 @@ impl Command for HscanCommand {
         match ctx.store.get_with_expiry_check(key) {
             Some(value) => {
                 if let Some(hash) = value.as_hash() {
-                    // Simple cursor-based scan implementation
-                    // In real Redis, MATCH pattern is applied
                     let entries: Vec<_> = hash.iter().collect();
                     let total = entries.len();
 
                     if cursor >= total {
-                        // Return empty with cursor 0
                         return Ok(Response::Array(vec![
                             Response::bulk(Bytes::from("0")),
                             Response::Array(vec![]),
                         ]));
                     }
 
-                    let end = (cursor + count).min(total);
-                    let next_cursor = if end >= total { 0 } else { end };
+                    let mut results = Vec::new();
+                    let mut new_cursor = 0;
 
-                    let mut results = Vec::with_capacity((end - cursor) * 2);
-                    for (field, value) in entries.into_iter().skip(cursor).take(count) {
-                        results.push(Response::bulk(field.clone()));
-                        results.push(Response::bulk(value.clone()));
+                    for (i, (field, value)) in entries.into_iter().enumerate().skip(cursor) {
+                        if results.len() >= count * 2 {
+                            new_cursor = i;
+                            break;
+                        }
+
+                        if let Some(pattern) = match_pattern
+                            && !crate::utils::simple_glob_match(pattern, field)
+                        {
+                            continue;
+                        }
+
+                        results.push(Response::bulk(Bytes::clone(field)));
+                        results.push(Response::bulk(Bytes::clone(value)));
                     }
 
                     Ok(Response::Array(vec![
-                        Response::bulk(Bytes::from(next_cursor.to_string())),
+                        Response::bulk(Bytes::from(new_cursor.to_string())),
                         Response::Array(results),
                     ]))
                 } else {
