@@ -67,7 +67,8 @@
       "WebFetch(domain:eu-central-1-1.aws.cloud2.influxdata.com)",
       "WebFetch(domain:formulae.brew.sh)",
       "Bash(tail:*)",
-      "WebFetch(domain:mise.jdx.dev)"
+      "WebFetch(domain:mise.jdx.dev)",
+      "WebFetch(domain:repology.org)"
     ]
   },
   "enableAllProjectMcpServers": true,
