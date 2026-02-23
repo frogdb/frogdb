@@ -253,7 +253,7 @@ fn compute_checksum(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::functions::function::{FunctionFlags, RegisteredFunction};
+    use crate::function::{FunctionFlags, RegisteredFunction};
 
     fn create_test_registry() -> FunctionRegistry {
         let mut registry = FunctionRegistry::new();

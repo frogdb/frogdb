@@ -11,6 +11,10 @@ shuttle = ["dep:shuttle", "frogdb-types/shuttle"]
 [dependencies]
 frogdb-types.workspace = true
 frogdb-protocol.workspace = true
+frogdb-cluster.workspace = true
+frogdb-persistence.workspace = true
+frogdb-acl.workspace = true
+frogdb-scripting.workspace = true
 bytes.workspace = true
 griddle.workspace = true
 bitflags.workspace = true
@@ -31,7 +35,6 @@ hex.workspace = true
 linked-hash-map.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-openraft.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

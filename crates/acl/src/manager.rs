@@ -16,7 +16,7 @@ use super::error::AclError;
 use super::log::{AclLog, DEFAULT_ACL_LOG_MAX_LEN};
 use super::parser::{AclRule, hash_password, parse_acl_line};
 use super::user::{AuthenticatedUser, User, UserPermissions};
-use crate::sync::RwLockExt;
+use frogdb_types::sync::RwLockExt;
 
 /// Configuration for the ACL manager.
 #[derive(Debug, Clone)]

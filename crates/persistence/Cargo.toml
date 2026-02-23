@@ -1,0 +1,22 @@
+[package]
+name = "frogdb-persistence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RocksDB persistence layer for FrogDB — storage, WAL, serialization, and snapshots"
+
+[dependencies]
+frogdb-types.workspace = true
+rocksdb.workspace = true
+bytes.workspace = true
+bitvec.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+tempfile.workspace = true

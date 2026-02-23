@@ -79,8 +79,8 @@ impl AclError {
     }
 }
 
-impl From<crate::sync::LockError> for AclError {
-    fn from(err: crate::sync::LockError) -> Self {
+impl From<frogdb_types::sync::LockError> for AclError {
+    fn from(err: frogdb_types::sync::LockError) -> Self {
         AclError::Internal {
             message: format!("Lock error: {}", err),
         }

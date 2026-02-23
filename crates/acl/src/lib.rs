@@ -22,7 +22,7 @@
 //! # Example
 //!
 //! ```rust
-//! use frogdb_core::acl::{AclManager, AclConfig};
+//! use frogdb_acl::{AclManager, AclConfig};
 //!
 //! // Create manager with requirepass
 //! let config = AclConfig {

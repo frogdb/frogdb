@@ -1,0 +1,11 @@
+[package]
+name = "frogdb-scripting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Redis Functions (library-based Lua scripting) for FrogDB"
+
+[dependencies]
+frogdb-types.workspace = true
+mlua.workspace = true
+bitflags.workspace = true

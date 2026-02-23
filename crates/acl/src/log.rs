@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::sync::MutexExt;
+use frogdb_types::sync::MutexExt;
 
 /// Default maximum number of log entries.
 pub const DEFAULT_ACL_LOG_MAX_LEN: usize = 128;

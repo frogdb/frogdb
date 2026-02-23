@@ -70,7 +70,7 @@ impl KeyPattern {
         }
 
         // Then check pattern match using byte-based glob
-        crate::glob::glob_match(self.pattern.as_bytes(), key)
+        frogdb_types::glob::glob_match(self.pattern.as_bytes(), key)
     }
 
     /// Convert to ACL rule string representation.
@@ -98,7 +98,7 @@ impl ChannelPattern {
 
     /// Check if a channel matches this pattern.
     pub fn matches(&self, channel: &[u8]) -> bool {
-        crate::glob::glob_match(self.pattern.as_bytes(), channel)
+        frogdb_types::glob::glob_match(self.pattern.as_bytes(), channel)
     }
 
     /// Convert to ACL rule string representation.

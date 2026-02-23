@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::types::{ClusterError, NodeId, TypeConfig};
+use crate::types::{ClusterError, NodeId, TypeConfig};
 
 /// Simple error wrapper for network errors that implements std::error::Error.
 #[derive(Debug)]
@@ -313,7 +313,7 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
 /// This function processes a single RPC request and returns the response.
 /// It should be called by the cluster bus TCP server.
 pub async fn handle_rpc_request(
-    raft: &super::ClusterRaft,
+    raft: &crate::ClusterRaft,
     request: ClusterRpcRequest,
 ) -> ClusterRpcResponse {
     match request {

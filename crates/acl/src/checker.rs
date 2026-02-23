@@ -182,8 +182,8 @@ impl AclChecker for FullAclChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acl::permissions::{ChannelPattern, KeyPattern};
-    use crate::acl::user::UserPermissions;
+    use crate::permissions::{ChannelPattern, KeyPattern};
+    use crate::user::UserPermissions;
     use std::collections::HashSet;
 
     fn create_test_user(

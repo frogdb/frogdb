@@ -6,15 +6,18 @@
 // Re-export everything from frogdb-types so downstream crates continue working unchanged.
 pub use frogdb_types::*;
 
-// Modules that remain in core (heavy deps: rocksdb, mlua, openraft, etc.)
-pub mod acl;
+// Re-export frogdb-cluster as the cluster module for backward compatibility.
+pub use frogdb_cluster as cluster;
+
+// Re-export frogdb-acl as the acl module for backward compatibility.
+pub use frogdb_acl as acl;
 pub mod client_registry;
-pub mod cluster;
 pub mod command;
 pub mod command_macro;
 pub mod error;
 pub mod eviction;
-pub mod functions;
+// Re-export frogdb-scripting as the functions module for backward compatibility.
+pub use frogdb_scripting as functions;
 pub mod latency;
 pub mod metrics;
 pub mod noop;

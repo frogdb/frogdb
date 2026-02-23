@@ -75,7 +75,7 @@ impl FunctionLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::functions::function::FunctionFlags;
+    use crate::function::FunctionFlags;
 
     #[test]
     fn test_library_creation() {
