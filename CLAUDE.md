@@ -105,3 +105,9 @@ The `spec/` directory contains design documentation. Consult it before making ar
 ## Redis Compatibility Tests (Conditional)
 
 Run `just redis-compat` when changes modify command behavior, argument parsing, or error responses. This validates compatibility with the Redis protocol and expected command semantics.
+
+## Agent Guidelines
+
+- **ALWAYS** ensure all packages build, lint, and pass tests before finishing a task
+- Prefer `just` commands over raw CLI tools
+- If a `just` command doesn't work for a task, we should fix it so it does
