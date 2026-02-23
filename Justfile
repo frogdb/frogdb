@@ -99,10 +99,12 @@ default:
 
 # Build debug
 build:
+    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo build
 
 # Build release
 release:
+    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo build --release
 
 # Run all tests
@@ -175,6 +177,10 @@ target-size:
 # Clean build artifacts
 clean:
     cargo clean
+
+# Clean stale build artifacts, keeping only the latest build's (requires: cargo install cargo-sweep)
+clean-stale:
+    cargo sweep --time 0
 
 # Watch for changes and run tests (requires cargo-watch)
 watch:
