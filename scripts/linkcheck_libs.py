@@ -7,9 +7,9 @@
 Check that system RocksDB libraries exist at the configured path.
 
 Usage:
-    uv run scripts/rocksdb_check_libs.py                              # Not using system RocksDB
-    uv run scripts/rocksdb_check_libs.py --system-rocksdb             # Check default path
-    uv run scripts/rocksdb_check_libs.py --system-rocksdb --lib-dir /usr/lib
+    uv run scripts/linkcheck_libs.py                              # Not using system RocksDB
+    uv run scripts/linkcheck_libs.py --system-rocksdb             # Check default path
+    uv run scripts/linkcheck_libs.py --system-rocksdb --lib-dir /usr/lib
 """
 
 import argparse

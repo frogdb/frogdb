@@ -68,7 +68,8 @@
       "WebFetch(domain:formulae.brew.sh)",
       "Bash(tail:*)",
       "WebFetch(domain:mise.jdx.dev)",
-      "WebFetch(domain:repology.org)"
+      "WebFetch(domain:repology.org)",
+      "WebFetch(domain:ghcr.io)"
     ]
   },
   "enableAllProjectMcpServers": true,

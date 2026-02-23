@@ -12,24 +12,30 @@ dyld-env := "DYLD_LIBRARY_PATH=/opt/homebrew/opt/llvm/lib"
 # Optionally set FROGDB_LIB_DIR to override the library path (default: /opt/homebrew/lib)
 use-system-rocksdb := env("FROGDB_SYSTEM_ROCKSDB", "")
 system-lib-dir := env("FROGDB_LIB_DIR", "/opt/homebrew/lib")
-# Only ROCKSDB_LIB_DIR and SNAPPY_LIB_DIR are effective here. The lz4-sys and zstd-sys
-# crates always compile from vendored C source and ignore LZ4_LIB_DIR / ZSTD_LIB_DIR.
+# ROCKSDB_LIB_DIR and SNAPPY_LIB_DIR tell librocksdb-sys to use system libraries.
+# lz4-sys always compiles from vendored C source (4 small files, unavoidable).
+# zstd-sys can use system zstd via ZSTD_SYS_USE_PKG_CONFIG=1 (set in Dockerfile.builder for Alpine;
+# on macOS the zstd compilation is fast so we don't bother).
 rocksdb-env := if use-system-rocksdb != "" { "ROCKSDB_LIB_DIR=" + system-lib-dir + " SNAPPY_LIB_DIR=" + system-lib-dir } else { "" }
 
 # =============================================================================
 # System RocksDB Verification
 # =============================================================================
 
-# Check that system RocksDB libraries exist at the configured path
-rocksdb-check-libs:
-    uv run scripts/rocksdb_check_libs.py {{if use-system-rocksdb != "" { "--system-rocksdb --lib-dir " + system-lib-dir } else { "" } }}
+# Check that system libraries (RocksDB, Snappy) exist at the configured path
+linkcheck-libs:
+    uv run scripts/linkcheck_libs.py {{if use-system-rocksdb != "" { "--system-rocksdb --lib-dir " + system-lib-dir } else { "" } }}
 
-# Check that a built binary dynamically links system RocksDB (post-build)
-rocksdb-check-binary:
-    uv run scripts/rocksdb_check_binary.py {{if use-system-rocksdb != "" { "--system-rocksdb" } else { "" } }}
+# Check that a built binary dynamically links system libraries (post-build)
+linkcheck-binary:
+    uv run scripts/linkcheck_binary.py {{if use-system-rocksdb != "" { "--system-rocksdb" } else { "" } }}
 
-# Full system RocksDB verification (libs + binary linking)
-rocksdb-check: rocksdb-check-libs rocksdb-check-binary
+# Verify build output files confirm system library linking (post-build)
+linkcheck-build profile="debug":
+    uv run scripts/linkcheck_build.py --profile {{profile}} {{if use-system-rocksdb != "" { "--system-rocksdb" } else { "" } }}
+
+# Full link verification (libs + build output + binary linking)
+linkcheck: linkcheck-libs linkcheck-build linkcheck-binary
 
 cargo-sweep-install:
     cargo install cargo-sweep

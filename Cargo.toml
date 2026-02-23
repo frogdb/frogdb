@@ -16,8 +16,8 @@ members = [
     "crates/browser-tests",
     "crates/frogdb-macros",
     "benches",
-    "tools/helm-gen",
-    "tools/dashboard-gen",
+    "helm/helm-gen",
+    "grafana/dashboard-gen",
     "tools/workflow-gen",
 ]
 
