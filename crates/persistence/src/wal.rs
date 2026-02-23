@@ -14,8 +14,8 @@ use tracing::{debug, error, info, trace};
 
 use super::rocks::RocksStore;
 use super::serialization::serialize;
-use crate::noop::{WalOperation, WalWriter};
-use crate::types::{KeyMetadata, Value};
+use frogdb_types::traits::{WalOperation, WalWriter};
+use frogdb_types::types::{KeyMetadata, Value};
 
 /// Durability mode for WAL writes.
 #[derive(Debug, Clone)]
@@ -93,7 +93,7 @@ pub struct RocksWalWriter {
     pending_batch: Mutex<BatchState>,
     sequence: AtomicU64,
     config: WalConfig,
-    metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+    metrics_recorder: Arc<dyn frogdb_types::traits::MetricsRecorder>,
     /// Unix timestamp (ms) of last sync (for Periodic mode tracking).
     last_sync_timestamp_ms: AtomicU64,
 }
@@ -124,7 +124,7 @@ impl RocksWalWriter {
         rocks: Arc<RocksStore>,
         shard_id: usize,
         config: WalConfig,
-        metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+        metrics_recorder: Arc<dyn frogdb_types::traits::MetricsRecorder>,
     ) -> Self {
         let durability_mode = match &config.mode {
             DurabilityMode::Async => "async".to_string(),
@@ -472,7 +472,7 @@ pub fn spawn_periodic_sync(
 #[cfg(test)]
 mod unit_tests {
     use super::*;
-    use crate::noop::NoopMetricsRecorder;
+    use frogdb_types::traits::NoopMetricsRecorder;
     use tempfile::TempDir;
 
     #[tokio::test]

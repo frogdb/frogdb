@@ -8,7 +8,7 @@ use super::error::FunctionError;
 use super::function::FunctionFlags;
 use super::library::FunctionLibrary;
 use super::parser::{CapturedRegistration, ParsedLibrary, parse_shebang};
-use crate::sync::{LockError, MutexExt};
+use frogdb_types::sync::{LockError, MutexExt};
 
 /// Helper to convert lock errors to Lua errors.
 fn lock_err_to_lua(err: LockError) -> mlua::Error {
@@ -338,7 +338,7 @@ pub fn validate_library(library: &FunctionLibrary) -> Result<(), FunctionError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::functions::function::RegisteredFunction;
+    use crate::function::RegisteredFunction;
 
     #[test]
     fn test_load_simple_library() {

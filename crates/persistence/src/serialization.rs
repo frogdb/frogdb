@@ -19,11 +19,11 @@ use bytes::Bytes;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-use crate::bloom::{BloomFilterValue, BloomLayer};
-use crate::hyperloglog::{HLL_DENSE_SIZE, HyperLogLogValue};
-use crate::json::JsonValue;
-use crate::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
-use crate::types::{
+use frogdb_types::bloom::{BloomFilterValue, BloomLayer};
+use frogdb_types::hyperloglog::{HLL_DENSE_SIZE, HyperLogLogValue};
+use frogdb_types::json::JsonValue;
+use frogdb_types::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
+use frogdb_types::types::{
     HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec,
     StreamValue, StringValue, Value,
 };

@@ -9,7 +9,7 @@ use openraft::{EntryPayload, LogId, Snapshot, SnapshotMeta, StorageError, Stored
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-use super::types::{
+use crate::types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterError, ClusterResponse, ClusterSnapshot, ConfigEpoch,
     MigrationState, NodeId, NodeInfo, NodeRole, SlotMigration, SlotRange, TypeConfig,
 };

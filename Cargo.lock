@@ -1251,6 +1251,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-acl"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-types",
+ "hex",
+ "rand 0.8.5",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "frogdb-benches"
 version = "0.1.0"
 dependencies = [
@@ -1277,6 +1291,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-cluster"
+version = "0.1.0"
+dependencies = [
+ "openraft",
+ "parking_lot",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "frogdb-core"
 version = "0.1.0"
 dependencies = [
@@ -1284,13 +1313,16 @@ dependencies = [
  "bitvec",
  "bytes",
  "crc16",
+ "frogdb-acl",
+ "frogdb-cluster",
+ "frogdb-persistence",
  "frogdb-protocol",
+ "frogdb-scripting",
  "frogdb-types",
  "griddle",
  "hex",
  "linked-hash-map",
  "mlua",
- "openraft",
  "parking_lot",
  "proptest",
  "rand 0.8.5",
@@ -1326,6 +1358,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-persistence"
+version = "0.1.0"
+dependencies = [
+ "bitvec",
+ "bytes",
+ "frogdb-types",
+ "parking_lot",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "frogdb-protocol"
 version = "0.1.0"
 dependencies = [
@@ -1337,6 +1386,15 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "frogdb-scripting"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "frogdb-types",
+ "mlua",
 ]
 
 [[package]]

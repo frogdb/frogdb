@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options};
 use serde::{Deserialize, Serialize};
 
-use super::types::{NodeId, TypeConfig};
+use crate::types::{NodeId, TypeConfig};
 
 /// Column family names for RocksDB.
 const CF_LOGS: &str = "raft_logs";

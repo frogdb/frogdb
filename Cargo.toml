@@ -3,6 +3,10 @@ resolver = "2"
 members = [
     "crates/protocol",
     "crates/types",
+    "crates/cluster",
+    "crates/persistence",
+    "crates/acl",
+    "crates/scripting",
     "crates/core",
     "crates/server",
     "crates/telemetry",
@@ -93,6 +97,10 @@ jsonpath-rust = "0.7"
 # Internal crates
 frogdb-protocol = { path = "crates/protocol" }
 frogdb-types = { path = "crates/types" }
+frogdb-cluster = { path = "crates/cluster" }
+frogdb-persistence = { path = "crates/persistence" }
+frogdb-acl = { path = "crates/acl" }
+frogdb-scripting = { path = "crates/scripting" }
 frogdb-core = { path = "crates/core" }
 frogdb-telemetry = { path = "crates/telemetry" }
 frogdb-metrics-derive = { path = "crates/metrics-derive" }

@@ -245,7 +245,7 @@ pub fn new_shared_registry() -> SharedFunctionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::functions::function::FunctionFlags;
+    use crate::function::FunctionFlags;
 
     fn create_test_library(name: &str, functions: &[&str]) -> FunctionLibrary {
         let mut lib = FunctionLibrary::new(name.to_string(), "-- code".to_string());

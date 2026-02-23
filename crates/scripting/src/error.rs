@@ -139,8 +139,8 @@ impl fmt::Display for FunctionError {
 
 impl std::error::Error for FunctionError {}
 
-impl From<crate::sync::LockError> for FunctionError {
-    fn from(err: crate::sync::LockError) -> Self {
+impl From<frogdb_types::sync::LockError> for FunctionError {
+    fn from(err: frogdb_types::sync::LockError) -> Self {
         FunctionError::Internal {
             message: format!("Lock error: {}", err),
         }

@@ -12,9 +12,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::noop::MetricsRecorder;
-use crate::persistence::RocksStore;
-use crate::types::Value;
+use frogdb_types::traits::MetricsRecorder;
+use crate::rocks::RocksStore;
+use frogdb_types::types::Value;
 
 /// Completion marker written to metadata files.
 const COMPLETION_MARKER: &str = "FROGDB_SNAPSHOT_COMPLETE_v1";
