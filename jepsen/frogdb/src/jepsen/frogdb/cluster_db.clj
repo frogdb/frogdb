@@ -187,9 +187,7 @@
 (defn cluster-addslots!
   "Execute CLUSTER ADDSLOTS to assign slots to current node."
   [conn slots]
-  (apply (fn [& args]
-           (wcar conn (apply car/redis-call (concat ["CLUSTER" "ADDSLOTS"] args))))
-         (map str slots)))
+  (wcar conn (car/redis-call (into ["CLUSTER" "ADDSLOTS"] (map str slots)))))
 
 (defn cluster-setslot-node!
   "Execute CLUSTER SETSLOT <slot> NODE <node-id>."
@@ -370,9 +368,7 @@
   (let [slots (range start-slot (inc end-slot))]
     ;; Add slots in batches to avoid command too long
     (doseq [batch (partition-all 1000 slots)]
-      (apply (fn [& args]
-               (wcar conn (apply car/redis-call (concat ["CLUSTER" "ADDSLOTS"] (map str args)))))
-             batch))))
+      (wcar conn (car/redis-call (into ["CLUSTER" "ADDSLOTS"] (map str batch)))))))
 
 (defn setup-cluster-slots!
   "Set up slot distribution for a new cluster.

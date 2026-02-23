@@ -27,5 +27,9 @@ brew "llvm"              # Provides libclang for bindgen (used by librocksdb-sys
 # Cross-compilation
 brew "zig"               # Cross-compiler toolchain (used by cargo-zigbuild)
 
+# Jepsen testing (distributed consistency tests)
+brew "openjdk"           # Required by Leiningen/Clojure
+brew "leiningen"         # Clojure build tool for Jepsen
+
 # Optional: System RocksDB for faster builds (see `just build-fast`)
 brew "rocksdb"
