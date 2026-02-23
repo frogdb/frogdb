@@ -51,101 +51,182 @@ cargo install cargo-zigbuild
 All commands run from the repository root:
 
 ```bash
-just jepsen-build                    # Cross-compile + build Docker image
-just jepsen-up                       # Start single-node container
-just jepsen-register --time-limit 30 # Run a register linearizability test
-just jepsen-results                  # Open results in browser (macOS)
-just jepsen-down                     # Tear down containers
+just jepsen-build                        # Cross-compile + build Docker image
+just jepsen register --time-limit 30     # Run a single test (auto-starts topology)
+just jepsen-results                      # Open results in browser (macOS)
+just jepsen-down                         # Tear down containers
 ```
 
-## Test Suites
+## Running Tests
 
-### Single-Node Tests
+### Single Test
 
-Tests run against a single FrogDB container. Start with `just jepsen-up`.
-
-| Recipe | Workload | Nemesis | What it tests |
-|---|---|---|---|
-| `just jepsen-register` | register | none | Linearizable reads/writes |
-| `just jepsen-counter` | counter | none | Atomic increment/decrement |
-| `just jepsen-append` | append | none | List append durability |
-| `just jepsen-transaction` | transaction | none | Multi-key atomicity |
-| `just jepsen-queue` | queue | none | FIFO ordering |
-| `just jepsen-set` | set | none | Set membership consistency |
-| `just jepsen-hash` | hash | none | Field-level atomicity |
-| `just jepsen-sortedset` | sortedset | none | Score/ranking consistency |
-| `just jepsen-expiry` | expiry | none | TTL/expiration correctness |
-| `just jepsen-blocking` | blocking | none | BLPOP/BRPOP semantics |
-
-### Single-Node Crash Tests
-
-Same container, with the nemesis killing and restarting FrogDB mid-test.
-
-| Recipe | Workload | Nemesis | What it tests |
-|---|---|---|---|
-| `just jepsen-crash` | register | kill | Register durability across crashes |
-| `just jepsen-counter-crash` | counter | kill | Counter durability across crashes |
-| `just jepsen-append-crash` | append | kill | Append durability across crashes |
-| `just jepsen-append-rapid` | append | rapid-kill | Append durability under rapid kills |
-| `just jepsen-transaction-crash` | transaction | kill | Transaction atomicity across crashes |
-| `just jepsen-sortedset-crash` | sortedset | kill | Sorted set durability across crashes |
-| `just jepsen-expiry-crash` | expiry | kill | TTL correctness across crashes |
-| `just jepsen-expiry-rapid` | expiry | rapid-kill | TTL correctness under rapid kills |
-| `just jepsen-blocking-crash` | blocking | kill | Blocking op semantics across crashes |
-
-### Replication Tests (3-Node)
-
-Tests run against a primary + 2 replica cluster. Start with `just jepsen-replication-up`.
-
-| Recipe | Workload | Nemesis | What it tests |
-|---|---|---|---|
-| `just jepsen-replication` | replication | none | Replication consistency |
-| `just jepsen-lag` | lag | none | Replication lag measurement |
-| `just jepsen-split-brain` | split-brain | partition | Split-brain detection |
-| `just jepsen-zombie` | zombie | partition | Zombie primary detection |
-| `just jepsen-replication-chaos` | replication | all-replication | Combined kill + pause + partition faults |
-
-### Raft Cluster Tests (5-Node)
-
-Tests run against a 5-node Raft cluster. Start with `just jepsen-raft-cluster-up`.
-
-| Recipe | Workload | Nemesis | What it tests |
-|---|---|---|---|
-| `just jepsen-cluster-formation` | cluster-formation | none | Cluster membership |
-| `just jepsen-leader-election` | leader-election | none | Raft leader election |
-| `just jepsen-slot-migration` | slot-migration | none | Hash slot redistribution |
-| `just jepsen-cross-slot` | cross-slot | none | Hash tag transactions |
-| `just jepsen-key-routing` | key-routing | none | MOVED/ASK redirects |
-| `just jepsen-leader-election-partition` | leader-election | partition | Leader election under partitions |
-| `just jepsen-key-routing-kill` | key-routing | kill | Key routing under node kills |
-| `just jepsen-slot-migration-partition` | slot-migration | partition | Slot migration under partitions |
-| `just jepsen-raft-chaos` | key-routing | raft-cluster | Combined Raft cluster faults |
-| `just jepsen-clock-skew` | register | clock-skew | Register correctness under clock skew |
-| `just jepsen-disk-failure` | register | disk-failure | Register correctness under disk failures |
-| `just jepsen-slow-network` | register | slow-network | Register correctness under slow network |
-| `just jepsen-memory-pressure` | register | memory-pressure | Register correctness under memory pressure |
-
-### Running All Tests
+Use `just jepsen <name>` to run any test by name. The script automatically starts the required Docker Compose topology:
 
 ```bash
-just jepsen-all              # All single-node + crash tests
+just jepsen register --time-limit 30         # Single-node linearizability
+just jepsen append-crash --time-limit 60     # Single-node crash recovery
+just jepsen split-brain --time-limit 60      # Replication partition test
+just jepsen raft-chaos --time-limit 120      # Raft combined faults
+```
+
+Extra flags are passed through to `lein`:
+
+```bash
+just jepsen register --time-limit 60 --rate 20
+```
+
+### Test Suites
+
+Run predefined groups of tests. Suite commands auto-build and manage topology lifecycle:
+
+```bash
+just jepsen-all              # All single + crash + replication + raft tests
 just jepsen-replication-all  # All 3-node replication tests
 just jepsen-raft-all         # All 5-node Raft cluster tests
 ```
 
-Each `*-all` recipe handles build and container startup automatically.
-
-### Tear Down
+Or use `run.py` directly for more control:
 
 ```bash
-just jepsen-down               # Single-node
-just jepsen-replication-down   # 3-node replication
-just jepsen-raft-cluster-down  # 5-node Raft cluster
+uv run jepsen/run.py run --suite single             # 10 basic single-node tests
+uv run jepsen/run.py run --suite crash              # 19 tests: basic + crash variants
+uv run jepsen/run.py run --suite replication        # 5 replication workloads
+uv run jepsen/run.py run --suite raft               # 9 core Raft tests
+uv run jepsen/run.py run --suite raft-extended      # 4 extended nemesis tests
+uv run jepsen/run.py run --suite all                # Everything except raft-extended
+uv run jepsen/run.py run --suite all --build        # Build first, then run all
+uv run jepsen/run.py run --suite crash --teardown   # Tear down containers after
+uv run jepsen/run.py run --suite all --stop-on-failure  # Abort on first failure
+```
+
+### Listing Tests
+
+```bash
+just jepsen-list                                     # All tests and suites
+uv run jepsen/run.py list --topology single          # Filter by topology
+uv run jepsen/run.py list --topology raft            # Only Raft tests
+```
+
+## `run.py` CLI Reference
+
+```
+jepsen/run.py run <test>                 # Run a single named test
+jepsen/run.py run --suite <name>         # Run a predefined suite
+jepsen/run.py list [--topology X]        # List tests/suites
+jepsen/run.py build                      # Cross-compile + docker build
+jepsen/run.py up <single|replication|raft>
+jepsen/run.py down [topology]            # Omit = tear down all
+jepsen/run.py clean                      # rm -rf jepsen/frogdb/store/
+jepsen/run.py results                    # Open latest results in browser
+```
+
+### `run` Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--build / --no-build` | no-build | Cross-compile + docker build before running |
+| `--teardown / --no-teardown` | no-teardown | Tear down compose after running |
+| `--time-limit N` | per-test default | Override default time-limit for all tests |
+| `--stop-on-failure` | off | Abort suite on first failure |
+| `--no-color` | auto-detect | Disable ANSI colors |
+
+Extra arguments after the test name are passed through to `lein run test`.
+
+## Test Suites
+
+### Single-Node Tests (`single` suite)
+
+Tests run against a single FrogDB container.
+
+| Test | Workload | Nemesis | What it tests |
+|---|---|---|---|
+| `register` | register | none | Linearizable reads/writes |
+| `counter` | counter | none | Atomic increment/decrement |
+| `append` | append | none | List append durability |
+| `transaction` | transaction | none | Multi-key atomicity |
+| `queue` | queue | none | FIFO ordering |
+| `set` | set | none | Set membership consistency |
+| `hash` | hash | none | Field-level atomicity |
+| `sortedset` | sortedset | none | Score/ranking consistency |
+| `expiry` | expiry | none | TTL/expiration correctness |
+| `blocking` | blocking | none | BLPOP/BRPOP semantics |
+
+### Crash Tests (`crash` suite)
+
+Includes all single-node basic tests plus crash variants:
+
+| Test | Workload | Nemesis | What it tests |
+|---|---|---|---|
+| `crash` | register | kill | Register durability across crashes |
+| `counter-crash` | counter | kill | Counter durability across crashes |
+| `append-crash` | append | kill | Append durability across crashes |
+| `append-rapid` | append | rapid-kill | Append durability under rapid kills |
+| `transaction-crash` | transaction | kill | Transaction atomicity across crashes |
+| `sortedset-crash` | sortedset | kill | Sorted set durability across crashes |
+| `expiry-crash` | expiry | kill | TTL correctness across crashes |
+| `expiry-rapid` | expiry | rapid-kill | TTL correctness under rapid kills |
+| `blocking-crash` | blocking | kill | Blocking op semantics across crashes |
+
+### Replication Tests (`replication` suite, 3-node)
+
+| Test | Workload | Nemesis | What it tests |
+|---|---|---|---|
+| `replication` | replication | none | Replication consistency |
+| `lag` | lag | none | Replication lag measurement |
+| `split-brain` | split-brain | partition | Split-brain detection |
+| `zombie` | zombie | partition | Zombie primary detection |
+| `replication-chaos` | replication | all-replication | Combined kill + pause + partition faults |
+
+### Raft Cluster Tests (`raft` suite, 5-node)
+
+| Test | Workload | Nemesis | What it tests |
+|---|---|---|---|
+| `cluster-formation` | cluster-formation | none | Cluster membership |
+| `leader-election` | leader-election | none | Raft leader election |
+| `slot-migration` | slot-migration | none | Hash slot redistribution |
+| `cross-slot` | cross-slot | none | Hash tag transactions |
+| `key-routing` | key-routing | none | MOVED/ASK redirects |
+| `leader-election-partition` | leader-election | partition | Leader election under partitions |
+| `key-routing-kill` | key-routing | kill | Key routing under node kills |
+| `slot-migration-partition` | slot-migration | partition | Slot migration under partitions |
+| `raft-chaos` | key-routing | raft-cluster | Combined Raft cluster faults |
+
+### Raft Extended Tests (`raft-extended` suite)
+
+| Test | Workload | Nemesis | What it tests |
+|---|---|---|---|
+| `clock-skew` | register | clock-skew | Register correctness under clock skew |
+| `disk-failure` | register | disk-failure | Register correctness under disk failures |
+| `slow-network` | register | slow-network | Register correctness under slow network |
+| `memory-pressure` | register | memory-pressure | Register correctness under memory pressure |
+
+### Standalone Tests
+
+| Test | Workload | Nemesis | What it tests |
+|---|---|---|---|
+| `nemesis-pause` | register | pause | Register correctness under SIGSTOP/SIGCONT |
+
+## Compose Lifecycle
+
+The `run` subcommand manages topology automatically, but you can also control it manually:
+
+```bash
+# Start/stop topologies
+just jepsen-up                  # Single-node
+just jepsen-down                # Single-node
+just jepsen-replication-up      # 3-node replication
+just jepsen-replication-down    # 3-node replication
+just jepsen-raft-cluster-up     # 5-node Raft cluster
+just jepsen-raft-cluster-down   # 5-node Raft cluster
+
+# Tear down all topologies at once
+uv run jepsen/run.py down
 ```
 
 ## Running Tests Directly
 
-For more control, run `lein run test` from `jepsen/frogdb/`:
+For full control, run `lein run test` from `jepsen/frogdb/`:
 
 ```bash
 cd jepsen/frogdb
@@ -198,6 +279,12 @@ Host machine
 ├── just jepsen-build
 │   ├── cargo zigbuild → target/x86_64-unknown-linux-gnu/release/frogdb-server
 │   └── docker build  → frogdb:latest image
+│
+├── jepsen/run.py (orchestration)
+│   ├── Manages Docker Compose lifecycle per topology
+│   ├── Groups tests by topology, starts/stops containers as needed
+│   ├── Streams lein output, detects pass/fail verdict
+│   └── Prints summary table with results
 │
 ├── Docker containers (per topology)
 │   ├── Single-node: n1                    (jepsen/docker-compose.yml)

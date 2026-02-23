@@ -4,7 +4,8 @@
    Provides CLI interface for running various consistency tests
    against FrogDB, including register and counter workloads with
    optional crash testing."
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [clojure.tools.logging :refer [info warn]]
             [jepsen.checker :as checker]
             [jepsen.cli :as cli]
@@ -225,6 +226,22 @@
   "All CLI options including Jepsen's standard options."
   (concat cli-opts cli/test-opt-spec))
 
+(def batch-cli-opts
+  "Additional CLI options for batch test execution."
+  [[nil "--batch-file PATH" "EDN file with batch test configurations"]])
+
+;; ===========================================================================
+;; Batch Execution
+;; ===========================================================================
+
+(defn batch-tests-fn
+  "Generate test maps from a batch EDN file.
+   Each entry in the EDN vector is merged with CLI options to form a test config."
+  [options]
+  (let [path (:batch-file options)
+        configs (edn/read-string (slurp path))]
+    (map #(frogdb-test (merge options %)) configs)))
+
 ;; ===========================================================================
 ;; Commands
 ;; ===========================================================================
@@ -250,10 +267,13 @@
 
    Usage:
      lein run test --workload register --nemesis none --time-limit 60
-     lein run test --workload counter --nemesis kill --time-limit 120"
+     lein run test --workload counter --nemesis kill --time-limit 120
+     lein run test-all --docker --batch-file tests.edn"
   [& args]
   (cli/run!
     (merge (cli/single-test-cmd {:test-fn frogdb-test
                                  :opt-spec cli-opts})
+           (cli/test-all-cmd {:tests-fn batch-tests-fn
+                              :opt-spec (into cli-opts batch-cli-opts)})
            (cli/serve-cmd))
     args))
