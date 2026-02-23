@@ -13,9 +13,9 @@ use rand::seq::IteratorRandom;
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-// Re-export traits and noop implementations from the traits module
+// Re-export traits and noop implementations from frogdb-types
 // for backward compatibility
-pub use crate::traits::{
+pub use frogdb_types::traits::{
     // Metrics
     MetricsRecorder,
     NoopMetricsRecorder,

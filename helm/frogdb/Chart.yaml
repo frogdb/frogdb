@@ -1,0 +1,24 @@
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: crates/server/src/config/
+# Regenerate with: just helm-gen
+# =============================================================================
+apiVersion: v2
+name: frogdb
+description: A high-performance Redis-compatible database with Raft consensus
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - database
+  - redis
+  - key-value
+  - raft
+  - distributed
+home: https://github.com/nathanjordan/frogdb
+sources:
+  - https://github.com/nathanjordan/frogdb
+maintainers:
+  - name: Nathan Jordan
+    url: https://github.com/nathanjordan

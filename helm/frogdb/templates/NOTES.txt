@@ -1,0 +1,57 @@
+FrogDB has been deployed!
+
+{{- if .Values.cluster.enabled }}
+
+CLUSTER MODE ENABLED ({{ .Values.replicaCount }} nodes)
+
+1. Wait for all pods to be ready:
+
+   kubectl get pods -l "app.kubernetes.io/name={{ include "frogdb.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -w
+
+2. Verify cluster status:
+
+   kubectl exec {{ include "frogdb.fullname" . }}-0 -- redis-cli -p {{ .Values.frogdb.port }} CLUSTER INFO
+
+3. Connect to the cluster:
+
+   kubectl port-forward svc/{{ include "frogdb.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+   redis-cli -p {{ .Values.service.port }}
+
+{{- else }}
+
+STANDALONE MODE
+
+1. Wait for the pod to be ready:
+
+   kubectl get pods -l "app.kubernetes.io/name={{ include "frogdb.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -w
+
+2. Connect to FrogDB:
+
+   kubectl port-forward svc/{{ include "frogdb.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+   redis-cli -p {{ .Values.service.port }}
+
+{{- end }}
+
+3. Check FrogDB logs:
+
+   kubectl logs -f {{ include "frogdb.fullname" . }}-0
+
+{{- if .Values.frogdb.metrics.enabled }}
+
+4. Access Prometheus metrics:
+
+   kubectl port-forward svc/{{ include "frogdb.fullname" . }} {{ .Values.frogdb.metrics.port }}:{{ .Values.frogdb.metrics.port }}
+   curl http://localhost:{{ .Values.frogdb.metrics.port }}/metrics
+
+{{- end }}
+
+{{- if .Values.frogdb.admin.enabled }}
+
+5. Access Admin API:
+
+   kubectl port-forward svc/{{ include "frogdb.fullname" . }} {{ .Values.frogdb.admin.port }}:{{ .Values.frogdb.admin.port }}
+   curl http://localhost:{{ .Values.frogdb.admin.port }}/health
+
+{{- end }}
+
+For more information, visit: https://github.com/nathanjordan/frogdb
