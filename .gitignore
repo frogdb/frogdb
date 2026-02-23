@@ -46,6 +46,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# cargo sweep cache
+sweep.timestamp
+
 # Load test reports (generated benchmark data)
 loadtest/reports
 
