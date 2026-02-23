@@ -22,76 +22,17 @@ rocksdb-env := if use-system-rocksdb != "" { "ROCKSDB_LIB_DIR=" + system-lib-dir
 
 # Check that system RocksDB libraries exist at the configured path
 rocksdb-check-libs:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -z "{{use-system-rocksdb}}" ]; then
-        echo "FROGDB_SYSTEM_ROCKSDB is not set — using vendored (compiled-from-source) RocksDB."
-        echo "Set FROGDB_SYSTEM_ROCKSDB=1 to use system-installed RocksDB for faster builds."
-        exit 0
-    fi
-    lib_dir="{{system-lib-dir}}"
-    echo "Checking for system RocksDB libraries in: $lib_dir"
-    if [ "$(uname)" = "Darwin" ]; then
-        ext="dylib"
-    else
-        ext="so"
-    fi
-    ok=true
-    for lib in rocksdb snappy; do
-        if ls "$lib_dir"/lib${lib}.*${ext}* 1>/dev/null 2>&1; then
-            echo "  ✓ lib${lib} found"
-        else
-            echo "  ✗ lib${lib} NOT found"
-            ok=false
-        fi
-    done
-    if [ "$ok" = false ]; then
-        echo ""
-        if [ "$(uname)" = "Darwin" ]; then
-            echo "Install with: brew install rocksdb snappy"
-        else
-            echo "Install with: apt install librocksdb-dev libsnappy-dev  (or your distro's equivalent)"
-        fi
-        exit 1
-    fi
-    echo "All required libraries found."
+    uv run scripts/rocksdb_check_libs.py {{if use-system-rocksdb != "" { "--system-rocksdb --lib-dir " + system-lib-dir } else { "" } }}
 
 # Check that a built binary dynamically links system RocksDB (post-build)
 rocksdb-check-binary:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -z "{{use-system-rocksdb}}" ]; then
-        echo "FROGDB_SYSTEM_ROCKSDB is not set — skipping binary link check."
-        exit 0
-    fi
-    # Find the most recently built binary (debug or release)
-    binary=""
-    for candidate in target/release/frogdb-server target/debug/frogdb-server; do
-        if [ -f "$candidate" ]; then
-            if [ -z "$binary" ] || [ "$candidate" -nt "$binary" ]; then
-                binary="$candidate"
-            fi
-        fi
-    done
-    if [ -z "$binary" ]; then
-        echo "No built binary found. Run 'just build' or 'just release' first."
-        exit 1
-    fi
-    echo "Checking binary: $binary"
-    if [ "$(uname)" = "Darwin" ]; then
-        deps=$(otool -L "$binary")
-    else
-        deps=$(ldd "$binary")
-    fi
-    if echo "$deps" | grep -q "librocksdb"; then
-        echo "  ✓ Dynamically links librocksdb (system RocksDB)"
-    else
-        echo "  ✗ No dynamic librocksdb link found — RocksDB is likely vendored (statically compiled)"
-        exit 1
-    fi
+    uv run scripts/rocksdb_check_binary.py {{if use-system-rocksdb != "" { "--system-rocksdb" } else { "" } }}
 
 # Full system RocksDB verification (libs + binary linking)
 rocksdb-check: rocksdb-check-libs rocksdb-check-binary
+
+cargo-sweep-install:
+    cargo install cargo-sweep
 
 # Default recipe - show available commands
 default:
@@ -196,11 +137,11 @@ doc:
 
 # Run Redis compatibility tests
 redis-compat *args:
-    uv run compat/redis-compat/run_tests.py {{args}}
+    uv run redis-compat/run_tests.py {{args}}
 
 # Run specific Redis test unit
 redis-compat-unit unit *args:
-    uv run compat/redis-compat/run_tests.py --single unit/{{unit}} {{args}}
+    uv run redis-compat/run_tests.py --single unit/{{unit}} {{args}}
 
 # Clean Redis test cache
 redis-compat-clean:
@@ -208,7 +149,7 @@ redis-compat-clean:
 
 # Show Redis compatibility coverage
 redis-compat-coverage:
-    uv run compat/redis-compat/coverage.py
+    uv run redis-compat/coverage.py
 
 # =============================================================================
 # Profiling (requires: cargo-flamegraph, samply, heaptrack)
