@@ -1,9 +1,9 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
 
-use super::json_error_to_command_error;
+use super::{get_json_mut, json_error_to_command_error};
 use crate::utils::{format_float, parse_f64};
 
 // ============================================================================
@@ -30,19 +30,7 @@ impl Command for JsonNumIncrByCommand {
         let path = String::from_utf8_lossy(&args[1]).to_string();
         let incr = parse_f64(&args[2])?;
 
-        // Check existence and type
-        {
-            let value = match ctx.store.get(key) {
-                Some(v) => v,
-                None => return Ok(Response::null()),
-            };
-            if value.as_json().is_none() {
-                return Err(CommandError::WrongType);
-            }
-        }
-
-        // Get mutable reference and increment
-        let json = ctx.store.get_mut(key).unwrap().as_json_mut().unwrap();
+        let json = get_json_mut!(ctx, key);
         let results = json
             .num_incr_by(&path, incr)
             .map_err(json_error_to_command_error)?;
@@ -67,13 +55,7 @@ impl Command for JsonNumIncrByCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -100,19 +82,7 @@ impl Command for JsonNumMultByCommand {
         let path = String::from_utf8_lossy(&args[1]).to_string();
         let mult = parse_f64(&args[2])?;
 
-        // Check existence and type
-        {
-            let value = match ctx.store.get(key) {
-                Some(v) => v,
-                None => return Ok(Response::null()),
-            };
-            if value.as_json().is_none() {
-                return Err(CommandError::WrongType);
-            }
-        }
-
-        // Get mutable reference and multiply
-        let json = ctx.store.get_mut(key).unwrap().as_json_mut().unwrap();
+        let json = get_json_mut!(ctx, key);
         let results = json
             .num_mult_by(&path, mult)
             .map_err(json_error_to_command_error)?;
@@ -137,11 +107,5 @@ impl Command for JsonNumMultByCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }

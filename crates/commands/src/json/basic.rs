@@ -1,9 +1,14 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, JsonValue, Value};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, JsonValue, Value, impl_keys_first,
+};
 use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
 
-use super::{default_limits, json_error_to_command_error, parse_json_value, parse_path};
+use super::{
+    default_limits, get_json, get_json_mut, json_error_to_command_error, parse_json_value,
+    parse_path, single_or_multi,
+};
 
 // ============================================================================
 // JSON.SET - Set a JSON value at a path
@@ -108,13 +113,7 @@ impl Command for JsonSetCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -189,14 +188,7 @@ impl Command for JsonGetCommand {
             paths.push("$".to_string());
         }
 
-        // Check if key exists and get the JSON value (cloned for use after borrow ends)
-        let json = match ctx.store.get(key) {
-            Some(value) => match value.as_json() {
-                Some(j) => j.clone(),
-                None => return Err(CommandError::WrongType),
-            },
-            None => return Ok(Response::null()),
-        };
+        let json = get_json!(ctx, key);
 
         // Get values for each path
         if paths.len() == 1 {
@@ -246,13 +238,7 @@ impl Command for JsonGetCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -285,30 +271,12 @@ impl Command for JsonDelCommand {
             return Ok(Response::Integer(deleted));
         }
 
-        // Check existence and type
-        {
-            let value = match ctx.store.get(key) {
-                Some(v) => v,
-                None => return Ok(Response::Integer(0)),
-            };
-            if value.as_json().is_none() {
-                return Err(CommandError::WrongType);
-            }
-        }
-
-        // Get mutable reference and delete
-        let json = ctx.store.get_mut(key).unwrap().as_json_mut().unwrap();
+        let json = get_json_mut!(ctx, key, Response::Integer(0));
         let deleted = json.delete(&path).map_err(json_error_to_command_error)?;
         Ok(Response::Integer(deleted as i64))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -391,35 +359,17 @@ impl Command for JsonTypeCommand {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
-        let json = match ctx.store.get(key) {
-            Some(value) => match value.as_json() {
-                Some(j) => j.clone(),
-                None => return Err(CommandError::WrongType),
-            },
-            None => return Ok(Response::null()),
-        };
+        let json = get_json!(ctx, key);
 
         let types = json.type_at(&path).map_err(json_error_to_command_error)?;
         if types.is_empty() {
             return Ok(Response::null());
         }
 
-        if types.len() == 1 {
-            Ok(Response::bulk(Bytes::from(types[0].as_str())))
-        } else {
-            let results: Vec<Response> = types
-                .iter()
-                .map(|t| Response::bulk(Bytes::from(t.as_str())))
-                .collect();
-            Ok(Response::Array(results))
-        }
+        Ok(single_or_multi(types, |t| {
+            Response::bulk(Bytes::from(t.as_str()))
+        }))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
