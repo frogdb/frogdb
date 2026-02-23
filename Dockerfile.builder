@@ -77,6 +77,7 @@ RUN mkdir -p /data && chown frogdb:frogdb /data
 COPY --from=builder /app/target/release/frogdb-server /usr/local/bin/frogdb-server
 
 # Environment variables for configuration (use __ for nested fields)
+# TODO: should this be 127.0.0.1 for security by default?
 ENV FROGDB_SERVER__BIND=0.0.0.0
 ENV FROGDB_SERVER__PORT=6379
 ENV FROGDB_PERSISTENCE__DATA_DIR=/data
