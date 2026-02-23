@@ -1,8 +1,11 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
-use super::{json_error_to_command_error, parse_json_value, parse_path};
+use super::{
+    get_json, get_json_mut, json_error_to_command_error, parse_json_value, parse_path,
+    single_or_multi,
+};
 use crate::utils::parse_i64;
 
 // ============================================================================
@@ -34,41 +37,17 @@ impl Command for JsonArrAppendCommand {
             values.push(parse_json_value(arg)?);
         }
 
-        // Check existence and type
-        {
-            let value = match ctx.store.get(key) {
-                Some(v) => v,
-                None => return Ok(Response::null()),
-            };
-            if value.as_json().is_none() {
-                return Err(CommandError::WrongType);
-            }
-        }
-
-        // Get mutable reference and append
-        let json = ctx.store.get_mut(key).unwrap().as_json_mut().unwrap();
+        let json = get_json_mut!(ctx, key);
         let results = json
             .arr_append(&path, values)
             .map_err(json_error_to_command_error)?;
 
-        if results.len() == 1 {
-            Ok(Response::Integer(results[0] as i64))
-        } else {
-            let responses: Vec<Response> = results
-                .iter()
-                .map(|&len| Response::Integer(len as i64))
-                .collect();
-            Ok(Response::Array(responses))
-        }
+        Ok(single_or_multi(results, |len| {
+            Response::Integer(len as i64)
+        }))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -105,34 +84,16 @@ impl Command for JsonArrIndexCommand {
             0
         };
 
-        let json = match ctx.store.get(key) {
-            Some(value) => match value.as_json() {
-                Some(j) => j.clone(),
-                None => return Err(CommandError::WrongType),
-            },
-            None => return Ok(Response::null()),
-        };
+        let json = get_json!(ctx, key);
 
         let results = json
             .arr_index(&path, &value, start, stop)
             .map_err(json_error_to_command_error)?;
 
-        if results.len() == 1 {
-            Ok(Response::Integer(results[0]))
-        } else {
-            let responses: Vec<Response> =
-                results.iter().map(|&idx| Response::Integer(idx)).collect();
-            Ok(Response::Array(responses))
-        }
+        Ok(single_or_multi(results, Response::Integer))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -165,41 +126,17 @@ impl Command for JsonArrInsertCommand {
             values.push(parse_json_value(arg)?);
         }
 
-        // Check existence and type
-        {
-            let value = match ctx.store.get(key) {
-                Some(v) => v,
-                None => return Ok(Response::null()),
-            };
-            if value.as_json().is_none() {
-                return Err(CommandError::WrongType);
-            }
-        }
-
-        // Get mutable reference and insert
-        let json = ctx.store.get_mut(key).unwrap().as_json_mut().unwrap();
+        let json = get_json_mut!(ctx, key);
         let results = json
             .arr_insert(&path, index, values)
             .map_err(json_error_to_command_error)?;
 
-        if results.len() == 1 {
-            Ok(Response::Integer(results[0] as i64))
-        } else {
-            let responses: Vec<Response> = results
-                .iter()
-                .map(|&len| Response::Integer(len as i64))
-                .collect();
-            Ok(Response::Array(responses))
-        }
+        Ok(single_or_multi(results, |len| {
+            Response::Integer(len as i64)
+        }))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -225,13 +162,7 @@ impl Command for JsonArrLenCommand {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
-        let json = match ctx.store.get(key) {
-            Some(value) => match value.as_json() {
-                Some(j) => j.clone(),
-                None => return Err(CommandError::WrongType),
-            },
-            None => return Ok(Response::null()),
-        };
+        let json = get_json!(ctx, key);
 
         let results = json.arr_len(&path).map_err(json_error_to_command_error)?;
 
@@ -239,30 +170,13 @@ impl Command for JsonArrLenCommand {
             return Ok(Response::null());
         }
 
-        if results.len() == 1 {
-            match results[0] {
-                Some(len) => Ok(Response::Integer(len as i64)),
-                None => Ok(Response::null()),
-            }
-        } else {
-            let responses: Vec<Response> = results
-                .iter()
-                .map(|&len| match len {
-                    Some(l) => Response::Integer(l as i64),
-                    None => Response::null(),
-                })
-                .collect();
-            Ok(Response::Array(responses))
-        }
+        Ok(single_or_multi(results, |len| match len {
+            Some(l) => Response::Integer(l as i64),
+            None => Response::null(),
+        }))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -293,53 +207,21 @@ impl Command for JsonArrPopCommand {
             None
         };
 
-        // Check existence and type
-        {
-            let value = match ctx.store.get(key) {
-                Some(v) => v,
-                None => return Ok(Response::null()),
-            };
-            if value.as_json().is_none() {
-                return Err(CommandError::WrongType);
-            }
-        }
-
-        // Get mutable reference and pop
-        let json = ctx.store.get_mut(key).unwrap().as_json_mut().unwrap();
+        let json = get_json_mut!(ctx, key);
         let results = json
             .arr_pop(&path, index)
             .map_err(json_error_to_command_error)?;
 
-        if results.len() == 1 {
-            match &results[0] {
-                Some(value) => {
-                    let json_str = serde_json::to_string(value).unwrap_or_default();
-                    Ok(Response::bulk(Bytes::from(json_str)))
-                }
-                None => Ok(Response::null()),
+        Ok(single_or_multi(results, |value| match value {
+            Some(v) => {
+                let json_str = serde_json::to_string(&v).unwrap_or_default();
+                Response::bulk(Bytes::from(json_str))
             }
-        } else {
-            let responses: Vec<Response> = results
-                .iter()
-                .map(|value| match value {
-                    Some(v) => {
-                        let json_str = serde_json::to_string(v).unwrap_or_default();
-                        Response::bulk(Bytes::from(json_str))
-                    }
-                    None => Response::null(),
-                })
-                .collect();
-            Ok(Response::Array(responses))
-        }
+            None => Response::null(),
+        }))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -367,39 +249,15 @@ impl Command for JsonArrTrimCommand {
         let start = parse_i64(&args[2])?;
         let stop = parse_i64(&args[3])?;
 
-        // Check existence and type
-        {
-            let value = match ctx.store.get(key) {
-                Some(v) => v,
-                None => return Ok(Response::null()),
-            };
-            if value.as_json().is_none() {
-                return Err(CommandError::WrongType);
-            }
-        }
-
-        // Get mutable reference and trim
-        let json = ctx.store.get_mut(key).unwrap().as_json_mut().unwrap();
+        let json = get_json_mut!(ctx, key);
         let results = json
             .arr_trim(&path, start, stop)
             .map_err(json_error_to_command_error)?;
 
-        if results.len() == 1 {
-            Ok(Response::Integer(results[0] as i64))
-        } else {
-            let responses: Vec<Response> = results
-                .iter()
-                .map(|&len| Response::Integer(len as i64))
-                .collect();
-            Ok(Response::Array(responses))
-        }
+        Ok(single_or_multi(results, |len| {
+            Response::Integer(len as i64)
+        }))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }

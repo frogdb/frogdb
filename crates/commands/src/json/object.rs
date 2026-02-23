@@ -1,8 +1,8 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
-use super::{json_error_to_command_error, parse_path};
+use super::{get_json, json_error_to_command_error, parse_path, single_or_multi};
 
 // ============================================================================
 // JSON.OBJKEYS - Get the keys of an object at a path
@@ -27,13 +27,7 @@ impl Command for JsonObjKeysCommand {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
-        let json = match ctx.store.get(key) {
-            Some(value) => match value.as_json() {
-                Some(j) => j.clone(),
-                None => return Err(CommandError::WrongType),
-            },
-            None => return Ok(Response::null()),
-        };
+        let json = get_json!(ctx, key);
 
         let results = json.obj_keys(&path).map_err(json_error_to_command_error)?;
 
@@ -41,42 +35,19 @@ impl Command for JsonObjKeysCommand {
             return Ok(Response::null());
         }
 
-        if results.len() == 1 {
-            match &results[0] {
-                Some(keys) => {
-                    let responses: Vec<Response> = keys
-                        .iter()
-                        .map(|k| Response::bulk(Bytes::from(k.clone())))
-                        .collect();
-                    Ok(Response::Array(responses))
-                }
-                None => Ok(Response::null()),
+        Ok(single_or_multi(results, |keys| match keys {
+            Some(ks) => {
+                let responses: Vec<Response> = ks
+                    .iter()
+                    .map(|k| Response::bulk(Bytes::from(k.clone())))
+                    .collect();
+                Response::Array(responses)
             }
-        } else {
-            let responses: Vec<Response> = results
-                .iter()
-                .map(|keys| match keys {
-                    Some(ks) => {
-                        let inner: Vec<Response> = ks
-                            .iter()
-                            .map(|k| Response::bulk(Bytes::from(k.clone())))
-                            .collect();
-                        Response::Array(inner)
-                    }
-                    None => Response::null(),
-                })
-                .collect();
-            Ok(Response::Array(responses))
-        }
+            None => Response::null(),
+        }))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
 
 // ============================================================================
@@ -102,13 +73,7 @@ impl Command for JsonObjLenCommand {
         let key = &args[0];
         let path = parse_path(args.get(1));
 
-        let json = match ctx.store.get(key) {
-            Some(value) => match value.as_json() {
-                Some(j) => j.clone(),
-                None => return Err(CommandError::WrongType),
-            },
-            None => return Ok(Response::null()),
-        };
+        let json = get_json!(ctx, key);
 
         let results = json.obj_len(&path).map_err(json_error_to_command_error)?;
 
@@ -116,28 +81,11 @@ impl Command for JsonObjLenCommand {
             return Ok(Response::null());
         }
 
-        if results.len() == 1 {
-            match results[0] {
-                Some(len) => Ok(Response::Integer(len as i64)),
-                None => Ok(Response::null()),
-            }
-        } else {
-            let responses: Vec<Response> = results
-                .iter()
-                .map(|&len| match len {
-                    Some(l) => Response::Integer(l as i64),
-                    None => Response::null(),
-                })
-                .collect();
-            Ok(Response::Array(responses))
-        }
+        Ok(single_or_multi(results, |len| match len {
+            Some(l) => Response::Integer(l as i64),
+            None => Response::null(),
+        }))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
+    impl_keys_first!();
 }
