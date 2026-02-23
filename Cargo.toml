@@ -9,6 +9,7 @@ members = [
     "crates/scripting",
     "crates/core",
     "crates/server",
+    "crates/debug",
     "crates/telemetry",
     "crates/metrics-derive",
     "crates/testing",
@@ -102,6 +103,7 @@ frogdb-persistence = { path = "crates/persistence" }
 frogdb-acl = { path = "crates/acl" }
 frogdb-scripting = { path = "crates/scripting" }
 frogdb-core = { path = "crates/core" }
+frogdb-debug = { path = "crates/debug" }
 frogdb-telemetry = { path = "crates/telemetry" }
 frogdb-metrics-derive = { path = "crates/metrics-derive" }
 frogdb-testing = { path = "crates/testing" }

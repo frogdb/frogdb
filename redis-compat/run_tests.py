@@ -37,7 +37,7 @@ def get_script_dir() -> Path:
 
 def get_project_root() -> Path:
     """Get the FrogDB project root directory."""
-    return get_script_dir().parent.parent
+    return get_script_dir().parent
 
 
 def get_skipfile_path() -> Path:
