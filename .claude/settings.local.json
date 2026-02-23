@@ -65,7 +65,9 @@
       "Bash(git cherry-pick:*)",
       "WebFetch(domain:lib.rs)",
       "WebFetch(domain:eu-central-1-1.aws.cloud2.influxdata.com)",
-      "WebFetch(domain:formulae.brew.sh)"
+      "WebFetch(domain:formulae.brew.sh)",
+      "Bash(tail:*)",
+      "WebFetch(domain:mise.jdx.dev)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -1,3 +1,4 @@
+# NOTE: We may move to mise (https://mise.jdx.dev/) for toolchain management in the future.
 { pkgs ? import <nixpkgs> {} }:
 
 pkgs.mkShell {
