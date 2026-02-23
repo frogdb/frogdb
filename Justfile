@@ -208,6 +208,10 @@ cross-install:
 cross-build:
     cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server
 
+# Cross-compile for Linux ARM64 using zig (for benchmarks on Apple Silicon)
+cross-build-arm:
+    cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server
+
 # Verify binary is valid Linux ELF
 cross-verify:
     @file target/x86_64-unknown-linux-gnu/release/frogdb-server
@@ -215,6 +219,10 @@ cross-verify:
 # Build Docker image (requires cross-build first)
 docker-build: cross-build
     docker build -t frogdb:latest .
+
+# Build benchmark Docker image (ARM-native, for Apple Silicon)
+docker-build-bench: cross-build-arm
+    docker build -f Dockerfile.bench -t frogdb:latest .
 
 # Build Docker image entirely inside Docker (no cross-compilation needed, uses system RocksDB)
 docker-build-full:

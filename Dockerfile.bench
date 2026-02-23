@@ -1,0 +1,38 @@
+# FrogDB Benchmark Docker Image (ARM-native for Apple Silicon)
+#
+# Unlike the main Dockerfile (which forces --platform=linux/amd64 for Jepsen),
+# this builds for the host architecture so FrogDB runs natively on ARM.
+#
+# Expects pre-built cross-compiled binary from:
+#   cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server
+# Or use: just cross-build-arm
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    ca-certificates \
+    redis-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -r -m -s /bin/false frogdb
+RUN mkdir -p /home/frogdb/data /home/frogdb/snapshots && chown -R frogdb:frogdb /home/frogdb
+
+COPY target/aarch64-unknown-linux-gnu/release/frogdb-server /usr/local/bin/frogdb-server
+RUN chmod +x /usr/local/bin/frogdb-server
+
+WORKDIR /home/frogdb
+
+ENV FROGDB_SERVER__BIND=0.0.0.0
+ENV FROGDB_SERVER__PORT=6379
+ENV FROGDB_PERSISTENCE__DATA_DIR=/home/frogdb/data
+ENV FROGDB_SNAPSHOT__SNAPSHOT_DIR=/home/frogdb/snapshots
+ENV FROGDB_LOGGING__LEVEL=info
+
+EXPOSE 6379
+
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=3 \
+    CMD redis-cli -p ${FROGDB_SERVER__PORT:-6379} PING || exit 1
+
+USER frogdb
+CMD ["frogdb-server"]
