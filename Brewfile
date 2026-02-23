@@ -34,6 +34,7 @@ brew "zig"               # Cross-compiler toolchain (used by cargo-zigbuild)
 # Jepsen testing (distributed consistency tests)
 brew "openjdk"           # Required by Leiningen/Clojure
 brew "leiningen"         # Clojure build tool for Jepsen
+brew "gnuplot"           # Required by Jepsen for performance graphs
 
 # Optional: System RocksDB for faster builds (set FROGDB_SYSTEM_ROCKSDB=1)
 brew "rocksdb"

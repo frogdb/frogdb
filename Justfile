@@ -218,250 +218,61 @@ docker-build-full:
 jepsen-build: cross-build
     docker build -t frogdb:latest .
 
-# Start Jepsen test environment (FrogDB node only)
-jepsen-up:
-    docker compose -f jepsen/docker-compose.yml up -d n1
+# Run a Jepsen test: just jepsen register --time-limit 30
+jepsen test *args:
+    uv run jepsen/run.py run {{test}} {{args}}
 
-# Stop Jepsen test environment
+# Run all single-node + crash + replication + raft Jepsen tests
+jepsen-all:
+    uv run jepsen/run.py run --suite all --build
+
+# Run all replication tests
+jepsen-replication-all:
+    uv run jepsen/run.py run --suite replication --build
+
+# Run all Raft cluster tests
+jepsen-raft-all:
+    uv run jepsen/run.py run --suite raft --build
+
+# Start Jepsen single-node environment
+jepsen-up:
+    uv run jepsen/run.py up single
+
+# Stop Jepsen single-node environment
 jepsen-down:
-    docker compose -f jepsen/docker-compose.yml down -v
+    uv run jepsen/run.py down single
+
+# Start Jepsen replication environment (3-node cluster)
+jepsen-replication-up:
+    uv run jepsen/run.py up replication
+
+# Stop Jepsen replication environment
+jepsen-replication-down:
+    uv run jepsen/run.py down replication
+
+# Start Jepsen Raft cluster environment (5-node)
+jepsen-raft-cluster-up:
+    uv run jepsen/run.py up raft
+
+# Stop Jepsen Raft cluster environment
+jepsen-raft-cluster-down:
+    uv run jepsen/run.py down raft
+
+# Clean Jepsen test results
+jepsen-clean:
+    uv run jepsen/run.py clean
+
+# Open Jepsen results in browser
+jepsen-results:
+    uv run jepsen/run.py results
+
+# List available Jepsen tests and suites
+jepsen-list:
+    uv run jepsen/run.py list
 
 # Enter Jepsen control node shell
 jepsen-shell:
     docker compose -f jepsen/docker-compose.yml exec control bash
-
-# Run Jepsen register workload (no failures)
-jepsen-register *args:
-    cd jepsen/frogdb && lein run test --docker --workload register --nemesis none {{args}}
-
-# Run Jepsen counter workload (no failures)
-jepsen-counter *args:
-    cd jepsen/frogdb && lein run test --docker --workload counter --nemesis none {{args}}
-
-# Run Jepsen append workload (durability/crash recovery testing)
-jepsen-append *args:
-    cd jepsen/frogdb && lein run test --docker --workload append --nemesis none {{args}}
-
-# Run Jepsen transaction workload (multi-key atomicity)
-jepsen-transaction *args:
-    cd jepsen/frogdb && lein run test --docker --workload transaction --nemesis none {{args}}
-
-# Run Jepsen queue workload (FIFO ordering)
-jepsen-queue *args:
-    cd jepsen/frogdb && lein run test --docker --workload queue --nemesis none {{args}}
-
-# Run Jepsen set workload (membership consistency)
-jepsen-set *args:
-    cd jepsen/frogdb && lein run test --docker --workload set --nemesis none {{args}}
-
-# Run Jepsen hash workload (field-level atomicity)
-jepsen-hash *args:
-    cd jepsen/frogdb && lein run test --docker --workload hash --nemesis none {{args}}
-
-# Run Jepsen sorted set workload (score/ranking consistency)
-jepsen-sortedset *args:
-    cd jepsen/frogdb && lein run test --docker --workload sortedset --nemesis none {{args}}
-
-# Run Jepsen expiry workload (TTL/expiration testing)
-jepsen-expiry *args:
-    cd jepsen/frogdb && lein run test --docker --workload expiry --nemesis none {{args}}
-
-# Run Jepsen blocking workload (BLPOP/BRPOP semantics)
-jepsen-blocking *args:
-    cd jepsen/frogdb && lein run test --docker --workload blocking --nemesis none {{args}}
-
-# Run Jepsen register workload with crash testing
-jepsen-crash *args:
-    cd jepsen/frogdb && lein run test --docker --workload register --nemesis kill {{args}}
-
-# Run Jepsen counter workload with crash testing
-jepsen-counter-crash *args:
-    cd jepsen/frogdb && lein run test --docker --workload counter --nemesis kill {{args}}
-
-# Run Jepsen append workload with crash testing (primary durability test)
-jepsen-append-crash *args:
-    cd jepsen/frogdb && lein run test --docker --workload append --nemesis kill {{args}}
-
-# Run Jepsen append workload with rapid-kill (stress test durability)
-jepsen-append-rapid *args:
-    cd jepsen/frogdb && lein run test --docker --workload append --nemesis rapid-kill {{args}}
-
-# Run Jepsen transaction workload with crash testing
-jepsen-transaction-crash *args:
-    cd jepsen/frogdb && lein run test --docker --workload transaction --nemesis kill {{args}}
-
-# Run Jepsen sorted set workload with crash testing
-jepsen-sortedset-crash *args:
-    cd jepsen/frogdb && lein run test --docker --workload sortedset --nemesis kill {{args}}
-
-# Run Jepsen expiry workload with crash testing
-jepsen-expiry-crash *args:
-    cd jepsen/frogdb && lein run test --docker --workload expiry --nemesis kill {{args}}
-
-# Run Jepsen expiry workload with rapid-kill (stress test TTL under crashes)
-jepsen-expiry-rapid *args:
-    cd jepsen/frogdb && lein run test --docker --workload expiry --nemesis rapid-kill {{args}}
-
-# Run Jepsen blocking workload with crash testing
-jepsen-blocking-crash *args:
-    cd jepsen/frogdb && lein run test --docker --workload blocking --nemesis kill {{args}}
-
-# Run nemesis test with kill (Docker mode)
-jepsen-nemesis-kill *args: jepsen-up
-    cd jepsen/frogdb && lein run test --docker --workload register --nemesis kill {{args}}
-
-# Run nemesis test with pause (Docker mode)
-jepsen-nemesis-pause *args: jepsen-up
-    cd jepsen/frogdb && lein run test --docker --workload register --nemesis pause {{args}}
-
-# Full nemesis test suite (build + kill + pause tests)
-jepsen-nemesis: jepsen-build
-    just jepsen-nemesis-kill --time-limit 60
-    just jepsen-nemesis-pause --time-limit 60
-    just jepsen-down
-
-# Run all Jepsen tests (build + all workloads)
-jepsen-all: jepsen-build jepsen-up
-    just jepsen-register --time-limit 30
-    just jepsen-counter --time-limit 30
-    just jepsen-append --time-limit 30
-    just jepsen-transaction --time-limit 30
-    just jepsen-queue --time-limit 30
-    just jepsen-set --time-limit 30
-    just jepsen-hash --time-limit 30
-    just jepsen-sortedset --time-limit 30
-    just jepsen-expiry --time-limit 30
-    just jepsen-blocking --time-limit 30
-    just jepsen-crash --time-limit 60
-    just jepsen-append-crash --time-limit 60
-    just jepsen-transaction-crash --time-limit 60
-    just jepsen-sortedset-crash --time-limit 60
-    just jepsen-expiry-crash --time-limit 60
-    just jepsen-blocking-crash --time-limit 60
-
-# Clean Jepsen test results
-jepsen-clean:
-    rm -rf jepsen/frogdb/store/
-
-# Open Jepsen results in browser (macOS)
-jepsen-results:
-    open jepsen/frogdb/store/latest/
-
-# ==============================================================================
-# Jepsen Replication Tests (3-node cluster)
-# ==============================================================================
-
-# Start Jepsen replication test environment (3-node cluster)
-jepsen-replication-up:
-    docker compose -f jepsen/frogdb/docker-compose.replication.yml up -d
-
-# Stop Jepsen replication test environment
-jepsen-replication-down:
-    docker compose -f jepsen/frogdb/docker-compose.replication.yml down -v
-
-# Run Jepsen replication consistency workload
-jepsen-replication *args:
-    cd jepsen/frogdb && lein run test --docker --workload replication --nemesis none {{args}}
-
-# Run Jepsen split-brain detection workload
-jepsen-split-brain *args:
-    cd jepsen/frogdb && lein run test --docker --workload split-brain --nemesis partition {{args}}
-
-# Run Jepsen zombie primary workload
-jepsen-zombie *args:
-    cd jepsen/frogdb && lein run test --docker --workload zombie --nemesis partition {{args}}
-
-# Run Jepsen replication lag measurement
-jepsen-lag *args:
-    cd jepsen/frogdb && lein run test --docker --workload lag --nemesis none {{args}}
-
-# Run Jepsen replication with combined faults (kill + pause + partition)
-jepsen-replication-chaos *args:
-    cd jepsen/frogdb && lein run test --docker --workload replication --nemesis all-replication {{args}}
-
-# Full replication test suite
-jepsen-replication-all: jepsen-build jepsen-replication-up
-    just jepsen-replication --time-limit 30
-    just jepsen-lag --time-limit 30
-    just jepsen-split-brain --time-limit 60
-    just jepsen-zombie --time-limit 60
-    just jepsen-replication-chaos --time-limit 120
-
-# ==============================================================================
-# Jepsen Raft Cluster Tests (5-node Raft consensus)
-# ==============================================================================
-
-# Start Jepsen Raft cluster test environment (5-node)
-jepsen-raft-cluster-up:
-    docker compose -f jepsen/frogdb/docker-compose.raft-cluster.yml up -d
-
-# Stop Jepsen Raft cluster test environment
-jepsen-raft-cluster-down:
-    docker compose -f jepsen/frogdb/docker-compose.raft-cluster.yml down -v
-
-# Run Jepsen cluster formation workload (cluster membership)
-jepsen-cluster-formation *args:
-    cd jepsen/frogdb && lein run test --docker --workload cluster-formation --nemesis none --cluster {{args}}
-
-# Run Jepsen leader election workload (Raft consensus)
-jepsen-leader-election *args:
-    cd jepsen/frogdb && lein run test --docker --workload leader-election --nemesis none --cluster {{args}}
-
-# Run Jepsen slot migration workload (hash slot redistribution)
-jepsen-slot-migration *args:
-    cd jepsen/frogdb && lein run test --docker --workload slot-migration --nemesis none --cluster {{args}}
-
-# Run Jepsen cross-slot workload (hash tag transactions)
-jepsen-cross-slot *args:
-    cd jepsen/frogdb && lein run test --docker --workload cross-slot --nemesis none --cluster {{args}}
-
-# Run Jepsen key routing workload (MOVED/ASK redirects)
-jepsen-key-routing *args:
-    cd jepsen/frogdb && lein run test --docker --workload key-routing --nemesis none --cluster {{args}}
-
-# Run Jepsen leader election with partition nemesis
-jepsen-leader-election-partition *args:
-    cd jepsen/frogdb && lein run test --docker --workload leader-election --nemesis partition --cluster {{args}}
-
-# Run Jepsen key routing with kill nemesis
-jepsen-key-routing-kill *args:
-    cd jepsen/frogdb && lein run test --docker --workload key-routing --nemesis kill --cluster {{args}}
-
-# Run Jepsen slot migration with partition nemesis
-jepsen-slot-migration-partition *args:
-    cd jepsen/frogdb && lein run test --docker --workload slot-migration --nemesis partition --cluster {{args}}
-
-# Run Jepsen Raft cluster with combined chaos nemesis
-jepsen-raft-chaos *args:
-    cd jepsen/frogdb && lein run test --docker --workload key-routing --nemesis raft-cluster --cluster {{args}}
-
-# Run Jepsen with clock skew nemesis
-jepsen-clock-skew *args:
-    cd jepsen/frogdb && lein run test --docker --workload register --nemesis clock-skew --cluster {{args}}
-
-# Run Jepsen with disk failure nemesis
-jepsen-disk-failure *args:
-    cd jepsen/frogdb && lein run test --docker --workload register --nemesis disk-failure --cluster {{args}}
-
-# Run Jepsen with slow network nemesis
-jepsen-slow-network *args:
-    cd jepsen/frogdb && lein run test --docker --workload register --nemesis slow-network --cluster {{args}}
-
-# Run Jepsen with memory pressure nemesis
-jepsen-memory-pressure *args:
-    cd jepsen/frogdb && lein run test --docker --workload register --nemesis memory-pressure --cluster {{args}}
-
-# Full Raft cluster test suite
-jepsen-raft-all: jepsen-build jepsen-raft-cluster-up
-    just jepsen-cluster-formation --time-limit 30
-    just jepsen-leader-election --time-limit 30
-    just jepsen-slot-migration --time-limit 60
-    just jepsen-cross-slot --time-limit 30
-    just jepsen-key-routing --time-limit 30
-    just jepsen-leader-election-partition --time-limit 60
-    just jepsen-key-routing-kill --time-limit 60
-    just jepsen-slot-migration-partition --time-limit 90
-    just jepsen-raft-chaos --time-limit 120
 
 # =============================================================================
 # Helm Chart Generation

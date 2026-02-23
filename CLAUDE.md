@@ -56,34 +56,21 @@ Run Jepsen tests when changes touch core server subsystems: **persistence, clust
 # Build the Docker image for Jepsen
 just jepsen-build
 
-# Start the Jepsen environment
-just jepsen-up
+# Run a single test (auto-starts the required topology)
+just jepsen register --time-limit 30
+just jepsen append-crash --time-limit 60
+just jepsen split-brain --time-limit 60
 
-# Core workloads (run all of these)
-just jepsen-register --time-limit 30
-just jepsen-counter --time-limit 30
-just jepsen-append --time-limit 30
-just jepsen-transaction --time-limit 30
-just jepsen-queue --time-limit 30
-just jepsen-set --time-limit 30
-just jepsen-hash --time-limit 30
-just jepsen-sortedset --time-limit 30
-just jepsen-expiry --time-limit 30
-just jepsen-blocking --time-limit 30
+# Run predefined suites (auto-builds and manages topology lifecycle)
+just jepsen-all                # single + crash + replication + raft
+just jepsen-replication-all    # replication tests only
+just jepsen-raft-all           # raft cluster tests only
 
-# Crash recovery workloads
-just jepsen-crash --time-limit 60
-just jepsen-append-crash --time-limit 60
-just jepsen-transaction-crash --time-limit 60
-just jepsen-sortedset-crash --time-limit 60
-just jepsen-expiry-crash --time-limit 60
-just jepsen-blocking-crash --time-limit 60
-
-# Tear down
-just jepsen-down
+# List all available tests and suites
+just jepsen-list
 ```
 
-Or run the full suite with: `just jepsen-all`
+Or run suites directly: `uv run jepsen/run.py run --suite crash --build`
 
 ## Code Generation
 
