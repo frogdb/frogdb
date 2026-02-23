@@ -192,7 +192,16 @@ def get_compose_file() -> Path:
 
 
 def build_memtier_image() -> bool:
-    """Build the memtier_benchmark Docker image."""
+    """Build the memtier_benchmark Docker image (skips if already cached)."""
+    # Check if image already exists
+    check = subprocess.run(
+        ["docker", "images", "-q", f"{COMPOSE_PROJECT}-memtier"],
+        capture_output=True, text=True,
+    )
+    if check.returncode == 0 and check.stdout.strip():
+        print("memtier_benchmark image: cached")
+        return True
+
     print("Building memtier_benchmark image (first run may take a few minutes)...")
     result = subprocess.run(
         compose_cmd() + ["build", "memtier"],
@@ -218,7 +227,7 @@ def start_services(backends: list[str]) -> bool:
 
     print(f"Starting services: {', '.join(services)}")
     result = subprocess.run(
-        compose_cmd() + ["up", "-d", "--build"] + services,
+        compose_cmd() + ["up", "-d"] + services,
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -349,6 +358,8 @@ def run_memtier(
     requests: int,
     name: str,
     cluster_mode: bool = False,
+    threads: int = 4,
+    clients: int = 25,
 ) -> bool:
     """Run memtier_benchmark inside Docker on the cluster network."""
     # Mount the report directory as /output in the container
@@ -361,8 +372,8 @@ def run_memtier(
         "memtier",
         "-s", host,
         "-p", str(port),
-        "--threads", "4",
-        "--clients", "25",
+        "--threads", str(threads),
+        "--clients", str(clients),
         "--requests", str(requests),
         "--data-size", "128",
         "--ratio", ratio,
@@ -404,6 +415,8 @@ def run_benchmarks(
     workload: WorkloadConfig,
     requests: int,
     report_dir: Path,
+    threads: int = 4,
+    clients: int = 25,
 ) -> dict[str, Any]:
     """Run memtier against all backends and collect results."""
     results: dict[str, Any] = {}
@@ -415,7 +428,7 @@ def run_benchmarks(
     if run_memtier(
         FROGDB_IP, CLUSTER_PORT, frogdb_json, frogdb_txt,
         workload.ratio, workload.key_pattern, requests,
-        name="FrogDB",
+        name="FrogDB", threads=threads, clients=clients,
     ):
         if frogdb_json.exists():
             with open(frogdb_json) as f:
@@ -430,7 +443,7 @@ def run_benchmarks(
                 REDIS_CLUSTER_IPS[0], CLUSTER_PORT, redis_json, redis_txt,
                 workload.ratio, workload.key_pattern, requests,
                 name="Redis Cluster",
-                cluster_mode=True,
+                cluster_mode=True, threads=threads, clients=clients,
             ):
                 if redis_json.exists():
                     with open(redis_json) as f:
@@ -444,7 +457,7 @@ def run_benchmarks(
                 VALKEY_CLUSTER_IPS[0], CLUSTER_PORT, valkey_json, valkey_txt,
                 workload.ratio, workload.key_pattern, requests,
                 name="Valkey Cluster",
-                cluster_mode=True,
+                cluster_mode=True, threads=threads, clients=clients,
             ):
                 if valkey_json.exists():
                     with open(valkey_json) as f:
@@ -457,7 +470,7 @@ def run_benchmarks(
             if run_memtier(
                 DRAGONFLY_IP, CLUSTER_PORT, df_json, df_txt,
                 workload.ratio, workload.key_pattern, requests,
-                name="Dragonfly",
+                name="Dragonfly", threads=threads, clients=clients,
             ):
                 if df_json.exists():
                     with open(df_json) as f:
@@ -640,6 +653,14 @@ def main() -> None:
         help="Comma-separated: redis,valkey,dragonfly or 'all' (default: all)",
     )
     parser.add_argument(
+        "--threads", type=int, default=4,
+        help="memtier threads (default: 4)",
+    )
+    parser.add_argument(
+        "--clients", type=int, default=25,
+        help="memtier clients per thread (default: 25)",
+    )
+    parser.add_argument(
         "--keep", action="store_true",
         help="Don't stop containers after benchmarks",
     )
@@ -674,6 +695,8 @@ def main() -> None:
     print("=" * 70)
     print(f"Workload:     {args.workload} (ratio {workload.ratio})")
     print(f"Requests:     {args.requests} per client")
+    print(f"Threads:      {args.threads}")
+    print(f"Clients:      {args.clients} per thread ({args.threads * args.clients} total)")
     print(f"Backends:     FrogDB, {', '.join(BACKEND_DISPLAY_NAMES[b] for b in backends)}")
     print(f"Output:       {report_dir}")
     print("=" * 70)
@@ -711,7 +734,7 @@ def main() -> None:
     print("Running benchmarks...")
     print("-" * 70)
 
-    results = run_benchmarks(backends, workload, args.requests, report_dir)
+    results = run_benchmarks(backends, workload, args.requests, report_dir, args.threads, args.clients)
 
     # Save combined results
     combined = {
