@@ -75,9 +75,60 @@ pub fn parse_simple_response(data: &[u8]) -> OperationResult {
                 OperationResult::Error("Invalid bulk string".into())
             }
         }
-        b'*' => OperationResult::Array(vec![]),
+        b'*' => OperationResult::Array(parse_resp_array(data)),
         _ => OperationResult::Error("Unknown response type".into()),
     }
+}
+
+/// Parse a RESP array response into a vector of `OperationResult`.
+///
+/// Expects `data` to start with `*N\r\n` followed by N bulk-string elements.
+fn parse_resp_array(data: &[u8]) -> Vec<OperationResult> {
+    let s = String::from_utf8_lossy(&data[1..]);
+    let header_end = match s.find("\r\n") {
+        Some(pos) => pos,
+        None => return vec![],
+    };
+    let count: usize = match s[..header_end].parse() {
+        Ok(n) => n,
+        Err(_) => return vec![],
+    };
+
+    let mut results = Vec::with_capacity(count);
+    // offset into `data` past the `*N\r\n` header
+    let mut pos = 1 + header_end + 2;
+
+    for _ in 0..count {
+        if pos >= data.len() {
+            break;
+        }
+        match data[pos] {
+            b'$' => {
+                let rest = String::from_utf8_lossy(&data[pos + 1..]);
+                if rest.starts_with("-1") {
+                    results.push(OperationResult::Nil);
+                    // skip past `$-1\r\n`
+                    pos += 5;
+                } else if let Some(len_end) = rest.find("\r\n") {
+                    let bulk_len: usize = rest[..len_end].parse().unwrap_or(0);
+                    let data_start = pos + 1 + len_end + 2;
+                    let data_end = data_start + bulk_len;
+                    if data_end <= data.len() {
+                        results.push(OperationResult::String(Bytes::copy_from_slice(
+                            &data[data_start..data_end],
+                        )));
+                    }
+                    // skip past `$N\r\n<data>\r\n`
+                    pos = data_end + 2;
+                } else {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+
+    results
 }
 
 type BoxError = Box<dyn std::error::Error + 'static>;

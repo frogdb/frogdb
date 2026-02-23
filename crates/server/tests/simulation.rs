@@ -1417,7 +1417,7 @@ fn test_mset_linearizable() {
         Ok(())
     });
 
-    // Client 3: Observe final state
+    // Client 3: Observe final state with a single atomic MGET
     let h3 = history.clone();
     sim.client("client3", async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1429,44 +1429,40 @@ fn test_mset_linearizable() {
         let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
         let mut buf = vec![0u8; 1024];
 
-        // GET {same}a
-        let op_a = {
+        // MGET {same}a {same}b — single atomic read on the same shard
+        let op_id = {
             let mut h = h3.lock().unwrap();
-            h.record_invoke(3, "GET", vec![Bytes::from("{same}a")])
+            h.record_invoke(
+                3,
+                "MGET",
+                vec![Bytes::from("{same}a"), Bytes::from("{same}b")],
+            )
         };
-        let cmd = encode_command(&[b"GET", b"{same}a"]);
+        let cmd = encode_command(&[b"MGET", b"{same}a", b"{same}b"]);
         stream.write_all(&cmd).await?;
         let n = stream.read(&mut buf).await?;
-        let result_a = parse_simple_response(&buf[..n]);
+        let result = parse_simple_response(&buf[..n]);
         {
             let mut h = h3.lock().unwrap();
-            h.record_return(op_a, 3, result_a.clone());
+            h.record_return(op_id, 3, result.clone());
         }
 
-        // GET {same}b
-        let op_b = {
-            let mut h = h3.lock().unwrap();
-            h.record_invoke(3, "GET", vec![Bytes::from("{same}b")])
-        };
-        let cmd = encode_command(&[b"GET", b"{same}b"]);
-        stream.write_all(&cmd).await?;
-        let n = stream.read(&mut buf).await?;
-        let result_b = parse_simple_response(&buf[..n]);
-        {
-            let mut h = h3.lock().unwrap();
-            h.record_return(op_b, 3, result_b.clone());
-        }
-
-        // Verify both keys have same value (either both 1 or both 2)
-        match (&result_a, &result_b) {
-            (OperationResult::String(a), OperationResult::String(b)) => {
-                assert_eq!(a, b, "Keys should have same value due to MSET atomicity");
-                assert!(
-                    a.as_ref() == b"1" || a.as_ref() == b"2",
-                    "Value should be 1 or 2"
-                );
+        // Verify both keys have same value (either both "1" or both "2")
+        match &result {
+            OperationResult::Array(results) => {
+                assert_eq!(results.len(), 2, "MGET should return 2 elements");
+                match (&results[0], &results[1]) {
+                    (OperationResult::String(a), OperationResult::String(b)) => {
+                        assert_eq!(a, b, "Keys should have same value due to MSET atomicity");
+                        assert!(
+                            a.as_ref() == b"1" || a.as_ref() == b"2",
+                            "Value should be 1 or 2"
+                        );
+                    }
+                    _ => panic!("Expected string results in MGET array, got {results:?}"),
+                }
             }
-            _ => panic!("Expected string results"),
+            _ => panic!("Expected array result from MGET, got {result:?}"),
         }
 
         Ok(())
