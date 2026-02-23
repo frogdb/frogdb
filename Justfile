@@ -373,3 +373,11 @@ docs-build:
 # Preview production build of documentation site
 docs-preview:
     cd docs-site && bun run preview
+
+# =============================================================================
+# Debug UI Assets
+# =============================================================================
+
+# Install and vendor JS/CSS assets for the debug web UI
+debug-assets:
+    cd crates/debug && bun install && bun run vendor

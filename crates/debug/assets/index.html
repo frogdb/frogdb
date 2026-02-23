@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FrogDB Debug</title>
+    <link rel="stylesheet" href="/debug/assets/css/chota.min.css">
+    <link rel="stylesheet" href="/debug/assets/css/style.css">
+    <link rel="stylesheet" href="/debug/assets/css/uPlot.min.css">
+    <script src="/debug/assets/js/htmx.min.js"></script>
+    <script defer src="/debug/assets/js/alpine.min.js"></script>
+    <script src="/debug/assets/js/uplot.min.js"></script>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>FrogDB Debug</h1>
+            <nav>
+                <a href="#cluster" class="nav-link active" data-tab="cluster">Cluster</a>
+                <a href="#config" class="nav-link" data-tab="config">Config</a>
+                <a href="#metrics" class="nav-link" data-tab="metrics">Metrics</a>
+                <a href="#slowlog" class="nav-link" data-tab="slowlog">Slowlog</a>
+                <a href="#latency" class="nav-link" data-tab="latency">Latency</a>
+                <a href="#bundles" class="nav-link" data-tab="bundles">Bundles</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container">
+        <section id="cluster"
+            hx-get="/debug/partials/cluster"
+            hx-trigger="load, every 5s"
+            hx-swap="innerHTML">
+            <div class="loading">Loading cluster status...</div>
+        </section>
+
+        <section id="config" style="display:none"
+            hx-get="/debug/partials/config"
+            hx-trigger="revealed, every 30s"
+            hx-swap="innerHTML">
+            <div class="loading">Loading configuration...</div>
+        </section>
+
+        <section id="metrics" style="display:none"
+            hx-get="/debug/partials/metrics"
+            hx-trigger="revealed, every 2s"
+            hx-swap="innerHTML">
+            <div class="loading">Loading metrics...</div>
+        </section>
+
+        <section id="slowlog" style="display:none"
+            hx-get="/debug/partials/slowlog"
+            hx-trigger="revealed, every 5s"
+            hx-swap="innerHTML">
+            <div class="loading">Loading slowlog...</div>
+        </section>
+
+        <section id="latency" style="display:none"
+            hx-get="/debug/partials/latency"
+            hx-trigger="revealed, every 5s"
+            hx-swap="innerHTML">
+            <div class="loading">Loading latency data...</div>
+        </section>
+
+        <section id="bundles" style="display:none"
+            hx-get="/debug/partials/bundles"
+            hx-trigger="revealed, every 10s"
+            hx-swap="innerHTML">
+            <div class="loading">Loading bundles...</div>
+        </section>
+    </main>
+
+    <script>
+        // Tab navigation
+        document.querySelectorAll('.nav-link').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const tab = link.dataset.tab;
+
+                // Update active nav
+                document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+                link.classList.add('active');
+
+                // Show/hide sections
+                document.querySelectorAll('main > section').forEach(s => {
+                    s.style.display = s.id === tab ? '' : 'none';
+                });
+
+                // Trigger HTMX load for newly visible section
+                const section = document.getElementById(tab);
+                if (section) htmx.trigger(section, 'revealed');
+            });
+        });
+
+        // Bundle generation
+        window.addEventListener('generate-bundle', async (e) => {
+            const duration = e.detail || '0';
+            const btn = document.querySelector('.btn-primary');
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = duration === '0' ? 'Generating...' : `Collecting (${duration}s)...`;
+            }
+
+            try {
+                const resp = await fetch(`/debug/api/bundle/generate?duration=${duration}`);
+                if (resp.ok) {
+                    const blob = await resp.blob();
+                    const id = resp.headers.get('X-Bundle-Id') || 'bundle';
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `frogdb-bundle-${id}.zip`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+
+                    // Refresh bundle list
+                    htmx.trigger(document.getElementById('bundles'), 'revealed');
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = 'Generate Bundle';
+                }
+            }
+        });
+    </script>
+</body>
+</html>
