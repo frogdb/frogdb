@@ -15,7 +15,7 @@ brew "terror/tap/just-lsp"
 brew "redis"
 
 # Redis compatibility testing
-brew "tcl-tk"  # Required for running Redis test suite
+brew "tcl-tk@8"  # Required for running Redis test suite (Tcl 8.x; Redis 7.x tests are incompatible with Tcl 9)
 brew "uv"      # Python script runner for test harness
 
 # Profiling tools

@@ -45,6 +45,44 @@ def get_skipfile_path() -> Path:
     return CACHE_DIR / "combined_skiplist.txt"
 
 
+def parse_skiplists(script_dir: Path) -> tuple[list[str], list[str]]:
+    """Parse all skiplist files and separate unit names from test names.
+
+    Returns (skip_units, skip_tests) where:
+    - skip_units: entries like "unit/protocol" that skip entire test files (--skipunit)
+    - skip_tests: individual test name patterns (--skipfile)
+    """
+    skipfiles = [
+        script_dir / "skiplist-intentional.txt",
+        script_dir / "skiplist-not-implemented.txt",
+        script_dir / "skiplist-flaky.txt",
+    ]
+
+    skip_units: list[str] = []
+    skip_tests: list[str] = []
+
+    for skipfile in skipfiles:
+        if not skipfile.exists():
+            continue
+        with open(skipfile) as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                # Entries like "unit/foo" or "integration/bar" are unit names
+                if "/" in stripped:
+                    skip_units.append(stripped)
+                else:
+                    skip_tests.append(stripped)
+
+    # Deduplicate while preserving order
+    skip_units = list(dict.fromkeys(skip_units))
+    skip_tests = list(dict.fromkeys(skip_tests))
+
+    print(f"Skipping {len(skip_units)} test units, {len(skip_tests)} individual tests")
+    return skip_units, skip_tests
+
+
 def download_redis(cache_dir: Path) -> Path:
     """Download and extract Redis source to cache directory."""
     redis_dir = cache_dir / f"redis-{REDIS_VERSION}"
@@ -91,30 +129,15 @@ def build_frogdb(project_root: Path) -> Path:
     return binary
 
 
-def combine_skiplists(script_dir: Path, cache_dir: Path) -> Path:
-    """Combine all skiplist files into one for the test runner."""
-    skipfiles = [
-        script_dir / "skiplist-intentional.txt",
-        script_dir / "skiplist-not-implemented.txt",
-        script_dir / "skiplist-flaky.txt",
-    ]
-
+def write_skipfile(skip_tests: list[str], cache_dir: Path) -> Path:
+    """Write individual test name patterns to a skipfile for --skipfile."""
     combined = cache_dir / "combined_skiplist.txt"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     with open(combined, "w") as outfile:
-        for skipfile in skipfiles:
-            if skipfile.exists():
-                outfile.write(f"# From {skipfile.name}\n")
-                with open(skipfile) as infile:
-                    for line in infile:
-                        # Skip empty lines and comments for deduplication
-                        stripped = line.strip()
-                        if stripped and not stripped.startswith("#"):
-                            outfile.write(f"{stripped}\n")
-                outfile.write("\n")
+        for test in skip_tests:
+            outfile.write(f"{test}\n")
 
-    print(f"Combined skiplist written to {combined}")
     return combined
 
 
@@ -131,14 +154,20 @@ class FrogDBServer:
         """Start the FrogDB server."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
+        # Write a minimal config file to set the data directory
+        config_path = self.data_dir / "frogdb-test.toml"
+        config_path.write_text(
+            f"[persistence]\ndata_dir = \"{self.data_dir}\"\n"
+        )
+
         print(f"Starting FrogDB on port {self.port}...")
         self.process = subprocess.Popen(
             [
                 str(self.binary),
                 "--port",
                 str(self.port),
-                "--data-dir",
-                str(self.data_dir),
+                "--config",
+                str(config_path),
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -192,6 +221,7 @@ def run_redis_tests(
     redis_dir: Path,
     port: int,
     skipfile: Path,
+    skip_units: list[str] | None = None,
     single: str | None = None,
     tags: list[str] | None = None,
     verbose: bool = False,
@@ -204,9 +234,20 @@ def run_redis_tests(
         # Fallback to older Redis test layout
         runtest = tests_dir / "support" / "run.tcl"
 
+    # Find tclsh - prefer tcl-tk@8 from Homebrew (Redis 7.x tests require Tcl 8.x)
+    # Homebrew keg-only formulas aren't on PATH, so check common install locations
+    homebrew_tclsh8 = Path("/opt/homebrew/opt/tcl-tk@8/bin/tclsh8.6")
+    if homebrew_tclsh8.exists():
+        tclsh = str(homebrew_tclsh8)
+    else:
+        tclsh = shutil.which("tclsh8.6") or shutil.which("tclsh")
+    if tclsh is None:
+        print("Error: tclsh not found. Install tcl-tk@8 via Homebrew: brew install tcl-tk@8")
+        return 1
+
     # Build the command
     cmd = [
-        "tclsh",
+        tclsh,
         str(redis_dir / "tests" / "test_helper.tcl"),
         "--host",
         "127.0.0.1",
@@ -217,9 +258,14 @@ def run_redis_tests(
         "--ignore-digest",
     ]
 
-    # Add skipfile if it exists and has content
+    # Add skipfile for individual test name patterns
     if skipfile.exists() and skipfile.stat().st_size > 0:
         cmd.extend(["--skipfile", str(skipfile)])
+
+    # Add skip units for entire test files
+    if skip_units:
+        for unit in skip_units:
+            cmd.extend(["--skipunit", unit])
 
     # Add default exclusion tags for features FrogDB doesn't support
     default_exclude_tags = [
@@ -252,7 +298,7 @@ def run_redis_tests(
     # Run the tests
     result = subprocess.run(
         cmd,
-        cwd=redis_dir / "tests",
+        cwd=redis_dir,
         env={**os.environ, "TERM": "dumb"},
     )
 
@@ -323,8 +369,9 @@ def main() -> None:
     else:
         binary = build_frogdb(project_root)
 
-    # Combine skiplists
-    skipfile = combine_skiplists(script_dir, cache_dir)
+    # Parse skiplists into units (whole files) and tests (individual names)
+    skip_units, skip_tests = parse_skiplists(script_dir)
+    skipfile = write_skipfile(skip_tests, cache_dir)
 
     # Setup FrogDB server
     data_dir = cache_dir / "frogdb-test-data"
@@ -347,6 +394,7 @@ def main() -> None:
         redis_dir=redis_dir,
         port=args.port,
         skipfile=skipfile,
+        skip_units=skip_units,
         single=args.single,
         tags=args.tags,
         verbose=args.verbose,
