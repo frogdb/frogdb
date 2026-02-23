@@ -7,6 +7,8 @@ This project uses `just` (see `Justfile`) as the command runner. Always use `jus
 Run `just` with no arguments to see all available recipes. Common examples:
 
 ```bash
+just check              # cargo check --all-targets (fastest error checking, no codegen)
+just c                  # alias for just check
 just build              # cargo build
 just release            # cargo build --release
 just test               # cargo test --all
@@ -15,7 +17,7 @@ just test-one <name>    # cargo test <name> -- --nocapture
 just fmt                # cargo fmt --all
 just fmt-check          # cargo fmt --all -- --check
 just lint               # cargo clippy --all-targets --all-features -- -D warnings
-just check              # fmt-check + lint + deny + test
+just check-all          # fmt-check + lint + deny + test
 just concurrency        # Shuttle + Turmoil concurrency tests
 ```
 
@@ -30,8 +32,8 @@ All `just` recipes that invoke cargo respect this flag automatically.
 **IMPORTANT:** Before marking any code change as complete, you MUST run all of the following commands and confirm they pass. Do NOT skip any of these steps.
 
 ```bash
-# 1. Build the entire workspace
-just build
+# 1. Type-check the entire workspace (fast, no codegen)
+just check
 
 # 2. Check formatting
 just fmt-check
