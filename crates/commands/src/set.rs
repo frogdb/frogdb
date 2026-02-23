@@ -995,7 +995,7 @@ impl Command for SscanCommand {
         let cursor = parse_usize(&args[1])?;
 
         // Parse options
-        let mut _match_pattern: Option<&[u8]> = None;
+        let mut match_pattern: Option<&[u8]> = None;
         let mut count: usize = 10;
 
         let mut i = 2;
@@ -1007,7 +1007,7 @@ impl Command for SscanCommand {
                     if i >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    _match_pattern = Some(&args[i]);
+                    match_pattern = Some(&args[i]);
                 }
                 b"COUNT" => {
                     i += 1;
@@ -1033,18 +1033,26 @@ impl Command for SscanCommand {
                     ]));
                 }
 
-                let end = (cursor + count).min(total);
-                let next_cursor = if end >= total { 0 } else { end };
+                let mut results = Vec::new();
+                let mut new_cursor = 0;
 
-                let results: Vec<Response> = members
-                    .into_iter()
-                    .skip(cursor)
-                    .take(count)
-                    .map(|m| Response::bulk(m.clone()))
-                    .collect();
+                for (i, m) in members.into_iter().enumerate().skip(cursor) {
+                    if results.len() >= count {
+                        new_cursor = i;
+                        break;
+                    }
+
+                    if let Some(pattern) = match_pattern
+                        && !crate::utils::simple_glob_match(pattern, m)
+                    {
+                        continue;
+                    }
+
+                    results.push(Response::bulk(Bytes::clone(m)));
+                }
 
                 Ok(Response::Array(vec![
-                    Response::bulk(Bytes::from(next_cursor.to_string())),
+                    Response::bulk(Bytes::from(new_cursor.to_string())),
                     Response::Array(results),
                 ]))
             }

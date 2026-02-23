@@ -2,7 +2,7 @@ use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
-use crate::utils::{format_float, parse_usize};
+use crate::utils::{format_float, parse_usize, simple_glob_match};
 
 // ============================================================================
 // ZSCAN - Cursor-based iteration
@@ -101,35 +101,4 @@ impl Command for ZscanCommand {
     }
 
     impl_keys_first!();
-}
-
-/// Simple glob pattern matching (supports * and ?)
-fn simple_glob_match(pattern: &[u8], text: &[u8]) -> bool {
-    let mut p = 0;
-    let mut t = 0;
-    let mut star_p = None;
-    let mut star_t = None;
-
-    while t < text.len() {
-        if p < pattern.len() && (pattern[p] == b'?' || pattern[p] == text[t]) {
-            p += 1;
-            t += 1;
-        } else if p < pattern.len() && pattern[p] == b'*' {
-            star_p = Some(p);
-            star_t = Some(t);
-            p += 1;
-        } else if let Some(sp) = star_p {
-            p = sp + 1;
-            star_t = Some(star_t.unwrap() + 1);
-            t = star_t.unwrap();
-        } else {
-            return false;
-        }
-    }
-
-    while p < pattern.len() && pattern[p] == b'*' {
-        p += 1;
-    }
-
-    p == pattern.len()
 }

@@ -255,10 +255,22 @@ impl ConnectionHandler {
     async fn dispatch_connection_state(
         &mut self,
         cmd_name: &str,
-        _args: &[Bytes],
+        args: &[Bytes],
     ) -> Option<Vec<Response>> {
         match cmd_name {
             "RESET" => Some(vec![self.handle_reset().await]),
+            // In pubsub mode, PING must return array format ["pong", <message>]
+            "PING" if self.state.pubsub.in_pubsub_mode() => {
+                let message = if args.is_empty() {
+                    Bytes::from_static(b"")
+                } else {
+                    args[0].clone()
+                };
+                Some(vec![Response::Array(vec![
+                    Response::bulk(Bytes::from_static(b"pong")),
+                    Response::bulk(message),
+                ])])
+            }
             // Note: SELECT, QUIT, PING, ECHO, COMMAND are handled via standard shard routing
             _ => None,
         }

@@ -105,7 +105,6 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::stub::SwapdbCommand);
     registry.register_metadata(crate::commands::metadata::ResetMetadata);
     registry.register(crate::commands::stub::BgrewriteaofCommand);
-    registry.register(crate::commands::stub::GetsetCommand);
     registry.register(crate::commands::stub::SubstrCommand);
     registry.register(crate::commands::stub::RpoplpushCommand);
     registry.register(crate::commands::stub::SyncCommand);

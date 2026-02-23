@@ -126,13 +126,6 @@ stub_command!(
 // =============================================================================
 
 stub_command!(
-    GetsetCommand,
-    "GETSET",
-    Arity::Fixed(2),
-    CommandFlags::WRITE | CommandFlags::FAST
-);
-
-stub_command!(
     SubstrCommand,
     "SUBSTR",
     Arity::Fixed(3),

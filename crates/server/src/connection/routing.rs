@@ -36,7 +36,7 @@ impl ConnectionHandler {
         if !handler.arity().check(cmd.args.len()) {
             return Response::error(format!(
                 "ERR wrong number of arguments for '{}' command",
-                handler.name()
+                handler.name().to_ascii_lowercase()
             ));
         }
 
