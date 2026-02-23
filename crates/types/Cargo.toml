@@ -1,0 +1,26 @@
+[package]
+name = "frogdb-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared type foundation for FrogDB — value types, errors, traits, and utilities"
+
+[features]
+shuttle = ["dep:shuttle"]
+
+[dependencies]
+frogdb-protocol.workspace = true
+bytes.workspace = true
+ordered-float.workspace = true
+bitvec.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+murmur3.workspace = true
+xxhash-rust.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+shuttle = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true

@@ -1,0 +1,80 @@
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: crates/server/src/config/
+# Regenerate with: just helm-gen
+# =============================================================================
+
+replicaCount: 1
+image:
+  repository: ghcr.io/nathanjordan/frogdb
+  tag: latest
+  pullPolicy: IfNotPresent
+frogdb:
+  port: 6379
+  numShards: 1
+  allowCrossSlotStandalone: false
+  scatterGatherTimeoutMs: 5000
+  logging:
+    level: info
+    format: pretty
+  persistence:
+    enabled: true
+    dataDir: /data
+    durabilityMode: periodic
+    syncIntervalMs: 1000
+    writeBufferSizeMb: 64
+    compression: lz4
+  snapshot:
+    dir: /data/snapshots
+    intervalSecs: 3600
+    maxSnapshots: 5
+  metrics:
+    enabled: true
+    port: 9090
+    otlp:
+      enabled: false
+      endpoint: http://localhost:4317
+      intervalSecs: 15
+  admin:
+    enabled: false
+    port: 6380
+  memory:
+    maxmemory: 0
+    policy: noeviction
+    samples: 5
+  security: {}
+cluster:
+  enabled: false
+  busPort: 16379
+  dataDir: /data/cluster
+  electionTimeoutMs: 1000
+  heartbeatIntervalMs: 250
+  autoFailover: false
+service:
+  type: ClusterIP
+  port: 6379
+  annotations: {}
+resources:
+  limits:
+    cpu: '2'
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+persistence:
+  enabled: true
+  storageClass: ''
+  size: 10Gi
+  accessModes:
+  - ReadWriteOnce
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+nodeSelector: {}
+tolerations: []
+affinity: {}

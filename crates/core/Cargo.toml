@@ -6,22 +6,20 @@ license.workspace = true
 description = "Core data structures, commands, and storage for FrogDB"
 
 [features]
-shuttle = ["dep:shuttle"]
+shuttle = ["dep:shuttle", "frogdb-types/shuttle"]
 
 [dependencies]
+frogdb-types.workspace = true
 frogdb-protocol.workspace = true
 bytes.workspace = true
 griddle.workspace = true
 bitflags.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-xxhash-rust.workspace = true
 crc16.workspace = true
-murmur3.workspace = true
 bitvec.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-ordered-float.workspace = true
 parking_lot.workspace = true
 rand.workspace = true
 shuttle = { workspace = true, optional = true }
@@ -33,7 +31,6 @@ hex.workspace = true
 linked-hash-map.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-jsonpath-rust.workspace = true
 openraft.workspace = true
 
 [dev-dependencies]

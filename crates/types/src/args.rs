@@ -26,7 +26,7 @@
 use bytes::Bytes;
 use std::str::FromStr;
 
-use crate::CommandError;
+use crate::error::CommandError;
 
 /// Parser for Redis-style command arguments.
 ///
