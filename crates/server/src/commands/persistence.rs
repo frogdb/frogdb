@@ -7,7 +7,7 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::utils::parse_i64;
+use frogdb_core::parse_i64;
 
 /// BGSAVE command - trigger a background save (noop in this implementation).
 pub struct BgsaveCommand;

@@ -1,83 +1,51 @@
 //! Command implementations.
 //!
-//! This module contains all Redis-compatible command implementations,
-//! organized by category.
+//! Data-structure commands (strings, hashes, lists, sets, sorted sets, streams,
+//! JSON, geo, bloom, bitmaps, timeseries, HyperLogLog, scan, sort, blocking)
+//! are provided by the `frogdb-commands` crate.
+//!
+//! This module contains server-specific command implementations that depend on
+//! server infrastructure (cluster, replication, config, client, ACL, scripting,
+//! transactions, migration, persistence).
 
 pub mod acl;
 pub mod auth;
-pub mod basic;
-pub mod bitmap;
-pub mod blocking;
-pub mod bloom;
 pub mod client;
 pub mod cluster;
 pub mod config;
-pub mod expiry;
 pub mod function;
-pub mod generic;
-pub mod geo;
-pub mod hash;
 pub mod hello;
-pub mod hyperloglog;
 pub mod info;
-pub mod json;
 pub mod latency;
-pub mod list;
 pub mod memory;
 pub mod metadata;
 pub mod migrate_cmd;
 pub mod persistence;
 pub mod replication;
-pub mod scan;
 pub mod scripting;
 pub mod server;
-pub mod set;
 pub mod slowlog;
-pub mod sort;
-pub mod sorted_set;
 pub mod status;
-pub mod stream;
-pub mod string;
 pub mod stub;
-pub mod timeseries;
 pub mod transaction;
-pub mod utils;
 
 pub use acl::*;
 pub use auth::*;
-pub use basic::*;
-pub use bitmap::*;
-pub use blocking::*;
-pub use bloom::*;
 pub use client::*;
 pub use cluster::*;
 pub use config::*;
-pub use expiry::*;
 pub use function::*;
-pub use generic::*;
-pub use geo::*;
-pub use hash::*;
 pub use hello::*;
-pub use hyperloglog::*;
 pub use info::*;
-pub use json::*;
 pub use latency::*;
-pub use list::*;
 pub use memory::*;
 pub use metadata::*;
 pub use migrate_cmd::*;
 pub use persistence::*;
 pub use replication::*;
-pub use scan::*;
 pub use scripting::*;
 pub use server::*;
-pub use set::*;
 pub use slowlog::*;
-pub use sort::*;
-pub use sorted_set::*;
 pub use status::*;
-pub use stream::*;
-pub use string::*;
 pub use stub::*;
-pub use timeseries::*;
 pub use transaction::*;

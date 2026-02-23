@@ -7,6 +7,9 @@ members = [
     "crates/persistence",
     "crates/acl",
     "crates/scripting",
+    "crates/vll",
+    "crates/replication",
+    "crates/commands",
     "crates/core",
     "crates/server",
     "crates/debug",
@@ -96,6 +99,9 @@ linked-hash-map = "0.5"
 jsonpath-rust = "0.7"
 
 # Internal crates
+frogdb-vll = { path = "crates/vll" }
+frogdb-replication = { path = "crates/replication" }
+frogdb-commands = { path = "crates/commands" }
 frogdb-protocol = { path = "crates/protocol" }
 frogdb-types = { path = "crates/types" }
 frogdb-cluster = { path = "crates/cluster" }

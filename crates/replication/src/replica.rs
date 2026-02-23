@@ -7,7 +7,6 @@
 //! - Sending ACKs
 
 use bytes::BytesMut;
-use frogdb_core::{ReplicationFrame, ReplicationFrameCodec, ReplicationState};
 use serde_json;
 use std::io;
 use std::net::SocketAddr;
@@ -21,7 +20,9 @@ use tokio::sync::{RwLock, mpsc};
 use tokio::time::timeout;
 use tokio_util::codec::Decoder;
 
-use crate::replication::fullsync::{FullSyncMetadata, receive_to_file};
+use crate::frame::{ReplicationFrame, ReplicationFrameCodec};
+use crate::fullsync::{FullSyncMetadata, receive_to_file};
+use crate::state::ReplicationState;
 
 /// Connection timeout for initial connection
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);

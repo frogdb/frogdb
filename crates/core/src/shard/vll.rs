@@ -1,10 +1,8 @@
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use crate::vll::{
-    ExecuteSignal, IntentTable, LockMode, ShardReadyResult, TransactionQueue, VllError,
-    VllPendingOp,
-};
+use crate::vll::{ExecuteSignal, IntentTable, LockMode, ShardReadyResult, VllError};
+use crate::{TransactionQueue, VllPendingOp};
 
 use super::message::ScatterOp;
 use super::types::PartialResult;

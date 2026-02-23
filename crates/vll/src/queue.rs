@@ -1,17 +1,20 @@
 //! VLL transaction queue for ordering and tracking pending operations.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::time::Instant;
 
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
 use super::{ExecuteSignal, LockMode, PendingOpState, ShardReadyResult, VllError};
-use crate::shard::ScatterOp;
 
 /// A pending VLL operation in the queue.
+///
+/// Generic over `O`, the operation payload (e.g., `ScatterOp` in frogdb-core).
+/// The VLL module never inspects the operation — it just stores and passes it through.
 #[derive(Debug)]
-pub struct VllPendingOp {
+pub struct VllPendingOp<O: Debug = ()> {
     /// Transaction ID (global ordering).
     pub txid: u64,
     /// Keys involved in this operation.
@@ -19,7 +22,7 @@ pub struct VllPendingOp {
     /// Lock mode required.
     pub mode: LockMode,
     /// The operation to execute.
-    pub operation: ScatterOp,
+    pub operation: O,
     /// Current state.
     pub state: PendingOpState,
     /// When this operation was enqueued.
@@ -30,13 +33,13 @@ pub struct VllPendingOp {
     pub execute_rx: Option<oneshot::Receiver<ExecuteSignal>>,
 }
 
-impl VllPendingOp {
+impl<O: Debug> VllPendingOp<O> {
     /// Create a new pending operation.
     pub fn new(
         txid: u64,
         keys: Vec<Bytes>,
         mode: LockMode,
-        operation: ScatterOp,
+        operation: O,
         ready_tx: oneshot::Sender<ShardReadyResult>,
         execute_rx: oneshot::Receiver<ExecuteSignal>,
     ) -> Self {
@@ -79,21 +82,23 @@ impl VllPendingOp {
 ///
 /// Maintains operations ordered by txid using a BTreeMap.
 /// Lower txid = higher priority.
+///
+/// Generic over `O`, the operation payload stored in each `VllPendingOp`.
 #[derive(Debug)]
-pub struct TransactionQueue {
+pub struct TransactionQueue<O: Debug = ()> {
     /// Pending operations indexed by transaction ID (BTreeMap for ordering).
-    pending: BTreeMap<u64, VllPendingOp>,
+    pending: BTreeMap<u64, VllPendingOp<O>>,
     /// Maximum queue depth.
     max_depth: usize,
 }
 
-impl Default for TransactionQueue {
+impl<O: Debug> Default for TransactionQueue<O> {
     fn default() -> Self {
         Self::new(10000)
     }
 }
 
-impl TransactionQueue {
+impl<O: Debug> TransactionQueue<O> {
     /// Create a new transaction queue with the specified max depth.
     pub fn new(max_depth: usize) -> Self {
         Self {
@@ -110,7 +115,7 @@ impl TransactionQueue {
     /// Enqueue a new operation.
     ///
     /// Returns an error if the queue is full.
-    pub fn enqueue(&mut self, op: VllPendingOp) -> Result<(), VllError> {
+    pub fn enqueue(&mut self, op: VllPendingOp<O>) -> Result<(), VllError> {
         if !self.has_capacity() {
             return Err(VllError::QueueFull);
         }
@@ -119,17 +124,17 @@ impl TransactionQueue {
     }
 
     /// Get a mutable reference to an operation by txid.
-    pub fn get_mut(&mut self, txid: u64) -> Option<&mut VllPendingOp> {
+    pub fn get_mut(&mut self, txid: u64) -> Option<&mut VllPendingOp<O>> {
         self.pending.get_mut(&txid)
     }
 
     /// Get a reference to an operation by txid.
-    pub fn get(&self, txid: u64) -> Option<&VllPendingOp> {
+    pub fn get(&self, txid: u64) -> Option<&VllPendingOp<O>> {
         self.pending.get(&txid)
     }
 
     /// Remove a completed operation from the queue.
-    pub fn dequeue(&mut self, txid: u64) -> Option<VllPendingOp> {
+    pub fn dequeue(&mut self, txid: u64) -> Option<VllPendingOp<O>> {
         self.pending.remove(&txid)
     }
 
@@ -160,7 +165,7 @@ impl TransactionQueue {
     }
 
     /// Remove expired operations and return them.
-    pub fn cleanup_expired(&mut self, timeout: std::time::Duration) -> Vec<VllPendingOp> {
+    pub fn cleanup_expired(&mut self, timeout: std::time::Duration) -> Vec<VllPendingOp<O>> {
         let expired_txids = self.get_expired(timeout);
         expired_txids
             .into_iter()
@@ -174,7 +179,7 @@ impl TransactionQueue {
     }
 
     /// Get all operations in txid order.
-    pub fn iter(&self) -> impl Iterator<Item = (&u64, &VllPendingOp)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&u64, &VllPendingOp<O>)> {
         self.pending.iter()
     }
 
@@ -235,7 +240,7 @@ mod tests {
             txid,
             vec![Bytes::from_static(b"key1")],
             LockMode::Write,
-            ScatterOp::MSet { pairs: vec![] },
+            (),
             ready_tx,
             execute_rx,
         )

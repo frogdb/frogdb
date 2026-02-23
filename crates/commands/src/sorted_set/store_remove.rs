@@ -5,7 +5,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use crate::commands::utils::{parse_i64, parse_lex_bound, parse_score_bound, parse_usize};
+use crate::utils::{parse_i64, parse_lex_bound, parse_score_bound, parse_usize};
 
 // ============================================================================
 // ZRANGESTORE - Range and store
