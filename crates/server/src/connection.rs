@@ -67,18 +67,9 @@ use crate::runtime_config::ConfigManager;
 pub use crate::server::next_txid;
 
 // Re-export utility functions used by handler submodules and internally
-<<<<<<< HEAD
 pub(crate) use util::{
     estimate_command_size, estimate_resp2_frame_size, extract_subcommand, key_access_type_for_flags,
 };
-||||||| parent of 670778b (more fixing stuff?)
-pub(crate) use util::{
-    convert_blocking_op, convert_raft_cluster_op, estimate_command_size, estimate_resp2_frame_size,
-    extract_subcommand, format_timestamp_iso, key_access_type_for_flags,
-};
-=======
-pub(crate) use util::{estimate_command_size, estimate_resp2_frame_size, extract_subcommand};
->>>>>>> 670778b (more fixing stuff?)
 
 /// Connection handler that processes client commands.
 pub struct ConnectionHandler {
@@ -137,14 +128,7 @@ pub struct ConnectionHandler {
     shared_tracer: Option<SharedTracer>,
 
     /// Tracing configuration.
-<<<<<<< HEAD
     _tracing_config: TracingConfig,
-||||||| parent of 670778b (more fixing stuff?)
-    tracing_config: TracingConfig,
-=======
-    #[allow(dead_code)]
-    tracing_config: TracingConfig,
->>>>>>> 670778b (more fixing stuff?)
 
     /// Optional replication tracker for WAIT command.
     replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
@@ -162,14 +146,7 @@ pub struct ConnectionHandler {
     admin_enabled: bool,
 
     /// Hot shard detection configuration.
-<<<<<<< HEAD
     _hotshards_config: frogdb_debug::HotShardConfig,
-||||||| parent of 670778b (more fixing stuff?)
-    hotshards_config: frogdb_telemetry::HotShardConfig,
-=======
-    #[allow(dead_code)]
-    hotshards_config: frogdb_telemetry::HotShardConfig,
->>>>>>> 670778b (more fixing stuff?)
 
     /// Memory diagnostics configuration.
     memory_diag_config: frogdb_debug::MemoryDiagConfig,
@@ -587,14 +564,7 @@ impl ConnectionHandler {
             );
 
             // Get the primary replication handler
-<<<<<<< HEAD
             if let Some(handler) = &self.primary_replication_handler {
-||||||| parent of 670778b (more fixing stuff?)
-            if let Some(ref handler) = self.primary_replication_handler {
-=======
-            #[allow(unused_variables)]
-            if let Some(ref handler) = self.primary_replication_handler {
->>>>>>> 670778b (more fixing stuff?)
                 // Extract the raw TcpStream from the Framed codec.
                 // into_inner() consumes the Framed and returns the underlying stream.
                 // crate::net::TcpStream is tokio::net::TcpStream (or turmoil::net::TcpStream in tests)

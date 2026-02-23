@@ -8,6 +8,7 @@ members = [
     "crates/metrics-derive",
     "crates/testing",
     "crates/browser-tests",
+    "crates/debug",
     "crates/frogdb-macros",
     "benches",
     "tools/helm-gen",
@@ -95,6 +96,7 @@ frogdb-core = { path = "crates/core" }
 frogdb-telemetry = { path = "crates/telemetry" }
 frogdb-metrics-derive = { path = "crates/metrics-derive" }
 frogdb-testing = { path = "crates/testing" }
+frogdb-debug = { path = "crates/debug" }
 
 # Benchmarking
 criterion = { version = "0.5", features = ["async_tokio"] }

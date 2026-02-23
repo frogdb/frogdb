@@ -223,22 +223,7 @@ impl Model for KVModel {
                 } else {
                     // CAS fails - state unchanged, result should indicate failure
                     let is_fail = result.is_some_and(|r| r.as_ref() == b"FAIL");
-<<<<<<< HEAD
                     if is_fail { Some(state.clone()) } else { None }
-||||||| parent of 670778b (more fixing stuff?)
-                    let is_fail = result.map_or(false, |r| r.as_ref() == b"FAIL");
-                    if is_fail {
-                        Some(state.clone())
-                    } else {
-                        None
-                    }
-=======
-                    if is_fail {
-                        Some(state.clone())
-                    } else {
-                        None
-                    }
->>>>>>> 670778b (more fixing stuff?)
                 }
             }
             "mget" => {

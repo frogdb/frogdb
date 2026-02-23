@@ -945,23 +945,11 @@ mod tests {
 
     #[test]
     fn test_double_to_resp3_frame() {
-<<<<<<< HEAD
         let resp = Response::Double(3.125);
-||||||| parent of 670778b (more fixing stuff?)
-        let resp = Response::Double(3.14159);
-=======
-        let resp = Response::Double(std::f64::consts::PI);
->>>>>>> 670778b (more fixing stuff?)
         let frame = resp.into_wire().unwrap().to_resp3_frame();
         match frame {
             Resp3BytesFrame::Double { data, attributes } => {
-<<<<<<< HEAD
                 assert!((data - 3.125).abs() < f64::EPSILON);
-||||||| parent of 670778b (more fixing stuff?)
-                assert!((data - 3.14159).abs() < f64::EPSILON);
-=======
-                assert!((data - std::f64::consts::PI).abs() < f64::EPSILON);
->>>>>>> 670778b (more fixing stuff?)
                 assert!(attributes.is_none());
             }
             _ => panic!("Expected Double frame, got {:?}", frame),
@@ -970,26 +958,14 @@ mod tests {
 
     #[test]
     fn test_double_to_resp2_string() {
-<<<<<<< HEAD
         let resp = Response::Double(3.125);
-||||||| parent of 670778b (more fixing stuff?)
-        let resp = Response::Double(3.14159);
-=======
-        let resp = Response::Double(std::f64::consts::PI);
->>>>>>> 670778b (more fixing stuff?)
         let frame = resp.into_wire().unwrap().to_resp2_frame();
         match frame {
             Resp2BytesFrame::BulkString(data) => {
                 let s = String::from_utf8(data.to_vec()).unwrap();
                 // Should be a valid float string
                 let parsed: f64 = s.parse().unwrap();
-<<<<<<< HEAD
                 assert!((parsed - 3.125).abs() < 1e-10);
-||||||| parent of 670778b (more fixing stuff?)
-                assert!((parsed - 3.14159).abs() < 1e-10);
-=======
-                assert!((parsed - std::f64::consts::PI).abs() < 1e-10);
->>>>>>> 670778b (more fixing stuff?)
             }
             _ => panic!("Expected BulkString frame, got {:?}", frame),
         }
@@ -1171,13 +1147,7 @@ mod tests {
             Response::bulk("hello"),
             Response::null(),
             Response::Null,
-<<<<<<< HEAD
             Response::Double(3.125),
-||||||| parent of 670778b (more fixing stuff?)
-            Response::Double(3.14),
-=======
-            Response::Double(std::f64::consts::PI),
->>>>>>> 670778b (more fixing stuff?)
             Response::Boolean(true),
         ];
 
@@ -1332,23 +1302,11 @@ mod tests {
     #[test]
     fn test_wire_response_to_resp3_frame() {
         // This should NOT panic - WireResponse only contains safe types
-<<<<<<< HEAD
         let wire = WireResponse::Double(3.125);
-||||||| parent of 670778b (more fixing stuff?)
-        let wire = WireResponse::Double(3.14);
-=======
-        let wire = WireResponse::Double(std::f64::consts::PI);
->>>>>>> 670778b (more fixing stuff?)
         let frame = wire.to_resp3_frame();
         match frame {
             Resp3BytesFrame::Double { data, .. } => {
-<<<<<<< HEAD
                 assert!((data - 3.125).abs() < f64::EPSILON);
-||||||| parent of 670778b (more fixing stuff?)
-                assert!((data - 3.14).abs() < f64::EPSILON);
-=======
-                assert!((data - std::f64::consts::PI).abs() < f64::EPSILON);
->>>>>>> 670778b (more fixing stuff?)
             }
             _ => panic!("Expected double"),
         }
@@ -1393,13 +1351,7 @@ mod tests {
     #[test]
     fn test_try_to_resp3_frame() {
         // Wire-serializable type should return Some
-<<<<<<< HEAD
         let resp = Response::Double(3.125);
-||||||| parent of 670778b (more fixing stuff?)
-        let resp = Response::Double(3.14);
-=======
-        let resp = Response::Double(std::f64::consts::PI);
->>>>>>> 670778b (more fixing stuff?)
         let frame = resp.try_to_resp3_frame();
         assert!(frame.is_some());
 

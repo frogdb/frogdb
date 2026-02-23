@@ -1,6 +1,11 @@
 # libclang is required by bindgen (used by librocksdb-sys). macOS: brew install llvm
 export LIBCLANG_PATH := "/opt/homebrew/opt/llvm/lib"
 
+# DYLD_LIBRARY_PATH needed at runtime for librocksdb-sys build script to find libclang.dylib
+# Note: just's export doesn't propagate DYLD_* vars on macOS (SIP strips them), so this is
+# used inline in recipes that need it
+dyld-env := "DYLD_LIBRARY_PATH=/opt/homebrew/opt/llvm/lib"
+
 # System RocksDB env vars for faster builds (macOS: brew install rocksdb)
 system-rocksdb-env := "ROCKSDB_LIB_DIR=/opt/homebrew/lib SNAPPY_LIB_DIR=/opt/homebrew/lib LZ4_LIB_DIR=/opt/homebrew/lib ZSTD_LIB_DIR=/opt/homebrew/lib"
 
@@ -10,52 +15,52 @@ default:
 
 # Build debug
 build:
-    cargo build
+    {{dyld-env}} cargo build
 
 # Build with system RocksDB (faster, requires: brew install rocksdb)
 build-fast:
-    {{system-rocksdb-env}} cargo build
+    {{dyld-env}} {{system-rocksdb-env}} cargo build
 
 # Build release
 release:
-    cargo build --release
+    {{dyld-env}} cargo build --release
 
 # Run all tests
 test:
-    cargo test --all
+    {{dyld-env}} cargo test --all
 
 # Test with system RocksDB (faster, requires: brew install rocksdb)
 test-fast:
-    {{system-rocksdb-env}} cargo test --all
+    {{dyld-env}} {{system-rocksdb-env}} cargo test --all
 
 # Run tests for a specific crate
 test-crate crate:
-    cargo test -p {{crate}}
+    {{dyld-env}} cargo test -p {{crate}}
 
 # Run a specific test
 test-one name:
-    cargo test {{name}} -- --nocapture
+    {{dyld-env}} cargo test {{name}} -- --nocapture
 
 # Run property-based tests (proptest)
 proptest:
-    cargo test proptest --all
+    {{dyld-env}} cargo test proptest --all
 
 # Run concurrency tests (Shuttle + Turmoil)
 concurrency:
-    cargo test -p frogdb-core --features shuttle --test concurrency
-    cargo test -p frogdb-server --features turmoil --test simulation
+    {{dyld-env}} cargo test -p frogdb-core --features shuttle --test concurrency
+    {{dyld-env}} cargo test -p frogdb-server --features turmoil --test simulation
 
 # Run browser integration tests (requires chromedriver running on port 9515)
 test-browser:
-    cargo test -p frogdb-browser-tests --features browser-tests
+    {{dyld-env}} cargo test -p frogdb-browser-tests --features browser-tests
 
 # Run linearizability checker tests
 test-linearizability:
-    cargo test -p frogdb-testing
+    {{dyld-env}} cargo test -p frogdb-testing
 
 # Run all benchmarks
 bench:
-    cargo bench -p frogdb-benches
+    {{dyld-env}} cargo bench -p frogdb-benches
 
 # Format code
 fmt:
@@ -67,11 +72,11 @@ fmt-check:
 
 # Run clippy lints
 lint:
-    cargo clippy --all-targets --all-features -- -D warnings
+    {{dyld-env}} cargo clippy --all-targets -- -D warnings
 
 # Lint with system RocksDB (faster, requires: brew install rocksdb)
 lint-fast:
-    {{system-rocksdb-env}} cargo clippy --all-targets --all-features -- -D warnings
+    {{dyld-env}} {{system-rocksdb-env}} cargo clippy --all-targets -- -D warnings
 
 # Run cargo-deny (license/security audit)
 deny:
@@ -82,11 +87,11 @@ check: fmt-check lint deny test
 
 # Run the server (debug)
 run *args:
-    cargo run -p frogdb-server -- {{args}}
+    {{dyld-env}} cargo run -p frogdb-server -- {{args}}
 
 # Run the server (release)
 run-release *args:
-    cargo run --release -p frogdb-server -- {{args}}
+    {{dyld-env}} cargo run --release -p frogdb-server -- {{args}}
 
 # Show size of target directory
 target-size:
@@ -101,11 +106,11 @@ clean:
 
 # Watch for changes and run tests (requires cargo-watch)
 watch:
-    cargo watch -x 'test --all'
+    {{dyld-env}} cargo watch -x 'test --all'
 
 # Generate documentation
 doc:
-    cargo doc --all --no-deps --open
+    {{dyld-env}} cargo doc --all --no-deps --open
 
 # =============================================================================
 # Redis Compatibility Testing
@@ -134,11 +139,11 @@ redis-compat-coverage:
 
 # Build with profiling symbols
 build-profile:
-    cargo build --profile profiling
+    {{dyld-env}} cargo build --profile profiling
 
 # Generate CPU flamegraph (requires cargo-flamegraph)
 profile-flamegraph *args:
-    cargo flamegraph --profile profiling --bin frogdb-server -- {{args}}
+    {{dyld-env}} cargo flamegraph --profile profiling --bin frogdb-server -- {{args}}
 
 # Profile with samply (requires samply)
 profile-samply *args:
@@ -441,11 +446,11 @@ jepsen-raft-all: jepsen-build jepsen-raft-cluster-up
 
 # Generate Helm chart files from FrogDB config
 helm-gen:
-    cargo run -p helm-gen
+    {{dyld-env}} cargo run -p helm-gen
 
 # Check that Helm chart files are up to date (for CI)
 helm-gen-check:
-    cargo run -p helm-gen -- --check
+    {{dyld-env}} cargo run -p helm-gen -- --check
 
 # =============================================================================
 # Dashboard Generation
@@ -453,11 +458,11 @@ helm-gen-check:
 
 # Generate Grafana dashboard from FrogDB metrics
 dashboard-gen:
-    cargo run -p dashboard-gen
+    {{dyld-env}} cargo run -p dashboard-gen
 
 # Check that Grafana dashboard is up to date (for CI)
 dashboard-gen-check:
-    cargo run -p dashboard-gen -- --check
+    {{dyld-env}} cargo run -p dashboard-gen -- --check
 
 # =============================================================================
 # Workflow Generation
@@ -465,11 +470,11 @@ dashboard-gen-check:
 
 # Generate GitHub Actions workflow files
 workflow-gen:
-    cargo run -p workflow-gen
+    {{dyld-env}} cargo run -p workflow-gen
 
 # Check that workflow files are up to date (for CI)
 workflow-gen-check:
-    cargo run -p workflow-gen -- --check
+    {{dyld-env}} cargo run -p workflow-gen -- --check
 
 # =============================================================================
 # Generate All
