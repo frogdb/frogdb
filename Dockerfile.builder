@@ -39,9 +39,10 @@ RUN apk add --no-cache \
 
 RUN cargo install cargo-chef --locked
 
-# Tell librocksdb-sys and snappy-sys to use system libraries
+# Tell librocksdb-sys, snappy-sys, and zstd-sys to use system libraries
 ENV ROCKSDB_LIB_DIR=/usr/lib
 ENV SNAPPY_LIB_DIR=/usr/lib
+ENV ZSTD_SYS_USE_PKG_CONFIG=1
 
 WORKDIR /app
 
@@ -52,6 +53,11 @@ RUN cargo chef cook --release --recipe-path recipe.json
 # Build the actual project
 COPY . .
 RUN cargo build --release --bin frogdb-server
+
+# Verify system libraries were linked (fail the build if not)
+RUN grep -q 'cargo:rustc-link-lib=dylib=rocksdb' target/release/build/librocksdb-sys-*/output && \
+    grep -q 'cargo:rustc-link-lib=dylib=snappy' target/release/build/librocksdb-sys-*/output && \
+    echo "Verified: RocksDB and Snappy linked from system libraries"
 
 # ---------------------------------------------------------------------------
 # Stage 3: Minimal runtime image
