@@ -35,5 +35,5 @@ brew "zig"               # Cross-compiler toolchain (used by cargo-zigbuild)
 brew "openjdk"           # Required by Leiningen/Clojure
 brew "leiningen"         # Clojure build tool for Jepsen
 
-# Optional: System RocksDB for faster builds (see `just build-fast`)
+# Optional: System RocksDB for faster builds (set FROGDB_SYSTEM_ROCKSDB=1)
 brew "rocksdb"
