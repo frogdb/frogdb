@@ -3,3 +3,8 @@
 
 [target.x86_64-unknown-linux-gnu]
 linker = "x86_64-linux-gnu-gcc"
+
+# Use lld for faster linking on macOS (Apple Silicon)
+# Requires: brew install lld@20
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld@20/bin/ld64.lld"]

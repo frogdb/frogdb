@@ -124,6 +124,10 @@ openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 axum = "0.7"
 tower = "0.5"
 
+[profile.dev]
+split-debuginfo = "unpacked"
+debug = "line-tables-only"
+
 [profile.release]
 lto = true
 codegen-units = 1

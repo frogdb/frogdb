@@ -44,10 +44,26 @@ cargo-sweep-install:
 default:
     @just --list
 
+# Type-check the workspace (no codegen, fastest error checking)
+check:
+    {{dyld-env}} {{rocksdb-env}} cargo check --all-targets
+
+# Type-check a specific crate
+check-crate crate:
+    {{dyld-env}} {{rocksdb-env}} cargo check -p {{crate}}
+
+# Alias: short form of check
+alias c := check
+
 # Build debug
 build:
     -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo build
+
+# Build with full debug info (for lldb/gdb variable inspection)
+build-debug:
+    -cargo sweep --stamp
+    {{dyld-env}} {{rocksdb-env}} CARGO_PROFILE_DEV_DEBUG=2 cargo build
 
 # Build release
 release:
@@ -104,7 +120,7 @@ deny:
     cargo deny check
 
 # Run all checks (CI)
-check: fmt-check lint deny test
+check-all: fmt-check lint deny test
 
 # Run the server (debug)
 run *args:
@@ -129,8 +145,12 @@ clean:
 clean-stale:
     cargo sweep --time 0
 
-# Watch for changes and run tests (requires cargo-watch)
+# Watch for changes and type-check (requires: cargo install cargo-watch)
 watch:
+    {{dyld-env}} {{rocksdb-env}} cargo watch -x 'check --all-targets'
+
+# Watch for changes and run tests (requires: cargo install cargo-watch)
+watch-test:
     {{dyld-env}} {{rocksdb-env}} cargo watch -x 'test --all'
 
 # Generate documentation
