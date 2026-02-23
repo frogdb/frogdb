@@ -3,139 +3,14 @@
 //! These tests use proptest to verify mathematical properties of increment/decrement
 //! operations through the RESP protocol.
 
+mod common;
+
 use bytes::Bytes;
+use common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
-use frogdb_server::{Config, Server};
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot};
-use futures::{SinkExt, StreamExt};
 use proptest::prelude::*;
-use redis_protocol::codec::Resp2;
-use redis_protocol::resp2::types::BytesFrame;
-use std::net::SocketAddr;
-use std::time::Duration;
-use tempfile::TempDir;
-use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
-use tokio::time::timeout;
-use tokio_util::codec::Framed;
-
-/// Helper struct for managing a test server.
-struct TestServer {
-    addr: SocketAddr,
-    metrics_addr: SocketAddr,
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    handle: JoinHandle<()>,
-    #[allow(dead_code)]
-    temp_dir: TempDir,
-}
-
-impl TestServer {
-    /// Start a new test server on an available port.
-    async fn start() -> Self {
-        let temp_dir = TempDir::new().unwrap();
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-
-        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let metrics_addr = metrics_listener.local_addr().unwrap();
-        drop(metrics_listener);
-
-        let mut config = Config::default();
-        config.server.bind = "127.0.0.1".to_string();
-        config.server.port = addr.port();
-        config.server.num_shards = 1;
-        config.logging.level = "warn".to_string();
-        config.persistence.data_dir = temp_dir.path().to_path_buf();
-        config.metrics.bind = "127.0.0.1".to_string();
-        config.metrics.port = metrics_addr.port();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        let handle = tokio::spawn(async move {
-            let server = Server::new(config).await.unwrap();
-
-            tokio::select! {
-                result = server.run() => {
-                    if let Err(e) = result {
-                        eprintln!("Server error: {}", e);
-                    }
-                }
-                _ = shutdown_rx => {
-                    // Shutdown requested
-                }
-            }
-        });
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        TestServer {
-            addr,
-            metrics_addr,
-            shutdown_tx: Some(shutdown_tx),
-            handle,
-            temp_dir,
-        }
-    }
-
-    /// Connect to the test server.
-    async fn connect(&self) -> TestClient {
-        let stream = TcpStream::connect(self.addr).await.unwrap();
-        let framed = Framed::new(stream, Resp2);
-        TestClient { framed }
-    }
-
-    /// Shutdown the test server.
-    async fn shutdown(mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
-        let _ = self.handle.await;
-    }
-}
-
-/// Helper struct for sending commands and receiving responses.
-struct TestClient {
-    framed: Framed<TcpStream, Resp2>,
-}
-
-impl TestClient {
-    /// Send a command and receive a response.
-    async fn command(&mut self, args: &[&str]) -> Response {
-        let frame = BytesFrame::Array(
-            args.iter()
-                .map(|s| BytesFrame::BulkString(Bytes::from(s.to_string())))
-                .collect(),
-        );
-
-        self.framed.send(frame).await.unwrap();
-
-        let response_frame = timeout(Duration::from_secs(5), self.framed.next())
-            .await
-            .expect("timeout")
-            .expect("connection closed")
-            .expect("frame error");
-
-        frame_to_response(response_frame)
-    }
-}
-
-/// Convert a BytesFrame to our Response type.
-fn frame_to_response(frame: BytesFrame) -> Response {
-    match frame {
-        BytesFrame::SimpleString(s) => Response::Simple(s),
-        BytesFrame::Error(e) => Response::Error(e.into_inner()),
-        BytesFrame::Integer(n) => Response::Integer(n),
-        BytesFrame::BulkString(b) => Response::Bulk(Some(b)),
-        BytesFrame::Null => Response::Bulk(None),
-        BytesFrame::Array(items) => {
-            Response::Array(items.into_iter().map(frame_to_response).collect())
-        }
-    }
-}
 
 /// Extract integer from response
 fn extract_integer(response: &Response) -> Option<i64> {
@@ -197,7 +72,10 @@ proptest! {
     ) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let server = TestServer::start().await;
+            let server = TestServer::start_standalone_with_config(TestServerConfig {
+                num_shards: Some(1),
+                ..Default::default()
+            }).await;
             let mut client = server.connect().await;
 
             // SET initial value
@@ -235,7 +113,10 @@ proptest! {
     ) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let server = TestServer::start().await;
+            let server = TestServer::start_standalone_with_config(TestServerConfig {
+                num_shards: Some(1),
+                ..Default::default()
+            }).await;
             let mut client = server.connect().await;
 
             let key1 = format!("{}:1", key);
@@ -264,14 +145,17 @@ proptest! {
     fn test_incr_creates_nonexistent_key(key in key_strategy()) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let server = TestServer::start().await;
+            let server = TestServer::start_standalone_with_config(TestServerConfig {
+                num_shards: Some(1),
+                ..Default::default()
+            }).await;
             let mut client = server.connect().await;
 
             // Ensure key doesn't exist
             client.command(&["DEL", &key]).await;
 
             // Get baseline metrics
-            let before = MetricsSnapshot::fetch(server.metrics_addr).await;
+            let before = MetricsSnapshot::fetch(server.metrics_addr()).await;
 
             // INCR on nonexistent key
             let result = client.command(&["INCR", &key]).await;
@@ -287,7 +171,7 @@ proptest! {
             }
 
             // Verify metrics - INCR and GET were tracked
-            let after = MetricsSnapshot::fetch(server.metrics_addr).await;
+            let after = MetricsSnapshot::fetch(server.metrics_addr()).await;
             MetricsDelta::new(before, after)
                 .assert_counter_increased_gte("frogdb_commands_total", &[("command", "INCR")], 1.0)
                 .assert_counter_increased_gte("frogdb_commands_total", &[("command", "GET")], 1.0);
@@ -305,7 +189,10 @@ proptest! {
     ) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let server = TestServer::start().await;
+            let server = TestServer::start_standalone_with_config(TestServerConfig {
+                num_shards: Some(1),
+                ..Default::default()
+            }).await;
             let mut client = server.connect().await;
 
             // SET non-integer value
@@ -334,7 +221,10 @@ proptest! {
 
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let server = TestServer::start().await;
+            let server = TestServer::start_standalone_with_config(TestServerConfig {
+                num_shards: Some(1),
+                ..Default::default()
+            }).await;
             let mut client = server.connect().await;
 
             // SET initial value
@@ -372,7 +262,10 @@ proptest! {
     fn test_incrbyfloat_rejects_overflow(key in key_strategy()) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let server = TestServer::start().await;
+            let server = TestServer::start_standalone_with_config(TestServerConfig {
+                num_shards: Some(1),
+                ..Default::default()
+            }).await;
             let mut client = server.connect().await;
 
             // SET to max f64
@@ -392,7 +285,10 @@ proptest! {
     fn test_incrby_overflow_at_max(key in key_strategy(), delta in 1i64..=1000i64) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let server = TestServer::start().await;
+            let server = TestServer::start_standalone_with_config(TestServerConfig {
+                num_shards: Some(1),
+                ..Default::default()
+            }).await;
             let mut client = server.connect().await;
 
             // SET to max i64
@@ -412,7 +308,10 @@ proptest! {
     fn test_decrby_underflow_at_min(key in key_strategy(), delta in 1i64..=1000i64) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let server = TestServer::start().await;
+            let server = TestServer::start_standalone_with_config(TestServerConfig {
+                num_shards: Some(1),
+                ..Default::default()
+            }).await;
             let mut client = server.connect().await;
 
             // SET to min i64
@@ -434,7 +333,10 @@ proptest! {
     fn test_reset_idempotent(reset_count in 1usize..10) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let server = TestServer::start().await;
+            let server = TestServer::start_standalone_with_config(TestServerConfig {
+                num_shards: Some(1),
+                ..Default::default()
+            }).await;
             let mut client = server.connect().await;
 
             for _ in 0..reset_count {
@@ -459,7 +361,10 @@ proptest! {
     ) {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let server = TestServer::start().await;
+            let server = TestServer::start_standalone_with_config(TestServerConfig {
+                num_shards: Some(1),
+                ..Default::default()
+            }).await;
             let mut client = server.connect().await;
 
             // Set client name

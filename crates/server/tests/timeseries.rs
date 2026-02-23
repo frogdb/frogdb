@@ -1,133 +1,27 @@
 //! Integration tests for TimeSeries commands.
 
-use bytes::Bytes;
+mod common;
+
+use common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
-use frogdb_server::{Config, Server};
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
-use futures::{SinkExt, StreamExt};
-use redis_protocol::codec::Resp2;
-use redis_protocol::resp2::types::BytesFrame;
-use std::net::SocketAddr;
 use std::time::Duration;
-use tempfile::TempDir;
-use tokio::net::TcpStream;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
-use tokio::time::timeout;
-use tokio_util::codec::Framed;
 
-/// Helper struct for managing a test server.
-struct TestServer {
-    addr: SocketAddr,
-    metrics_addr: SocketAddr,
-    shutdown_tx: oneshot::Sender<()>,
-    handle: JoinHandle<()>,
-    #[allow(dead_code)]
-    temp_dir: TempDir,
-}
-
-impl TestServer {
-    async fn start() -> Self {
-        let temp_dir = TempDir::new().unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-
-        let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let metrics_addr = metrics_listener.local_addr().unwrap();
-        drop(metrics_listener);
-
-        let mut config = Config::default();
-        config.server.bind = "127.0.0.1".to_string();
-        config.server.port = addr.port();
-        config.server.num_shards = 1;
-        config.logging.level = "warn".to_string();
-        config.persistence.data_dir = temp_dir.path().to_path_buf();
-        config.metrics.bind = "127.0.0.1".to_string();
-        config.metrics.port = metrics_addr.port();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        let handle = tokio::spawn(async move {
-            let server = Server::new(config).await.unwrap();
-
-            tokio::select! {
-                result = server.run() => {
-                    if let Err(e) = result {
-                        eprintln!("Server error: {}", e);
-                    }
-                }
-                _ = shutdown_rx => {}
-            }
-        });
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        TestServer {
-            addr,
-            metrics_addr,
-            shutdown_tx,
-            handle,
-            temp_dir,
-        }
-    }
-
-    async fn connect(&self) -> TestClient {
-        let stream = TcpStream::connect(self.addr).await.unwrap();
-        let framed = Framed::new(stream, Resp2);
-        TestClient { framed }
-    }
-
-    async fn shutdown(self) {
-        let _ = self.shutdown_tx.send(());
-        let _ = self.handle.await;
-    }
-}
-
-struct TestClient {
-    framed: Framed<TcpStream, Resp2>,
-}
-
-impl TestClient {
-    async fn command(&mut self, args: &[&str]) -> Response {
-        let frame = BytesFrame::Array(
-            args.iter()
-                .map(|s| BytesFrame::BulkString(Bytes::from(s.to_string())))
-                .collect(),
-        );
-
-        self.framed.send(frame).await.unwrap();
-
-        let response_frame = timeout(Duration::from_secs(5), self.framed.next())
-            .await
-            .expect("timeout")
-            .expect("connection closed")
-            .expect("frame error");
-
-        frame_to_response(response_frame)
-    }
-}
-
-fn frame_to_response(frame: BytesFrame) -> Response {
-    match frame {
-        BytesFrame::SimpleString(s) => Response::Simple(s),
-        BytesFrame::Error(e) => Response::Error(e.into_inner()),
-        BytesFrame::Integer(n) => Response::Integer(n),
-        BytesFrame::BulkString(b) => Response::Bulk(Some(b)),
-        BytesFrame::Null => Response::Bulk(None),
-        BytesFrame::Array(items) => {
-            Response::Array(items.into_iter().map(frame_to_response).collect())
-        }
-    }
+async fn start_server() -> TestServer {
+    TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await
 }
 
 #[tokio::test]
 async fn test_ts_create() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Get baseline metrics
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // Basic create
     let response = client.command(&["TS.CREATE", "temp"]).await;
@@ -159,7 +53,7 @@ async fn test_ts_create() {
 
     // Verify metrics - 3 TS.CREATE commands total
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after).assert_counter_increased(
         "frogdb_commands_total",
         &[("command", "TS.CREATE")],
@@ -171,14 +65,14 @@ async fn test_ts_create() {
 
 #[tokio::test]
 async fn test_ts_add_and_get() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Create time series
     client.command(&["TS.CREATE", "temp"]).await;
 
     // Get baseline metrics (after CREATE)
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // Add with explicit timestamp
     let response = client.command(&["TS.ADD", "temp", "1000", "23.5"]).await;
@@ -206,7 +100,7 @@ async fn test_ts_add_and_get() {
 
     // Verify metrics - 2 TS.ADD and 1 TS.GET
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after)
         .assert_counter_increased("frogdb_commands_total", &[("command", "TS.ADD")], 2.0)
         .assert_counter_increased("frogdb_commands_total", &[("command", "TS.GET")], 1.0);
@@ -216,7 +110,7 @@ async fn test_ts_add_and_get() {
 
 #[tokio::test]
 async fn test_ts_add_auto_create() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Add to non-existent key should auto-create
@@ -234,7 +128,7 @@ async fn test_ts_add_auto_create() {
 
 #[tokio::test]
 async fn test_ts_add_auto_timestamp() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     client.command(&["TS.CREATE", "temp"]).await;
@@ -254,7 +148,7 @@ async fn test_ts_add_auto_timestamp() {
 
 #[tokio::test]
 async fn test_ts_range() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     client.command(&["TS.CREATE", "temp"]).await;
@@ -269,7 +163,7 @@ async fn test_ts_range() {
     }
 
     // Get baseline metrics (after CREATE and ADDs)
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // Query range
     let response = client.command(&["TS.RANGE", "temp", "1000", "1500"]).await;
@@ -302,7 +196,7 @@ async fn test_ts_range() {
 
     // Verify metrics - 3 TS.RANGE commands
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after).assert_counter_increased(
         "frogdb_commands_total",
         &[("command", "TS.RANGE")],
@@ -314,7 +208,7 @@ async fn test_ts_range() {
 
 #[tokio::test]
 async fn test_ts_revrange() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     client.command(&["TS.CREATE", "temp"]).await;
@@ -344,7 +238,7 @@ async fn test_ts_revrange() {
 
 #[tokio::test]
 async fn test_ts_range_with_aggregation() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     client.command(&["TS.CREATE", "temp"]).await;
@@ -383,7 +277,7 @@ async fn test_ts_range_with_aggregation() {
 
 #[tokio::test]
 async fn test_ts_del() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     client.command(&["TS.CREATE", "temp"]).await;
@@ -414,7 +308,7 @@ async fn test_ts_del() {
 
 #[tokio::test]
 async fn test_ts_madd() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Create multiple time series
@@ -422,7 +316,7 @@ async fn test_ts_madd() {
     client.command(&["TS.CREATE", "temp2"]).await;
 
     // Get baseline metrics (after CREATEs)
-    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let before = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
 
     // Add to multiple series
     let response = client
@@ -442,7 +336,7 @@ async fn test_ts_madd() {
 
     // Verify metrics - 1 TS.MADD command
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr).await);
+    let after = MetricsSnapshot::new(fetch_metrics(server.metrics_addr()).await);
     MetricsDelta::new(before, after).assert_counter_increased(
         "frogdb_commands_total",
         &[("command", "TS.MADD")],
@@ -454,7 +348,7 @@ async fn test_ts_madd() {
 
 #[tokio::test]
 async fn test_ts_incrby_decrby() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     client.command(&["TS.CREATE", "counter"]).await;
@@ -495,7 +389,7 @@ async fn test_ts_incrby_decrby() {
 
 #[tokio::test]
 async fn test_ts_info() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Create with labels
@@ -552,7 +446,7 @@ async fn test_ts_info() {
 
 #[tokio::test]
 async fn test_ts_alter() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     client.command(&["TS.CREATE", "temp"]).await;
@@ -593,7 +487,7 @@ async fn test_ts_alter() {
 
 #[tokio::test]
 async fn test_ts_duplicate_policies() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     // Test BLOCK policy
@@ -654,7 +548,7 @@ async fn test_ts_duplicate_policies() {
 
 #[tokio::test]
 async fn test_ts_filter_by_value() {
-    let server = TestServer::start().await;
+    let server = start_server().await;
     let mut client = server.connect().await;
 
     client.command(&["TS.CREATE", "temp"]).await;

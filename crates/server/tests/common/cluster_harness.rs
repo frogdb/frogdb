@@ -10,10 +10,11 @@
 use super::cluster_helpers::{ClusterError, ClusterInfo, parse_cluster_info};
 use super::test_server::TestClient;
 use frogdb_protocol::Response;
-use frogdb_server::{Config, Server};
+use frogdb_server::net::tcp_listener_reusable;
+use frogdb_server::{Config, Server, ServerListeners};
 use redis_protocol::codec::Resp2;
 use std::collections::HashMap;
-use std::net::TcpListener as StdTcpListener;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -88,14 +89,6 @@ pub struct ClusterTestNode {
 }
 
 impl ClusterTestNode {
-    /// Allocate a free port from the OS.
-    fn allocate_port() -> u16 {
-        let listener = StdTcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        port
-    }
-
     /// Create a unique temp directory for test data.
     fn create_temp_dir() -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -123,9 +116,13 @@ impl ClusterTestNode {
 
     /// Start a cluster node with the given configuration.
     pub async fn start(config: ClusterNodeConfig, initial_nodes: Vec<String>) -> Self {
-        let client_port = Self::allocate_port();
-        let cluster_port = Self::allocate_port();
-        let metrics_port = Self::allocate_port();
+        // Pre-bind cluster bus listener on port 0 to avoid TOCTOU race
+        let cluster_bus_listener =
+            tcp_listener_reusable("127.0.0.1:0".parse::<SocketAddr>().unwrap())
+                .await
+                .unwrap();
+        let cluster_port = cluster_bus_listener.local_addr().unwrap().port();
+        let cluster_bus_addr_str = format!("127.0.0.1:{}", cluster_port);
 
         let data_dir = config
             .data_dir
@@ -144,10 +141,10 @@ impl ClusterTestNode {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
 
-        // Build server config
+        // Build server config (client and metrics ports use 0 — read actual ports after construction)
         let mut server_config = Config::default();
         server_config.server.bind = "127.0.0.1".to_string();
-        server_config.server.port = client_port;
+        server_config.server.port = 0;
         server_config.server.num_shards = config.num_shards.unwrap_or(4);
         server_config.logging.level = config
             .log_level
@@ -156,12 +153,12 @@ impl ClusterTestNode {
         server_config.persistence.enabled = config.persistence;
         server_config.persistence.data_dir = data_dir.clone();
         server_config.metrics.bind = "127.0.0.1".to_string();
-        server_config.metrics.port = metrics_port;
+        server_config.metrics.port = 0;
 
         // Cluster configuration
         server_config.cluster.enabled = true;
         server_config.cluster.node_id = node_id;
-        server_config.cluster.cluster_bus_addr = format!("127.0.0.1:{}", cluster_port);
+        server_config.cluster.cluster_bus_addr = cluster_bus_addr_str;
         server_config.cluster.initial_nodes = initial_nodes.clone();
         server_config.cluster.data_dir = cluster_data_dir;
         server_config.cluster.election_timeout_ms = config.election_timeout_ms;
@@ -169,21 +166,28 @@ impl ClusterTestNode {
         server_config.cluster.connect_timeout_ms = config.connect_timeout_ms;
         server_config.cluster.request_timeout_ms = config.request_timeout_ms;
 
+        // Construct server OUTSIDE spawn so we can read bound addresses
+        let listeners = ServerListeners {
+            cluster_bus: Some(cluster_bus_listener),
+        };
+        let server = Server::with_listeners(server_config, listeners)
+            .await
+            .unwrap();
+        let client_port = server.local_addr().unwrap().port();
+        let metrics_port = server
+            .metrics_addr()
+            .and_then(|r| r.ok())
+            .map(|a| a.port())
+            .unwrap_or(0);
+
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let handle = tokio::spawn(async move {
-            match Server::new(server_config).await {
-                Ok(server) => {
-                    let _ = server
-                        .run_until(async move {
-                            let _ = shutdown_rx.await;
-                        })
-                        .await;
-                }
-                Err(e) => {
-                    eprintln!("Failed to start cluster node: {}", e);
-                }
-            }
+            let _ = server
+                .run_until(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
             running_clone.store(false, Ordering::SeqCst);
         });
 
@@ -308,6 +312,14 @@ impl ClusterTestNode {
         // Wait a bit for ports to be released (500ms provides extra margin for OS cleanup)
         tokio::time::sleep(Duration::from_millis(500)).await;
 
+        // Pre-bind cluster bus listener on the SAME port (SO_REUSEADDR allows this)
+        let cluster_bus_addr: SocketAddr = format!("127.0.0.1:{}", restart_info.cluster_port)
+            .parse()
+            .unwrap();
+        let cluster_bus_listener = tcp_listener_reusable(cluster_bus_addr)
+            .await
+            .map_err(|e| ClusterError::new(format!("Failed to bind cluster bus: {}", e)))?;
+
         // Create cluster data directory if needed
         let cluster_data_dir = restart_info.data_dir.join("cluster");
         std::fs::create_dir_all(&cluster_data_dir).ok();
@@ -315,10 +327,10 @@ impl ClusterTestNode {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
 
-        // Build server config
+        // Build server config (client and metrics use port 0 — read actual after construction)
         let mut server_config = Config::default();
         server_config.server.bind = "127.0.0.1".to_string();
-        server_config.server.port = restart_info.client_port;
+        server_config.server.port = 0;
         server_config.server.num_shards = restart_info.config.num_shards.unwrap_or(4);
         server_config.logging.level = restart_info
             .config
@@ -328,7 +340,7 @@ impl ClusterTestNode {
         server_config.persistence.enabled = restart_info.config.persistence;
         server_config.persistence.data_dir = restart_info.data_dir.clone();
         server_config.metrics.bind = "127.0.0.1".to_string();
-        server_config.metrics.port = restart_info.metrics_port;
+        server_config.metrics.port = 0;
 
         // Cluster configuration
         server_config.cluster.enabled = true;
@@ -341,30 +353,47 @@ impl ClusterTestNode {
         server_config.cluster.connect_timeout_ms = restart_info.config.connect_timeout_ms;
         server_config.cluster.request_timeout_ms = restart_info.config.request_timeout_ms;
 
+        // Construct server OUTSIDE spawn to read bound addresses
+        let listeners = ServerListeners {
+            cluster_bus: Some(cluster_bus_listener),
+        };
+        let server = Server::with_listeners(server_config, listeners)
+            .await
+            .map_err(|e| ClusterError::new(format!("Failed to start server: {}", e)))?;
+        let client_port = server.local_addr().unwrap().port();
+        let metrics_port = server
+            .metrics_addr()
+            .and_then(|r| r.ok())
+            .map(|a| a.port())
+            .unwrap_or(0);
+
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let handle = tokio::spawn(async move {
-            match Server::new(server_config).await {
-                Ok(server) => {
-                    let _ = server
-                        .run_until(async move {
-                            let _ = shutdown_rx.await;
-                        })
-                        .await;
-                }
-                Err(e) => {
-                    eprintln!("Failed to restart cluster node: {}", e);
-                }
-            }
+            let _ = server
+                .run_until(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
             running_clone.store(false, Ordering::SeqCst);
         });
 
         // Wait for server to be ready
-        Self::wait_for_ready(restart_info.client_port).await;
+        Self::wait_for_ready(client_port).await;
 
+        // Update ports (client/metrics may change since we use port 0)
+        self.client_port = client_port;
+        self.metrics_port = metrics_port;
         self.shutdown_tx = Some(shutdown_tx);
         self.handle = Some(handle);
         self.running = running;
+
+        // Update restart_info with new ports
+        self.restart_info = Some(NodeRestartInfo {
+            client_port,
+            metrics_port,
+            ..restart_info
+        });
 
         Ok(())
     }
@@ -413,24 +442,30 @@ impl ClusterTestHarness {
             return Err(ClusterError::new("Cluster must have at least 1 node"));
         }
 
-        // Pre-allocate ports for all nodes
-        let mut node_ports: Vec<(u64, u16, u16, u16)> = Vec::new();
+        // Pre-bind cluster bus listeners for ALL nodes (no TOCTOU!)
+        let mut bus_listeners = Vec::new();
+        let mut bus_addrs = Vec::new();
+        let mut node_ids = Vec::new();
         for _ in 0..num_nodes {
-            let client_port = ClusterTestNode::allocate_port();
-            let cluster_port = ClusterTestNode::allocate_port();
-            let metrics_port = ClusterTestNode::allocate_port();
+            let listener = tcp_listener_reusable("127.0.0.1:0".parse::<SocketAddr>().unwrap())
+                .await
+                .unwrap();
+            let addr = listener.local_addr().unwrap();
+            let cluster_port = addr.port();
             let node_id = ClusterTestNode::generate_node_id_from_port(cluster_port);
-            node_ports.push((node_id, client_port, cluster_port, metrics_port));
+            bus_addrs.push(addr.to_string());
+            node_ids.push(node_id);
+            bus_listeners.push(listener);
         }
 
         // Build initial_nodes list with all cluster addresses
-        let initial_nodes: Vec<String> = node_ports
-            .iter()
-            .map(|(_, _, cluster_port, _)| format!("127.0.0.1:{}", cluster_port))
-            .collect();
+        let initial_nodes: Vec<String> = bus_addrs.clone();
 
         // Start all nodes
-        for (node_id, client_port, cluster_port, metrics_port) in node_ports {
+        for (i, bus_listener) in bus_listeners.into_iter().enumerate() {
+            let node_id = node_ids[i];
+            let cluster_port = bus_listener.local_addr().unwrap().port();
+
             let mut config = self.base_config.clone();
             config.node_id = node_id;
 
@@ -444,10 +479,10 @@ impl ClusterTestHarness {
             let running = Arc::new(AtomicBool::new(true));
             let running_clone = running.clone();
 
-            // Build server config
+            // Build server config (client and metrics ports use 0)
             let mut server_config = Config::default();
             server_config.server.bind = "127.0.0.1".to_string();
-            server_config.server.port = client_port;
+            server_config.server.port = 0;
             server_config.server.num_shards = config.num_shards.unwrap_or(4);
             server_config.logging.level = config
                 .log_level
@@ -456,12 +491,12 @@ impl ClusterTestHarness {
             server_config.persistence.enabled = config.persistence;
             server_config.persistence.data_dir = data_dir.clone();
             server_config.metrics.bind = "127.0.0.1".to_string();
-            server_config.metrics.port = metrics_port;
+            server_config.metrics.port = 0;
 
             // Cluster configuration
             server_config.cluster.enabled = true;
             server_config.cluster.node_id = node_id;
-            server_config.cluster.cluster_bus_addr = format!("127.0.0.1:{}", cluster_port);
+            server_config.cluster.cluster_bus_addr = bus_addrs[i].clone();
             server_config.cluster.initial_nodes = initial_nodes.clone();
             server_config.cluster.data_dir = cluster_data_dir;
             server_config.cluster.election_timeout_ms = config.election_timeout_ms;
@@ -469,21 +504,28 @@ impl ClusterTestHarness {
             server_config.cluster.connect_timeout_ms = config.connect_timeout_ms;
             server_config.cluster.request_timeout_ms = config.request_timeout_ms;
 
+            // Construct server OUTSIDE spawn to read bound addresses
+            let listeners = ServerListeners {
+                cluster_bus: Some(bus_listener),
+            };
+            let server = Server::with_listeners(server_config, listeners)
+                .await
+                .unwrap();
+            let client_port = server.local_addr().unwrap().port();
+            let metrics_port = server
+                .metrics_addr()
+                .and_then(|r| r.ok())
+                .map(|a| a.port())
+                .unwrap_or(0);
+
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
             let handle = tokio::spawn(async move {
-                match Server::new(server_config).await {
-                    Ok(server) => {
-                        let _ = server
-                            .run_until(async move {
-                                let _ = shutdown_rx.await;
-                            })
-                            .await;
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to start cluster node {}: {}", node_id, e);
-                    }
-                }
+                let _ = server
+                    .run_until(async move {
+                        let _ = shutdown_rx.await;
+                    })
+                    .await;
                 running_clone.store(false, Ordering::SeqCst);
             });
 

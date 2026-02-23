@@ -29,27 +29,27 @@ pub struct AdminState {
 /// Admin HTTP server.
 pub struct AdminServer {
     config: AdminConfig,
+    listener: Option<TcpListener>,
     state: AdminState,
 }
 
 impl AdminServer {
     /// Create a new admin server.
+    ///
+    /// Call `with_listener()` to provide a pre-bound listener. If none is
+    /// provided, `run()` will bind from the `AdminConfig`.
     pub fn new(config: AdminConfig, state: AdminState) -> Self {
-        Self { config, state }
-    }
-
-    /// Create admin server with default state (no cluster, no replication).
-    pub fn new_standalone(config: AdminConfig, client_addr: String) -> Self {
         Self {
             config,
-            state: AdminState {
-                cluster_state: None,
-                replication_tracker: None,
-                node_id: None,
-                client_addr,
-                cluster_bus_addr: None,
-            },
+            listener: None,
+            state,
         }
+    }
+
+    /// Provide a pre-bound `TcpListener` so the port is never released.
+    pub fn with_listener(mut self, listener: TcpListener) -> Self {
+        self.listener = Some(listener);
+        self
     }
 
     /// Run the admin server.
@@ -59,12 +59,13 @@ impl AdminServer {
             return Ok(());
         }
 
-        let bind_addr = self.config.bind_addr();
-        let addr: SocketAddr = bind_addr.parse()?;
-
+        let listener = match self.listener {
+            Some(l) => l,
+            None => TcpListener::bind(self.config.bind_addr().parse::<SocketAddr>()?).await?,
+        };
+        let addr = listener.local_addr()?;
         let app = Self::create_router(self.state);
 
-        let listener = TcpListener::bind(addr).await?;
         info!(addr = %addr, "Admin API server started");
 
         axum::serve(listener, app).await.map_err(|e| {

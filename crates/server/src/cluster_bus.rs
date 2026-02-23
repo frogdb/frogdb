@@ -4,7 +4,6 @@
 //! from other cluster nodes. It uses the length-prefixed JSON protocol defined
 //! in frogdb_core::cluster::network.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use frogdb_core::cluster::ClusterRaft;
@@ -21,16 +20,19 @@ use tracing::{debug, error, info};
 /// This server listens for incoming connections from other cluster nodes
 /// and handles Raft RPC requests (AppendEntries, Vote, InstallSnapshot).
 ///
+/// Accepts a pre-bound `TcpListener` so that the port is held open from
+/// `Server::new()` and never subject to TOCTOU port races.
+///
 /// # Arguments
 ///
-/// * `addr` - The address to bind the server to
+/// * `listener` - Pre-bound TCP listener for cluster bus connections
 /// * `raft` - The Raft instance to handle requests
 ///
 /// # Returns
 ///
 /// This function runs indefinitely and only returns on error.
-pub async fn run(addr: SocketAddr, raft: Arc<ClusterRaft>) -> std::io::Result<()> {
-    let listener = TcpListener::bind(addr).await?;
+pub async fn run(listener: TcpListener, raft: Arc<ClusterRaft>) -> std::io::Result<()> {
+    let addr = listener.local_addr()?;
     info!(%addr, "Cluster bus listening");
 
     loop {
@@ -102,8 +104,8 @@ async fn handle_connection(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::net::tcp_listener_reusable;
+    use std::net::SocketAddr;
 
     #[tokio::test]
     async fn test_cluster_bus_bind_fails_on_invalid_addr() {
