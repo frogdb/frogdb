@@ -8,6 +8,9 @@ brew "rustup"
 # Command runner (like make, but simpler)
 brew "just"
 
+# Language server for Justfiles (IDE support)
+brew "terror/tap/just-lsp"
+
 # Optional: Redis CLI for manual testing
 brew "redis"
 
