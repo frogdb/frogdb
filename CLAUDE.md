@@ -21,7 +21,7 @@ just concurrency        # Shuttle + Turmoil concurrency tests
 
 ## System RocksDB (Faster Builds)
 
-Set `FROGDB_SYSTEM_ROCKSDB=1` to link against system-installed RocksDB instead of building from source. This significantly speeds up builds. Optionally set `FROGDB_LIB_DIR` to override the library search path (default: `/opt/homebrew/lib`).
+**IMPORTANT:** Always set `FROGDB_SYSTEM_ROCKSDB=1` when running local builds to dynamically link against the system-installed RocksDB instead of building from source. This significantly speeds up builds. Optionally set `FROGDB_LIB_DIR` to override the library search path (default: `/opt/homebrew/lib`).
 
 All `just` recipes that invoke cargo respect this flag automatically.
 
