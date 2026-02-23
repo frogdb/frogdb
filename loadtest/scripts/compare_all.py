@@ -998,7 +998,7 @@ def main() -> None:
     if not check_connectivity(host, frogdb_port):
         print(f"Warning: FrogDB not responding on {host}:{frogdb_port}")
         if frogdb_in_docker:
-            print("Check Docker container status: docker compose -f tools/loadtest/docker-compose.benchmarks.yml ps")
+            print("Check Docker container status: docker compose -f loadtest/docker-compose.benchmarks.yml ps")
         else:
             print("Start it with: cargo run --release")
     else:
