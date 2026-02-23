@@ -1,5 +1,6 @@
 # FrogDB Development Dependencies (macOS)
 # For Linux/WSL, use shell.nix instead: nix-shell
+# NOTE: We may move to mise (https://mise.jdx.dev/) for toolchain management in the future.
 
 # Rust toolchain (via rustup for version management)
 brew "rustup"

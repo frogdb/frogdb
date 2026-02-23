@@ -1,3 +1,5 @@
+# NOTE: We may move to mise (https://mise.jdx.dev/) for toolchain management in the future.
+
 # libclang is required by bindgen (used by librocksdb-sys). macOS: brew install llvm
 export LIBCLANG_PATH := "/opt/homebrew/opt/llvm/lib"
 
