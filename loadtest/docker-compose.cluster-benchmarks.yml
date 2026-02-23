@@ -1,0 +1,243 @@
+# Docker Compose configuration for cluster benchmark targets
+#
+# Compares multi-threaded/multi-process scaling:
+#   FrogDB:    1 process, 3 internal shards      → 172.30.0.10:6379 (host: 16379)
+#   Redis:     3 master cluster nodes             → 172.30.0.11-13:6379 (host: 17001-17003)
+#   Valkey:    3 master cluster nodes             → 172.30.0.21-23:6379 (host: 17011-17013)
+#   Dragonfly: 1 process, 3 proactor threads      → 172.30.0.30:6379 (host: 16382)
+#
+# All services run on a shared Docker bridge network with static IPs.
+# This avoids macOS Docker Desktop host networking issues while allowing
+# Redis/Valkey cluster gossip and MOVED redirects to work correctly.
+#
+# memtier_benchmark runs inside Docker on the same network (via the
+# "memtier" service) so it can reach cluster nodes and follow redirects.
+#
+# After startup, clusters require initialization (handled by compare_cluster.py):
+#   docker exec cluster-bench-redis-1 redis-cli --cluster create \
+#     172.30.0.11:6379 172.30.0.12:6379 172.30.0.13:6379 --cluster-yes
+#
+# Usage:
+#   docker compose -f loadtest/docker-compose.cluster-benchmarks.yml up -d
+#   docker compose -f loadtest/docker-compose.cluster-benchmarks.yml down
+
+networks:
+  benchnet:
+    name: cluster-benchnet
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+services:
+  # --- FrogDB: single process, 3 shards ---
+  frogdb:
+    build:
+      context: ..
+      dockerfile: Dockerfile.bench
+    container_name: cluster-bench-frogdb
+    ports:
+      - "16379:6379"
+    networks:
+      benchnet:
+        ipv4_address: 172.30.0.10
+    environment:
+      - FROGDB_SERVER__NUM_SHARDS=3
+      - FROGDB_PERSISTENCE__ENABLED=false
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # --- Redis Cluster: 3 master nodes ---
+  redis-1:
+    image: redis:7-alpine
+    container_name: cluster-bench-redis-1
+    ports:
+      - "17001:6379"
+    networks:
+      benchnet:
+        ipv4_address: 172.30.0.11
+    command: >
+      redis-server
+      --port 6379
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-ip 172.30.0.11
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+      --save ""
+      --appendonly no
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis-2:
+    image: redis:7-alpine
+    container_name: cluster-bench-redis-2
+    ports:
+      - "17002:6379"
+    networks:
+      benchnet:
+        ipv4_address: 172.30.0.12
+    command: >
+      redis-server
+      --port 6379
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-ip 172.30.0.12
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+      --save ""
+      --appendonly no
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis-3:
+    image: redis:7-alpine
+    container_name: cluster-bench-redis-3
+    ports:
+      - "17003:6379"
+    networks:
+      benchnet:
+        ipv4_address: 172.30.0.13
+    command: >
+      redis-server
+      --port 6379
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-ip 172.30.0.13
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+      --save ""
+      --appendonly no
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # --- Valkey Cluster: 3 master nodes ---
+  valkey-1:
+    image: valkey/valkey:8-alpine
+    container_name: cluster-bench-valkey-1
+    ports:
+      - "17011:6379"
+    networks:
+      benchnet:
+        ipv4_address: 172.30.0.21
+    command: >
+      valkey-server
+      --port 6379
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-ip 172.30.0.21
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+      --save ""
+      --appendonly no
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-p", "6379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  valkey-2:
+    image: valkey/valkey:8-alpine
+    container_name: cluster-bench-valkey-2
+    ports:
+      - "17012:6379"
+    networks:
+      benchnet:
+        ipv4_address: 172.30.0.22
+    command: >
+      valkey-server
+      --port 6379
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-ip 172.30.0.22
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+      --save ""
+      --appendonly no
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-p", "6379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  valkey-3:
+    image: valkey/valkey:8-alpine
+    container_name: cluster-bench-valkey-3
+    ports:
+      - "17013:6379"
+    networks:
+      benchnet:
+        ipv4_address: 172.30.0.23
+    command: >
+      valkey-server
+      --port 6379
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-ip 172.30.0.23
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+      --save ""
+      --appendonly no
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-p", "6379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # --- Dragonfly: single process, 3 proactor threads ---
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly
+    container_name: cluster-bench-dragonfly
+    ports:
+      - "16382:6379"
+    networks:
+      benchnet:
+        ipv4_address: 172.30.0.30
+    command: dragonfly --proactor_threads 3
+    restart: unless-stopped
+    ulimits:
+      memlock: -1
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # --- memtier_benchmark: benchmark client ---
+  # Built from source for ARM-native execution.
+  # Not started with `docker compose up` (uses profiles).
+  # Used via: docker compose run --rm memtier <args>
+  memtier:
+    build:
+      context: ..
+      dockerfile: Dockerfile.memtier
+    container_name: cluster-bench-memtier
+    networks:
+      benchnet: {}
+    profiles:
+      - tools
