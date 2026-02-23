@@ -1,0 +1,14 @@
+{
+  "name": "frogdb-debug-assets",
+  "private": true,
+  "description": "Vendored JS/CSS assets for the FrogDB debug web UI",
+  "dependencies": {
+    "htmx.org": "^2.0.0",
+    "alpinejs": "^3.14.0",
+    "uplot": "^1.6.31",
+    "chota": "^0.9.2"
+  },
+  "scripts": {
+    "vendor": "mkdir -p assets/js assets/css && cp node_modules/htmx.org/dist/htmx.min.js assets/js/htmx.min.js && cp node_modules/alpinejs/dist/cdn.min.js assets/js/alpine.min.js && cp node_modules/uplot/dist/uPlot.iife.min.js assets/js/uplot.min.js && cp node_modules/uplot/dist/uPlot.min.css assets/css/uPlot.min.css && cp node_modules/chota/dist/chota.min.css assets/css/chota.min.css"
+  }
+}

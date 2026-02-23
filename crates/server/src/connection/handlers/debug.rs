@@ -319,7 +319,7 @@ impl ConnectionHandler {
             .map(|b| {
                 Response::Array(vec![
                     Response::Bulk(Some(Bytes::from(b.id))),
-                    Response::Bulk(Some(Bytes::from(b.created_at))),
+                    Response::Integer(b.created_at as i64),
                     Response::Integer(b.size_bytes as i64),
                 ])
             })
