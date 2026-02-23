@@ -2,8 +2,8 @@ use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
-use crate::commands::utils::{parse_i64, parse_usize, pop_response, scored_array};
-use crate::routing::require_same_shard;
+use crate::utils::require_same_shard;
+use crate::utils::{parse_i64, parse_usize, pop_response, scored_array};
 
 // ============================================================================
 // ZPOPMIN - Pop minimum score members

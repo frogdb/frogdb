@@ -2,7 +2,7 @@ use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
-use crate::commands::utils::{
+use crate::utils::{
     members_array, parse_i64, parse_lex_bound, parse_score_bound, parse_usize, scored_array,
 };
 

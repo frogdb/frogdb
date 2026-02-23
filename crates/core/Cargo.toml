@@ -11,6 +11,8 @@ shuttle = ["dep:shuttle", "frogdb-types/shuttle"]
 [dependencies]
 frogdb-types.workspace = true
 frogdb-protocol.workspace = true
+frogdb-vll.workspace = true
+frogdb-replication.workspace = true
 frogdb-cluster.workspace = true
 frogdb-persistence.workspace = true
 frogdb-acl.workspace = true

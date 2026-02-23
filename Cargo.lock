@@ -1339,6 +1339,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-commands"
+version = "0.1.0"
+dependencies = [
+ "bitvec",
+ "bytes",
+ "crc16",
+ "frogdb-core",
+ "frogdb-protocol",
+ "rand 0.8.5",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "frogdb-core"
 version = "0.1.0"
 dependencies = [
@@ -1350,8 +1365,10 @@ dependencies = [
  "frogdb-cluster",
  "frogdb-persistence",
  "frogdb-protocol",
+ "frogdb-replication",
  "frogdb-scripting",
  "frogdb-types",
+ "frogdb-vll",
  "griddle",
  "hex",
  "linked-hash-map",
@@ -1441,6 +1458,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-replication"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-persistence",
+ "frogdb-protocol",
+ "frogdb-types",
+ "hex",
+ "parking_lot",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "frogdb-scripting"
 version = "0.1.0"
 dependencies = [
@@ -1460,10 +1498,12 @@ dependencies = [
  "clap",
  "crc16",
  "figment",
+ "frogdb-commands",
  "frogdb-core",
  "frogdb-debug",
  "frogdb-macros",
  "frogdb-protocol",
+ "frogdb-replication",
  "frogdb-telemetry",
  "frogdb-testing",
  "futures",
@@ -1548,6 +1588,15 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "xxhash-rust",
+]
+
+[[package]]
+name = "frogdb-vll"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-protocol",
+ "tokio",
 ]
 
 [[package]]

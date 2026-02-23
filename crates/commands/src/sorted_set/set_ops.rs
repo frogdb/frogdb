@@ -6,8 +6,8 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 use std::collections::HashMap;
 
-use crate::commands::utils::{parse_f64, parse_usize, scored_array};
-use crate::routing::require_same_shard;
+use crate::utils::require_same_shard;
+use crate::utils::{parse_f64, parse_usize, scored_array};
 
 /// Aggregate function for set operations.
 #[derive(Clone, Copy)]

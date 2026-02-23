@@ -7,11 +7,8 @@
 //! - Handling REPLCONF ACKs
 
 use bytes::{Bytes, BytesMut};
-use frogdb_core::{
-    ReplicationBroadcaster, ReplicationFrame, ReplicationState, ReplicationTracker,
-    ReplicationTrackerImpl, RocksStore, replication::tracker::ReplicaState,
-    serialize_command_to_resp,
-};
+use frogdb_persistence::RocksStore;
+use frogdb_types::ReplicationTracker;
 use sha2::Digest;
 use std::collections::HashMap;
 use std::io;
@@ -24,9 +21,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{RwLock, broadcast, mpsc};
 
-use crate::replication::fullsync::{
+use crate::ReplicationBroadcaster;
+use crate::frame::{ReplicationFrame, serialize_command_to_resp};
+use crate::fullsync::{
     FullSyncMetadata, FullSyncState, calculate_file_checksum, stream_file_to_writer,
 };
+use crate::state::ReplicationState;
+use crate::tracker::{ReplicaState, ReplicationTrackerImpl};
 
 // ============================================================================
 // RDB Format Constants

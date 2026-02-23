@@ -19,7 +19,7 @@ use crate::connection::{ConnectionHandler, next_txid};
 impl ConnectionHandler {
     /// Handle SCAN command - scan keys across all shards with cursor.
     pub(crate) async fn handle_scan(&self, args: &[Bytes]) -> Response {
-        use crate::commands::scan::cursor;
+        use frogdb_commands::scan::cursor;
 
         if args.is_empty() {
             return Response::error("ERR wrong number of arguments for 'scan' command");

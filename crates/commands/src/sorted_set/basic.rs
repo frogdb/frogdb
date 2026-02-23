@@ -2,7 +2,7 @@ use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
-use crate::commands::utils::{ZaddOptions, format_float, get_or_create_zset, parse_f64};
+use crate::utils::{ZaddOptions, format_float, get_or_create_zset, parse_f64};
 
 // ============================================================================
 // ZADD - Add members to sorted set

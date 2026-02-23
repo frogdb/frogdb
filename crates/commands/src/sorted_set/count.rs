@@ -2,7 +2,7 @@ use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
-use crate::commands::utils::{parse_lex_bound, parse_score_bound};
+use crate::utils::{parse_lex_bound, parse_score_bound};
 
 // ============================================================================
 // ZCOUNT - Count members in score range

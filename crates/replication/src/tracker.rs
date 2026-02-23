@@ -4,7 +4,7 @@
 //! acknowledged offsets. This enables the WAIT command for synchronous
 //! replication.
 
-use crate::noop::ReplicationTracker;
+use frogdb_types::ReplicationTracker;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::SocketAddr;

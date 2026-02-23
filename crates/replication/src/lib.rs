@@ -32,12 +32,18 @@
 //! - REPLCONF ACK <offset> - Replica acknowledges offset
 
 pub mod frame;
+pub mod fullsync;
+pub mod primary;
+pub mod replica;
 pub mod state;
 pub mod tracker;
 
 pub use frame::{
     FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec, serialize_command_to_resp,
 };
+pub use fullsync::{FullSyncMetadata, FullSyncState};
+pub use primary::PrimaryReplicationHandler;
+pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use state::ReplicationState;
 pub use tracker::{ReplicaInfo, ReplicationTrackerImpl};
 

@@ -24,12 +24,15 @@ pub mod noop;
 pub mod persistence;
 pub mod pubsub;
 pub mod registry;
-pub mod replication;
+// Re-export frogdb-replication as the replication module for backward compatibility.
+pub use frogdb_replication as replication;
 pub mod scripting;
 pub mod shard;
 pub mod slowlog;
 pub mod store;
-pub mod vll;
+
+// Re-export frogdb-vll as the vll module for backward compatibility.
+pub use frogdb_vll as vll;
 
 pub use acl::{
     AclChecker, AclConfig, AclError, AclLog, AclManager, AllowAllChecker, AuthenticatedUser,
@@ -86,7 +89,8 @@ pub use pubsub::{
 };
 pub use registry::{CommandEntry, CommandRegistry};
 pub use replication::{
-    FRAME_MAGIC, FRAME_VERSION, NoopBroadcaster, ReplicaInfo, ReplicationBroadcaster,
+    FRAME_MAGIC, FRAME_VERSION, FullSyncState, NoopBroadcaster, PrimaryReplicationHandler,
+    ReplicaConnection, ReplicaInfo, ReplicaReplicationHandler, ReplicationBroadcaster,
     ReplicationFrame, ReplicationFrameCodec, ReplicationState, ReplicationTrackerImpl,
     SharedBroadcaster, serialize_command_to_resp,
 };
@@ -108,6 +112,12 @@ pub use slowlog::{
 pub use store::ValueType;
 pub use store::{HashMapStore, Store};
 pub use vll::{
-    ExecuteSignal, IntentTable, KeyLockState, LockMode, PendingOpState, ShardReadyResult,
-    TransactionQueue, VllCommand, VllConfig, VllError, VllPendingOp, VllShardResult,
+    ContinuationLock, ExecuteSignal, IntentTable, KeyLockState, LockMode, PendingOpState,
+    ShardReadyResult, VllCommand, VllConfig, VllError, VllShardResult,
 };
+
+/// VllPendingOp specialized with ScatterOp as the operation type.
+pub type VllPendingOp = vll::VllPendingOp<ScatterOp>;
+
+/// TransactionQueue specialized with ScatterOp as the operation type.
+pub type TransactionQueue = vll::TransactionQueue<ScatterOp>;

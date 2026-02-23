@@ -99,7 +99,7 @@ pub struct ShardWorker {
     pub(crate) intent_table: Option<crate::vll::IntentTable>,
 
     /// VLL transaction queue for ordering operations.
-    pub(crate) tx_queue: Option<crate::vll::TransactionQueue>,
+    pub(crate) tx_queue: Option<crate::TransactionQueue>,
 
     /// VLL continuation lock (for MULTI/EXEC and Lua scripts).
     pub(crate) continuation_lock: Option<crate::vll::ContinuationLock>,

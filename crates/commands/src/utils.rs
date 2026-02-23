@@ -475,3 +475,25 @@ pub fn pop_response(members: Vec<(Bytes, f64)>) -> Response {
 pub fn members_array(members: Vec<(Bytes, f64)>) -> Response {
     scored_array(members, false)
 }
+
+// ============================================================================
+// Routing Utilities
+// ============================================================================
+
+/// Check that all keys hash to the same shard, returning an error if not.
+#[inline]
+pub fn require_same_shard(keys: &[Bytes], num_shards: usize) -> Result<(), CommandError> {
+    use frogdb_core::shard_for_key;
+
+    if keys.len() < 2 {
+        return Ok(());
+    }
+
+    let first_shard = shard_for_key(&keys[0], num_shards);
+    for key in &keys[1..] {
+        if shard_for_key(key, num_shards) != first_shard {
+            return Err(CommandError::CrossSlot);
+        }
+    }
+    Ok(())
+}

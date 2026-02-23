@@ -2,7 +2,7 @@ use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
-use crate::commands::utils::{format_float, parse_usize};
+use crate::utils::{format_float, parse_usize};
 
 // ============================================================================
 // ZSCAN - Cursor-based iteration

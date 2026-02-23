@@ -1,0 +1,27 @@
+[package]
+name = "frogdb-replication"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Replication protocol for FrogDB primary-replica streaming"
+
+[dependencies]
+bytes.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+frogdb-protocol.workspace = true
+frogdb-types.workspace = true
+frogdb-persistence.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+tempfile.workspace = true
+serde_json.workspace = true
