@@ -284,26 +284,10 @@ fn parse_flags_value(value: &Value) -> LuaResult<FunctionFlags> {
             }
 
             // Also check for table-style flags: {["no-writes"] = true}
-<<<<<<< HEAD
             for pair in t.pairs::<String, bool>() {
                 if let Ok((key, value)) = pair
                     && value
                 {
-||||||| parent of 670778b (more fixing stuff?)
-            for pair in t.pairs::<String, bool>() {
-                if let Ok((key, value)) = pair {
-                    if value {
-                        match key.as_str() {
-                            "no-writes" => flags |= FunctionFlags::NO_WRITES,
-                            "allow-oom" => flags |= FunctionFlags::ALLOW_OOM,
-                            "allow-stale" => flags |= FunctionFlags::ALLOW_STALE,
-                            "no-cluster" => flags |= FunctionFlags::NO_CLUSTER,
-                            _ => {} // Ignore non-flag keys or already processed array items
-                        }
-=======
-            for (key, value) in t.pairs::<String, bool>().flatten() {
-                if value {
->>>>>>> 670778b (more fixing stuff?)
                     match key.as_str() {
                         "no-writes" => flags |= FunctionFlags::NO_WRITES,
                         "allow-oom" => flags |= FunctionFlags::ALLOW_OOM,

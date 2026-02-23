@@ -7,26 +7,14 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-<<<<<<< HEAD
 use frogdb_core::cluster::ClusterRaft;
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::{handle_rpc_request, parse_rpc_message, send_rpc_response};
 
-use crate::net::tcp_listener_reusable;
+use crate::net::TcpListener;
 #[cfg(not(feature = "turmoil"))]
 use tracing::warn;
 use tracing::{debug, error, info};
-||||||| parent of 670778b (more fixing stuff?)
-use frogdb_core::cluster::{handle_rpc_request, parse_rpc_message, send_rpc_response, ClusterRaft};
-use tokio::net::TcpStream;
-
-use crate::net::tcp_listener_reusable;
-use tracing::{debug, error, info, warn};
-=======
-use frogdb_core::cluster::{handle_rpc_request, parse_rpc_message, send_rpc_response, ClusterRaft};
-use tokio::net::{TcpListener, TcpStream};
-use tracing::{debug, error, info, warn};
->>>>>>> 670778b (more fixing stuff?)
 
 /// Run the cluster bus TCP server.
 ///

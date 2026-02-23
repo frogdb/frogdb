@@ -390,13 +390,7 @@ impl AclRule {
                     });
             }
             AclRule::AddSelector(perm_set) => {
-<<<<<<< HEAD
                 user.selectors.push(*perm_set.clone());
-||||||| parent of 670778b (more fixing stuff?)
-                user.selectors.push(perm_set.clone());
-=======
-                user.selectors.push((**perm_set).clone());
->>>>>>> 670778b (more fixing stuff?)
             }
             AclRule::ClearSelectors => {
                 user.selectors.clear();

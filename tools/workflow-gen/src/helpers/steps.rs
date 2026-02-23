@@ -1,6 +1,6 @@
 //! Common step builders for GitHub Actions workflows.
 
-use gh_workflow::{Run, Step, Use};
+use gh_workflow::{Expression, Run, Step, Use};
 
 use super::actions::*;
 
@@ -75,21 +75,12 @@ pub fn setup_helm() -> Step<Use> {
         .add_with(("version", HELM_VERSION))
 }
 
-<<<<<<< HEAD
 /// Creates a setup kubectl step.
 #[allow(dead_code)]
 pub fn setup_kubectl() -> Step<Use> {
     Step::new("Install kubectl").uses("azure", "setup-kubectl", SETUP_KUBECTL_VERSION)
 }
 
-||||||| parent of 670778b (more fixing stuff?)
-/// Creates a setup kubectl step.
-pub fn setup_kubectl() -> Step<Use> {
-    Step::new("Install kubectl").uses("azure", "setup-kubectl", SETUP_KUBECTL_VERSION)
-}
-
-=======
->>>>>>> 670778b (more fixing stuff?)
 /// Creates a setup Zig step.
 pub fn setup_zig() -> Step<Use> {
     Step::new("Install Zig")
@@ -97,7 +88,6 @@ pub fn setup_zig() -> Step<Use> {
         .add_with(("version", ZIG_VERSION))
 }
 
-<<<<<<< HEAD
 /// Creates a setup Terraform step.
 #[allow(dead_code)]
 pub fn setup_terraform() -> Step<Use> {
@@ -106,16 +96,6 @@ pub fn setup_terraform() -> Step<Use> {
         .add_with(("terraform_version", "${{ env.TERRAFORM_VERSION }}"))
 }
 
-||||||| parent of 670778b (more fixing stuff?)
-/// Creates a setup Terraform step.
-pub fn setup_terraform() -> Step<Use> {
-    Step::new("Setup Terraform")
-        .uses("hashicorp", "setup-terraform", SETUP_TERRAFORM_VERSION)
-        .add_with(("terraform_version", "${{ env.TERRAFORM_VERSION }}"))
-}
-
-=======
->>>>>>> 670778b (more fixing stuff?)
 /// Creates a cargo zigbuild install step.
 pub fn install_cargo_zigbuild() -> Step<Run> {
     Step::new("Install cargo-zigbuild").run("cargo install cargo-zigbuild")
@@ -204,7 +184,6 @@ pub fn download_all_artifacts(path: &str) -> Step<Use> {
         .add_with(("path", path))
 }
 
-<<<<<<< HEAD
 /// Creates an AWS credentials configuration step.
 #[allow(dead_code)]
 pub fn configure_aws_credentials() -> Step<Use> {
@@ -243,44 +222,6 @@ pub fn azure_login() -> Step<Use> {
         .add_with(("subscription-id", "${{ secrets.AZURE_SUBSCRIPTION_ID }}"))
 }
 
-||||||| parent of 670778b (more fixing stuff?)
-/// Creates an AWS credentials configuration step.
-pub fn configure_aws_credentials() -> Step<Use> {
-    Step::new("Configure AWS credentials")
-        .uses(
-            "aws-actions",
-            "configure-aws-credentials",
-            AWS_CREDENTIALS_VERSION,
-        )
-        .if_condition(Expression::new("inputs.cloud == 'aws'"))
-        .add_with(("role-to-assume", "${{ secrets.AWS_ROLE_ARN }}"))
-        .add_with(("aws-region", "${{ vars.AWS_REGION }}"))
-}
-
-/// Creates a GCP authentication step.
-pub fn authenticate_gcp() -> Step<Use> {
-    Step::new("Authenticate to Google Cloud")
-        .uses("google-github-actions", "auth", GCP_AUTH_VERSION)
-        .if_condition(Expression::new("inputs.cloud == 'gcp'"))
-        .add_with((
-            "workload_identity_provider",
-            "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}",
-        ))
-        .add_with(("service_account", "${{ secrets.GCP_SERVICE_ACCOUNT }}"))
-}
-
-/// Creates an Azure login step.
-pub fn azure_login() -> Step<Use> {
-    Step::new("Azure Login")
-        .uses("azure", "login", AZURE_LOGIN_VERSION)
-        .if_condition(Expression::new("inputs.cloud == 'azure'"))
-        .add_with(("client-id", "${{ secrets.AZURE_CLIENT_ID }}"))
-        .add_with(("tenant-id", "${{ secrets.AZURE_TENANT_ID }}"))
-        .add_with(("subscription-id", "${{ secrets.AZURE_SUBSCRIPTION_ID }}"))
-}
-
-=======
->>>>>>> 670778b (more fixing stuff?)
 /// Creates a GitHub release step.
 pub fn gh_release(files: &str) -> Step<Use> {
     Step::new("Create GitHub Release")

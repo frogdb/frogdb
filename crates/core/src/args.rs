@@ -633,13 +633,7 @@ mod tests {
 
         assert_eq!(parser.next_u64().unwrap(), 42);
         assert_eq!(parser.next_i64().unwrap(), -10);
-<<<<<<< HEAD
         assert!((parser.next_f64().unwrap() - 3.15_f64).abs() < 0.001);
-||||||| parent of 670778b (more fixing stuff?)
-        assert!((parser.next_f64().unwrap() - 3.14_f64).abs() < 0.001);
-=======
-        assert!((parser.next_f64().unwrap() - std::f64::consts::PI).abs() < 0.001);
->>>>>>> 670778b (more fixing stuff?)
     }
 
     #[test]

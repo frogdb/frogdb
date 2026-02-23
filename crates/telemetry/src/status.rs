@@ -248,14 +248,7 @@ pub struct StatusCollector {
     health_checker: HealthChecker,
     shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
     client_registry: Arc<ClientRegistry>,
-<<<<<<< HEAD
     _recorder: Arc<PrometheusRecorder>,
-||||||| parent of 670778b (more fixing stuff?)
-    recorder: Arc<PrometheusRecorder>,
-=======
-    #[allow(dead_code)]
-    recorder: Arc<PrometheusRecorder>,
->>>>>>> 670778b (more fixing stuff?)
     start_time: Instant,
     // Configuration values needed for status
     max_clients: usize,

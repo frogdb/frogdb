@@ -93,21 +93,6 @@ pub struct ShardConfig {
     pub enable_vll: bool,
 }
 
-<<<<<<< HEAD
-||||||| parent of 670778b (more fixing stuff?)
-impl Default for ShardConfig {
-    fn default() -> Self {
-        Self {
-            eviction: EvictionConfig::default(),
-            scripting: ScriptingConfig::default(),
-            enable_vll: false,
-        }
-    }
-}
-
-=======
-
->>>>>>> 670778b (more fixing stuff?)
 // ============================================================================
 // Response / metadata types
 // ============================================================================
@@ -171,21 +156,6 @@ pub struct WalLagStatsResponse {
     pub lag_stats: Option<crate::persistence::WalLagStats>,
 }
 
-<<<<<<< HEAD
-||||||| parent of 670778b (more fixing stuff?)
-impl Default for WalLagStatsResponse {
-    fn default() -> Self {
-        Self {
-            shard_id: 0,
-            persistence_enabled: false,
-            lag_stats: None,
-        }
-    }
-}
-
-=======
-
->>>>>>> 670778b (more fixing stuff?)
 /// Response for VLL queue info query.
 #[derive(Debug, Clone, Default)]
 pub struct VllQueueInfo {

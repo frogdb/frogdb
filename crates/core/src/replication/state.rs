@@ -108,15 +108,7 @@ impl ReplicationState {
 
         // Write atomically using a temp file
         let temp_path = path.with_extension("tmp");
-<<<<<<< HEAD
         let contents = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
-||||||| parent of 670778b (more fixing stuff?)
-        let contents = serde_json::to_string_pretty(self)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-=======
-        let contents = serde_json::to_string_pretty(self)
-            .map_err(io::Error::other)?;
->>>>>>> 670778b (more fixing stuff?)
         fs::write(&temp_path, contents)?;
         fs::rename(temp_path, path)?;
 
