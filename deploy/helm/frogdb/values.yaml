@@ -25,6 +25,10 @@ frogdb:
     syncIntervalMs: 1000
     writeBufferSizeMb: 64
     compression: lz4
+    blockCacheSizeMb: 256
+    bloomFilterBits: 10
+    maxWriteBufferNumber: 4
+    compactionRateLimitMb: 0
   snapshot:
     dir: /data/snapshots
     intervalSecs: 3600

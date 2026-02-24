@@ -56,7 +56,7 @@ Run Jepsen tests when changes touch core server subsystems: **persistence, clust
 
 ```bash
 # Build the Docker image for Jepsen
-just jepsen-build
+just docker-build
 
 # Run a single test (auto-starts the required topology)
 just jepsen register --time-limit 30
@@ -64,9 +64,9 @@ just jepsen append-crash --time-limit 60
 just jepsen split-brain --time-limit 60
 
 # Run predefined suites (auto-builds and manages topology lifecycle)
-just jepsen-all                # single + crash + replication + raft
-just jepsen-replication-all    # replication tests only
-just jepsen-raft-all           # raft cluster tests only
+just jepsen-suite all            # single + crash + replication + raft
+just jepsen-suite replication    # replication tests only
+just jepsen-suite raft           # raft cluster tests only
 
 # List all available tests and suites
 just jepsen-list
