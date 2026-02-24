@@ -420,6 +420,58 @@ impl ConnectionHandler {
         }
     }
 
+    /// Send multiple responses as a batch, flushing only once at the end.
+    ///
+    /// This reduces syscalls for commands that produce multiple responses
+    /// (e.g., SUBSCRIBE/UNSUBSCRIBE with multiple channels).
+    async fn send_responses_batch(&mut self, responses: Vec<Response>) -> std::io::Result<()> {
+        match self.state.protocol_version {
+            ProtocolVersion::Resp2 => {
+                let mut total_bytes = 0u64;
+                for response in responses {
+                    let wire = response.into_wire().expect(
+                        "Internal action in batch - should be intercepted by route_and_execute_with_transaction",
+                    );
+                    if matches!(wire, frogdb_protocol::WireResponse::NullArray) {
+                        // NullArray requires raw bytes - flush pending codec data first
+                        self.framed.flush().await.map_err(std::io::Error::other)?;
+                        const NULL_ARRAY_BYTES: &[u8] = b"*-1\r\n";
+                        total_bytes += NULL_ARRAY_BYTES.len() as u64;
+                        self.framed.get_mut().write_all(NULL_ARRAY_BYTES).await?;
+                        continue;
+                    }
+                    let frame = wire.to_resp2_frame();
+                    total_bytes += estimate_resp2_frame_size(&frame) as u64;
+                    self.framed
+                        .feed(frame)
+                        .await
+                        .map_err(std::io::Error::other)?;
+                }
+                self.state.local_stats.add_bytes_sent(total_bytes);
+                self.framed.flush().await.map_err(std::io::Error::other)
+            }
+            ProtocolVersion::Resp3 => {
+                self.resp3_buf.clear();
+                for response in responses {
+                    let wire = response.into_wire().expect(
+                        "Internal action in batch - should be intercepted by route_and_execute_with_transaction",
+                    );
+                    let frame = wire.to_resp3_frame();
+                    redis_protocol::resp3::encode::complete::extend_encode(
+                        &mut self.resp3_buf,
+                        &frame,
+                    )
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                }
+                self.state
+                    .local_stats
+                    .add_bytes_sent(self.resp3_buf.len() as u64);
+                self.framed.get_mut().write_all(&self.resp3_buf).await?;
+                self.framed.get_mut().flush().await
+            }
+        }
+    }
+
     /// Run the connection handling loop.
     pub async fn run(mut self) -> Result<()> {
         debug!(conn_id = self.state.id, "Connection handler started");
@@ -569,14 +621,16 @@ impl ConnectionHandler {
                             if self.state.skip_next_reply {
                                 self.state.skip_next_reply = false;
                                 // Skip sending this response
-                            } else {
-                                for response in responses {
-                                    if self.send_response(response).await.is_err() {
-                                        debug!(conn_id = self.state.id, "Failed to send response");
-                                        // Break out of the loop on send failure
-                                        break;
-                                    }
+                            } else if responses.len() == 1 {
+                                if self.send_response(responses.into_iter().next().unwrap()).await.is_err() {
+                                    debug!(conn_id = self.state.id, "Failed to send response");
+                                    break;
                                 }
+                            } else if !responses.is_empty()
+                                && self.send_responses_batch(responses).await.is_err()
+                            {
+                                debug!(conn_id = self.state.id, "Failed to send batch response");
+                                break;
                             }
                         }
                         ReplyMode::Off => {
