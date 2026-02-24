@@ -52,6 +52,7 @@ pub async fn tcp_listener_reusable(addr: SocketAddr) -> std::io::Result<TcpListe
     };
     let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
     socket.set_reuse_address(true)?;
+    socket.set_reuse_port(true)?;
     socket.set_nonblocking(true)?;
     socket.bind(&addr.into())?;
     socket.listen(1024)?;
