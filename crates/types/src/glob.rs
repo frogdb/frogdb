@@ -12,6 +12,36 @@
 ///
 /// Returns true if the key matches the pattern.
 pub fn glob_match(pattern: &[u8], key: &[u8]) -> bool {
+    // Fast path: match-all
+    if pattern == b"*" {
+        return true;
+    }
+    // Fast path: exact match (no special chars)
+    if !pattern
+        .iter()
+        .any(|&b| matches!(b, b'*' | b'?' | b'[' | b'\\'))
+    {
+        return pattern == key;
+    }
+    // Fast path: prefix* (e.g., "user:*")
+    if pattern.len() >= 2
+        && pattern[pattern.len() - 1] == b'*'
+        && !pattern[..pattern.len() - 1]
+            .iter()
+            .any(|&b| matches!(b, b'*' | b'?' | b'[' | b'\\'))
+    {
+        return key.starts_with(&pattern[..pattern.len() - 1]);
+    }
+    // Fast path: *suffix (e.g., "*:profile")
+    if pattern.len() >= 2
+        && pattern[0] == b'*'
+        && !pattern[1..]
+            .iter()
+            .any(|&b| matches!(b, b'*' | b'?' | b'[' | b'\\'))
+    {
+        return key.ends_with(&pattern[1..]);
+    }
+    // Full recursive match
     let mut pattern_iter = pattern.iter().peekable();
     let mut key_iter = key.iter().peekable();
 

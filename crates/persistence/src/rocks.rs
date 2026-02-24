@@ -82,6 +82,8 @@ impl CompressionType {
 pub struct RocksStore {
     db: DBWithThreadMode<MultiThreaded>,
     num_shards: usize,
+    /// Pre-computed column family names to avoid allocating on every operation.
+    cf_names: Vec<String>,
 }
 
 impl RocksStore {
@@ -172,7 +174,11 @@ impl RocksStore {
         };
 
         info!(path = %path_str, num_shards, "RocksDB opened");
-        Ok(Self { db, num_shards })
+        Ok(Self {
+            db,
+            num_shards,
+            cf_names,
+        })
     }
 
     /// Get the column family handle for a shard.
@@ -181,10 +187,10 @@ impl RocksStore {
             return Err(RocksError::InvalidShardId(shard_id));
         }
 
-        let cf_name = format!("shard_{}", shard_id);
+        let cf_name = &self.cf_names[shard_id];
         self.db
-            .cf_handle(&cf_name)
-            .ok_or(RocksError::ColumnFamilyNotFound(cf_name))
+            .cf_handle(cf_name)
+            .ok_or_else(|| RocksError::ColumnFamilyNotFound(cf_name.clone()))
     }
 
     /// Put a key-value pair into a shard.
@@ -278,7 +284,7 @@ impl RocksStore {
         if shard_id >= self.num_shards {
             return Err(RocksError::InvalidShardId(shard_id));
         }
-        Ok((WriteBatch::default(), format!("shard_{}", shard_id)))
+        Ok((WriteBatch::default(), self.cf_names[shard_id].clone()))
     }
 
     /// Put to a write batch.
