@@ -37,13 +37,13 @@ This will:
 
 ```bash
 # Run string type tests
-just redis-compat-unit type/string
+just redis-compat --single unit/type/string
 
 # Run hash type tests
-just redis-compat-unit type/hash
+just redis-compat --single unit/type/hash
 
 # Run set operations tests
-just redis-compat-unit type/set
+just redis-compat --single unit/type/set
 ```
 
 ### Command Line Options

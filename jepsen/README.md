@@ -51,10 +51,10 @@ cargo install cargo-zigbuild
 All commands run from the repository root:
 
 ```bash
-just jepsen-build                        # Cross-compile + build Docker image
+just docker-build                        # Cross-compile + build Docker image
 just jepsen register --time-limit 30     # Run a single test (auto-starts topology)
 just jepsen-results                      # Open results in browser (macOS)
-just jepsen-down                         # Tear down containers
+just jepsen-down                         # Tear down all containers
 ```
 
 ## Running Tests
@@ -81,9 +81,9 @@ just jepsen register --time-limit 60 --rate 20
 Run predefined groups of tests. Suite commands auto-build and manage topology lifecycle:
 
 ```bash
-just jepsen-all              # All single + crash + replication + raft tests
-just jepsen-replication-all  # All 3-node replication tests
-just jepsen-raft-all         # All 5-node Raft cluster tests
+just jepsen-suite all            # All single + crash + replication + raft tests
+just jepsen-suite replication    # All 3-node replication tests
+just jepsen-suite raft           # All 5-node Raft cluster tests
 ```
 
 Or use `run.py` directly for more control:
@@ -213,15 +213,15 @@ The `run` subcommand manages topology automatically, but you can also control it
 
 ```bash
 # Start/stop topologies
-just jepsen-up                  # Single-node
-just jepsen-down                # Single-node
-just jepsen-replication-up      # 3-node replication
-just jepsen-replication-down    # 3-node replication
-just jepsen-raft-cluster-up     # 5-node Raft cluster
-just jepsen-raft-cluster-down   # 5-node Raft cluster
+just jepsen-up single           # Single-node
+just jepsen-down single         # Single-node
+just jepsen-up replication      # 3-node replication
+just jepsen-down replication    # 3-node replication
+just jepsen-up raft             # 5-node Raft cluster
+just jepsen-down raft           # 5-node Raft cluster
 
 # Tear down all topologies at once
-uv run jepsen/run.py down
+just jepsen-down
 ```
 
 ## Running Tests Directly
@@ -276,7 +276,7 @@ Key output files per run:
 
 ```
 Host machine
-├── just jepsen-build
+├── just docker-build
 │   ├── cargo zigbuild → target/x86_64-unknown-linux-gnu/release/frogdb-server
 │   └── docker build  → frogdb:latest image
 │

@@ -95,10 +95,6 @@ concurrency:
 test-browser:
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-browser-tests --features browser-tests
 
-# Run linearizability checker tests
-test-linearizability:
-    {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-testing
-
 # Run all benchmarks
 bench:
     {{dyld-env}} {{rocksdb-env}} cargo bench -p frogdb-benches
@@ -165,10 +161,6 @@ doc:
 redis-compat *args:
     uv run redis-compat/run_tests.py {{args}}
 
-# Run specific Redis test unit
-redis-compat-unit unit *args:
-    uv run redis-compat/run_tests.py --single unit/{{unit}} {{args}}
-
 # Clean Redis test cache
 redis-compat-clean:
     rm -rf .redis-tests/
@@ -213,10 +205,6 @@ profile-heap *args:
 profile-load workload="mixed" requests="10000" *args:
     uv run loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} {{args}}
 
-# Profile with save-only (no auto-open)
-profile-load-save workload="mixed" requests="10000" *args:
-    uv run loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} --save-only {{args}}
-
 # =============================================================================
 # Cross-Compilation (for faster Jepsen builds)
 # =============================================================================
@@ -249,49 +237,21 @@ docker-build-bench: cross-build-arm
 docker-build-full:
     docker build -f Dockerfile.builder -t frogdb:latest .
 
-# Build FrogDB for Jepsen testing (uses cross-compilation)
-jepsen-build: cross-build
-    docker build -t frogdb:latest .
-
 # Run a Jepsen test: just jepsen register --time-limit 30
 jepsen test *args:
     uv run jepsen/run.py run {{test}} {{args}}
 
-# Run all single-node + crash + replication + raft Jepsen tests
-jepsen-all:
-    uv run jepsen/run.py run --suite all --build
+# Run a Jepsen test suite (all, single, crash, replication, raft, raft-extended)
+jepsen-suite suite *args:
+    uv run jepsen/run.py run --suite {{suite}} --build {{args}}
 
-# Run all replication tests
-jepsen-replication-all:
-    uv run jepsen/run.py run --suite replication --build
+# Start a Jepsen topology (single, replication, raft)
+jepsen-up topology:
+    uv run jepsen/run.py up {{topology}}
 
-# Run all Raft cluster tests
-jepsen-raft-all:
-    uv run jepsen/run.py run --suite raft --build
-
-# Start Jepsen single-node environment
-jepsen-up:
-    uv run jepsen/run.py up single
-
-# Stop Jepsen single-node environment
-jepsen-down:
-    uv run jepsen/run.py down single
-
-# Start Jepsen replication environment (3-node cluster)
-jepsen-replication-up:
-    uv run jepsen/run.py up replication
-
-# Stop Jepsen replication environment
-jepsen-replication-down:
-    uv run jepsen/run.py down replication
-
-# Start Jepsen Raft cluster environment (5-node)
-jepsen-raft-cluster-up:
-    uv run jepsen/run.py up raft
-
-# Stop Jepsen Raft cluster environment
-jepsen-raft-cluster-down:
-    uv run jepsen/run.py down raft
+# Stop a Jepsen topology (single, replication, raft; omit to stop all)
+jepsen-down *topology:
+    uv run jepsen/run.py down {{topology}}
 
 # Clean Jepsen test results
 jepsen-clean:
@@ -313,37 +273,25 @@ jepsen-shell:
 # Helm Chart Generation
 # =============================================================================
 
-# Generate Helm chart files from FrogDB config
-helm-gen:
-    {{dyld-env}} {{rocksdb-env}} cargo run -p helm-gen
-
-# Check that Helm chart files are up to date (for CI)
-helm-gen-check:
-    {{dyld-env}} {{rocksdb-env}} cargo run -p helm-gen -- --check
+# Generate Helm chart files from FrogDB config (pass --check to verify)
+helm-gen *args:
+    {{dyld-env}} {{rocksdb-env}} cargo run -p helm-gen -- {{args}}
 
 # =============================================================================
 # Dashboard Generation
 # =============================================================================
 
-# Generate Grafana dashboard from FrogDB metrics
-dashboard-gen:
-    {{dyld-env}} {{rocksdb-env}} cargo run -p dashboard-gen
-
-# Check that Grafana dashboard is up to date (for CI)
-dashboard-gen-check:
-    {{dyld-env}} {{rocksdb-env}} cargo run -p dashboard-gen -- --check
+# Generate Grafana dashboard from FrogDB metrics (pass --check to verify)
+dashboard-gen *args:
+    {{dyld-env}} {{rocksdb-env}} cargo run -p dashboard-gen -- {{args}}
 
 # =============================================================================
 # Workflow Generation
 # =============================================================================
 
-# Generate GitHub Actions workflow files
-workflow-gen:
-    {{dyld-env}} {{rocksdb-env}} cargo run -p workflow-gen
-
-# Check that workflow files are up to date (for CI)
-workflow-gen-check:
-    {{dyld-env}} {{rocksdb-env}} cargo run -p workflow-gen -- --check
+# Generate GitHub Actions workflow files (pass --check to verify)
+workflow-gen *args:
+    {{dyld-env}} {{rocksdb-env}} cargo run -p workflow-gen -- {{args}}
 
 # =============================================================================
 # Generate All
@@ -353,7 +301,10 @@ workflow-gen-check:
 generate: helm-gen dashboard-gen workflow-gen
 
 # Check all derived files are up to date (for CI)
-generate-check: helm-gen-check dashboard-gen-check workflow-gen-check
+generate-check:
+    just helm-gen --check
+    just dashboard-gen --check
+    just workflow-gen --check
 
 # =============================================================================
 # Documentation Site
