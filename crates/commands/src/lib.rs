@@ -105,6 +105,7 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     // Sorted set commands - range queries
     registry.register(sorted_set::ZrangeCommand);
     registry.register(sorted_set::ZrangebyscoreCommand);
+    registry.register(sorted_set::ZrevrangeCommand);
     registry.register(sorted_set::ZrevrangebyscoreCommand);
     registry.register(sorted_set::ZrangebylexCommand);
     registry.register(sorted_set::ZrevrangebylexCommand);
@@ -186,6 +187,7 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(list::LtrimCommand);
     registry.register(list::LposCommand);
     registry.register(list::LmoveCommand);
+    registry.register(list::RpoplpushCommand);
     registry.register(list::LmpopCommand);
 
     // Blocking commands (list and sorted set)

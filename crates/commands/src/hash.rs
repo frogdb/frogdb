@@ -635,15 +635,18 @@ impl Command for HincrbyfloatCommand {
         let field = args[1].clone();
         let increment = parse_f64(&args[2])?;
 
+        if increment.is_nan() || increment.is_infinite() {
+            return Err(CommandError::InvalidArgument {
+                message: "value is NaN or Infinity".to_string(),
+            });
+        }
+
         let hash = get_or_create_hash(ctx, key)?;
 
         match hash.incr_by_float(field, increment) {
             Ok(new_val) => {
-                if ctx.protocol_version.is_resp3() {
-                    Ok(Response::Double(new_val))
-                } else {
-                    Ok(Response::bulk(Bytes::from(format_float(new_val))))
-                }
+                // Always return bulk string (not Double), matching Redis behavior
+                Ok(Response::bulk(Bytes::from(format_float(new_val))))
             }
             Err(frogdb_core::IncrementError::NotFloat) => Err(CommandError::InvalidArgument {
                 message: "hash value is not a float".to_string(),
@@ -832,6 +835,26 @@ impl Command for HrandfieldCommand {
             false
         };
 
+        // Overflow protection: i64::MIN can't be negated, and very large negative
+        // counts with WITHVALUES would overflow the result array size
+        if count < 0 {
+            if count == i64::MIN {
+                return Err(CommandError::InvalidArgument {
+                    message: "value is out of range".to_string(),
+                });
+            }
+            if with_values
+                && count
+                    .checked_neg()
+                    .and_then(|c| c.checked_mul(2))
+                    .is_none()
+            {
+                return Err(CommandError::InvalidArgument {
+                    message: "value is out of range".to_string(),
+                });
+            }
+        }
+
         match ctx.store.get_with_expiry_check(key) {
             Some(value) => {
                 if let Some(hash) = value.as_hash() {
@@ -857,12 +880,17 @@ impl Command for HrandfieldCommand {
                     // Multiple fields mode
                     if with_values {
                         if ctx.protocol_version.is_resp3() {
-                            // RESP3: return as map of field -> value
-                            let pairs: Vec<_> = random_fields
+                            // RESP3: return as array of [field, value] pairs
+                            let results: Vec<_> = random_fields
                                 .into_iter()
-                                .map(|(f, v)| (Response::bulk(f), Response::bulk(v.unwrap())))
+                                .map(|(f, v)| {
+                                    Response::Array(vec![
+                                        Response::bulk(f),
+                                        Response::bulk(v.unwrap()),
+                                    ])
+                                })
                                 .collect();
-                            Ok(Response::Map(pairs))
+                            Ok(Response::Array(results))
                         } else {
                             // RESP2: flat array of field, value, field, value, ...
                             let mut results = Vec::with_capacity(random_fields.len() * 2);

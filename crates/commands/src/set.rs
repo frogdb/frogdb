@@ -391,6 +391,11 @@ impl Command for SinterCommand {
             Response::Array(vec![])
         };
 
+        // Type-check all keys first (Redis validates all keys before returning)
+        for key in args.iter() {
+            get_set_inline(ctx, key)?;
+        }
+
         // Get the first set (or empty)
         let first = match get_set_inline(ctx, &args[0])? {
             Some(s) => s.clone(),
@@ -448,6 +453,11 @@ impl Command for SdiffCommand {
         } else {
             Response::Array(vec![])
         };
+
+        // Type-check all keys first (Redis validates all keys before returning)
+        for key in args.iter() {
+            get_set_inline(ctx, key)?;
+        }
 
         // Get the first set (or empty)
         let first = match get_set_inline(ctx, &args[0])? {
@@ -557,6 +567,11 @@ impl Command for SinterstoreCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = &args[0];
 
+        // Type-check all source keys first (Redis validates all keys before returning)
+        for key in &args[1..] {
+            get_set_inline(ctx, key)?;
+        }
+
         // Get the first set (or empty)
         let first = match get_set_inline(ctx, &args[1])? {
             Some(s) => s.clone(),
@@ -618,6 +633,11 @@ impl Command for SdiffstoreCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = &args[0];
+
+        // Type-check all source keys first (Redis validates all keys before returning)
+        for key in &args[1..] {
+            get_set_inline(ctx, key)?;
+        }
 
         // Get the first set (or empty)
         let first = match get_set_inline(ctx, &args[1])? {
@@ -704,7 +724,11 @@ impl Command for SintercardCommand {
                 if i >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                limit = Some(parse_usize(&args[i])?);
+                limit = Some(parse_usize(&args[i]).map_err(|_| {
+                    CommandError::InvalidArgument {
+                        message: "LIMIT can't be negative".to_string(),
+                    }
+                })?);
             } else {
                 return Err(CommandError::SyntaxError);
             }

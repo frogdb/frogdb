@@ -769,6 +769,11 @@ impl Command for LposCommand {
                         return Err(CommandError::SyntaxError);
                     }
                     rank = parse_i64(&args[i])?;
+                    if rank == i64::MIN {
+                        return Err(CommandError::InvalidArgument {
+                            message: "value is out of range".to_string(),
+                        });
+                    }
                     if rank == 0 {
                         return Err(CommandError::InvalidArgument {
                             message: "RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list".to_string(),
@@ -840,6 +845,76 @@ impl Command for LposCommand {
             vec![]
         } else {
             vec![&args[0]]
+        }
+    }
+}
+
+// ============================================================================
+// RPOPLPUSH - Pop from tail of source, push to head of dest (deprecated)
+// ============================================================================
+
+pub struct RpoplpushCommand;
+
+impl Command for RpoplpushCommand {
+    fn name(&self) -> &'static str {
+        "RPOPLPUSH"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(2) // RPOPLPUSH source destination
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        let source = &args[0];
+        let dest = &args[1];
+
+        // Check source exists and is correct type
+        match ctx.store.get(source) {
+            Some(v) => {
+                if v.as_list().is_none() {
+                    return Err(CommandError::WrongType);
+                }
+            }
+            None => return Ok(Response::null()),
+        }
+
+        // Check dest is correct type if it exists
+        if let Some(v) = ctx.store.get(dest)
+            && v.as_list().is_none()
+        {
+            return Err(CommandError::WrongType);
+        }
+
+        // Pop from right of source
+        let source_list = ctx.store.get_mut(source).unwrap().as_list_mut().unwrap();
+        let element = source_list.pop_back();
+
+        let element = match element {
+            Some(e) => e,
+            None => return Ok(Response::null()),
+        };
+
+        // Delete source if empty
+        if source_list.is_empty() {
+            ctx.store.delete(source);
+        }
+
+        // Push to left of dest (create if needed)
+        let dest_list = get_or_create_list(ctx, dest)?;
+        dest_list.push_front(element.clone());
+
+        Ok(Response::bulk(element))
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.len() < 2 {
+            vec![]
+        } else {
+            vec![&args[0], &args[1]]
         }
     }
 }
@@ -956,11 +1031,13 @@ impl Command for LmpopCommand {
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        let numkeys = parse_usize(&args[0])?;
+        let numkeys = parse_usize(&args[0]).map_err(|_| CommandError::InvalidArgument {
+            message: "numkeys can't be non-positive value".to_string(),
+        })?;
 
         if numkeys == 0 {
             return Err(CommandError::InvalidArgument {
-                message: "numkeys should be greater than 0".to_string(),
+                message: "numkeys can't be non-positive value".to_string(),
             });
         }
 
@@ -977,17 +1054,32 @@ impl Command for LmpopCommand {
             _ => return Err(CommandError::SyntaxError),
         };
 
-        // Parse optional COUNT
+        // Parse optional COUNT (only allowed once)
         let mut count: usize = 1;
+        let mut count_seen = false;
         let mut i = keys_end + 1;
         while i < args.len() {
             let opt = args[i].to_ascii_uppercase();
             if opt.as_slice() == b"COUNT" {
+                if count_seen {
+                    return Err(CommandError::SyntaxError);
+                }
+                count_seen = true;
                 i += 1;
                 if i >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                count = parse_usize(&args[i])?;
+                let c = parse_i64(&args[i]).map_err(|_| CommandError::InvalidArgument {
+                    message: "count value of LMPOP command is not an positive value"
+                        .to_string(),
+                })?;
+                if c <= 0 {
+                    return Err(CommandError::InvalidArgument {
+                        message: "count value of LMPOP command is not an positive value"
+                            .to_string(),
+                    });
+                }
+                count = c as usize;
             } else {
                 return Err(CommandError::SyntaxError);
             }

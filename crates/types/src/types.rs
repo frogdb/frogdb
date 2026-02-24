@@ -1698,13 +1698,9 @@ impl HashValue {
                 .collect()
         } else {
             // Allow duplicates
-            // Guard against i64::MIN overflow (-i64::MIN overflows i64) and
-            // absurdly large counts that would OOM.  Redis caps at count * entries
-            // so we clamp to entries.len() * 10 as a reasonable upper bound.
             let abs_count = count.unsigned_abs() as usize;
-            let count = abs_count.min(entries.len().saturating_mul(10));
-            let mut result = Vec::with_capacity(count);
-            for _ in 0..count {
+            let mut result = Vec::with_capacity(abs_count);
+            for _ in 0..abs_count {
                 let idx = rand::random::<usize>() % entries.len();
                 let (k, v) = entries[idx];
                 result.push((k.clone(), if with_values { Some(v.clone()) } else { None }));
