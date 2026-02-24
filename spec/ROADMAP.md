@@ -163,7 +163,7 @@ GET /alerts/prometheus
 
 **Goal**: Comprehensive performance profiling and optimization.
 
-See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for detailed profiling infrastructure, optimization strategies, and implementation guidance.
+See [optimizations/](optimizations/INDEX.md) for detailed profiling infrastructure, optimization strategies, and implementation guidance.
 
 **Subsections:**
 
@@ -221,4 +221,4 @@ These must exist from the initial foundation to avoid refactoring:
 - [PERSISTENCE.md](PERSISTENCE.md) - RocksDB integration
 - [CONFIGURATION.md](CONFIGURATION.md) - Configuration system
 - [TESTING.md](TESTING.md) - Test strategy
-- [OPTIMIZATIONS.md](OPTIMIZATIONS.md) - Performance profiling and optimization
+- [optimizations/](optimizations/INDEX.md) - Performance profiling and optimization

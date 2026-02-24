@@ -404,4 +404,5 @@ These sources document how similar systems handle edge cases and can be consulte
 | [CONSISTENCY.md](CONSISTENCY.md) | Consistency guarantees |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Docker, K8s deployment |
 | [COMPATIBILITY.md](COMPATIBILITY.md) | Redis incompatibilities and migration guide |
+| [optimizations/](optimizations/INDEX.md) | Performance profiling and optimization strategies |
 | [SOURCES.md](SOURCES.md) | External references (Redis, DragonflyDB, papers) |
