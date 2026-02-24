@@ -259,12 +259,26 @@ impl ClusterTestNode {
     }
 
     /// Connect to this node and return a TestClient.
+    /// Retries on transient errors (e.g. EADDRNOTAVAIL during rapid restarts).
     pub async fn connect(&self) -> TestClient {
-        let stream = TcpStream::connect(("127.0.0.1", self.client_port))
-            .await
-            .unwrap();
-        let framed = Framed::new(stream, Resp2);
-        TestClient { framed }
+        let mut last_err = None;
+        for _ in 0..10 {
+            match TcpStream::connect(("127.0.0.1", self.client_port)).await {
+                Ok(stream) => {
+                    let framed = Framed::new(stream, Resp2);
+                    return TestClient { framed };
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+        panic!(
+            "Failed to connect to node on port {} after 10 attempts: {}",
+            self.client_port,
+            last_err.unwrap()
+        );
     }
 
     /// Send a command and get response.
@@ -289,11 +303,19 @@ impl ClusterTestNode {
     }
 
     /// Immediately stop the node (simulate crash).
-    pub fn kill(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            handle.abort();
+    /// Triggers shutdown and briefly waits for cleanup so RocksDB in-process
+    /// locks are released. In a real crash the OS handles this; in single-process
+    /// tests we must do it ourselves.
+    pub async fn kill(&mut self) {
+        // Send shutdown signal to allow the server to clean up child tasks
+        // (Raft, replication, etc.) that hold RocksDB handles.
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
         }
-        self.shutdown_tx.take();
+        // Wait briefly for the server to terminate and release locks
+        if let Some(handle) = self.handle.take() {
+            let _ = timeout(Duration::from_millis(2000), handle).await;
+        }
         self.running.store(false, Ordering::SeqCst);
     }
 
@@ -309,16 +331,44 @@ impl ClusterTestNode {
             self.shutdown().await;
         }
 
-        // Wait a bit for ports to be released (500ms provides extra margin for OS cleanup)
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Wait for old server task to fully terminate (handles both shutdown()
+        // and kill() cases — ensures RocksDB locks are released)
+        if let Some(handle) = self.handle.take() {
+            let _ = timeout(Duration::from_secs(5), handle).await;
+        }
 
-        // Pre-bind cluster bus listener on the SAME port (SO_REUSEADDR allows this)
+        // Retry binding with backoff — OS may need time to release TIME_WAIT sockets
         let cluster_bus_addr: SocketAddr = format!("127.0.0.1:{}", restart_info.cluster_port)
             .parse()
             .unwrap();
-        let cluster_bus_listener = tcp_listener_reusable(cluster_bus_addr)
-            .await
-            .map_err(|e| ClusterError::new(format!("Failed to bind cluster bus: {}", e)))?;
+        let cluster_bus_listener = {
+            let mut listener = None;
+            let mut last_err = None;
+            for attempt in 0..10 {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                match tcp_listener_reusable(cluster_bus_addr).await {
+                    Ok(l) => {
+                        listener = Some(l);
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Cluster bus bind attempt {}/10 for port {} failed: {}",
+                            attempt + 1,
+                            restart_info.cluster_port,
+                            e
+                        );
+                        last_err = Some(e);
+                    }
+                }
+            }
+            listener.ok_or_else(|| {
+                ClusterError::new(format!(
+                    "Failed to bind cluster bus after 10 attempts: {}",
+                    last_err.unwrap()
+                ))
+            })?
+        };
 
         // Create cluster data directory if needed
         let cluster_data_dir = restart_info.data_dir.join("cluster");
@@ -719,10 +769,9 @@ impl ClusterTestHarness {
             if let Some(node) = self.nodes.get(&node_id)
                 && node.is_running()
             {
-                // Try to get cluster info to verify node is responsive
-                if let Ok(info) = self.get_cluster_info(node_id).await
-                    && info.cluster_state == "ok"
-                {
+                // Verify node is responsive (cluster_state may be "fail" after
+                // partitions or without slot assignment, but node is still usable)
+                if self.get_cluster_info(node_id).await.is_ok() {
                     return Some(node_id);
                 }
             }
@@ -851,9 +900,9 @@ impl ClusterTestHarness {
     }
 
     /// Kill a specific node (immediate, simulates crash).
-    pub fn kill_node(&mut self, node_id: u64) {
+    pub async fn kill_node(&mut self, node_id: u64) {
         if let Some(node) = self.nodes.get_mut(&node_id) {
-            node.kill();
+            node.kill().await;
         }
     }
 
