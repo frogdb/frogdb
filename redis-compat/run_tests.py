@@ -8,11 +8,16 @@ Redis Compatibility Test Runner for FrogDB
 
 This script downloads the Redis 7.2.4 source code, builds FrogDB in release mode,
 and runs the official Redis Tcl test suite against FrogDB in external server mode.
+
+By default, every non-skipped suite is run individually with its own FrogDB server
+instance and a wall-clock timeout. Suites that hang or crash the server are detected
+and reported without blocking the rest of the run.
 """
 
 import argparse
 import atexit
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -27,7 +32,18 @@ REDIS_VERSION = "7.2.4"
 REDIS_URL = f"https://github.com/redis/redis/archive/refs/tags/{REDIS_VERSION}.tar.gz"
 CACHE_DIR = Path(".redis-tests")
 DEFAULT_PORT = 6399
+DEFAULT_SUITE_TIMEOUT = 60  # seconds per suite
 FROGDB_STARTUP_TIMEOUT = 10  # seconds
+
+# Default tags to exclude (features FrogDB doesn't support)
+DEFAULT_EXCLUDE_TAGS = [
+    "needs:repl",
+    "needs:debug",
+    "needs:save",
+    "needs:reset",
+    "needs:config-maxmemory",
+    "external:skip",
+]
 
 
 def get_script_dir() -> Path:
@@ -38,11 +54,6 @@ def get_script_dir() -> Path:
 def get_project_root() -> Path:
     """Get the FrogDB project root directory."""
     return get_script_dir().parent
-
-
-def get_skipfile_path() -> Path:
-    """Get the path to the combined skipfile."""
-    return CACHE_DIR / "combined_skiplist.txt"
 
 
 def parse_skiplists(script_dir: Path) -> tuple[list[str], list[str]]:
@@ -69,8 +80,9 @@ def parse_skiplists(script_dir: Path) -> tuple[list[str], list[str]]:
                 stripped = line.strip()
                 if not stripped or stripped.startswith("#"):
                     continue
-                # Entries like "unit/foo" or "integration/bar" are unit names
-                if "/" in stripped:
+                # Unit names look like "unit/foo" or "integration/bar".
+                # Everything else (exact names, /regex patterns) is a test name.
+                if stripped.startswith(("unit/", "integration/")):
                     skip_units.append(stripped)
                 else:
                     skip_tests.append(stripped)
@@ -83,9 +95,33 @@ def parse_skiplists(script_dir: Path) -> tuple[list[str], list[str]]:
     return skip_units, skip_tests
 
 
+def discover_suites(redis_dir: Path, skip_units: list[str]) -> list[str]:
+    """Parse all_tests from test_helper.tcl, minus skipped units."""
+    test_helper = redis_dir / "tests" / "test_helper.tcl"
+    content = test_helper.read_text()
+
+    # Extract the Tcl list between "set ::all_tests {" and the closing "}"
+    match = re.search(r'set\s+::all_tests\s*\{([^}]+)\}', content)
+    if not match:
+        print("Error: Could not parse $::all_tests from test_helper.tcl")
+        sys.exit(1)
+
+    all_suites = match.group(1).split()
+    skip_set = set(skip_units)
+    suites = [
+        s for s in all_suites
+        if s not in skip_set
+        and not any(s.startswith(u + "/") for u in skip_set)
+    ]
+
+    print(f"Discovered {len(all_suites)} total suites, {len(suites)} to run "
+          f"({len(all_suites) - len(suites)} skipped)")
+    return suites
+
+
 def download_redis(cache_dir: Path) -> Path:
     """Download and extract Redis source to cache directory."""
-    redis_dir = cache_dir / f"redis-{REDIS_VERSION}"
+    redis_dir = (cache_dir / f"redis-{REDIS_VERSION}").resolve()
 
     if redis_dir.exists():
         print(f"Using cached Redis source at {redis_dir}")
@@ -141,6 +177,18 @@ def write_skipfile(skip_tests: list[str], cache_dir: Path) -> Path:
     return combined
 
 
+def find_tclsh() -> str:
+    """Find tclsh binary, preferring Homebrew tcl-tk@8."""
+    homebrew_tclsh8 = Path("/opt/homebrew/opt/tcl-tk@8/bin/tclsh8.6")
+    if homebrew_tclsh8.exists():
+        return str(homebrew_tclsh8)
+    tclsh = shutil.which("tclsh8.6") or shutil.which("tclsh")
+    if tclsh is None:
+        print("Error: tclsh not found. Install tcl-tk@8 via Homebrew: brew install tcl-tk@8")
+        sys.exit(1)
+    return tclsh
+
+
 class FrogDBServer:
     """Manages the FrogDB server process."""
 
@@ -160,7 +208,6 @@ class FrogDBServer:
             f"[persistence]\ndata_dir = \"{self.data_dir}\"\n"
         )
 
-        print(f"Starting FrogDB on port {self.port}...")
         self.process = subprocess.Popen(
             [
                 str(self.binary),
@@ -180,7 +227,6 @@ class FrogDBServer:
                 import socket
 
                 with socket.create_connection(("127.0.0.1", self.port), timeout=1):
-                    print(f"FrogDB is ready on port {self.port}")
                     return
             except (ConnectionRefusedError, socket.timeout, OSError):
                 time.sleep(0.1)
@@ -199,17 +245,14 @@ class FrogDBServer:
         if self.process is None:
             return
 
-        print("Stopping FrogDB...")
         self.process.terminate()
         try:
             self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            print("FrogDB did not terminate gracefully, killing...")
             self.process.kill()
             self.process.wait()
 
         self.process = None
-        print("FrogDB stopped")
 
     def cleanup_data(self) -> None:
         """Remove the data directory."""
@@ -217,92 +260,257 @@ class FrogDBServer:
             shutil.rmtree(self.data_dir)
 
 
-def run_redis_tests(
+def parse_test_output(output: str) -> dict:
+    """Parse Redis test suite output for pass/fail/error counts and failing test names."""
+    passed = 0
+    failed = 0
+    errors = 0
+    failing_tests: list[str] = []
+
+    for line in output.splitlines():
+        m = re.search(r"Passed\s+(\d+)", line)
+        if m:
+            passed = int(m.group(1))
+        m = re.search(r"Failed\s+(\d+)", line)
+        if m:
+            failed = int(m.group(1))
+        if "[err]" in line.lower() or "[exception]" in line.lower():
+            errors += 1
+        # Capture failing test names from lines like "[err]: test name in ..."
+        err_match = re.match(r'\[err\]:\s*(.+?)(?:\s+in\s+|$)', line, re.IGNORECASE)
+        if err_match:
+            failing_tests.append(err_match.group(1).strip())
+
+    return {"passed": passed, "failed": failed, "errors": errors, "failing_tests": failing_tests}
+
+
+def build_tcl_command(
+    tclsh: str,
     redis_dir: Path,
     port: int,
     skipfile: Path,
-    skip_units: list[str] | None = None,
-    single: str | None = None,
+    skip_units: list[str],
+    suite: str | None = None,
     tags: list[str] | None = None,
     verbose: bool = False,
-) -> int:
-    """Run the Redis test suite against FrogDB."""
-    tests_dir = redis_dir / "tests"
-    runtest = tests_dir / "integration" / "run.tcl"
-
-    if not runtest.exists():
-        # Fallback to older Redis test layout
-        runtest = tests_dir / "support" / "run.tcl"
-
-    # Find tclsh - prefer tcl-tk@8 from Homebrew (Redis 7.x tests require Tcl 8.x)
-    # Homebrew keg-only formulas aren't on PATH, so check common install locations
-    homebrew_tclsh8 = Path("/opt/homebrew/opt/tcl-tk@8/bin/tclsh8.6")
-    if homebrew_tclsh8.exists():
-        tclsh = str(homebrew_tclsh8)
-    else:
-        tclsh = shutil.which("tclsh8.6") or shutil.which("tclsh")
-    if tclsh is None:
-        print("Error: tclsh not found. Install tcl-tk@8 via Homebrew: brew install tcl-tk@8")
-        return 1
-
-    # Build the command
+) -> list[str]:
+    """Build the tclsh command for running Redis tests."""
     cmd = [
         tclsh,
         str(redis_dir / "tests" / "test_helper.tcl"),
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
+        "--host", "127.0.0.1",
+        "--port", str(port),
         "--singledb",
         "--ignore-encoding",
         "--ignore-digest",
+        "--timeout", "30",
     ]
 
-    # Add skipfile for individual test name patterns
     if skipfile.exists() and skipfile.stat().st_size > 0:
         cmd.extend(["--skipfile", str(skipfile)])
 
-    # Add skip units for entire test files
-    if skip_units:
-        for unit in skip_units:
-            cmd.extend(["--skipunit", unit])
+    for unit in skip_units:
+        cmd.extend(["--skipunit", unit])
 
-    # Add default exclusion tags for features FrogDB doesn't support
-    default_exclude_tags = [
-        "needs:repl",
-        "needs:debug",
-        "needs:save",
-        "needs:reset",
-        "needs:config-maxmemory",
-        "external:skip",
-    ]
-
-    for tag in default_exclude_tags:
+    for tag in DEFAULT_EXCLUDE_TAGS:
         cmd.extend(["--tags", f"-{tag}"])
 
-    # Add user-specified tags
     if tags:
         for tag in tags:
             cmd.extend(["--tags", tag])
 
-    # Add single test if specified
-    if single:
-        cmd.extend(["--single", single])
+    if suite:
+        cmd.extend(["--single", suite])
 
     if verbose:
         cmd.append("--verbose")
 
-    print(f"Running: {' '.join(cmd)}")
-    print("-" * 60)
+    return cmd
 
-    # Run the tests
-    result = subprocess.run(
+
+def run_single_suite(
+    tclsh: str,
+    redis_dir: Path,
+    suite: str,
+    port: int,
+    skipfile: Path,
+    skip_units: list[str],
+    timeout: int,
+    server: FrogDBServer,
+    tags: list[str] | None = None,
+    verbose: bool = False,
+) -> dict:
+    """Run a single suite with timeout and crash detection. Returns result dict."""
+    cmd = build_tcl_command(
+        tclsh=tclsh,
+        redis_dir=redis_dir,
+        port=port,
+        skipfile=skipfile,
+        skip_units=skip_units,
+        suite=suite,
+        tags=tags,
+        verbose=verbose,
+    )
+
+    # Use a new process group so we can kill the entire tree on timeout
+    proc = subprocess.Popen(
         cmd,
         cwd=redis_dir,
         env={**os.environ, "TERM": "dumb"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
     )
 
-    return result.returncode
+    timed_out = False
+    try:
+        stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        # Kill the entire process group (tclsh + any children it spawned)
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            proc.kill()
+        stdout_bytes, stderr_bytes = proc.communicate()
+
+    output = ""
+    if stdout_bytes:
+        output += stdout_bytes.decode(errors="replace")
+    if stderr_bytes:
+        output += "\n" + stderr_bytes.decode(errors="replace")
+
+    if timed_out:
+        counts = parse_test_output(output)
+        return {
+            "suite": suite,
+            "status": "TIMEOUT",
+            "returncode": -1,
+            "output": output,
+            **counts,
+        }
+
+    # Check if the server crashed during the test
+    if server.process and server.process.poll() is not None:
+        counts = parse_test_output(output)
+        return {
+            "suite": suite,
+            "status": "CRASH",
+            "returncode": proc.returncode,
+            "output": output,
+            **counts,
+        }
+
+    counts = parse_test_output(output)
+    return {
+        "suite": suite,
+        "status": "PASS" if proc.returncode == 0 else "FAIL",
+        "returncode": proc.returncode,
+        "output": output,
+        **counts,
+    }
+
+
+def print_summary(results: list[dict], elapsed: float) -> None:
+    """Print a summary table of all suite results."""
+    print(f"\n{'=' * 80}")
+    print("REDIS COMPATIBILITY TEST SUMMARY")
+    print(f"{'=' * 80}")
+
+    print(f"\n{'Suite':<40} {'Status':<10} {'Pass':<6} {'Fail':<6} {'Err':<6}")
+    print("-" * 80)
+
+    pass_suites: list[str] = []
+    fail_suites: list[str] = []
+    timeout_suites: list[str] = []
+    crash_suites: list[str] = []
+    error_suites: list[str] = []
+
+    for r in results:
+        status = r["status"]
+        if status == "PASS":
+            pass_suites.append(r["suite"])
+        elif status == "TIMEOUT":
+            timeout_suites.append(r["suite"])
+        elif status == "CRASH":
+            crash_suites.append(r["suite"])
+        elif status == "ERROR":
+            error_suites.append(r["suite"])
+        else:
+            fail_suites.append(r["suite"])
+
+        print(
+            f"{r['suite']:<40} {status:<10} "
+            f"{r.get('passed', '-'):<6} {r.get('failed', '-'):<6} {r.get('errors', '-'):<6}"
+        )
+
+    print("-" * 80)
+
+    total_passed = sum(r.get("passed", 0) for r in results)
+    total_failed = sum(r.get("failed", 0) for r in results)
+    total_errors = sum(r.get("errors", 0) for r in results)
+    print(
+        f"{'TOTAL':<40} {'':<10} "
+        f"{total_passed:<6} {total_failed:<6} {total_errors:<6}"
+    )
+
+    minutes, seconds = divmod(int(elapsed), 60)
+    print(f"\nCompleted in {minutes}m {seconds}s")
+    print(f"  {len(pass_suites)} passed, {len(fail_suites)} failed, "
+          f"{len(timeout_suites)} timed out, {len(crash_suites)} crashed, "
+          f"{len(error_suites)} errors")
+
+    if timeout_suites:
+        print(f"\nTIMEOUT suites (hung/deadlocked):")
+        for s in timeout_suites:
+            print(f"  - {s}")
+
+    if crash_suites:
+        print(f"\nCRASH suites (server died):")
+        for s in crash_suites:
+            print(f"  - {s}")
+
+    if fail_suites:
+        print(f"\nFAIL suites (tests failed but completed):")
+        for s in fail_suites:
+            print(f"  - {s}")
+
+
+def update_skiplists(
+    results: list[dict],
+    skiplist_path: Path,
+) -> None:
+    """Append TIMEOUT and CRASH suites to the not-implemented skiplist."""
+    # Read existing entries to avoid duplicates
+    existing: set[str] = set()
+    if skiplist_path.exists():
+        with open(skiplist_path) as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    existing.add(stripped)
+
+    new_entries: list[tuple[str, str]] = []
+    for r in results:
+        if r["status"] == "TIMEOUT" and r["suite"] not in existing:
+            new_entries.append((r["suite"], "# TODO: hangs/deadlocks the server"))
+        elif r["status"] == "CRASH" and r["suite"] not in existing:
+            new_entries.append((r["suite"], "# TODO: crashes the server"))
+
+    if not new_entries:
+        print("\nNo new suites to add to skiplist.")
+        return
+
+    with open(skiplist_path, "a") as f:
+        f.write("\n# =============================================================================\n")
+        f.write("# AUTO-DETECTED BY PER-SUITE RUNNER\n")
+        f.write("# =============================================================================\n")
+        for suite, comment in new_entries:
+            f.write(f"{comment}\n{suite}\n")
+
+    print(f"\nUpdated {skiplist_path.name}: added {len(new_entries)} suite(s)")
+    for suite, comment in new_entries:
+        print(f"  + {suite} ({comment})")
 
 
 def main() -> None:
@@ -318,7 +526,7 @@ def main() -> None:
     parser.add_argument(
         "--single",
         type=str,
-        help="Run a single test file (e.g., unit/type/string)",
+        help="Run a single test suite (e.g., unit/type/string)",
     )
     parser.add_argument(
         "--tags",
@@ -346,12 +554,23 @@ def main() -> None:
         action="store_true",
         help="Keep FrogDB data directory after tests",
     )
+    parser.add_argument(
+        "--suite-timeout",
+        type=int,
+        default=int(os.environ.get("FROGDB_SUITE_TIMEOUT", DEFAULT_SUITE_TIMEOUT)),
+        help=f"Wall-clock timeout per suite in seconds (default: {DEFAULT_SUITE_TIMEOUT})",
+    )
+    parser.add_argument(
+        "--update-skiplists",
+        action="store_true",
+        help="Auto-append TIMEOUT/CRASH suites to skiplist-not-implemented.txt",
+    )
 
     args = parser.parse_args()
 
     script_dir = get_script_dir()
     project_root = get_project_root()
-    cache_dir = project_root / CACHE_DIR
+    cache_dir = (project_root / CACHE_DIR).resolve()
 
     # Download Redis if needed
     if args.skip_download and not (cache_dir / f"redis-{REDIS_VERSION}").exists():
@@ -373,34 +592,138 @@ def main() -> None:
     skip_units, skip_tests = parse_skiplists(script_dir)
     skipfile = write_skipfile(skip_tests, cache_dir)
 
-    # Setup FrogDB server
-    data_dir = cache_dir / "frogdb-test-data"
-    server = FrogDBServer(binary, args.port, data_dir)
+    # --single mode: run a single suite with one server (legacy behavior)
+    if args.single:
+        data_dir = cache_dir / "frogdb-test-data"
+        server = FrogDBServer(binary, args.port, data_dir)
 
-    # Register cleanup handlers
-    def cleanup() -> None:
-        server.stop()
-        if not args.keep_data:
-            server.cleanup_data()
+        def cleanup() -> None:
+            server.stop()
+            if not args.keep_data:
+                server.cleanup_data()
 
-    atexit.register(cleanup)
-    signal.signal(signal.SIGINT, lambda s, f: sys.exit(130))
-    signal.signal(signal.SIGTERM, lambda s, f: sys.exit(143))
+        atexit.register(cleanup)
+        signal.signal(signal.SIGINT, lambda s, f: sys.exit(130))
+        signal.signal(signal.SIGTERM, lambda s, f: sys.exit(143))
 
-    # Start server and run tests
-    server.start()
+        print(f"Starting FrogDB on port {args.port}...")
+        server.start()
+        print(f"FrogDB is ready on port {args.port}")
 
-    exit_code = run_redis_tests(
-        redis_dir=redis_dir,
-        port=args.port,
-        skipfile=skipfile,
-        skip_units=skip_units,
-        single=args.single,
-        tags=args.tags,
-        verbose=args.verbose,
-    )
+        tclsh = find_tclsh()
+        result = run_single_suite(
+            tclsh=tclsh,
+            redis_dir=redis_dir,
+            suite=args.single,
+            port=args.port,
+            skipfile=skipfile,
+            skip_units=skip_units,
+            timeout=args.suite_timeout,
+            server=server,
+            tags=args.tags,
+            verbose=args.verbose,
+        )
 
-    sys.exit(exit_code)
+        # Print output directly for --single mode
+        if result["output"]:
+            print(result["output"])
+
+        status = result["status"]
+        print(f"\nResult: {status} — {result.get('passed', 0)} passed, "
+              f"{result.get('failed', 0)} failed, {result.get('errors', 0)} errors")
+
+        sys.exit(0 if status == "PASS" else 1)
+
+    # Per-suite mode (default): run each suite with its own server
+    suites = discover_suites(redis_dir, skip_units)
+    tclsh = find_tclsh()
+
+    # Register signal handlers for clean shutdown
+    _shutdown_requested = False
+
+    def request_shutdown(signum: int, frame: object) -> None:
+        nonlocal _shutdown_requested
+        if _shutdown_requested:
+            # Second signal: hard exit
+            sys.exit(128 + signum)
+        _shutdown_requested = True
+        print("\nShutdown requested, finishing current suite...")
+
+    signal.signal(signal.SIGINT, request_shutdown)
+    signal.signal(signal.SIGTERM, request_shutdown)
+
+    results: list[dict] = []
+    start_time = time.time()
+
+    for i, suite in enumerate(suites, 1):
+        if _shutdown_requested:
+            print(f"Skipping remaining {len(suites) - i + 1} suites due to shutdown request")
+            break
+
+        print(f"\n[{i}/{len(suites)}] {suite} ", end="", flush=True)
+
+        data_dir = cache_dir / "frogdb-suite-data"
+        if data_dir.exists():
+            shutil.rmtree(data_dir)
+
+        server = FrogDBServer(binary, args.port, data_dir)
+        try:
+            server.start()
+
+            result = run_single_suite(
+                tclsh=tclsh,
+                redis_dir=redis_dir,
+                suite=suite,
+                port=args.port,
+                skipfile=skipfile,
+                skip_units=skip_units,
+                timeout=args.suite_timeout,
+                server=server,
+                tags=args.tags,
+                verbose=args.verbose,
+            )
+            results.append(result)
+
+            status = result["status"]
+            passed = result.get("passed", 0)
+            failed = result.get("failed", 0)
+
+            if status == "PASS":
+                print(f"PASS ({passed} passed)")
+            elif status == "TIMEOUT":
+                print(f"TIMEOUT (hung after {args.suite_timeout}s, {passed} passed before hang)")
+            elif status == "CRASH":
+                print(f"CRASH (server died, {passed} passed before crash)")
+            else:
+                print(f"FAIL ({passed} passed, {failed} failed)")
+
+        except Exception as e:
+            print(f"ERROR ({e})")
+            results.append({
+                "suite": suite,
+                "status": "ERROR",
+                "returncode": -1,
+                "output": str(e),
+                "passed": 0,
+                "failed": 0,
+                "errors": 0,
+                "failing_tests": [],
+            })
+        finally:
+            server.stop()
+            if not args.keep_data:
+                server.cleanup_data()
+
+    elapsed = time.time() - start_time
+    print_summary(results, elapsed)
+
+    if args.update_skiplists:
+        skiplist_path = script_dir / "skiplist-not-implemented.txt"
+        update_skiplists(results, skiplist_path)
+
+    # Exit with failure if any suite timed out or crashed
+    has_critical = any(r["status"] in ("TIMEOUT", "CRASH", "ERROR") for r in results)
+    sys.exit(1 if has_critical else 0)
 
 
 if __name__ == "__main__":
