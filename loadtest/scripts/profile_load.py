@@ -8,6 +8,7 @@ Usage:
 """
 
 import argparse
+import os
 import subprocess
 import signal
 import socket
@@ -17,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 PROFILE_DIR = Path("/tmp/claude")
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SERVER_PORT = 6379
 STARTUP_TIMEOUT = 30  # seconds
 
@@ -34,10 +36,11 @@ def wait_for_port(port: int, timeout: float = STARTUP_TIMEOUT) -> bool:
 
 
 def build_profiling_binary() -> None:
-    """Build FrogDB with profiling symbols."""
+    """Build FrogDB with profiling symbols via just."""
     print("Building profiling binary...")
     subprocess.run(
-        ["cargo", "build", "--profile", "profiling"],
+        ["just", "build-profile"],
+        cwd=REPO_ROOT,
         check=True,
     )
 
@@ -48,6 +51,7 @@ def run_profile(
     auto_open: bool,
     threads: int = 4,
     clients: int = 25,
+    shards: int | None = None,
 ) -> Path:
     """Run the full profiling workflow."""
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
@@ -58,14 +62,24 @@ def run_profile(
     # Build first
     build_profiling_binary()
 
+    # Server environment: disable persistence, configure shards
+    server_env = {
+        **os.environ,
+        "FROGDB_PERSISTENCE__ENABLED": "false",
+    }
+    if shards is not None:
+        server_env["FROGDB_SERVER__NUM_SHARDS"] = str(shards)
+
     # Start samply with FrogDB
-    print("Starting FrogDB under samply profiler...")
+    shard_info = f" ({shards} shards)" if shards else ""
+    print(f"Starting FrogDB under samply profiler{shard_info}...")
     samply_proc = subprocess.Popen(
         [
             "samply", "record",
             "--save-only", "-o", str(profile_path),
-            "./target/profiling/frogdb-server",
+            str(REPO_ROOT / "target" / "profiling" / "frogdb-server"),
         ],
+        env=server_env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -140,6 +154,12 @@ def main():
         default=25,
         help="Clients per thread",
     )
+    parser.add_argument(
+        "--shards",
+        type=int,
+        default=None,
+        help="Number of FrogDB shards (default: server default)",
+    )
 
     open_group = parser.add_mutually_exclusive_group()
     open_group.add_argument(
@@ -164,6 +184,7 @@ def main():
         auto_open=args.auto_open,
         threads=args.threads,
         clients=args.clients,
+        shards=args.shards,
     )
 
 
