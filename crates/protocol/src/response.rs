@@ -113,6 +113,10 @@ pub enum WireResponse {
 
     /// Big number ((<big-integer>\r\n)
     BigNumber(Bytes),
+
+    /// Null array (*-1\r\n) - distinct from Null ($-1\r\n) in RESP2.
+    /// Used when commands like LPOP/RPOP with count get a non-existing key.
+    NullArray,
 }
 
 impl WireResponse {
@@ -210,6 +214,11 @@ impl WireResponse {
                 // Convert big number to bulk string
                 Resp2BytesFrame::BulkString(n)
             }
+            WireResponse::NullArray => {
+                // NullArray needs special handling at the connection layer to emit *-1\r\n.
+                // If it reaches here, fall back to Null ($-1\r\n) as best effort.
+                Resp2BytesFrame::Null
+            }
         }
     }
 
@@ -287,6 +296,7 @@ impl WireResponse {
                 data: n,
                 attributes: None,
             },
+            WireResponse::NullArray => Resp3BytesFrame::Null,
         }
     }
 }
@@ -533,6 +543,9 @@ pub enum Response {
     /// Big number ((<big-integer>\r\n)
     BigNumber(Bytes),
 
+    /// Null array (*-1\r\n) - distinct from Null ($-1\r\n) in RESP2.
+    NullArray,
+
     // === Internal Types (Not Wire-Serialized) ===
     /// Signal that a blocking command needs to wait for data.
     /// This is intercepted by the connection handler and never sent on the wire.
@@ -628,6 +641,7 @@ impl Response {
                 Ok(WireResponse::Push(wire_items?))
             }
             Response::BigNumber(n) => Ok(WireResponse::BigNumber(n)),
+            Response::NullArray => Ok(WireResponse::NullArray),
 
             // Internal actions - return as error
             Response::BlockingNeeded { keys, timeout, op } => {
@@ -682,6 +696,7 @@ impl Response {
                 Response::Push(items.into_iter().map(Response::from_wire).collect())
             }
             WireResponse::BigNumber(n) => Response::BigNumber(n),
+            WireResponse::NullArray => Response::NullArray,
         }
     }
 }

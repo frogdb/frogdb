@@ -60,12 +60,50 @@ stub_command!(
 // Module Commands
 // =============================================================================
 
-stub_command!(
-    ModuleCommand,
-    "MODULE",
-    Arity::AtLeast(1),
-    CommandFlags::ADMIN | CommandFlags::NOSCRIPT
-);
+pub struct ModuleCommand;
+
+impl Command for ModuleCommand {
+    fn name(&self) -> &'static str {
+        "MODULE"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(1)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::ADMIN | CommandFlags::NOSCRIPT
+    }
+
+    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        if !args.is_empty() {
+            let sub = args[0].to_ascii_uppercase();
+            if sub.as_slice() == b"HELP" {
+                let help = vec![
+                    "MODULE <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+                    "LIST",
+                    "    Return a list of loaded modules.",
+                    "LOAD <path> [<arg> ...]",
+                    "    Load a module library from a dynamic library.",
+                    "LOADEX <path> [CONFIG <name> <value> ...] [ARGS <arg> ...]",
+                    "    Load a module library from a dynamic library.",
+                    "UNLOAD <name>",
+                    "    Unload a module.",
+                    "HELP",
+                    "    Return subcommand help summary.",
+                ];
+                return Ok(Response::Array(
+                    help.into_iter().map(Response::bulk).collect(),
+                ));
+            }
+        }
+        Err(CommandError::NotImplemented { command: "MODULE" })
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
 
 // =============================================================================
 // Generic/Keys Commands
@@ -119,17 +157,6 @@ stub_command!(
     "MONITOR",
     Arity::Fixed(0),
     CommandFlags::ADMIN | CommandFlags::NOSCRIPT
-);
-
-// =============================================================================
-// String Commands (deprecated/missing)
-// =============================================================================
-
-stub_command!(
-    SubstrCommand,
-    "SUBSTR",
-    Arity::Fixed(3),
-    CommandFlags::READONLY
 );
 
 // =============================================================================

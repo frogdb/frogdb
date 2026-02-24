@@ -11,7 +11,7 @@ use bytes::Bytes;
 use frogdb_core::{ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags};
 use frogdb_protocol::Response;
 
-use super::utils::{format_float, get_or_create_hash, parse_f64, parse_i64, parse_usize};
+use super::utils::{format_float, get_or_create_hash, parse_f64, parse_i64};
 
 // ============================================================================
 // HSET - Set hash fields
@@ -734,7 +734,7 @@ impl Command for HscanCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let cursor = parse_usize(&args[1])?;
+        let cursor: u64 = crate::utils::parse_u64(&args[1])?;
 
         // Parse options [MATCH pattern] [COUNT count]
         let mut match_pattern: Option<&[u8]> = None;
@@ -754,34 +754,17 @@ impl Command for HscanCommand {
         match ctx.store.get_with_expiry_check(key) {
             Some(value) => {
                 if let Some(hash) = value.as_hash() {
-                    let entries: Vec<_> = hash.iter().collect();
-                    let total = entries.len();
-
-                    if cursor >= total {
-                        return Ok(Response::Array(vec![
-                            Response::bulk(Bytes::from("0")),
-                            Response::Array(vec![]),
-                        ]));
-                    }
-
-                    let mut results = Vec::new();
-                    let mut new_cursor = 0;
-
-                    for (i, (field, value)) in entries.into_iter().enumerate().skip(cursor) {
-                        if results.len() >= count * 2 {
-                            new_cursor = i;
-                            break;
-                        }
-
-                        if let Some(pattern) = match_pattern
-                            && !crate::utils::simple_glob_match(pattern, field)
-                        {
-                            continue;
-                        }
-
-                        results.push(Response::bulk(Bytes::clone(field)));
-                        results.push(Response::bulk(Bytes::clone(value)));
-                    }
+                    let (new_cursor, results) = crate::utils::hash_cursor_scan(
+                        hash.iter(),
+                        cursor,
+                        count,
+                        match_pattern,
+                        |entry: &(&Bytes, &Bytes)| entry.0.as_ref(),
+                        |entry: (&Bytes, &Bytes), results: &mut Vec<Response>| {
+                            results.push(Response::bulk(Bytes::clone(entry.0)));
+                            results.push(Response::bulk(Bytes::clone(entry.1)));
+                        },
+                    );
 
                     Ok(Response::Array(vec![
                         Response::bulk(Bytes::from(new_cursor.to_string())),

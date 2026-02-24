@@ -85,10 +85,10 @@ Run `just redis-compat` to reproduce. Last run: 2026-02-24.
 | `unit/sort` | 24 | Missing SORT features |
 | `unit/expire` | 17 | Expiry edge cases |
 | `unit/type/hash` | 13 | Hash encoding/config |
-| `unit/type/set` | 12 | Set operations |
+| `unit/type/set` | 11 | Set operations |
 | `unit/bitops` | 12 | BITOP/BITCOUNT/BITPOS edge cases |
 | `unit/geo` | 11 | GEO command edge cases |
-| `unit/type/list` | 9 | Blocking list ops + client tracking |
+| `unit/type/list` | 7 | Blocking list ops + client tracking |
 | `unit/type/zset` | 9 | Sorted set operations |
 | `unit/info-command` | 6 | COMMAND INFO metadata |
 | `unit/pause` | 6 | CLIENT PAUSE behavior |
@@ -100,7 +100,7 @@ Run `just redis-compat` to reproduce. Last run: 2026-02-24.
 | `unit/slowlog` | 3 | SLOWLOG command |
 | `unit/scan` | 2 | SCAN/SSCAN cursor issues |
 | `unit/pubsub` | 2 | Pub/Sub edge cases |
-| `unit/type/string` | 1 | SUBSTR alias missing |
+| `unit/type/string` | 3 | SET GET with wrong type |
 | `unit/other` | 1 | Miscellaneous |
 | `unit/functions` | 1 | FUNCTION subsystem |
 | `unit/latency-monitor` | 1 | LATENCY HISTORY |
@@ -156,19 +156,22 @@ Expiry-related edge cases. Tests exercise:
 - EXPIRETIME/PEXPIRETIME precision
 - Expire propagation and notification behavior
 
-#### `unit/type/hash` (13 errors)
+#### `unit/type/hash` (18 errors)
 
 Hash encoding transitions and CONFIG-driven behavior:
-- `hash-max-ziplist-entries` / `hash-max-listpack-entries` CONFIG settings
 - Encoding type assertion failures (ziplist vs hashtable transitions)
-- Likely needs CONFIG alias mapping for legacy settings
+- HRANDFIELD with RESP3, count overflow, count variants
+- HINCRBYFLOAT edge cases (32-bit values, NaN/Infinity rejection)
+- Hash ziplist encoding tests
+- CONFIG aliases for `hash-max-ziplist-entries` / `hash-max-listpack-entries` added
 
-#### `unit/type/set` (12 errors)
+#### `unit/type/set` (11 errors)
 
 Set operation edge cases:
 - SRANDMEMBER count overflow (skipped via flaky list -- causes shard panic)
 - SDIFF fuzzing timeout (skipped via flaky list)
-- SINTERCARD error messages
+- SDIFF/SINTER/SDIFFSTORE/SINTERSTORE against non-set error handling
+- SMOVE notification behavior
 - Set encoding transitions
 
 #### `unit/bitops` (12 errors)
@@ -185,12 +188,13 @@ GEO command edge cases:
 - GEODIST edge cases
 - Likely encoding or precision issues
 
-#### `unit/type/list` (9 errors)
+#### `unit/type/list` (7 errors)
 
-Blocking list operation tests that require blocked client tracking:
+Blocking list operation tests and edge cases:
+- LPOS RANK i64::MIN out-of-range not detected (2 errors, both encodings)
+- BLPOP timeout error message mismatch (1 error)
+- RPOPLPUSH stub not implemented (1 exception, cascades to remaining errors)
 - BLPOP/BRPOP/BLMOVE client state reporting
-- MULTI/EXEC interaction with blocking commands
-- Most are covered by `skiplist-flaky.txt` patterns but some new ones
 
 #### `unit/type/zset` (9 errors)
 
@@ -209,30 +213,24 @@ that poll for blocked state to fail. Affects: `unit/type/list`, `unit/type/zset`
 
 #### Error Message Mismatches
 
-| Command | FrogDB Returns | Redis Returns |
-|---------|---------------|---------------|
-| `LPOS ... RANK 0` | `ERR RANK can't be zero` | Full usage hint message |
-| `SINTERCARD 0 ...` | `ERR value is not an integer or out of range` | `ERR numkeys can't be non-positive value` |
-| `LPOP/RPOP <count>` non-existing | `$-1` (null bulk) | `*-1` (null array) |
-| `COPY ... DB notanumber` | Error | `0` (single-db should ignore DB param) |
-
-#### Missing Command Aliases
-
-| Command | Notes |
-|---------|-------|
-| `SUBSTR` | Deprecated alias for `GETRANGE` -- trivial to add |
+| Command | FrogDB Returns | Redis Returns | Status |
+|---------|---------------|---------------|--------|
+| ~~`LPOS ... RANK 0`~~ | ~~`ERR RANK can't be zero`~~ | ~~Full usage hint message~~ | **Fixed** |
+| ~~`SINTERCARD 0 ...`~~ | ~~`ERR value is not an integer or out of range`~~ | ~~`ERR numkeys can't be non-positive value`~~ | **Fixed** |
+| ~~`LPOP/RPOP <count>` non-existing~~ | ~~`$-1` (null bulk)~~ | ~~`*-1` (null array)~~ | **Fixed** |
+| `COPY ... DB notanumber` | Error | `0` (single-db should ignore DB param) | |
 
 ---
 
 ## Action Items
 
 ### Quick Wins
-- [ ] Implement `SUBSTR` as alias for `GETRANGE` (fixes `unit/type/string`)
-- [ ] Fix `LPOS RANK 0` error message to include usage hint
-- [ ] Fix `SINTERCARD` error message for invalid numkeys
-- [ ] Fix `LPOP/RPOP` with count on non-existing key to return null array
+- [x] ~~Implement `SUBSTR` as alias for `GETRANGE`~~ (was already implemented; removed stale stub override)
+- [x] ~~Fix `LPOS RANK 0` error message to include usage hint~~
+- [x] ~~Fix `SINTERCARD` error message for invalid numkeys~~
+- [x] ~~Fix `LPOP/RPOP` with count on non-existing key to return null array~~ (added `NullArray` protocol variant)
 - [ ] Fix `COPY ... DB` to handle non-integer DB gracefully in single-db mode
-- [ ] Add `hash-max-ziplist-entries` as CONFIG alias (fixes many `unit/type/hash` errors)
+- [x] ~~Add `hash-max-ziplist-entries` / `hash-max-listpack-entries` as CONFIG aliases~~
 
 ### Medium Effort
 - [ ] Fix COMMAND INFO metadata (fixes `unit/info-command` -- 6 errors)

@@ -398,9 +398,12 @@ impl StringValue {
     /// Create a new string value from bytes.
     pub fn new(data: impl Into<Bytes>) -> Self {
         let bytes = data.into();
-        // Try to parse as integer for efficient storage
+        // Try to parse as integer for efficient storage.
+        // The round-trip check (i.to_string() == original) ensures we don't
+        // lose information like leading zeros (e.g. "007" → 7 → "7").
         if let Ok(s) = std::str::from_utf8(&bytes)
             && let Ok(i) = s.parse::<i64>()
+            && i.to_string().as_bytes() == bytes.as_ref()
         {
             return Self {
                 data: StringData::Integer(i),

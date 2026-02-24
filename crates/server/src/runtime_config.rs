@@ -450,10 +450,24 @@ impl ConfigManager {
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
+                name: "hash-max-ziplist-entries",
+                mutable: true,
+                noop: true,
+                getter: |_| "128".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
                 name: "hash-max-ziplist-value",
                 mutable: true,
                 noop: true,
                 getter: |_| "64".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "hash-max-listpack-entries",
+                mutable: true,
+                noop: true,
+                getter: |_| "128".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {

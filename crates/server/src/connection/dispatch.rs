@@ -261,17 +261,28 @@ impl ConnectionHandler {
     ) -> Option<Vec<Response>> {
         match cmd_name {
             "RESET" => Some(vec![self.handle_reset().await]),
-            // In pubsub mode, PING must return array format ["pong", <message>]
+            // In pubsub mode, PING format depends on protocol version:
+            // RESP2: array ["pong", <message>]
+            // RESP3: simple string "PONG" or the message argument
             "PING" if self.state.pubsub.in_pubsub_mode() => {
-                let message = if args.is_empty() {
-                    Bytes::from_static(b"")
+                if self.state.protocol_version.is_resp3() {
+                    let response = if args.is_empty() {
+                        Response::pong()
+                    } else {
+                        Response::bulk(args[0].clone())
+                    };
+                    Some(vec![response])
                 } else {
-                    args[0].clone()
-                };
-                Some(vec![Response::Array(vec![
-                    Response::bulk(Bytes::from_static(b"pong")),
-                    Response::bulk(message),
-                ])])
+                    let message = if args.is_empty() {
+                        Bytes::from_static(b"")
+                    } else {
+                        args[0].clone()
+                    };
+                    Some(vec![Response::Array(vec![
+                        Response::bulk(Bytes::from_static(b"pong")),
+                        Response::bulk(message),
+                    ])])
+                }
             }
             // Note: SELECT, QUIT, PING, ECHO, COMMAND are handled via standard shard routing
             _ => None,
@@ -305,6 +316,17 @@ impl ConnectionHandler {
         // Run pre-execution checks (auth, admin port, ACL, pub/sub mode)
         if let Some(error_response) = self.run_pre_checks(cmd_name, &cmd.args) {
             return vec![error_response];
+        }
+
+        // In pub/sub mode, route allowed commands through the connection state handler.
+        // PING is registered as a Standard (shard) command but needs special handling
+        // in pub/sub mode to return array format ["pong", <message>].
+        if self.state.pubsub.in_pubsub_mode()
+            && let Some(responses) = self
+                .dispatch_connection_state(&cmd_name_str, &cmd.args)
+                .await
+        {
+            return responses;
         }
 
         // Category-based dispatch using registry-driven handler lookup

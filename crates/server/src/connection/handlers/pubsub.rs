@@ -379,6 +379,7 @@ impl ConnectionHandler {
             "NUMPAT" => self.handle_pubsub_numpat().await,
             "SHARDCHANNELS" => self.handle_pubsub_shardchannels(&args[1..]).await,
             "SHARDNUMSUB" => self.handle_pubsub_shardnumsub(&args[1..]).await,
+            "HELP" => pubsub_help(),
             _ => Response::error(format!(
                 "ERR unknown subcommand '{}'. Try PUBSUB HELP.",
                 subcommand_str
@@ -643,18 +644,19 @@ pub fn sunsubscribe_response(channel: Option<&Bytes>, subscription_count: usize)
 /// Generate PUBSUB command help text.
 pub fn pubsub_help() -> Response {
     let help = vec![
-        "PUBSUB CHANNELS [<pattern>]",
-        "    Return the active channels matching the pattern.",
-        "PUBSUB NUMSUB [<channel> ...]",
-        "    Return the number of subscribers for the given channels.",
-        "PUBSUB NUMPAT",
-        "    Return the number of pattern subscriptions.",
-        "PUBSUB SHARDCHANNELS [<pattern>]",
-        "    Return the active shard channels matching the pattern.",
-        "PUBSUB SHARDNUMSUB [<channel> ...]",
-        "    Return the number of shard subscribers for the given channels.",
-        "PUBSUB HELP",
-        "    Show this help.",
+        "PUBSUB <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+        "CHANNELS [<pattern>]",
+        "    Return channels that have at least one subscriber matching the pattern.",
+        "NUMSUB [<channel> [<channel> ...]]",
+        "    Return the number of subscribers for the specified channels.",
+        "NUMPAT",
+        "    Return the number of unique pattern subscriptions.",
+        "SHARDCHANNELS [<pattern>]",
+        "    Return shard channels that have at least one subscriber matching the pattern.",
+        "SHARDNUMSUB [<channel> [<channel> ...]]",
+        "    Return the number of subscribers for the specified shard channels.",
+        "HELP",
+        "    Return subcommand help summary.",
     ];
     Response::Array(help.into_iter().map(Response::bulk).collect())
 }

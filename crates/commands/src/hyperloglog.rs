@@ -21,7 +21,7 @@ impl Command for PfaddCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
+        Arity::AtLeast(1)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -46,16 +46,14 @@ impl Command for PfaddCommand {
                 any_changed
             }
             None => {
-                // Create new HyperLogLog
+                // Create new HyperLogLog (even with no elements, like Redis)
                 let mut hll = HyperLogLogValue::new();
-                let mut any_changed = false;
                 for element in elements {
-                    if hll.add(element) {
-                        any_changed = true;
-                    }
+                    hll.add(element);
                 }
                 ctx.store.set(key.clone(), Value::HyperLogLog(hll));
-                any_changed
+                // Redis returns 1 when creating a new HLL, even with no elements
+                true
             }
         };
 
@@ -85,7 +83,7 @@ impl Command for PfcountCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
+        Arity::AtLeast(1)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -137,7 +135,7 @@ impl Command for PfmergeCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(3)
+        Arity::AtLeast(1)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -196,7 +194,7 @@ impl Command for PfdebugCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Fixed(3)
+        Arity::Fixed(2)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -217,6 +215,10 @@ impl Command for PfdebugCommand {
 
                 match subcommand.as_str() {
                     "ENCODING" => Ok(Response::bulk(Bytes::from(hll.encoding_str()))),
+                    "TODENSE" => {
+                        // FrogDB HLL is always dense, so this is a no-op
+                        Ok(Response::Integer(1))
+                    }
                     "DECODE" => {
                         // Return non-zero register values
                         let mut results = Vec::new();

@@ -13,7 +13,7 @@ use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, SetValue, Value};
 use frogdb_protocol::Response;
 
-use super::utils::{get_or_create_set, parse_i64, parse_usize};
+use super::utils::{get_or_create_set, parse_i64, parse_u64, parse_usize};
 
 /// Get an existing set (cloned), returning None if key doesn't exist, Error if wrong type.
 fn get_set_inline(ctx: &mut CommandContext, key: &Bytes) -> Result<Option<SetValue>, CommandError> {
@@ -675,13 +675,17 @@ impl Command for SintercardCommand {
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        let numkeys = parse_usize(&args[0])?;
+        let numkeys_i64 = parse_i64(&args[0]).map_err(|_| CommandError::InvalidArgument {
+            message: "numkeys can't be non-positive value".to_string(),
+        })?;
 
-        if numkeys == 0 {
+        if numkeys_i64 <= 0 {
             return Err(CommandError::InvalidArgument {
-                message: "numkeys should be greater than 0".to_string(),
+                message: "numkeys can't be non-positive value".to_string(),
             });
         }
+
+        let numkeys = numkeys_i64 as usize;
 
         if args.len() < 1 + numkeys {
             return Err(CommandError::InvalidArgument {
@@ -992,7 +996,7 @@ impl Command for SscanCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let cursor = parse_usize(&args[1])?;
+        let cursor: u64 = parse_u64(&args[1])?;
 
         // Parse options
         let mut match_pattern: Option<&[u8]> = None;
@@ -1023,33 +1027,16 @@ impl Command for SscanCommand {
 
         match get_set_inline(ctx, key)? {
             Some(set) => {
-                let members: Vec<_> = set.members().collect();
-                let total = members.len();
-
-                if cursor >= total {
-                    return Ok(Response::Array(vec![
-                        Response::bulk(Bytes::from("0")),
-                        Response::Array(vec![]),
-                    ]));
-                }
-
-                let mut results = Vec::new();
-                let mut new_cursor = 0;
-
-                for (i, m) in members.into_iter().enumerate().skip(cursor) {
-                    if results.len() >= count {
-                        new_cursor = i;
-                        break;
-                    }
-
-                    if let Some(pattern) = match_pattern
-                        && !crate::utils::simple_glob_match(pattern, m)
-                    {
-                        continue;
-                    }
-
-                    results.push(Response::bulk(Bytes::clone(m)));
-                }
+                let (new_cursor, results) = crate::utils::hash_cursor_scan(
+                    set.members(),
+                    cursor,
+                    count,
+                    match_pattern,
+                    |m: &&Bytes| m.as_ref(),
+                    |m: &Bytes, results: &mut Vec<Response>| {
+                        results.push(Response::bulk(Bytes::clone(m)));
+                    },
+                );
 
                 Ok(Response::Array(vec![
                     Response::bulk(Bytes::from(new_cursor.to_string())),

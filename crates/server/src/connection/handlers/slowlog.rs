@@ -43,11 +43,18 @@ impl ConnectionHandler {
     /// Handle SLOWLOG GET [count] - get recent slow queries.
     async fn handle_slowlog_get(&self, args: &[Bytes]) -> Response {
         // Default count is 10, like Redis
-        let count = if args.is_empty() {
+        let count: usize = if args.is_empty() {
             10
         } else {
-            match String::from_utf8_lossy(&args[0]).parse::<usize>() {
-                Ok(n) => n,
+            match String::from_utf8_lossy(&args[0]).parse::<i64>() {
+                Ok(n) if n >= -1 => {
+                    if n == -1 {
+                        usize::MAX // -1 means all entries
+                    } else {
+                        n as usize
+                    }
+                }
+                Ok(_) => return Response::error("ERR count should be greater than or equal to -1"),
                 Err(_) => return Response::error("ERR value is not an integer or out of range"),
             }
         };
