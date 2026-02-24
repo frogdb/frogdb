@@ -1417,19 +1417,47 @@ fn test_mset_linearizable() {
         Ok(())
     });
 
-    // Client 3: Observe final state with a single atomic MGET
+    // Client 3: Poll until writes are visible, then verify atomicity
     let h3 = history.clone();
     sim.client("client3", async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        // Wait for writes to complete
-        tokio::time::sleep(Duration::from_millis(50)).await;
 
         let addr = turmoil::lookup(SERVER_HOST);
         let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
         let mut buf = vec![0u8; 1024];
 
-        // MGET {same}a {same}b — single atomic read on the same shard
+        let cmd = encode_command(&[b"MGET", b"{same}a", b"{same}b"]);
+        let mut final_result = None;
+
+        // Poll until we see a non-nil result (writes have landed)
+        for _ in 0..100 {
+            stream.write_all(&cmd).await?;
+            let n = stream.read(&mut buf).await?;
+            let result = parse_simple_response(&buf[..n]);
+
+            match &result {
+                OperationResult::Array(results) if results.len() == 2 => {
+                    match (&results[0], &results[1]) {
+                        // Both nil — writes haven't landed yet, keep polling
+                        (OperationResult::Nil, OperationResult::Nil) => {}
+                        // Both have values — record and break
+                        (OperationResult::String(_), OperationResult::String(_)) => {
+                            final_result = Some(result);
+                            break;
+                        }
+                        // Mixed nil/value — atomicity violation
+                        _ => panic!("MSET atomicity violation: partial visibility {results:?}"),
+                    }
+                }
+                _ => panic!("Unexpected MGET response: {result:?}"),
+            }
+
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        let result = final_result.expect("Observer never saw non-nil MGET result after 100 polls");
+
+        // Record history for the final observation
         let op_id = {
             let mut h = h3.lock().unwrap();
             h.record_invoke(
@@ -1438,31 +1466,22 @@ fn test_mset_linearizable() {
                 vec![Bytes::from("{same}a"), Bytes::from("{same}b")],
             )
         };
-        let cmd = encode_command(&[b"MGET", b"{same}a", b"{same}b"]);
-        stream.write_all(&cmd).await?;
-        let n = stream.read(&mut buf).await?;
-        let result = parse_simple_response(&buf[..n]);
         {
             let mut h = h3.lock().unwrap();
             h.record_return(op_id, 3, result.clone());
         }
 
         // Verify both keys have same value (either both "1" or both "2")
-        match &result {
-            OperationResult::Array(results) => {
-                assert_eq!(results.len(), 2, "MGET should return 2 elements");
-                match (&results[0], &results[1]) {
-                    (OperationResult::String(a), OperationResult::String(b)) => {
-                        assert_eq!(a, b, "Keys should have same value due to MSET atomicity");
-                        assert!(
-                            a.as_ref() == b"1" || a.as_ref() == b"2",
-                            "Value should be 1 or 2"
-                        );
-                    }
-                    _ => panic!("Expected string results in MGET array, got {results:?}"),
-                }
+        if let OperationResult::Array(results) = &result {
+            if let (OperationResult::String(a), OperationResult::String(b)) =
+                (&results[0], &results[1])
+            {
+                assert_eq!(a, b, "Keys should have same value due to MSET atomicity");
+                assert!(
+                    a.as_ref() == b"1" || a.as_ref() == b"2",
+                    "Value should be 1 or 2"
+                );
             }
-            _ => panic!("Expected array result from MGET, got {result:?}"),
         }
 
         Ok(())
@@ -1721,46 +1740,56 @@ fn test_transaction_isolation_concurrent_writes() {
         Ok(())
     });
 
-    let final_state = Arc::new(Mutex::new(None));
-    let state_clone = final_state.clone();
+    let all_results = Arc::new(Mutex::new(Vec::new()));
+    let results_clone = all_results.clone();
 
     sim.client("observer", async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        // Wait for both transactions to complete
-        tokio::time::sleep(Duration::from_millis(50)).await;
 
         let addr = turmoil::lookup(SERVER_HOST);
         let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
         let mut buf = vec![0u8; 1024];
 
-        // Read final state
-        let cmd = encode_command(&[b"GET", b"{same}a"]);
-        stream.write_all(&cmd).await?;
-        let n = stream.read(&mut buf).await?;
-        let a_value = match parse_simple_response(&buf[..n]) {
-            OperationResult::String(b) => String::from_utf8_lossy(&b).to_string(),
-            _ => "nil".to_string(),
-        };
+        let cmd = encode_command(&[b"MGET", b"{same}a", b"{same}b"]);
 
-        let cmd = encode_command(&[b"GET", b"{same}b"]);
-        stream.write_all(&cmd).await?;
-        let n = stream.read(&mut buf).await?;
-        let b_value = match parse_simple_response(&buf[..n]) {
-            OperationResult::String(b) => String::from_utf8_lossy(&b).to_string(),
-            _ => "nil".to_string(),
-        };
+        // Poll with MGET until we see a non-nil result
+        for _ in 0..100 {
+            stream.write_all(&cmd).await?;
+            let n = stream.read(&mut buf).await?;
+            let result = parse_simple_response(&buf[..n]);
 
-        *state_clone.lock().unwrap() = Some((a_value, b_value));
+            if let OperationResult::Array(ref results) = result {
+                if results.len() == 2 {
+                    match (&results[0], &results[1]) {
+                        // Both nil — writes haven't landed yet, keep polling
+                        (OperationResult::Nil, OperationResult::Nil) => {}
+                        // Both have values — record observation
+                        (OperationResult::String(a), OperationResult::String(b)) => {
+                            let a_str = String::from_utf8_lossy(a).to_string();
+                            let b_str = String::from_utf8_lossy(b).to_string();
+                            results_clone.lock().unwrap().push((a_str, b_str));
+                        }
+                        // Mixed nil/value — atomicity violation
+                        _ => panic!("MSET atomicity violation: partial visibility {results:?}"),
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
 
         Ok(())
     });
 
     sim.run().unwrap();
 
-    // Verify final state is consistent (both 1 or both 2)
-    let state = final_state.lock().unwrap();
-    if let Some((a, b)) = state.as_ref() {
+    // Verify: every observation must be consistent, and at least one non-nil was seen
+    let results = all_results.lock().unwrap();
+    assert!(
+        !results.is_empty(),
+        "Observer never saw non-nil MGET result after polling"
+    );
+    for (a, b) in results.iter() {
         assert_eq!(a, b, "Final state should be consistent: a={}, b={}", a, b);
         assert!(a == "1" || a == "2", "Value should be 1 or 2, got: {}", a);
     }
