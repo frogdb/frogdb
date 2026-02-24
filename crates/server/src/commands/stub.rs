@@ -163,12 +163,7 @@ stub_command!(
 // List Commands (deprecated)
 // =============================================================================
 
-stub_command!(
-    RpoplpushCommand,
-    "RPOPLPUSH",
-    Arity::Fixed(2),
-    CommandFlags::WRITE
-);
+// RPOPLPUSH moved to frogdb_commands::list::RpoplpushCommand
 
 // =============================================================================
 // Replication Commands (additional)

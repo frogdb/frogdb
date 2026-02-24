@@ -854,6 +854,11 @@ fn parse_timeout(arg: &[u8]) -> Result<f64, CommandError> {
     let timeout: f64 = s.parse().map_err(|_| CommandError::InvalidArgument {
         message: "timeout is not a float or out of range".to_string(),
     })?;
+    if timeout.is_infinite() || timeout.is_nan() {
+        return Err(CommandError::InvalidArgument {
+            message: "timeout is out of range".to_string(),
+        });
+    }
     if timeout < 0.0 {
         return Err(CommandError::InvalidArgument {
             message: "timeout is negative".to_string(),

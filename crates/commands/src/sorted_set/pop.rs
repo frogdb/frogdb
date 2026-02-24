@@ -3,7 +3,7 @@ use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, im
 use frogdb_protocol::Response;
 
 use crate::utils::require_same_shard;
-use crate::utils::{parse_i64, parse_usize, pop_response, scored_array};
+use crate::utils::{parse_i64, parse_usize, scored_array, scored_array_resp3};
 
 // ============================================================================
 // ZPOPMIN - Pop minimum score members
@@ -26,8 +26,15 @@ impl Command for ZpopminCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
+        let is_resp3 = ctx.protocol_version.is_resp3();
         let count = if args.len() > 1 {
-            parse_usize(&args[1])?
+            let c = parse_i64(&args[1])?;
+            if c < 0 {
+                return Err(CommandError::InvalidArgument {
+                    message: "value must be positive".to_string(),
+                });
+            }
+            c as usize
         } else {
             1
         };
@@ -44,7 +51,11 @@ impl Command for ZpopminCommand {
             ctx.store.delete(key);
         }
 
-        Ok(pop_response(results))
+        if is_resp3 {
+            Ok(scored_array_resp3(results, true))
+        } else {
+            Ok(scored_array(results, true))
+        }
     }
 
     impl_keys_first!();
@@ -71,8 +82,15 @@ impl Command for ZpopmaxCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
+        let is_resp3 = ctx.protocol_version.is_resp3();
         let count = if args.len() > 1 {
-            parse_usize(&args[1])?
+            let c = parse_i64(&args[1])?;
+            if c < 0 {
+                return Err(CommandError::InvalidArgument {
+                    message: "value must be positive".to_string(),
+                });
+            }
+            c as usize
         } else {
             1
         };
@@ -89,7 +107,11 @@ impl Command for ZpopmaxCommand {
             ctx.store.delete(key);
         }
 
-        Ok(pop_response(results))
+        if is_resp3 {
+            Ok(scored_array_resp3(results, true))
+        } else {
+            Ok(scored_array(results, true))
+        }
     }
 
     impl_keys_first!();
@@ -115,13 +137,21 @@ impl Command for ZmpopCommand {
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        let numkeys = parse_usize(&args[0])?;
-        if numkeys == 0 || args.len() < numkeys + 2 {
+        let numkeys = parse_usize(&args[0]).map_err(|_| CommandError::InvalidArgument {
+            message: "numkeys can't be non-positive value".to_string(),
+        })?;
+        if numkeys == 0 {
+            return Err(CommandError::InvalidArgument {
+                message: "numkeys can't be non-positive value".to_string(),
+            });
+        }
+        if args.len() < numkeys + 2 {
             return Err(CommandError::SyntaxError);
         }
 
         let keys = &args[1..numkeys + 1];
         let remaining = &args[numkeys + 1..];
+        let is_resp3 = ctx.protocol_version.is_resp3();
 
         // Check all keys are in same shard
         require_same_shard(keys, ctx.num_shards)?;
@@ -139,28 +169,49 @@ impl Command for ZmpopCommand {
         };
 
         let mut count: usize = 1;
+        let mut count_seen = false;
         let mut i = 1;
         while i < remaining.len() {
             let opt = remaining[i].to_ascii_uppercase();
             match opt.as_slice() {
                 b"COUNT" => {
+                    if count_seen {
+                        return Err(CommandError::SyntaxError);
+                    }
+                    count_seen = true;
                     if i + 1 >= remaining.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    count = parse_usize(&remaining[i + 1])?;
+                    let c = parse_i64(&remaining[i + 1]).map_err(|_| {
+                        CommandError::InvalidArgument {
+                            message: "count value of ZMPOP command is not an positive value"
+                                .to_string(),
+                        }
+                    })?;
+                    if c <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "count value of ZMPOP command is not an positive value"
+                                .to_string(),
+                        });
+                    }
+                    count = c as usize;
                     i += 2;
                 }
                 _ => return Err(CommandError::SyntaxError),
             }
         }
 
-        // Find first non-empty key
+        // Find first non-empty key (check type for all keys)
         for key in keys {
             let zset = match ctx.store.get_mut(key) {
-                Some(value) => match value.as_sorted_set_mut() {
-                    Some(zset) if !zset.is_empty() => zset,
-                    _ => continue,
-                },
+                Some(value) => {
+                    // Must be a sorted set if key exists
+                    let zset = value.as_sorted_set_mut().ok_or(CommandError::WrongType)?;
+                    if zset.is_empty() {
+                        continue;
+                    }
+                    zset
+                }
                 None => continue,
             };
 
@@ -176,14 +227,19 @@ impl Command for ZmpopCommand {
             }
 
             if !results.is_empty() {
+                let pop_result = if is_resp3 {
+                    scored_array_resp3(results, true)
+                } else {
+                    scored_array(results, true)
+                };
                 return Ok(Response::Array(vec![
                     Response::bulk(key.clone()),
-                    pop_response(results),
+                    pop_result,
                 ]));
             }
         }
 
-        Ok(Response::null())
+        Ok(Response::NullArray)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -221,6 +277,7 @@ impl Command for ZrandmemberCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
+        let is_resp3 = ctx.protocol_version.is_resp3();
 
         let value = match ctx.store.get(key) {
             Some(v) => v,
@@ -249,7 +306,11 @@ impl Command for ZrandmemberCommand {
 
             let results = zset.random_members(count);
 
-            Ok(scored_array(results, with_scores))
+            if is_resp3 {
+                Ok(scored_array_resp3(results, with_scores))
+            } else {
+                Ok(scored_array(results, with_scores))
+            }
         }
     }
 

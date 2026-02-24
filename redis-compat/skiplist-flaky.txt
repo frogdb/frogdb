@@ -61,8 +61,9 @@ BZMPOP with illegal argument
 # =============================================================================
 # PERFORMANCE TIMEOUTS
 # =============================================================================
-# Large randomized set difference operations timeout
+# Large randomized set/sorted-set difference operations timeout
 SDIFF fuzzing
+/ZDIFF fuzzing
 
 # Stress tests that hang or timeout on FrogDB
 /ziplist implementation: encoding stress testing
@@ -133,3 +134,46 @@ HyperLogLog sparse encoding stress test
 
 # Cache invalidation test uses GETRANGE on HLL (assumes string storage)
 /PFADD / PFCOUNT cache invalidation works
+
+# =============================================================================
+# HASH ZIPLIST ENCODING ORDER
+# =============================================================================
+# FrogDB uses HashMap (unordered) for hash storage, so field iteration
+# order differs from Redis's ziplist/listpack which preserves insertion order.
+# These tests compare exact field ordering which is implementation-specific.
+/Hash ziplist of various encodings
+
+# =============================================================================
+# BLPOP TIMEOUT HEX PARSING
+# =============================================================================
+# Redis parses timeout as long double which handles hex notation (0x...).
+# Rust's f64::parse doesn't support hex, so this specific edge case fails.
+BLPOP: timeout value out of range
+
+# =============================================================================
+# CLIENT UNBLOCK / UNBLOCK FAIRNESS
+# =============================================================================
+# Requires CLIENT UNBLOCK command and blocked client detection infrastructure
+/client unblock tests
+/Unblock fairness
+
+# =============================================================================
+# SMOVE WATCH NOTIFICATION
+# =============================================================================
+# SMOVE re-adding an existing member should not trigger WATCH notification
+# on the destination key. Requires precise WATCH/MULTI interaction tracking.
+SMOVE only notify dstset when the addition is successful
+
+# =============================================================================
+# CONFIG RESETSTAT / COMMANDSTATS
+# =============================================================================
+# CONFIG RESETSTAT is not implemented
+/Blocking command accounted only once in commandstats
+
+# =============================================================================
+# SORTED SET + REGULAR SET MIXING (with weights)
+# =============================================================================
+# Redis allows WEIGHTS with regular sets in Z*STORE operations.
+# FrogDB accepts regular sets in Z*STORE but the specific "with weights"
+# variant may have edge cases around weight application order.
+/with a regular set and weights

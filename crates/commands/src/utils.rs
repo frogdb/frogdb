@@ -57,6 +57,21 @@ pub fn format_float(f: f64) -> String {
     s.to_string()
 }
 
+/// Format a float for increment commands (HINCRBYFLOAT, INCRBYFLOAT).
+///
+/// Like `format_float` but always includes a decimal point for whole numbers
+/// (e.g., "17179869185.0" instead of "17179869185"), matching Redis's
+/// `ld2string` behavior for increment results.
+pub fn format_float_incr(f: f64) -> String {
+    let s = format_float(f);
+    // If the result has no decimal point and no exponent notation, add ".0"
+    if !s.contains('.') && !s.contains('e') && !s.contains('E') && s != "inf" && s != "-inf" {
+        format!("{}.0", s)
+    } else {
+        s
+    }
+}
+
 // ============================================================================
 // Glob Pattern Matching
 // ============================================================================
@@ -182,10 +197,16 @@ pub fn parse_score_bound(arg: &[u8]) -> Result<ScoreBound, CommandError> {
     if let Some(rest) = s.strip_prefix('(') {
         // Exclusive bound
         let value: f64 = rest.parse().map_err(|_| CommandError::NotFloat)?;
+        if value.is_nan() {
+            return Err(CommandError::NotFloat);
+        }
         Ok(ScoreBound::Exclusive(value))
     } else {
         // Inclusive bound
         let value: f64 = s.parse().map_err(|_| CommandError::NotFloat)?;
+        if value.is_nan() {
+            return Err(CommandError::NotFloat);
+        }
         Ok(ScoreBound::Inclusive(value))
     }
 }
@@ -534,10 +555,26 @@ impl RangeOptions {
 
 use frogdb_protocol::Response;
 
-/// Format a sorted set response with optional scores.
+/// Return a score as the appropriate Response type.
+///
+/// In RESP3 mode, finite scores are returned as `Response::Double` so that
+/// clients receive the RESP3 Double wire type.  Infinity/NaN values are
+/// always returned as bulk strings (`"inf"`, `"-inf"`) to avoid client-side
+/// formatting differences (e.g., Tcl displays float infinity as `Inf`).
+#[inline]
+pub fn score_response(score: f64, is_resp3: bool) -> Response {
+    if is_resp3 && score.is_finite() {
+        Response::Double(score)
+    } else {
+        Response::bulk(Bytes::from(format_float(score)))
+    }
+}
+
+/// Format a sorted set response with optional scores (RESP2 flat format).
 ///
 /// When `with_scores` is true, returns an array with alternating member/score pairs.
 /// When `with_scores` is false, returns just the members.
+/// Scores are always returned as bulk strings.
 ///
 /// # Example
 ///
@@ -556,6 +593,64 @@ pub fn scored_array(members: Vec<(Bytes, f64)>, with_scores: bool) -> Response {
                         Response::bulk(member),
                         Response::bulk(Bytes::from(format_float(score))),
                     ]
+                })
+                .collect(),
+        )
+    } else {
+        Response::Array(
+            members
+                .into_iter()
+                .map(|(member, _)| Response::bulk(member))
+                .collect(),
+        )
+    }
+}
+
+/// Format a sorted set response with optional scores, using RESP3 Double for scores.
+///
+/// Same flat format as `scored_array`, but uses `score_response` for RESP3-aware
+/// score formatting (Double for finite values, bulk string for infinity).
+/// Used by pop commands (ZPOPMIN, ZPOPMAX, ZMPOP).
+#[inline]
+pub fn scored_array_with_scores_resp3(
+    members: Vec<(Bytes, f64)>,
+    with_scores: bool,
+    is_resp3: bool,
+) -> Response {
+    if with_scores {
+        Response::Array(
+            members
+                .into_iter()
+                .flat_map(|(member, score)| {
+                    [Response::bulk(member), score_response(score, is_resp3)]
+                })
+                .collect(),
+        )
+    } else {
+        Response::Array(
+            members
+                .into_iter()
+                .map(|(member, _)| Response::bulk(member))
+                .collect(),
+        )
+    }
+}
+
+/// Format a sorted set response with optional scores (RESP3 nested pair format).
+///
+/// In RESP3, WITHSCORES responses use an array of `[member, Double(score)]` pairs.
+/// When `with_scores` is false, returns just the members (same as `scored_array`).
+#[inline]
+pub fn scored_array_resp3(members: Vec<(Bytes, f64)>, with_scores: bool) -> Response {
+    if with_scores {
+        Response::Array(
+            members
+                .into_iter()
+                .map(|(member, score)| {
+                    Response::Array(vec![
+                        Response::bulk(member),
+                        score_response(score, true),
+                    ])
                 })
                 .collect(),
         )

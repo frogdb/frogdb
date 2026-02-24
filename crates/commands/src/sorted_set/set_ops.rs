@@ -7,7 +7,50 @@ use frogdb_protocol::Response;
 use std::collections::HashMap;
 
 use crate::utils::require_same_shard;
-use crate::utils::{parse_f64, parse_usize, scored_array};
+use crate::utils::{parse_f64, parse_usize, scored_array, scored_array_resp3};
+
+/// Iterate members/scores from a Value that is either a sorted set or a regular set.
+///
+/// Redis Z*STORE operations accept both sorted sets and regular sets as inputs.
+/// Regular set members are treated as having score 0.
+fn iter_zset_or_set(value: &frogdb_core::Value) -> Result<Vec<(Bytes, f64)>, CommandError> {
+    if let Some(zset) = value.as_sorted_set() {
+        Ok(zset.iter().map(|(m, s)| (m.clone(), s)).collect())
+    } else if let Some(set) = value.as_set() {
+        Ok(set.members().map(|m| (m.clone(), 1.0)).collect())
+    } else {
+        Err(CommandError::WrongType)
+    }
+}
+
+/// Check if a Value contains a member (works with sorted sets and regular sets).
+fn zset_or_set_contains(value: &frogdb_core::Value, member: &Bytes) -> Result<bool, CommandError> {
+    if let Some(zset) = value.as_sorted_set() {
+        Ok(zset.contains(member))
+    } else if let Some(set) = value.as_set() {
+        Ok(set.contains(member))
+    } else {
+        Err(CommandError::WrongType)
+    }
+}
+
+/// Get a member's score from a sorted set or regular set (score 0 for regular sets).
+fn zset_or_set_get_score(
+    value: &frogdb_core::Value,
+    member: &Bytes,
+) -> Result<Option<f64>, CommandError> {
+    if let Some(zset) = value.as_sorted_set() {
+        Ok(zset.get_score(member))
+    } else if let Some(set) = value.as_set() {
+        if set.contains(member) {
+            Ok(Some(1.0))
+        } else {
+            Ok(None)
+        }
+    } else {
+        Err(CommandError::WrongType)
+    }
+}
 
 /// Aggregate function for set operations.
 #[derive(Clone, Copy)]
@@ -21,6 +64,7 @@ enum AggregateFunc {
 fn parse_set_op_options(
     args: &[Bytes],
     numkeys: usize,
+    allow_withscores: bool,
 ) -> Result<(Vec<f64>, AggregateFunc, bool), CommandError> {
     let mut weights = vec![1.0; numkeys];
     let mut aggregate = AggregateFunc::Sum;
@@ -35,7 +79,17 @@ fn parse_set_op_options(
                     return Err(CommandError::SyntaxError);
                 }
                 for j in 0..numkeys {
-                    weights[j] = parse_f64(&args[i + 1 + j])?;
+                    let w = parse_f64(&args[i + 1 + j]).map_err(|_| {
+                        CommandError::InvalidArgument {
+                            message: "weight value is not a float".to_string(),
+                        }
+                    })?;
+                    if w.is_nan() {
+                        return Err(CommandError::InvalidArgument {
+                            message: "weight value is not a float".to_string(),
+                        });
+                    }
+                    weights[j] = w;
                 }
                 i += numkeys + 1;
             }
@@ -53,6 +107,9 @@ fn parse_set_op_options(
                 i += 2;
             }
             b"WITHSCORES" => {
+                if !allow_withscores {
+                    return Err(CommandError::SyntaxError);
+                }
                 with_scores = true;
                 i += 1;
             }
@@ -64,12 +121,15 @@ fn parse_set_op_options(
 }
 
 /// Apply aggregate function.
+///
+/// Returns 0.0 for NaN results (e.g. `inf + (-inf)`), matching Redis behavior.
 fn apply_aggregate(scores: &[f64], func: AggregateFunc) -> f64 {
-    match func {
+    let result = match func {
         AggregateFunc::Sum => scores.iter().sum(),
         AggregateFunc::Min => scores.iter().cloned().fold(f64::INFINITY, f64::min),
         AggregateFunc::Max => scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-    }
+    };
+    if result.is_nan() { 0.0 } else { result }
 }
 
 // ============================================================================
@@ -99,22 +159,22 @@ impl Command for ZunionCommand {
 
         let keys = &args[1..numkeys + 1];
         let options = &args[numkeys + 1..];
+        let is_resp3 = ctx.protocol_version.is_resp3();
 
         // Check all keys are in same shard
         require_same_shard(keys, ctx.num_shards)?;
 
-        let (weights, aggregate, with_scores) = parse_set_op_options(options, numkeys)?;
+        let (weights, aggregate, with_scores) = parse_set_op_options(options, numkeys, true)?;
 
         // Collect all members with their weighted scores
         let mut result: HashMap<Bytes, Vec<f64>> = HashMap::new();
 
         for (i, key) in keys.iter().enumerate() {
             if let Some(value) = ctx.store.get(key) {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-                for (member, score) in zset.iter() {
+                for (member, score) in iter_zset_or_set(&value)? {
                     let weighted_score = score * weights[i];
                     result
-                        .entry(member.clone())
+                        .entry(member)
                         .or_default()
                         .push(weighted_score);
                 }
@@ -132,7 +192,11 @@ impl Command for ZunionCommand {
                 .then_with(|| a.0.cmp(&b.0))
         });
 
-        Ok(scored_array(members, with_scores))
+        if is_resp3 {
+            Ok(scored_array_resp3(members, with_scores))
+        } else {
+            Ok(scored_array(members, with_scores))
+        }
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -186,18 +250,17 @@ impl Command for ZunionstoreCommand {
             }
         }
 
-        let (weights, aggregate, _) = parse_set_op_options(options, numkeys)?;
+        let (weights, aggregate, _) = parse_set_op_options(options, numkeys, false)?;
 
         // Collect all members with their weighted scores
         let mut result: HashMap<Bytes, Vec<f64>> = HashMap::new();
 
         for (i, key) in keys.iter().enumerate() {
             if let Some(value) = ctx.store.get(key) {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-                for (member, score) in zset.iter() {
+                for (member, score) in iter_zset_or_set(&value)? {
                     let weighted_score = score * weights[i];
                     result
-                        .entry(member.clone())
+                        .entry(member)
                         .or_default()
                         .push(weighted_score);
                 }
@@ -265,22 +328,23 @@ impl Command for ZinterCommand {
 
         let keys = &args[1..numkeys + 1];
         let options = &args[numkeys + 1..];
+        let is_resp3 = ctx.protocol_version.is_resp3();
 
         // Check all keys are in same shard
         require_same_shard(keys, ctx.num_shards)?;
 
-        let (weights, aggregate, with_scores) = parse_set_op_options(options, numkeys)?;
+        let (weights, aggregate, with_scores) = parse_set_op_options(options, numkeys, true)?;
 
         // Start with members from first set
         let first_value = match ctx.store.get(&keys[0]) {
             Some(v) => v,
             None => return Ok(Response::Array(vec![])),
         };
-        let first_zset = first_value.as_sorted_set().ok_or(CommandError::WrongType)?;
+        let first_members = iter_zset_or_set(&first_value)?;
 
         let mut result: HashMap<Bytes, Vec<f64>> = HashMap::new();
-        for (member, score) in first_zset.iter() {
-            result.insert(member.clone(), vec![score * weights[0]]);
+        for (member, score) in first_members {
+            result.insert(member, vec![score * weights[0]]);
         }
 
         // Intersect with remaining sets
@@ -289,14 +353,14 @@ impl Command for ZinterCommand {
                 Some(v) => v,
                 None => return Ok(Response::Array(vec![])),
             };
-            let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
             result.retain(|member, scores| {
-                if let Some(score) = zset.get_score(member) {
-                    scores.push(score * weights[i]);
-                    true
-                } else {
-                    false
+                match zset_or_set_get_score(&value, member) {
+                    Ok(Some(score)) => {
+                        scores.push(score * weights[i]);
+                        true
+                    }
+                    _ => false,
                 }
             });
 
@@ -316,7 +380,11 @@ impl Command for ZinterCommand {
                 .then_with(|| a.0.cmp(&b.0))
         });
 
-        Ok(scored_array(members, with_scores))
+        if is_resp3 {
+            Ok(scored_array_resp3(members, with_scores))
+        } else {
+            Ok(scored_array(members, with_scores))
+        }
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -370,7 +438,7 @@ impl Command for ZinterstoreCommand {
             }
         }
 
-        let (weights, aggregate, _) = parse_set_op_options(options, numkeys)?;
+        let (weights, aggregate, _) = parse_set_op_options(options, numkeys, false)?;
 
         // Start with members from first set
         let first_value = match ctx.store.get(&keys[0]) {
@@ -380,11 +448,11 @@ impl Command for ZinterstoreCommand {
                 return Ok(Response::Integer(0));
             }
         };
-        let first_zset = first_value.as_sorted_set().ok_or(CommandError::WrongType)?;
+        let first_members = iter_zset_or_set(&first_value)?;
 
         let mut result: HashMap<Bytes, Vec<f64>> = HashMap::new();
-        for (member, score) in first_zset.iter() {
-            result.insert(member.clone(), vec![score * weights[0]]);
+        for (member, score) in first_members {
+            result.insert(member, vec![score * weights[0]]);
         }
 
         // Intersect with remaining sets
@@ -396,14 +464,14 @@ impl Command for ZinterstoreCommand {
                     return Ok(Response::Integer(0));
                 }
             };
-            let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
             result.retain(|member, scores| {
-                if let Some(score) = zset.get_score(member) {
-                    scores.push(score * weights[i]);
-                    true
-                } else {
-                    false
+                match zset_or_set_get_score(&value, member) {
+                    Ok(Some(score)) => {
+                        scores.push(score * weights[i]);
+                        true
+                    }
+                    _ => false,
                 }
             });
 
@@ -488,7 +556,11 @@ impl Command for ZintercardCommand {
                     if i + 1 >= remaining.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    limit = Some(parse_usize(&remaining[i + 1])?);
+                    limit = Some(parse_usize(&remaining[i + 1]).map_err(|_| {
+                        CommandError::InvalidArgument {
+                            message: "LIMIT can't be negative".to_string(),
+                        }
+                    })?);
                     i += 2;
                 }
                 _ => return Err(CommandError::SyntaxError),
@@ -500,11 +572,11 @@ impl Command for ZintercardCommand {
             Some(v) => v,
             None => return Ok(Response::Integer(0)),
         };
-        let first_zset = first_value.as_sorted_set().ok_or(CommandError::WrongType)?;
+        let first_members = iter_zset_or_set(&first_value)?;
 
-        let mut members: std::collections::HashSet<Bytes> = first_zset
-            .iter()
-            .map(|(member, _)| member.clone())
+        let mut members: std::collections::HashSet<Bytes> = first_members
+            .into_iter()
+            .map(|(member, _)| member)
             .collect();
 
         // Intersect with remaining sets
@@ -513,9 +585,10 @@ impl Command for ZintercardCommand {
                 Some(v) => v,
                 None => return Ok(Response::Integer(0)),
             };
-            let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
-            members.retain(|member| zset.contains(member));
+            members.retain(|member| {
+                zset_or_set_contains(&value, member).unwrap_or(false)
+            });
 
             if members.is_empty() {
                 return Ok(Response::Integer(0));
@@ -571,6 +644,7 @@ impl Command for ZdiffCommand {
 
         let keys = &args[1..numkeys + 1];
         let remaining = &args[numkeys + 1..];
+        let is_resp3 = ctx.protocol_version.is_resp3();
 
         // Check all keys are in same shard
         require_same_shard(keys, ctx.num_shards)?;
@@ -583,18 +657,16 @@ impl Command for ZdiffCommand {
             Some(v) => v,
             None => return Ok(Response::Array(vec![])),
         };
-        let first_zset = first_value.as_sorted_set().ok_or(CommandError::WrongType)?;
+        let first_members = iter_zset_or_set(&first_value)?;
 
-        let mut result: HashMap<Bytes, f64> = first_zset
-            .iter()
-            .map(|(member, score)| (member.clone(), score))
-            .collect();
+        let mut result: HashMap<Bytes, f64> = first_members.into_iter().collect();
 
         // Remove members that exist in other sets
         for key in keys.iter().skip(1) {
             if let Some(value) = ctx.store.get(key) {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-                result.retain(|member, _| !zset.contains(member));
+                result.retain(|member, _| {
+                    !zset_or_set_contains(&value, member).unwrap_or(false)
+                });
             }
 
             if result.is_empty() {
@@ -610,7 +682,11 @@ impl Command for ZdiffCommand {
                 .then_with(|| a.0.cmp(&b.0))
         });
 
-        Ok(scored_array(members, with_scores))
+        if is_resp3 {
+            Ok(scored_array_resp3(members, with_scores))
+        } else {
+            Ok(scored_array(members, with_scores))
+        }
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -671,18 +747,16 @@ impl Command for ZdiffstoreCommand {
                 return Ok(Response::Integer(0));
             }
         };
-        let first_zset = first_value.as_sorted_set().ok_or(CommandError::WrongType)?;
+        let first_members = iter_zset_or_set(&first_value)?;
 
-        let mut result: HashMap<Bytes, f64> = first_zset
-            .iter()
-            .map(|(member, score)| (member.clone(), score))
-            .collect();
+        let mut result: HashMap<Bytes, f64> = first_members.into_iter().collect();
 
         // Remove members that exist in other sets
         for key in keys.iter().skip(1) {
             if let Some(value) = ctx.store.get(key) {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-                result.retain(|member, _| !zset.contains(member));
+                result.retain(|member, _| {
+                    !zset_or_set_contains(&value, member).unwrap_or(false)
+                });
             }
 
             if result.is_empty() {

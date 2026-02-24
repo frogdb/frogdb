@@ -2,7 +2,7 @@ use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
-use crate::utils::{ZaddOptions, format_float, get_or_create_zset, parse_f64};
+use crate::utils::{ZaddOptions, format_float, get_or_create_zset, parse_f64, score_response};
 
 // ============================================================================
 // ZADD - Add members to sorted set
@@ -73,21 +73,29 @@ impl Command for ZaddCommand {
 
             // Apply NX/XX conditions
             if nx && current_score.is_some() {
+                // Clean up empty zset created by get_or_create_zset
+                if zset.is_empty() {
+                    ctx.store.delete(key);
+                }
                 return Ok(Response::null());
             }
             if xx && current_score.is_none() {
+                // Clean up empty zset created by get_or_create_zset
+                if zset.is_empty() {
+                    ctx.store.delete(key);
+                }
                 return Ok(Response::null());
             }
 
             let new_score = if let Some(old) = current_score {
                 let candidate = old + score;
 
-                // Apply GT/LT conditions
+                // Apply GT/LT conditions — return nil when score not updated
                 if gt && candidate <= old {
-                    return Ok(Response::bulk(Bytes::from(format_float(old))));
+                    return Ok(Response::null());
                 }
                 if lt && candidate >= old {
-                    return Ok(Response::bulk(Bytes::from(format_float(old))));
+                    return Ok(Response::null());
                 }
 
                 zset.add(member, candidate);
@@ -132,6 +140,15 @@ impl Command for ZaddCommand {
                 }
                 if result.changed {
                     changed += 1;
+                }
+            }
+
+            // Clean up empty zset created by get_or_create_zset if no members were added
+            if added == 0 && changed == 0 {
+                if let Some(v) = ctx.store.get(key)
+                    && v.as_sorted_set().is_some_and(|z| z.is_empty())
+                {
+                    ctx.store.delete(key);
                 }
             }
 
@@ -219,11 +236,7 @@ impl Command for ZscoreCommand {
                 let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
                 match zset.get_score(member) {
                     Some(score) => {
-                        if ctx.protocol_version.is_resp3() {
-                            Ok(Response::Double(score))
-                        } else {
-                            Ok(Response::bulk(Bytes::from(format_float(score))))
-                        }
+                        Ok(score_response(score, ctx.protocol_version.is_resp3()))
                     }
                     None => Ok(Response::null()),
                 }
@@ -264,13 +277,7 @@ impl Command for ZmscoreCommand {
                 let scores: Vec<Response> = args[1..]
                     .iter()
                     .map(|member| match zset.get_score(member) {
-                        Some(score) => {
-                            if is_resp3 {
-                                Response::Double(score)
-                            } else {
-                                Response::bulk(Bytes::from(format_float(score)))
-                            }
-                        }
+                        Some(score) => score_response(score, is_resp3),
                         None => Response::null(),
                     })
                     .collect();
@@ -351,6 +358,13 @@ impl Command for ZincrbyCommand {
 
         let zset = get_or_create_zset(ctx, key)?;
         let new_score = zset.incr(member, increment);
+
+        // Check if the result is NaN (e.g., +inf + -inf)
+        if new_score.is_nan() {
+            return Err(CommandError::InvalidArgument {
+                message: "resulting score is not a number (NaN)".to_string(),
+            });
+        }
 
         if ctx.protocol_version.is_resp3() {
             Ok(Response::Double(new_score))

@@ -174,6 +174,47 @@ impl Command for ZrangebyscoreCommand {
 }
 
 // ============================================================================
+// ZREVRANGE - Legacy reverse range by rank (deprecated, use ZRANGE REV)
+// ============================================================================
+
+pub struct ZrevrangeCommand;
+
+impl Command for ZrevrangeCommand {
+    fn name(&self) -> &'static str {
+        "ZREVRANGE"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(3) // ZREVRANGE key start stop [WITHSCORES]
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        let key = &args[0];
+        let start = parse_i64(&args[1])?;
+        let end = parse_i64(&args[2])?;
+
+        let with_scores = args.len() > 3
+            && args[3].to_ascii_uppercase().as_slice() == b"WITHSCORES";
+
+        let value = match ctx.store.get(key) {
+            Some(v) => v,
+            None => return Ok(Response::Array(vec![])),
+        };
+        let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
+
+        let results = zset.rev_range_by_rank(start, end);
+
+        Ok(scored_array(results, with_scores))
+    }
+
+    impl_keys_first!();
+}
+
+// ============================================================================
 // ZREVRANGEBYSCORE - Legacy score range (descending)
 // ============================================================================
 
