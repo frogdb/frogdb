@@ -176,48 +176,48 @@ impl Store for HashMapStore {
         pattern: Option<&[u8]>,
         key_type: Option<KeyType>,
     ) -> (u64, Vec<Bytes>) {
-        // Simple implementation: cursor is just an index
-        let keys: Vec<_> = self.data.keys().cloned().collect();
         let start = cursor as usize;
+        let total = self.data.len();
 
-        if start >= keys.len() {
+        if start >= total {
             return (0, vec![]);
         }
 
         let mut results = Vec::with_capacity(count);
-        let mut current = start;
+        let mut current = 0;
+        let mut next_pos = start;
 
-        while results.len() < count && current < keys.len() {
-            let key = &keys[current];
+        for (key, entry) in self.data.iter() {
+            if current < start {
+                current += 1;
+                continue;
+            }
 
-            // Pattern matching (full glob)
+            next_pos = current + 1;
+
             let pattern_matches = match pattern {
                 Some(p) => glob_match(p, key),
                 None => true,
             };
 
-            // Type filtering
             let type_matches = match key_type {
-                Some(filter_type) => {
-                    if let Some(entry) = self.data.get(key) {
-                        entry.value.key_type() == filter_type
-                    } else {
-                        false
-                    }
-                }
+                Some(filter_type) => entry.value.key_type() == filter_type,
                 None => true,
             };
 
             if pattern_matches && type_matches {
                 results.push(key.clone());
+                if results.len() >= count {
+                    break;
+                }
             }
             current += 1;
         }
 
-        let next_cursor = if current >= keys.len() {
+        let next_cursor = if next_pos >= total {
             0
         } else {
-            current as u64
+            next_pos as u64
         };
 
         (next_cursor, results)

@@ -1386,10 +1386,41 @@ impl SortedSetValue {
     ///
     /// Returns the number of members removed.
     pub fn remove_range_by_rank(&mut self, start: i64, end: i64) -> usize {
-        let to_remove = self.range_by_rank(start, end);
+        let len = self.len() as i64;
+        if len == 0 {
+            return 0;
+        }
+
+        let start = if start < 0 {
+            (len + start).max(0) as usize
+        } else {
+            start.min(len) as usize
+        };
+
+        let end = if end < 0 {
+            (len + end).max(-1)
+        } else {
+            end.min(len - 1)
+        };
+
+        if end < 0 || start > end as usize {
+            return 0;
+        }
+
+        let end = end as usize;
+
+        let to_remove: Vec<_> = self
+            .scores
+            .keys()
+            .skip(start)
+            .take(end - start + 1)
+            .cloned()
+            .collect();
+
         let count = to_remove.len();
-        for (member, _) in to_remove {
-            self.remove(&member);
+        for (score, member) in &to_remove {
+            self.scores.remove(&(*score, member.clone()));
+            self.members.remove(member);
         }
         count
     }
@@ -1398,10 +1429,17 @@ impl SortedSetValue {
     ///
     /// Returns the number of members removed.
     pub fn remove_range_by_score(&mut self, min: &ScoreBound, max: &ScoreBound) -> usize {
-        let to_remove = self.range_by_score(min, max, 0, None);
+        let to_remove: Vec<_> = self
+            .scores
+            .keys()
+            .filter(|(score, _)| min.satisfies_min(score.0) && max.satisfies_max(score.0))
+            .cloned()
+            .collect();
+
         let count = to_remove.len();
-        for (member, _) in to_remove {
-            self.remove(&member);
+        for (score, member) in &to_remove {
+            self.scores.remove(&(*score, member.clone()));
+            self.members.remove(member);
         }
         count
     }
@@ -1410,10 +1448,17 @@ impl SortedSetValue {
     ///
     /// Returns the number of members removed.
     pub fn remove_range_by_lex(&mut self, min: &LexBound, max: &LexBound) -> usize {
-        let to_remove = self.range_by_lex(min, max, 0, None);
+        let to_remove: Vec<_> = self
+            .scores
+            .keys()
+            .filter(|(_, member)| min.satisfies_min(member) && max.satisfies_max(member))
+            .cloned()
+            .collect();
+
         let count = to_remove.len();
-        for (member, _) in to_remove {
-            self.remove(&member);
+        for (score, member) in &to_remove {
+            self.scores.remove(&(*score, member.clone()));
+            self.members.remove(member);
         }
         count
     }
