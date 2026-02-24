@@ -10,6 +10,7 @@ This document details comprehensive performance profiling and optimization strat
 | [QUICK_WINS.md](QUICK_WINS.md) | Low-effort, high-impact optimizations (jemalloc, caching, pre-sizing) |
 | [MEMORY.md](MEMORY.md) | Arc-wrapped values, response buffer pools, arena allocator |
 | [IO.md](IO.md) | WAL batching, RocksDB write path, io_uring integration |
+| [IO_URING.md](IO_URING.md) | Completion-based I/O deep dive: runtime comparison (compio vs monoio vs glommio), migration options, safety concerns |
 | [DATA_STRUCTURES.md](DATA_STRUCTURES.md) | Streaming SCAN, sorted set clone elimination, skip list |
 | [CONCURRENCY.md](CONCURRENCY.md) | Lock-free WAL, pub/sub zero-copy, connection pooling |
 | [ADVANCED.md](ADVANCED.md) | SIMD pattern matching, vectored I/O |

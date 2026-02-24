@@ -9,7 +9,7 @@ FrogDB's profiling under a 214K ops/sec write-heavy workload shows **86% of CPU 
 3. **Reducing context switches**: The kernel can process submissions without switching to userspace.
 4. **Multishot operations**: A single SQE can serve multiple accept() or recv() completions.
 
-**Expected improvement**: 30-50% throughput increase based on DragonflyDB benchmarks and [optimizations/IO.md](optimizations/IO.md) estimates. The optimizations spec already identifies this as a planned I/O optimization.
+**Expected improvement**: 30-50% throughput increase based on DragonflyDB benchmarks and [IO.md](IO.md) estimates. The optimizations spec already identifies this as a planned I/O optimization.
 
 **Target platform**: Linux 5.10+ for production. macOS remains the development platform with a tokio-based fallback.
 
@@ -75,36 +75,53 @@ This buffer ownership difference means:
 
 ## 4. Rust io_uring Runtime Ecosystem
 
-### Runtime Options
+### Runtime Options (as of February 2026)
 
-| Runtime | Model | io_uring | macOS | Ecosystem | Maturity | Used By |
-|---------|-------|----------|-------|-----------|----------|---------|
-| **tokio** | Work-stealing, multi-threaded | No (readiness-based) | Yes (kqueue) | Massive | 7+ years | TiKV, SurrealDB, most Rust servers |
-| **tokio-uring** | Single-threaded on tokio | Yes | No | Small | **Dormant** (no releases since 2022) | Not recommended |
-| **monoio** | Thread-per-core | Yes (native) | Yes (kqueue fallback) | Small | 3+ years | ByteDance production, Tonbo |
-| **compio** | Thread-per-core | Yes (+ IOCP on Windows) | Yes (kqueue) | Tiny | ~2 years | Apache Iggy |
-| **glommio** | Thread-per-core | Yes | No (Linux only) | Small | 4+ years, **alpha** | DataDog (creator), ScyllaDB-inspired |
-| **io-uring** (crate) | Low-level bindings | Yes (raw API) | No | N/A | Mature | Building block for other runtimes |
+| Runtime | Model | io_uring | macOS | Windows | Ecosystem | Status | Used By |
+|---------|-------|----------|-------|---------|-----------|--------|---------|
+| **tokio** | Work-stealing, multi-threaded | No (readiness-based) | Yes (kqueue) | Yes (mio) | Massive (20k+ dependents) | Active | TiKV, SurrealDB, most Rust servers |
+| **compio** | Thread-per-core | Yes | Yes (kqueue) | Yes (IOCP) | Growing (HTTP, TLS, QUIC, WS) | **Most active** (~300 commits/yr) | Apache Iggy |
+| **monoio** | Thread-per-core | Yes (native) | Yes (kqueue fallback) | No | Small (ByteDance-internal focus) | Moderate (~70 commits/yr) | ByteDance (Monolake proxy) |
+| **glommio** | Thread-per-core | Yes | No (Linux only) | No | Withered | **Effectively stalled** (~25 commits/yr) | DataDog (historical) |
+| **tokio-uring** | Single-threaded on tokio | Yes | No | No | Small | **Dormant** (no releases since 2022) | Not recommended |
+| **io-uring** (crate) | Low-level bindings | Yes (raw API) | No | No | N/A | Mature | Building block for other runtimes |
 
 ### Key Characteristics
+
+**compio** (community, recommended for new thread-per-core projects):
+- Cross-platform completion-based I/O: io_uring (Linux), IOCP (Windows), kqueue (macOS)
+- Most actively developed thread-per-core runtime: ~300+ commits since Jan 2024, frequent releases (v0.18.0 Jan 2026)
+- Richest ecosystem of any completion-based runtime: cyper (hyper-based HTTP), compio-tls (rustls/native-tls), compio-quic (quinn-synced), compio-ws (WebSocket)
+- Apache Iggy rewrote their entire server from tokio to compio (v0.6.0, Dec 2025), documenting that poll-based and completion-based I/O models don't compose cleanly
+- Modular crate structure: compio-driver, compio-runtime, compio-io, compio-net, compio-fs, compio-tls
+- Risk: heavily dependent on a single maintainer (Berrysoft, ~1,137 of ~1,500 commits)
 
 **monoio** (ByteDance):
 - Thread-per-core: each thread has its own io_uring instance, no task migration
 - Futures are `!Send` — no Arc/Mutex overhead for cross-thread safety
 - ~20-26% faster than tokio in gateway/RPC benchmarks
 - macOS fallback via kqueue (not io_uring, but same API)
-- Production-proven at ByteDance scale
+- Production-proven at ByteDance scale via Monolake proxy
+- No Windows support; ecosystem is narrow and ByteDance-internal-focused
+- Moderate development pace: ~70 commits since Jan 2024, last release v0.2.4 (Aug 2024)
 
-**compio** (community):
-- Cross-platform completion-based I/O (io_uring + IOCP + kqueue)
-- Apache Iggy migrated from tokio to compio; had to rewrite their WebSocket layer due to buffer model incompatibility
-- Newer, smaller community
+**glommio** (DataDog — not recommended for new projects):
+- Created by Glauber Costa (Linux kernel developer, ex-ScyllaDB), inspired by Seastar
+- Costa left to co-found Turso in 2021; no longer contributing
+- Last release v0.9.0 (Mar 2024), only ~25 commits since Jan 2024
+- Linux-only (io_uring exclusive, no fallback)
+- Ecosystem has withered: no maintained HTTP server, TLS, or database drivers
+- Pioneering work lives on conceptually in monoio and compio
 
-**glommio** (DataDog):
-- Self-described as "alpha release"
-- Cooperative scheduling within each thread
-- Requires 512KB locked memory per io_uring ring
-- Less actively maintained
+### Why compio over monoio for FrogDB
+
+If FrogDB were to replace tokio with a thread-per-core runtime, **compio is the recommended choice**:
+
+1. **Development velocity**: compio has ~4x the commit rate of monoio (300+ vs 70 since 2024) and ships releases every 1-2 months vs monoio's 18-month gap
+2. **Ecosystem breadth**: compio has HTTP, TLS, QUIC, and WebSocket support. Monoio's ecosystem is internal to ByteDance's CloudWeGo stack
+3. **Production validation for our use case**: Apache Iggy (a message streaming server) did a full tokio→compio migration — a closer analog to FrogDB's architecture than ByteDance's proxy use case (Monolake)
+4. **Cross-platform development**: compio supports macOS (kqueue) and Windows (IOCP) natively, preserving the macOS development workflow. Monoio supports macOS but not Windows
+5. **Buffer model**: Both use owned-buffer completion-based I/O, but compio's modular crate design makes it easier to adopt incrementally
 
 ### DragonflyDB's Model (C++, for reference)
 
@@ -122,29 +139,29 @@ DragonflyDB claims 4.5x throughput over Valkey on identical hardware. FrogDB's s
 
 ## 5. Potential Solutions
 
-### Option A: Full Runtime Replacement (monoio)
+### Option A: Full Runtime Replacement (compio)
 
-Replace tokio with monoio. Each shard becomes one OS thread with its own io_uring ring.
+Replace tokio with compio. Each shard becomes one OS thread with its own completion-based I/O ring (io_uring on Linux, kqueue on macOS, IOCP on Windows).
 
 **Data Flow:**
 ```
-Client ←TCP→ [monoio thread: io_uring accept + read]
+Client ←TCP→ [compio thread: io_uring accept + read]
                 ↓ ParsedCommand (same thread, no channel)
-             [monoio thread: shard execution]
+             [compio thread: shard execution]
                 ↓ Response (same thread)
-             [monoio thread: io_uring write]
+             [compio thread: io_uring write]
                 ↓ TCP
              Client
 ```
 
 **What changes:**
-- `#[tokio::main]` → `monoio::start()` per thread
-- `Framed<TcpStream, Resp2>` → manual RESP parsing with owned buffers
-- `tokio::select!` → monoio equivalent
-- `tokio::sync::mpsc`/`oneshot` → crossbeam channels (for cross-thread) or monoio channels (same-thread)
-- `tokio::time::interval` → monoio timer
-- `tokio::spawn` → monoio task spawn (thread-local, `!Send`)
-- `net.rs` → monoio `TcpListener`/`TcpStream`
+- `#[tokio::main]` → `compio::runtime::RuntimeBuilder` per thread
+- `Framed<TcpStream, Resp2>` → manual RESP parsing with owned buffers (compio-io)
+- `tokio::select!` → compio equivalent
+- `tokio::sync::mpsc`/`oneshot` → crossbeam channels (for cross-thread) or compio local channels (same-thread)
+- `tokio::time::interval` → compio timer
+- `tokio::spawn` → compio task spawn (thread-local, `!Send`)
+- `net.rs` → compio-net `TcpListener`/`TcpStream`
 - Connection handler runs on same thread as its shard — no channel hop for single-shard commands
 
 **What stays the same:**
@@ -161,10 +178,13 @@ Client ←TCP→ [monoio thread: io_uring accept + read]
 | Maximum performance (30-50% gain) | Largest rewrite (weeks) |
 | Thread-per-core matches shard model perfectly | Lose Shuttle concurrency tests |
 | No Send/Sync overhead | Lose Turmoil simulation tests |
-| No channel hop for single-shard commands | Small monoio ecosystem |
-| Same architecture as DragonflyDB | Two-platform maintenance (monoio Linux, tokio macOS?) |
-| `!Send` futures are more efficient | Every tokio dependency must be replaced |
-| Lower tail latency | io_uring safety concerns (buffer lifetime, cancellation) |
+| No channel hop for single-shard commands | Every tokio dependency must be replaced |
+| Same architecture as DragonflyDB | io_uring safety concerns (buffer lifetime, cancellation) |
+| `!Send` futures are more efficient | Single-maintainer risk on compio |
+| Lower tail latency | |
+| Cross-platform: io_uring (Linux), kqueue (macOS), IOCP (Windows) | |
+| Richest completion-based ecosystem (HTTP, TLS, QUIC, WS) | |
+| Apache Iggy proved this migration path viable | |
 
 **Testing strategy post-migration:**
 - Loom for low-level primitive correctness
@@ -172,6 +192,7 @@ Client ←TCP→ [monoio thread: io_uring accept + read]
 - Property-based testing (proptest) for logic correctness
 - OS-level fault injection (iptables, tc) for network chaos
 - Custom in-process simulation would need to be built
+- Consider MadSim (madsim-rs) for deterministic simulation testing — used by RisingWave, provides drop-in runtime replacement with deterministic execution
 
 ---
 
@@ -266,7 +287,7 @@ These are engineering challenges, not blockers. Both monoio and compio handle th
 
 ## 7. Testing Impact Matrix
 
-| Test Type | Option A (monoio) | Option B (hybrid) | Option C (targeted) |
+| Test Type | Option A (compio) | Option B (hybrid) | Option C (targeted) |
 |-----------|-------------------|-------------------|---------------------|
 | **Shuttle** (randomized concurrency) | Lost | Preserved (shard logic) | Preserved |
 | **Turmoil** (network simulation) | Lost | Preserved (shard logic only) | Preserved |
@@ -282,7 +303,7 @@ These are engineering challenges, not blockers. Both monoio and compio handle th
 
 | Approach | Scope | Estimated Effort | Performance Gain |
 |----------|-------|-----------------|------------------|
-| Option A: Full monoio | Rewrite network + runtime layer | 3-6 weeks | 30-50% |
+| Option A: Full compio | Rewrite network + runtime layer | 3-6 weeks | 30-50% |
 | Option B: Hybrid | New I/O thread module + RESP parser | 1-2 weeks | 20-40% |
 | Option C: Targeted | Accept + fsync wrappers | 2-3 days | 10-20% |
 
@@ -290,34 +311,39 @@ These are engineering challenges, not blockers. Both monoio and compio handle th
 
 ## 9. Recommendation
 
-**Short-term (next milestone):** Focus on other optimizations from the [optimizations/](optimizations/INDEX.md) spec that don't require runtime changes — Arc<Value> for reads (30-50% read improvement), WAL batching (2-5x write throughput), response buffer pools. These compound with the jemalloc + TCP_NODELAY + Arc<ParsedCommand> changes already landed.
+**Short-term (next milestone):** Focus on other optimizations from the [INDEX.md](INDEX.md) spec that don't require runtime changes — Arc<Value> for reads (30-50% read improvement), WAL batching (2-5x write throughput), response buffer pools. These compound with the jemalloc + TCP_NODELAY + Arc<ParsedCommand> changes already landed.
 
 **Medium-term:** Option B (hybrid) as a feature-gated Linux optimization. Proves out the io_uring integration with minimal risk to existing code. Provides real benchmark data to justify further investment.
 
-**Long-term:** If benchmarks confirm io_uring gains and FrogDB is Linux-primary in production, consider Option A (full monoio swap) to match DragonflyDB's architecture. This would be a major version milestone with a rebuilt testing strategy.
+**Long-term:** If benchmarks confirm io_uring gains and FrogDB is Linux-primary in production, consider Option A (full compio swap) to match DragonflyDB's architecture. Compio is the recommended runtime for this migration: it has the most active development, richest ecosystem, cross-platform support (preserving macOS dev workflow), and Apache Iggy has already validated this exact migration path (tokio→compio for a thread-per-core shared-nothing server). This would be a major version milestone with a rebuilt testing strategy.
 
 ---
 
 ## 10. Open Questions for Future Work
 
-1. **What monoio version to target?** Latest stable, or pin to a specific release?
-2. **How to handle cross-shard operations in thread-per-core?** Currently uses tokio mpsc. Monoio has no built-in cross-thread channel — need crossbeam or flume.
-3. **Can turmoil be adapted for monoio?** Turmoil intercepts tokio's reactor. A monoio equivalent would need to intercept monoio's io_uring submission path.
+1. **What compio version to target?** Releases are frequent (every 1-2 months). Pin to a stable release and track upstream closely given single-maintainer risk.
+2. **How to handle cross-shard operations in thread-per-core?** Currently uses tokio mpsc. Compio has no built-in cross-thread channel — need crossbeam or flume.
+3. **Can turmoil be adapted for compio?** Turmoil intercepts tokio's reactor. A compio equivalent would need to intercept compio's driver submission path. Alternatively, consider MadSim for deterministic simulation testing.
 4. **RocksDB + io_uring**: RocksDB 7.x+ supports `io_uring` as a backend (`PosixIoUringRandomAccessFile`). Worth enabling?
 5. **Kernel version requirements**: What's the minimum deployment kernel? 5.10 covers all stable io_uring features. 6.0+ adds multishot recv.
 6. **Buffer pool design**: io_uring works best with pre-allocated fixed buffers registered with the ring. What buffer pool strategy? Per-thread arena? Slab allocator?
+7. **Single-maintainer risk mitigation**: Compio is heavily dependent on Berrysoft (~75% of commits). Evaluate whether FrogDB should contribute upstream, maintain a fork, or have a fallback plan if the project stalls.
 
 ---
 
 ## References
 
-- [optimizations/IO.md](optimizations/IO.md) — io_uring listed as an I/O optimization
+- [IO.md](IO.md) — io_uring listed as an I/O optimization
 - [DragonflyDB shared-nothing architecture](https://github.com/dragonflydb/dragonfly/blob/main/docs/df-share-nothing.md)
 - [DragonflyDB vs Valkey threading comparison](https://www.dragonflydb.io/blog/why-threading-models-matter-dragonfly-vs-valkey)
-- [Apache Iggy's compio migration](https://iggy.apache.org/blogs/2025/11/17/websocket-io-uring/)
+- [Apache Iggy's compio migration](https://iggy.apache.org/blogs/2025/11/17/websocket-io-uring/) — Most relevant case study: tokio→compio for a thread-per-core server
+- [Apache Iggy 0.6.0 release notes](https://iggy.apache.org/blogs/2025/12/09/release-0.6.0/) — Production results of the compio migration
 - [Tonbo: Async Rust is not safe with io_uring](https://tonbo.io/blog/async-rust-is-not-safe-with-io-uring)
+- [compio](https://github.com/compio-rs/compio) — Cross-platform completion-based runtime (recommended)
+- [cyper](https://github.com/compio-rs/cyper) — HTTP client/server built on compio (hyper-based)
 - [monoio](https://github.com/bytedance/monoio) — ByteDance's thread-per-core io_uring runtime
-- [compio](https://github.com/compio-rs/compio) — Cross-platform completion-based runtime
+- [glommio](https://github.com/DataDog/glommio) — DataDog's thread-per-core runtime (stalled, not recommended)
 - [tokio-uring status discussion](https://users.rust-lang.org/t/status-of-tokio-uring/114481)
 - [io-uring crate](https://github.com/tokio-rs/io-uring) — Low-level Rust bindings
+- [MadSim](https://github.com/madsim-rs/madsim) — Deterministic simulation testing (Tokio drop-in replacement)
 - [DragonflyDB Redis threading analysis](https://www.dragonflydb.io/blog/redis-analysis-part-1-threading-model)
