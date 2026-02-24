@@ -22,9 +22,14 @@ pub use frogdb_core::get_or_create;
 
 /// Format a float for Redis compatibility.
 ///
+/// Uses `ryu` for accurate, round-trip-safe float-to-string conversion,
+/// matching Redis's `ld2string` behavior for extreme values (very small
+/// or very large numbers that need scientific notation).
+///
 /// Handles special cases:
 /// - Infinity values are formatted as "inf" or "-inf"
-/// - Integers are formatted without decimal point
+/// - Zero is formatted as "0"
+/// - Integers (within safe range) are formatted without decimal point
 /// - Trailing zeros are removed
 pub fn format_float(f: f64) -> String {
     if f == f64::INFINITY {
@@ -41,9 +46,14 @@ pub fn format_float(f: f64) -> String {
         return format!("{:.0}", f);
     }
 
-    let s = format!("{:.17}", f);
-    let s = s.trim_end_matches('0');
-    let s = s.trim_end_matches('.');
+    // Use ryu for accurate round-trip representation.
+    // ryu produces minimal-length representations that round-trip correctly.
+    let mut buf = ryu::Buffer::new();
+    let s = buf.format(f);
+
+    // ryu may produce "1e100" or "1.5e-10" style output — Redis uses similar
+    // notation but formats it like "1e100" (no leading zero in exponent).
+    // ryu already matches this convention, so we can return as-is.
     s.to_string()
 }
 

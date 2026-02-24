@@ -416,7 +416,7 @@ pub(super) fn cluster_setslot(
 
     if args.is_empty() {
         return Err(CommandError::WrongArgCount {
-            command: "CLUSTER SETSLOT".to_string(),
+            command: "cluster setslot".to_string(),
         });
     }
 
@@ -438,7 +438,7 @@ pub(super) fn cluster_setslot(
 
     if args.len() < 2 {
         return Err(CommandError::WrongArgCount {
-            command: "CLUSTER SETSLOT".to_string(),
+            command: "cluster setslot".to_string(),
         });
     }
 
@@ -453,7 +453,7 @@ pub(super) fn cluster_setslot(
             // Mark slot as importing from source node
             if args.len() < 3 {
                 return Err(CommandError::WrongArgCount {
-                    command: "CLUSTER SETSLOT IMPORTING".to_string(),
+                    command: "cluster setslot importing".to_string(),
                 });
             }
             let source_id_str =
@@ -480,7 +480,7 @@ pub(super) fn cluster_setslot(
             // Mark slot as migrating to target node
             if args.len() < 3 {
                 return Err(CommandError::WrongArgCount {
-                    command: "CLUSTER SETSLOT MIGRATING".to_string(),
+                    command: "cluster setslot migrating".to_string(),
                 });
             }
             let target_id_str =
@@ -507,7 +507,7 @@ pub(super) fn cluster_setslot(
             // Assign slot to specified node (completes migration)
             if args.len() < 3 {
                 return Err(CommandError::WrongArgCount {
-                    command: "CLUSTER SETSLOT NODE".to_string(),
+                    command: "cluster setslot node".to_string(),
                 });
             }
             let node_id_str =

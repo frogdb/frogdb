@@ -8,6 +8,7 @@ pub mod blocking;
 #[cfg(feature = "turmoil")]
 pub mod chaos;
 pub mod cluster;
+pub mod compat;
 pub mod debug_bundle;
 pub mod distributed_tracing;
 pub mod json;
@@ -29,6 +30,7 @@ pub use blocking::BlockingConfig;
 #[cfg(feature = "turmoil")]
 pub use chaos::ChaosConfig;
 pub use cluster::ClusterConfigSection;
+pub use compat::CompatConfig;
 pub use debug_bundle::DebugBundleConfig;
 pub use distributed_tracing::TracingConfig;
 pub use json::JsonConfig;
@@ -141,6 +143,10 @@ pub struct Config {
     /// Debug bundle configuration.
     #[serde(default)]
     pub debug_bundle: DebugBundleConfig,
+
+    /// Compatibility configuration.
+    #[serde(default)]
+    pub compat: CompatConfig,
 }
 
 /// Validate a bind address (IP address or hostname).

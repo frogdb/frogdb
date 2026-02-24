@@ -38,7 +38,7 @@ impl Command for BlpopCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 2 {
-            return Err(CommandError::WrongArity { command: "BLPOP" });
+            return Err(CommandError::WrongArity { command: "blpop" });
         }
 
         // Last argument is timeout
@@ -124,7 +124,7 @@ impl Command for BrpopCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 2 {
-            return Err(CommandError::WrongArity { command: "BRPOP" });
+            return Err(CommandError::WrongArity { command: "brpop" });
         }
 
         // Last argument is timeout
@@ -209,7 +209,7 @@ impl Command for BlmoveCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() != 5 {
-            return Err(CommandError::WrongArity { command: "BLMOVE" });
+            return Err(CommandError::WrongArity { command: "blmove" });
         }
 
         let source = &args[0];
@@ -319,7 +319,7 @@ impl Command for BlmpopCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 4 {
-            return Err(CommandError::WrongArity { command: "BLMPOP" });
+            return Err(CommandError::WrongArity { command: "blmpop" });
         }
 
         let timeout = parse_timeout(&args[0])?;
@@ -454,7 +454,7 @@ impl Command for BzpopminCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 2 {
             return Err(CommandError::WrongArity {
-                command: "BZPOPMIN",
+                command: "bzpopmin",
             });
         }
 
@@ -541,7 +541,7 @@ impl Command for BzpopmaxCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 2 {
             return Err(CommandError::WrongArity {
-                command: "BZPOPMAX",
+                command: "bzpopmax",
             });
         }
 
@@ -626,7 +626,7 @@ impl Command for BzmpopCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 4 {
-            return Err(CommandError::WrongArity { command: "BZMPOP" });
+            return Err(CommandError::WrongArity { command: "bzmpop" });
         }
 
         let timeout = parse_timeout(&args[0])?;
@@ -770,7 +770,7 @@ impl Command for BrpoplpushCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() != 3 {
             return Err(CommandError::WrongArity {
-                command: "BRPOPLPUSH",
+                command: "brpoplpush",
             });
         }
 

@@ -3,7 +3,7 @@
 //! Commands for string manipulation:
 //! - SETNX, SETEX, PSETEX - SET variants
 //! - APPEND, STRLEN - string operations
-//! - GETRANGE, SETRANGE - substring operations
+//! - GETRANGE, SETRANGE, SUBSTR - substring operations
 //! - GETDEL, GETEX - GET variants
 //! - INCR, DECR, INCRBY, DECRBY, INCRBYFLOAT - numeric operations
 
@@ -332,7 +332,12 @@ impl Command for SetrangeCommand {
                 Err(CommandError::WrongType)
             }
         } else {
-            // Key doesn't exist, create with padding
+            // Key doesn't exist - Redis does not create the key when offset=0
+            // and value is empty
+            if offset == 0 && value.is_empty() {
+                return Ok(Response::Integer(0));
+            }
+            // Create with padding
             let mut sv = StringValue::new(Bytes::new());
             let new_len = sv.set_range(offset, value);
             ctx.store.set(key.clone(), Value::String(sv));
@@ -839,7 +844,7 @@ impl Command for MsetCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if !args.len().is_multiple_of(2) {
-            return Err(CommandError::WrongArity { command: "MSET" });
+            return Err(CommandError::WrongArity { command: "mset" });
         }
 
         for pair in args.chunks(2) {
@@ -876,7 +881,7 @@ impl Command for MsetnxCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if !args.len().is_multiple_of(2) {
-            return Err(CommandError::WrongArity { command: "MSETNX" });
+            return Err(CommandError::WrongArity { command: "msetnx" });
         }
 
         // Check if any key already exists
@@ -1206,6 +1211,39 @@ impl Command for GetsetCommand {
             Some(bytes) => Ok(Response::bulk(bytes)),
             None => Ok(Response::null()),
         }
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
+    }
+}
+
+// ============================================================================
+// SUBSTR - Deprecated alias for GETRANGE
+// ============================================================================
+
+pub struct SubstrCommand;
+
+impl Command for SubstrCommand {
+    fn name(&self) -> &'static str {
+        "SUBSTR"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(3) // SUBSTR key start end
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        // SUBSTR is a deprecated alias for GETRANGE
+        GetrangeCommand.execute(ctx, args)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

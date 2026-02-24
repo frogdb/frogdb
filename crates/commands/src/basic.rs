@@ -172,7 +172,7 @@ impl Command for CommandCommand {
                 // COMMAND GETKEYS command [args...] - return keys for a command
                 if args.len() < 2 {
                     return Err(CommandError::WrongArity {
-                        command: "COMMAND|GETKEYS",
+                        command: "command|getkeys",
                     });
                 }
                 // For simplicity, return empty array

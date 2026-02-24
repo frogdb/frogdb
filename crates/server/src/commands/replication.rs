@@ -40,7 +40,7 @@ impl Command for ReplicaofCommand {
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() != 2 {
             return Err(CommandError::WrongArity {
-                command: "REPLICAOF",
+                command: "replicaof",
             });
         }
 
@@ -159,7 +159,7 @@ impl Command for ReplconfCommand {
             "listening-port" => {
                 if args.len() < 2 {
                     return Err(CommandError::WrongArity {
-                        command: "REPLCONF listening-port",
+                        command: "replconf listening-port",
                     });
                 }
 
@@ -192,7 +192,7 @@ impl Command for ReplconfCommand {
             "ack" => {
                 if args.len() < 2 {
                     return Err(CommandError::WrongArity {
-                        command: "REPLCONF ACK",
+                        command: "replconf ack",
                     });
                 }
 
@@ -224,7 +224,7 @@ impl Command for ReplconfCommand {
                 // Replica announcing its IP address
                 if args.len() < 2 {
                     return Err(CommandError::WrongArity {
-                        command: "REPLCONF ip-address",
+                        command: "replconf ip-address",
                     });
                 }
                 tracing::debug!(ip = ?args[1], "REPLCONF ip-address");
@@ -297,7 +297,7 @@ impl Command for PsyncCommand {
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() != 2 {
-            return Err(CommandError::WrongArity { command: "PSYNC" });
+            return Err(CommandError::WrongArity { command: "psync" });
         }
 
         let replication_id =
@@ -367,7 +367,7 @@ impl Command for WaitCommand {
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() != 2 {
-            return Err(CommandError::WrongArity { command: "WAIT" });
+            return Err(CommandError::WrongArity { command: "wait" });
         }
 
         let num_replicas: u32 = std::str::from_utf8(&args[0])

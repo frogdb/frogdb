@@ -32,7 +32,7 @@ impl Command for InfoCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Range { min: 0, max: 1 } // INFO [section]
+        Arity::AtLeast(0) // INFO [section ...]
     }
 
     fn flags(&self) -> CommandFlags {
@@ -40,28 +40,38 @@ impl Command for InfoCommand {
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        let section = if args.is_empty() {
-            None
-        } else {
-            Some(args[0].to_ascii_lowercase())
-        };
+        if args.is_empty() {
+            return Ok(Response::bulk(Bytes::from(build_all_info(ctx))));
+        }
 
-        let info = match section.as_deref() {
-            None | Some(b"all") | Some(b"default") => build_all_info(ctx),
-            Some(b"server") => build_server_info(),
-            Some(b"clients") => build_clients_info(),
-            Some(b"memory") => build_memory_info(ctx),
-            Some(b"persistence") => build_persistence_info(),
-            Some(b"stats") => build_stats_info(ctx),
-            Some(b"replication") => build_replication_info(ctx),
-            Some(b"cpu") => build_cpu_info(),
-            Some(b"keyspace") => build_keyspace_info(ctx),
-            Some(b"latency_baseline") => build_latency_baseline_info(),
-            Some(_) => {
-                // Unknown section - return empty string (matches Redis behavior)
-                String::new()
+        // Support multiple section arguments (INFO server clients memory ...)
+        let mut seen = std::collections::HashSet::new();
+        let mut info = String::new();
+
+        for arg in args {
+            let section = arg.to_ascii_lowercase();
+            // Deduplicate sections
+            if !seen.insert(section.clone()) {
+                continue;
             }
-        };
+            let section_info = match section.as_slice() {
+                b"all" | b"default" | b"everything" => build_all_info(ctx),
+                b"server" => build_server_info(),
+                b"clients" => build_clients_info(),
+                b"memory" => build_memory_info(ctx),
+                b"persistence" => build_persistence_info(),
+                b"stats" => build_stats_info(ctx),
+                b"replication" => build_replication_info(ctx),
+                b"cpu" => build_cpu_info(),
+                b"keyspace" => build_keyspace_info(ctx),
+                b"latency_baseline" => build_latency_baseline_info(),
+                _ => {
+                    // Unknown section - skip (matches Redis behavior)
+                    String::new()
+                }
+            };
+            info.push_str(&section_info);
+        }
 
         Ok(Response::bulk(Bytes::from(info)))
     }

@@ -141,16 +141,6 @@ impl ConnectionHandler {
                 ProtocolVersion::Resp2
             };
 
-            // Check for downgrade after HELLO 3
-            if self.state.hello_received
-                && self.state.protocol_version.is_resp3()
-                && !new_version.is_resp3()
-            {
-                return Response::error(
-                    "ERR protocol downgrade from RESP3 to RESP2 is not allowed",
-                );
-            }
-
             self.state.protocol_version = new_version;
         }
 

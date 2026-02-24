@@ -103,6 +103,7 @@ pub struct StaticConfig {
     pub persistence_enabled: bool,
     pub metrics_enabled: bool,
     pub metrics_port: u16,
+    pub strict_config: bool,
 }
 
 impl StaticConfig {
@@ -116,6 +117,7 @@ impl StaticConfig {
             persistence_enabled: config.persistence.enabled,
             metrics_enabled: config.metrics.enabled,
             metrics_port: config.metrics.port,
+            strict_config: config.compat.strict_config,
         }
     }
 }
@@ -129,6 +131,9 @@ pub struct ParamMeta {
     pub name: &'static str,
     /// Whether this parameter can be changed at runtime.
     pub mutable: bool,
+    /// Whether this is a no-op compatibility parameter.
+    /// When `strict_config` is true, these are hidden from CONFIG GET/SET.
+    pub noop: bool,
     /// Get the current value as a string.
     pub getter: fn(&ConfigManager) -> String,
     /// Set the value from a string (only for mutable params).
@@ -189,6 +194,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "maxmemory",
                 mutable: true,
+                noop: false,
                 getter: |mgr| mgr.runtime.read().unwrap().maxmemory.to_string(),
                 setter: Some(|mgr, val| {
                     let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
@@ -202,6 +208,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "maxmemory-policy",
                 mutable: true,
+                noop: false,
                 getter: |mgr| mgr.runtime.read().unwrap().maxmemory_policy.clone(),
                 setter: Some(|mgr, val| {
                     let valid_policies = [
@@ -228,6 +235,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "maxmemory-samples",
                 mutable: true,
+                noop: false,
                 getter: |mgr| mgr.runtime.read().unwrap().maxmemory_samples.to_string(),
                 setter: Some(|mgr, val| {
                     let parsed: usize = val.parse().map_err(|_| ConfigError::InvalidValue {
@@ -247,6 +255,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "lfu-log-factor",
                 mutable: true,
+                noop: false,
                 getter: |mgr| mgr.runtime.read().unwrap().lfu_log_factor.to_string(),
                 setter: Some(|mgr, val| {
                     let parsed: u8 = val.parse().map_err(|_| ConfigError::InvalidValue {
@@ -260,6 +269,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "lfu-decay-time",
                 mutable: true,
+                noop: false,
                 getter: |mgr| mgr.runtime.read().unwrap().lfu_decay_time.to_string(),
                 setter: Some(|mgr, val| {
                     let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
@@ -273,6 +283,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "loglevel",
                 mutable: true,
+                noop: false,
                 getter: |mgr| mgr.runtime.read().unwrap().loglevel.clone(),
                 setter: Some(|mgr, val| {
                     let valid_levels = ["trace", "debug", "info", "warn", "error"];
@@ -301,6 +312,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "durability-mode",
                 mutable: true,
+                noop: false,
                 getter: |mgr| mgr.runtime.read().unwrap().durability_mode.clone(),
                 setter: Some(|mgr, val| {
                     let valid_modes = ["async", "periodic", "sync"];
@@ -318,6 +330,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "sync-interval-ms",
                 mutable: true,
+                noop: false,
                 getter: |mgr| mgr.runtime.read().unwrap().sync_interval_ms.to_string(),
                 setter: Some(|mgr, val| {
                     let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
@@ -331,6 +344,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "batch-timeout-ms",
                 mutable: true,
+                noop: false,
                 getter: |mgr| mgr.runtime.read().unwrap().batch_timeout_ms.to_string(),
                 setter: Some(|mgr, val| {
                     let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
@@ -344,6 +358,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "scatter-gather-timeout-ms",
                 mutable: true,
+                noop: false,
                 getter: |mgr| {
                     mgr.runtime
                         .read()
@@ -364,6 +379,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "slowlog-log-slower-than",
                 mutable: true,
+                noop: false,
                 getter: |mgr| {
                     mgr.runtime
                         .read()
@@ -383,6 +399,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "slowlog-max-len",
                 mutable: true,
+                noop: false,
                 getter: |mgr| mgr.runtime.read().unwrap().slowlog_max_len.to_string(),
                 setter: Some(|mgr, val| {
                     let parsed: usize = val.parse().map_err(|_| ConfigError::InvalidValue {
@@ -396,6 +413,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "slowlog-max-arg-len",
                 mutable: true,
+                noop: false,
                 getter: |mgr| mgr.runtime.read().unwrap().slowlog_max_arg_len.to_string(),
                 setter: Some(|mgr, val| {
                     let parsed: usize = val.parse().map_err(|_| ConfigError::InvalidValue {
@@ -409,106 +427,159 @@ impl ConfigManager {
             // No-op mutable parameters (accept any value, return Redis defaults)
             // These exist so that Redis test suites can CONFIG SET encoding thresholds
             // without aborting.  FrogDB does not use these internally.
+            // When compat.strict_config = true, these are treated as unknown.
             ParamMeta {
                 name: "save",
                 mutable: true,
+                noop: true,
                 getter: |_| "".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
                 name: "set-max-intset-entries",
                 mutable: true,
+                noop: true,
                 getter: |_| "512".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
                 name: "set-max-listpack-entries",
                 mutable: true,
+                noop: true,
                 getter: |_| "128".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
                 name: "hash-max-ziplist-value",
                 mutable: true,
+                noop: true,
                 getter: |_| "64".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
                 name: "hash-max-listpack-value",
                 mutable: true,
+                noop: true,
                 getter: |_| "64".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
                 name: "list-max-listpack-size",
                 mutable: true,
+                noop: true,
                 getter: |_| "-2".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
                 name: "list-compress-depth",
                 mutable: true,
+                noop: true,
                 getter: |_| "0".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
                 name: "list-max-ziplist-size",
                 mutable: true,
+                noop: true,
                 getter: |_| "-2".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
                 name: "latency-monitor-threshold",
                 mutable: true,
+                noop: true,
                 getter: |_| "0".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
                 name: "hz",
                 mutable: true,
+                noop: true,
                 getter: |_| "10".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
                 name: "activedefrag",
                 mutable: true,
+                noop: true,
                 getter: |_| "no".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
                 name: "close-on-oom",
                 mutable: true,
+                noop: true,
                 getter: |_| "no".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "set-max-listpack-value",
+                mutable: true,
+                noop: true,
+                getter: |_| "64".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "zset-max-ziplist-entries",
+                mutable: true,
+                noop: true,
+                getter: |_| "128".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "zset-max-ziplist-value",
+                mutable: true,
+                noop: true,
+                getter: |_| "64".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "zset-max-listpack-entries",
+                mutable: true,
+                noop: true,
+                getter: |_| "128".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "zset-max-listpack-value",
+                mutable: true,
+                noop: true,
+                getter: |_| "64".to_string(),
                 setter: Some(|_, _| Ok(())),
             },
             // Immutable parameters
             ParamMeta {
                 name: "bind",
                 mutable: false,
+                noop: false,
                 getter: |mgr| mgr.static_config.bind.clone(),
                 setter: None,
             },
             ParamMeta {
                 name: "port",
                 mutable: false,
+                noop: false,
                 getter: |mgr| mgr.static_config.port.to_string(),
                 setter: None,
             },
             ParamMeta {
                 name: "num-shards",
                 mutable: false,
+                noop: false,
                 getter: |mgr| mgr.static_config.num_shards.to_string(),
                 setter: None,
             },
             ParamMeta {
                 name: "dir",
                 mutable: false,
+                noop: false,
                 getter: |mgr| mgr.static_config.data_dir.clone(),
                 setter: None,
             },
             ParamMeta {
                 name: "persistence-enabled",
                 mutable: false,
+                noop: false,
                 getter: |mgr| {
                     if mgr.static_config.persistence_enabled {
                         "yes".to_string()
@@ -521,6 +592,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "metrics-enabled",
                 mutable: false,
+                noop: false,
                 getter: |mgr| {
                     if mgr.static_config.metrics_enabled {
                         "yes".to_string()
@@ -533,6 +605,7 @@ impl ConfigManager {
             ParamMeta {
                 name: "metrics-port",
                 mutable: false,
+                noop: false,
                 getter: |mgr| mgr.static_config.metrics_port.to_string(),
                 setter: None,
             },
@@ -542,11 +615,18 @@ impl ConfigManager {
     /// Get parameters matching a glob pattern.
     ///
     /// Returns a vector of (name, value) pairs.
+    /// When `strict_config` is enabled, no-op compatibility params are hidden.
     pub fn get(&self, pattern: &str) -> Vec<(String, String)> {
+        let strict = self.static_config.strict_config;
         let pattern_bytes = pattern.as_bytes();
         self.params
             .iter()
-            .filter(|param| glob_match(pattern_bytes, param.name.as_bytes()))
+            .filter(|param| {
+                if strict && param.noop {
+                    return false;
+                }
+                glob_match(pattern_bytes, param.name.as_bytes())
+            })
             .map(|param| (param.name.to_string(), (param.getter)(self)))
             .collect()
     }
@@ -555,6 +635,7 @@ impl ConfigManager {
     ///
     /// Returns Ok(()) on success, or an error if the parameter is immutable,
     /// unknown, or the value is invalid.
+    /// When `strict_config` is enabled, no-op compatibility params are rejected.
     pub fn set(&self, name: &str, value: &str) -> Result<(), ConfigError> {
         // Normalize name (lowercase, allow underscores as dashes)
         let normalized = name.to_lowercase().replace('_', "-");
@@ -567,6 +648,12 @@ impl ConfigManager {
                 warn!(param = %name, "Unknown config parameter");
                 ConfigError::UnknownParameter(name.to_string())
             })?;
+
+        // When strict_config is enabled, reject no-op compatibility params
+        if self.static_config.strict_config && param.noop {
+            warn!(param = %name, "No-op config parameter rejected (strict_config=true)");
+            return Err(ConfigError::UnknownParameter(name.to_string()));
+        }
 
         if !param.mutable {
             warn!(param = %name, "Attempted to change immutable config");

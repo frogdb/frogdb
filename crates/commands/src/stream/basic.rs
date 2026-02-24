@@ -49,17 +49,17 @@ impl Command for XaddCommand {
 
         // Parse ID
         if i >= args.len() {
-            return Err(CommandError::WrongArity { command: "XADD" });
+            return Err(CommandError::WrongArity { command: "xadd" });
         }
         let id_spec = StreamId::parse_for_add(&args[i])?;
         i += 1;
 
         // Parse field-value pairs
         if !(args.len() - i).is_multiple_of(2) {
-            return Err(CommandError::WrongArity { command: "XADD" });
+            return Err(CommandError::WrongArity { command: "xadd" });
         }
         if args.len() - i == 0 {
-            return Err(CommandError::WrongArity { command: "XADD" });
+            return Err(CommandError::WrongArity { command: "xadd" });
         }
 
         let mut fields = Vec::with_capacity((args.len() - i) / 2);
