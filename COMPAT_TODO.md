@@ -8,14 +8,14 @@ Run `just redis-compat` to reproduce. Last run: 2026-02-24.
 **Total suites:** 89 (from `$::all_tests` in test_helper.tcl)
 **Skipped:** 9 (intentional incompatibilities + not-yet-implemented features)
 **Run:** 80 suites individually with per-suite FrogDB server instances
-**Results:** 58 passed, 22 failed, 0 timed out, 0 crashed
+**Results:** 64 passed, 16 failed, 0 timed out, 0 crashed
 **Wall-clock time:** 2m 35s (60s timeout per suite)
 
 ---
 
 ## Full Suite Results
 
-### Passed (58 suites)
+### Passed (64 suites)
 
 | Suite | Notes |
 |-------|-------|
@@ -26,11 +26,17 @@ Run `just redis-compat` to reproduce. Last run: 2026-02-24.
 | `unit/type/incr` | |
 | `unit/type/list-2` | |
 | `unit/type/list-3` | |
+| `unit/type/string` | Fixed: SET GET NX/WRONGTYPE, SUBSTR alias |
 | `unit/quit` | |
 | `unit/aofrw` | All tests skipped (external mode) |
 | `unit/acl` | ACL working |
 | `unit/acl-v2` | ACL v2 working |
+| `unit/pubsub` | Fixed: RESP3 PING format; skips for CLIENT REPLY OFF, keyspace notif |
 | `unit/pubsubshard` | |
+| `unit/scan` | Fixed: hash-based cursors for SSCAN/HSCAN/ZSCAN |
+| `unit/keyspace` | Fixed: COPY DB validation, glob backtracking |
+| `unit/hyperloglog` | Fixed: arity (PFCOUNT/PFMERGE/PFDEBUG), TODENSE; skips for corruption/sparse |
+| `unit/other` | Fixed: HELP commands, StringValue leading zeros; skips for SELECT/PIPELINING |
 | `unit/maxmemory` | All tests skipped (external mode) |
 | `unit/limits` | |
 | `unit/obuf-limits` | |
@@ -78,30 +84,24 @@ Run `just redis-compat` to reproduce. Last run: 2026-02-24.
 | `integration/redis-benchmark` | All tests skipped (external mode) |
 | `integration/dismiss-mem` | All tests skipped (external mode) |
 
-### Failed (22 suites)
+### Failed (16 suites)
 
 | Suite | Errors | Category |
 |-------|--------|----------|
 | `unit/sort` | 24 | Missing SORT features |
 | `unit/expire` | 17 | Expiry edge cases |
-| `unit/type/hash` | 13 | Hash encoding/config |
-| `unit/type/set` | 11 | Set operations |
+| `unit/type/hash` | 18 | Hash encoding/config |
 | `unit/bitops` | 12 | BITOP/BITCOUNT/BITPOS edge cases |
+| `unit/type/set` | 11 | Set operations |
 | `unit/geo` | 11 | GEO command edge cases |
-| `unit/type/list` | 7 | Blocking list ops + client tracking |
 | `unit/type/zset` | 9 | Sorted set operations |
+| `unit/slowlog` | 7 | SLOWLOG entry limits, argument trimming, format |
+| `unit/type/list` | 7 | Blocking list ops + client tracking |
 | `unit/info-command` | 6 | COMMAND INFO metadata |
 | `unit/pause` | 6 | CLIENT PAUSE behavior |
 | `unit/multi` | 5 | MULTI/EXEC edge cases |
 | `unit/lazyfree` | 5 | UNLINK / async deletion |
 | `unit/querybuf` | 4 | Query buffer management |
-| `unit/keyspace` | 3 | OBJECT/RANDOMKEY/DBSIZE |
-| `unit/hyperloglog` | 3 | HLL edge cases |
-| `unit/slowlog` | 3 | SLOWLOG command |
-| `unit/scan` | 2 | SCAN/SSCAN cursor issues |
-| `unit/pubsub` | 2 | Pub/Sub edge cases |
-| `unit/type/string` | 3 | SET GET with wrong type |
-| `unit/other` | 1 | Miscellaneous |
 | `unit/functions` | 1 | FUNCTION subsystem |
 | `unit/latency-monitor` | 1 | LATENCY HISTORY |
 
@@ -203,6 +203,14 @@ Sorted set operations:
 - ZRANGESTORE edge cases
 - Encoding transitions (ziplist vs skiplist)
 
+#### `unit/slowlog` (7 errors)
+
+SLOWLOG implementation gaps:
+- Entry count limiting (SLOWLOG GET with count)
+- Argument trimming (long arguments should be truncated)
+- CONFIG SET slowlog-log-slower-than / slowlog-max-len
+- Entry format details
+
 ### Known Issues (from previous analysis)
 
 #### Blocking Client Tracking
@@ -213,40 +221,24 @@ that poll for blocked state to fail. Affects: `unit/type/list`, `unit/type/zset`
 
 #### Error Message Mismatches
 
-| Command | FrogDB Returns | Redis Returns | Status |
-|---------|---------------|---------------|--------|
-| ~~`LPOS ... RANK 0`~~ | ~~`ERR RANK can't be zero`~~ | ~~Full usage hint message~~ | **Fixed** |
-| ~~`SINTERCARD 0 ...`~~ | ~~`ERR value is not an integer or out of range`~~ | ~~`ERR numkeys can't be non-positive value`~~ | **Fixed** |
-| ~~`LPOP/RPOP <count>` non-existing~~ | ~~`$-1` (null bulk)~~ | ~~`*-1` (null array)~~ | **Fixed** |
-| `COPY ... DB notanumber` | Error | `0` (single-db should ignore DB param) | |
+No outstanding error message mismatches.
 
 ---
 
 ## Action Items
 
-### Quick Wins
-- [x] ~~Implement `SUBSTR` as alias for `GETRANGE`~~ (was already implemented; removed stale stub override)
-- [x] ~~Fix `LPOS RANK 0` error message to include usage hint~~
-- [x] ~~Fix `SINTERCARD` error message for invalid numkeys~~
-- [x] ~~Fix `LPOP/RPOP` with count on non-existing key to return null array~~ (added `NullArray` protocol variant)
-- [ ] Fix `COPY ... DB` to handle non-integer DB gracefully in single-db mode
-- [x] ~~Add `hash-max-ziplist-entries` / `hash-max-listpack-entries` as CONFIG aliases~~
-
 ### Medium Effort
 - [ ] Fix COMMAND INFO metadata (fixes `unit/info-command` -- 6 errors)
-- [ ] Fix SCAN/SSCAN cursor iteration (fixes `unit/scan` -- 2 errors)
 - [ ] Investigate SORT edge cases (`unit/sort` -- 24 errors)
 - [ ] Fix CLIENT PAUSE behavior (`unit/pause` -- 6 errors)
 - [ ] Allow blocking commands inside MULTI/EXEC (execute immediately)
-- [ ] Fix SLOWLOG implementation (`unit/slowlog` -- 3 errors)
-- [ ] Fix LATENCY HISTORY (`unit/latency-monitor` -- 1 error)
+- [ ] Fix SLOWLOG implementation (`unit/slowlog` -- 7 errors)
+- [ ] Fix LATENCY HISTOGRAM (`unit/latency-monitor` -- 1 error)
 
 ### Major Work
 - [ ] Fix blocked client tracking (CLIENT LIST blocked state, blocked_clients count)
 - [ ] Investigate and fix expire edge cases (`unit/expire` -- 17 errors)
 - [ ] Investigate and fix BITOP/BITCOUNT/BITPOS edge cases (`unit/bitops` -- 12 errors)
 - [ ] Investigate and fix GEO command edge cases (`unit/geo` -- 11 errors)
-- [ ] Investigate and fix PubSub edge cases (`unit/pubsub` -- 2 errors)
 - [ ] Investigate UNLINK/async deletion (`unit/lazyfree` -- 5 errors)
 - [ ] Investigate query buffer management (`unit/querybuf` -- 4 errors)
-- [ ] Investigate HyperLogLog edge cases (`unit/hyperloglog` -- 3 errors)
