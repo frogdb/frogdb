@@ -17,6 +17,8 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
+use crate::utils::parse_i64;
+
 // ============================================================================
 // TYPE - Get key type
 // ============================================================================
@@ -281,7 +283,7 @@ impl Command for ObjectCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // OBJECT subcommand key
+        Arity::AtLeast(1) // OBJECT subcommand [key] — HELP has no key arg
     }
 
     fn flags(&self) -> CommandFlags {
@@ -406,11 +408,27 @@ impl Command for ObjectCommand {
             }
             b"HELP" => {
                 let help = vec![
-                    Response::bulk(Bytes::from_static(b"OBJECT ENCODING <key>")),
-                    Response::bulk(Bytes::from_static(b"OBJECT FREQ <key>")),
-                    Response::bulk(Bytes::from_static(b"OBJECT IDLETIME <key>")),
-                    Response::bulk(Bytes::from_static(b"OBJECT REFCOUNT <key>")),
-                    Response::bulk(Bytes::from_static(b"OBJECT HELP")),
+                    Response::bulk(Bytes::from_static(
+                        b"OBJECT <subcommand> [<arg> [value] ...]. Subcommands are:",
+                    )),
+                    Response::bulk(Bytes::from_static(b"ENCODING <key>")),
+                    Response::bulk(Bytes::from_static(
+                        b"    Return the encoding of the object stored at <key>.",
+                    )),
+                    Response::bulk(Bytes::from_static(b"FREQ <key>")),
+                    Response::bulk(Bytes::from_static(
+                        b"    Return the access frequency index of the key <key>.",
+                    )),
+                    Response::bulk(Bytes::from_static(b"HELP")),
+                    Response::bulk(Bytes::from_static(b"    Return subcommand help summary.")),
+                    Response::bulk(Bytes::from_static(b"IDLETIME <key>")),
+                    Response::bulk(Bytes::from_static(
+                        b"    Return the idle time of the key <key>.",
+                    )),
+                    Response::bulk(Bytes::from_static(b"REFCOUNT <key>")),
+                    Response::bulk(Bytes::from_static(
+                        b"    Return the reference count of the object stored at <key>.",
+                    )),
                 ];
                 Ok(Response::Array(help))
             }
@@ -629,14 +647,13 @@ impl Command for CopyCommand {
                     replace = true;
                     i += 1;
                 }
-                b"DB" => {
-                    // DB option is accepted but ignored
+                b"DB" | b"DESTINATION-DB" => {
+                    // DB option is accepted but we validate the argument is an integer
                     if i + 1 >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "DB requires an argument".to_string(),
-                        });
+                        return Err(CommandError::SyntaxError);
                     }
-                    tracing::warn!("COPY DB option not supported, ignoring");
+                    // Validate DB number is a valid integer (even though we ignore it)
+                    let _db = parse_i64(&args[i + 1])?;
                     i += 2; // Skip DB and its argument
                 }
                 _ => {

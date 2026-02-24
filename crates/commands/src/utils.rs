@@ -95,6 +95,76 @@ pub fn simple_glob_match(pattern: &[u8], text: &[u8]) -> bool {
 }
 
 // ============================================================================
+// Hash-based scan cursor for SSCAN/HSCAN
+// ============================================================================
+
+/// Compute a deterministic hash for a byte sequence using SipHash with fixed seed.
+///
+/// This provides a stable ordering for scan cursors that is not affected by
+/// hash table resizing or element insertion/removal order.
+fn scan_hash(key: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    key.hash(&mut hasher);
+    let h = hasher.finish();
+    // Reserve 0 as "scan complete" marker — remap hash 0 to 1
+    if h == 0 { 1 } else { h }
+}
+
+/// Perform a hash-based cursor scan over an iterator of items.
+///
+/// Returns `(new_cursor, results)` where `new_cursor` is 0 when the scan is complete.
+///
+/// The `hash_key` function extracts the bytes used for hash-based ordering from each item.
+/// The `emit` function converts an item into Response values appended to `results`.
+/// `count` is the maximum number of items to emit (not response elements).
+pub fn hash_cursor_scan<T>(
+    items: impl Iterator<Item = T>,
+    cursor: u64,
+    count: usize,
+    match_pattern: Option<&[u8]>,
+    hash_key: impl Fn(&T) -> &[u8],
+    emit: impl Fn(T, &mut Vec<frogdb_protocol::Response>),
+) -> (u64, Vec<frogdb_protocol::Response>) {
+    // Collect items with their hashes
+    let mut hashed: Vec<(u64, T)> = items
+        .map(|item| (scan_hash(hash_key(&item)), item))
+        .collect();
+
+    // Sort by hash for deterministic ordering
+    hashed.sort_unstable_by_key(|(h, _)| *h);
+
+    // Find starting position: first item with hash >= cursor (cursor 0 starts from beginning)
+    let start = if cursor == 0 {
+        0
+    } else {
+        hashed.partition_point(|(h, _)| *h < cursor)
+    };
+
+    let mut results = Vec::new();
+    let mut emitted = 0usize;
+    let mut new_cursor = 0u64;
+
+    for (hash, item) in hashed.into_iter().skip(start) {
+        if emitted >= count {
+            new_cursor = hash;
+            break;
+        }
+
+        if let Some(pattern) = match_pattern
+            && !simple_glob_match(pattern, hash_key(&item))
+        {
+            continue;
+        }
+
+        emit(item, &mut results);
+        emitted += 1;
+    }
+
+    (new_cursor, results)
+}
+
+// ============================================================================
 // Sorted Set Parsing Utilities
 // ============================================================================
 

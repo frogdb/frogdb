@@ -181,23 +181,37 @@ impl Command for CommandCommand {
             b"HELP" => {
                 // COMMAND HELP
                 let help = vec![
-                    Response::bulk(Bytes::from_static(b"COMMAND [subcommand [arg [arg ...]]]")),
-                    Response::bulk(Bytes::from_static(b"Return info about Redis commands.")),
-                    Response::bulk(Bytes::from_static(b"Subcommands:")),
                     Response::bulk(Bytes::from_static(
-                        b"  (no subcommand) -- Return info about all commands",
+                        b"COMMAND <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
                     )),
-                    Response::bulk(Bytes::from_static(b"  COUNT -- Return count of commands")),
+                    Response::bulk(Bytes::from_static(b"(no subcommand)")),
                     Response::bulk(Bytes::from_static(
-                        b"  DOCS [cmd ...] -- Return documentation for commands",
+                        b"    Return details about all Redis commands.",
                     )),
+                    Response::bulk(Bytes::from_static(b"COUNT")),
                     Response::bulk(Bytes::from_static(
-                        b"  INFO [cmd ...] -- Return info for commands",
+                        b"    Return number of total commands in this Redis server.",
                     )),
                     Response::bulk(Bytes::from_static(
-                        b"  GETKEYS cmd [args...] -- Extract keys from command",
+                        b"DOCS [<command-name> [<command-name> ...]]",
                     )),
-                    Response::bulk(Bytes::from_static(b"  HELP -- Print this help")),
+                    Response::bulk(Bytes::from_static(
+                        b"    Return documentary information about commands.",
+                    )),
+                    Response::bulk(Bytes::from_static(b"GETKEYS <full-command>")),
+                    Response::bulk(Bytes::from_static(
+                        b"    Extract keys given a full Redis command.",
+                    )),
+                    Response::bulk(Bytes::from_static(
+                        b"INFO [<command-name> [<command-name> ...]]",
+                    )),
+                    Response::bulk(Bytes::from_static(
+                        b"    Return details about multiple Redis commands.",
+                    )),
+                    Response::bulk(Bytes::from_static(b"LIST [FILTERBY <filter> <value>]")),
+                    Response::bulk(Bytes::from_static(b"    Return a list of command names.")),
+                    Response::bulk(Bytes::from_static(b"HELP")),
+                    Response::bulk(Bytes::from_static(b"    Return subcommand help summary.")),
                 ];
                 Ok(Response::Array(help))
             }
@@ -352,22 +366,39 @@ impl Command for SetCommand {
             return Err(CommandError::SyntaxError);
         }
 
+        // Redis returns WRONGTYPE when SET GET is used on a non-string key.
+        // This check must happen before set_with_options replaces the value.
+        // Also capture the old string value for the GET flag when NX/XX prevents the SET.
+        let mut old_string_value: Option<Bytes> = None;
+        if opts.return_old
+            && let Some(existing) = ctx.store.get(&key)
+        {
+            if let Some(sv) = existing.as_string() {
+                old_string_value = Some(sv.as_bytes());
+            } else {
+                return Err(CommandError::WrongType);
+            }
+        }
+
         match ctx.store.set_with_options(key, Value::string(value), opts) {
             SetResult::Ok => Ok(Response::ok()),
-            SetResult::OkWithOldValue(old) => {
-                match old {
-                    Some(v) => {
-                        if let Some(sv) = v.as_string() {
-                            Ok(Response::bulk(sv.as_bytes()))
-                        } else {
-                            // Old value was wrong type but we replaced it anyway
-                            Ok(Response::null())
-                        }
+            SetResult::OkWithOldValue(old) => match old {
+                Some(v) => {
+                    if let Some(sv) = v.as_string() {
+                        Ok(Response::bulk(sv.as_bytes()))
+                    } else {
+                        Ok(Response::null())
                     }
+                }
+                None => Ok(Response::null()),
+            },
+            SetResult::NotSet => {
+                // When GET flag is set, return the old value even when NX/XX prevents the SET
+                match old_string_value {
+                    Some(v) => Ok(Response::bulk(v)),
                     None => Ok(Response::null()),
                 }
             }
-            SetResult::NotSet => Ok(Response::null()),
         }
     }
 

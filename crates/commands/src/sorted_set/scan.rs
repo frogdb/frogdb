@@ -2,7 +2,7 @@ use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
 use frogdb_protocol::Response;
 
-use crate::utils::{format_float, parse_usize, simple_glob_match};
+use crate::utils::{format_float, parse_u64, parse_usize};
 
 // ============================================================================
 // ZSCAN - Cursor-based iteration
@@ -25,7 +25,7 @@ impl Command for ZscanCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let cursor = parse_usize(&args[1])?;
+        let cursor: u64 = parse_u64(&args[1])?;
 
         let mut match_pattern: Option<&[u8]> = None;
         let mut count: usize = 10;
@@ -63,40 +63,21 @@ impl Command for ZscanCommand {
         };
         let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
-        // Simple cursor-based iteration (not true cursor, just offset)
-        let all_members: Vec<_> = zset.to_vec();
-        let total = all_members.len();
-
-        if cursor >= total {
-            return Ok(Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"0")),
-                Response::Array(vec![]),
-            ]));
-        }
-
-        let mut result = Vec::new();
-        let mut new_cursor = 0;
-
-        for (i, (member, score)) in all_members.into_iter().enumerate().skip(cursor) {
-            if result.len() >= count * 2 {
-                new_cursor = i;
-                break;
-            }
-
-            // Apply pattern match if specified
-            if let Some(pattern) = match_pattern
-                && !simple_glob_match(pattern, &member)
-            {
-                continue;
-            }
-
-            result.push(Response::bulk(member));
-            result.push(Response::bulk(Bytes::from(format_float(score))));
-        }
+        let (new_cursor, results) = crate::utils::hash_cursor_scan(
+            zset.to_vec().into_iter(),
+            cursor,
+            count,
+            match_pattern,
+            |entry: &(Bytes, f64)| entry.0.as_ref(),
+            |entry: (Bytes, f64), results: &mut Vec<Response>| {
+                results.push(Response::bulk(entry.0));
+                results.push(Response::bulk(Bytes::from(format_float(entry.1))));
+            },
+        );
 
         Ok(Response::Array(vec![
             Response::bulk(Bytes::from(new_cursor.to_string())),
-            Response::Array(result),
+            Response::Array(results),
         ]))
     }
 

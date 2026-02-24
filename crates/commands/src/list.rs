@@ -227,7 +227,11 @@ impl Command for LpopCommand {
 
         // Check if key exists
         if ctx.store.get(key).is_none() {
-            return Ok(Response::null());
+            return Ok(if count.is_some() {
+                Response::NullArray
+            } else {
+                Response::null()
+            });
         }
 
         // Verify type
@@ -311,7 +315,11 @@ impl Command for RpopCommand {
 
         // Check if key exists
         if ctx.store.get(key).is_none() {
-            return Ok(Response::null());
+            return Ok(if count.is_some() {
+                Response::NullArray
+            } else {
+                Response::null()
+            });
         }
 
         // Verify type
@@ -763,7 +771,7 @@ impl Command for LposCommand {
                     rank = parse_i64(&args[i])?;
                     if rank == 0 {
                         return Err(CommandError::InvalidArgument {
-                            message: "RANK can't be zero".to_string(),
+                            message: "RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list".to_string(),
                         });
                     }
                 }

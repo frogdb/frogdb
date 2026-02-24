@@ -1,5 +1,7 @@
 //! Full Redis-compatible glob pattern matching.
 //!
+//! Uses an iterative algorithm with O(nm) worst case (no exponential backtracking).
+//!
 //! Supports:
 //! - `*` matches any sequence of characters
 //! - `?` matches any single character
@@ -41,153 +43,146 @@ pub fn glob_match(pattern: &[u8], key: &[u8]) -> bool {
     {
         return key.ends_with(&pattern[1..]);
     }
-    // Full recursive match
-    let mut pattern_iter = pattern.iter().peekable();
-    let mut key_iter = key.iter().peekable();
+    // Full iterative match
+    let mut pi = 0; // pattern index
+    let mut ki = 0; // key index
+    let mut star_pi = usize::MAX; // pattern index after last *
+    let mut star_ki = 0; // key index at last * match
 
-    glob_match_impl(&mut pattern_iter, &mut key_iter)
+    while ki < key.len() {
+        if pi < pattern.len() {
+            match pattern[pi] {
+                b'*' => {
+                    // Skip consecutive stars
+                    while pi < pattern.len() && pattern[pi] == b'*' {
+                        pi += 1;
+                    }
+                    // Save backtrack point: resume pattern after *, key from ki+1
+                    star_pi = pi;
+                    star_ki = ki;
+                    // Don't advance ki — try matching * against 0 chars first
+                    continue;
+                }
+                b'?' => {
+                    pi += 1;
+                    ki += 1;
+                    continue;
+                }
+                b'[' => {
+                    if let Some((true, new_pi)) = match_char_class(pattern, pi + 1, key[ki]) {
+                        pi = new_pi;
+                        ki += 1;
+                        continue;
+                    }
+                    // Fall through to backtrack
+                }
+                b'\\' => {
+                    if pi + 1 < pattern.len() && pattern[pi + 1] == key[ki] {
+                        pi += 2;
+                        ki += 1;
+                        continue;
+                    }
+                    // Fall through to backtrack
+                }
+                c => {
+                    if c == key[ki] {
+                        pi += 1;
+                        ki += 1;
+                        continue;
+                    }
+                    // Fall through to backtrack
+                }
+            }
+        }
+
+        // Mismatch (or pattern exhausted while key remains) — try backtracking
+        if star_pi != usize::MAX {
+            pi = star_pi;
+            star_ki += 1;
+            ki = star_ki;
+        } else {
+            return false;
+        }
+    }
+
+    // Key consumed — skip trailing stars in pattern
+    while pi < pattern.len() && pattern[pi] == b'*' {
+        pi += 1;
+    }
+
+    pi == pattern.len()
 }
 
-fn glob_match_impl<'a>(
-    pattern: &mut std::iter::Peekable<std::slice::Iter<'a, u8>>,
-    key: &mut std::iter::Peekable<std::slice::Iter<'a, u8>>,
-) -> bool {
-    while let Some(&p) = pattern.next() {
-        match p {
-            b'*' => {
-                // Skip consecutive stars
-                while pattern.peek() == Some(&&b'*') {
-                    pattern.next();
-                }
+/// Try to match a character class starting at `pi` (just past the opening `[`).
+/// Returns `Some((matched, new_pi))` where `new_pi` points past the closing `]`,
+/// or `None` if the class is malformed.
+fn match_char_class(pattern: &[u8], mut pi: usize, ch: u8) -> Option<(bool, usize)> {
+    let negated = pi < pattern.len() && (pattern[pi] == b'^' || pattern[pi] == b'!');
+    if negated {
+        pi += 1;
+    }
 
-                // If * is at the end, match everything
-                if pattern.peek().is_none() {
-                    return true;
-                }
+    let mut matched = false;
+    let mut prev_char: Option<u8> = None;
+    let mut in_range = false;
 
-                // Try matching * against 0 or more characters
-                loop {
-                    // Clone iterators to try matching from current position
-                    let mut pattern_clone = pattern.clone();
-                    let mut key_clone = key.clone();
+    loop {
+        if pi >= pattern.len() {
+            return None; // Unterminated character class
+        }
 
-                    if glob_match_impl(&mut pattern_clone, &mut key_clone) {
-                        return true;
-                    }
+        let c = pattern[pi];
+        pi += 1;
 
-                    // Advance key by one character
-                    if key.next().is_none() {
-                        return false;
-                    }
-                }
-            }
-            b'?' => {
-                // Match exactly one character
-                if key.next().is_none() {
-                    return false;
-                }
-            }
-            b'[' => {
-                // Character class
-                let Some(&k) = key.next() else {
-                    return false;
-                };
-
-                let negated = pattern.peek() == Some(&&b'^') || pattern.peek() == Some(&&b'!');
-                if negated {
-                    pattern.next();
-                }
-
-                let mut matched = false;
-                let mut prev_char: Option<u8> = None;
-                let mut in_range = false;
-
-                loop {
-                    match pattern.next() {
-                        Some(&b']') if prev_char.is_some() => {
-                            // End of character class (but only if we've seen at least one char)
-                            break;
-                        }
-                        Some(&b'\\') => {
-                            // Escaped character in class
-                            if let Some(&c) = pattern.next() {
-                                if in_range {
-                                    // Range: prev_char-c
-                                    if let Some(start) = prev_char
-                                        && k >= start
-                                        && k <= c
-                                    {
-                                        matched = true;
-                                    }
-                                    in_range = false;
-                                } else if k == c {
-                                    matched = true;
-                                }
-                                prev_char = Some(c);
-                            } else {
-                                return false; // Unterminated escape
-                            }
-                        }
-                        Some(&b'-') if prev_char.is_some() && pattern.peek() != Some(&&b']') => {
-                            // Range indicator
-                            in_range = true;
-                        }
-                        Some(&c) => {
-                            if in_range {
-                                // Range: prev_char-c
-                                if let Some(start) = prev_char
-                                    && k >= start
-                                    && k <= c
-                                {
-                                    matched = true;
-                                }
-                                in_range = false;
-                            } else if k == c {
-                                matched = true;
-                            }
-                            prev_char = Some(c);
-                        }
-                        None => {
-                            // Unterminated character class
-                            return false;
-                        }
-                    }
-                }
-
-                if negated {
-                    if matched {
-                        return false;
-                    }
-                } else if !matched {
-                    return false;
-                }
+        match c {
+            b']' if prev_char.is_some() => {
+                // End of class (only valid after at least one char)
+                break;
             }
             b'\\' => {
-                // Escaped character
-                let Some(&escaped) = pattern.next() else {
-                    return false; // Unterminated escape
-                };
-                let Some(&k) = key.next() else {
-                    return false;
-                };
-                if escaped != k {
-                    return false;
+                if pi >= pattern.len() {
+                    return None;
                 }
+                let esc = pattern[pi];
+                pi += 1;
+                if in_range {
+                    if let Some(start) = prev_char
+                        && ch >= start
+                        && ch <= esc
+                    {
+                        matched = true;
+                    }
+                    in_range = false;
+                } else if ch == esc {
+                    matched = true;
+                }
+                prev_char = Some(esc);
+            }
+            b'-' if prev_char.is_some() && pi < pattern.len() && pattern[pi] != b']' => {
+                in_range = true;
             }
             _ => {
-                // Literal character
-                let Some(&k) = key.next() else {
-                    return false;
-                };
-                if p != k {
-                    return false;
+                if in_range {
+                    if let Some(start) = prev_char
+                        && ch >= start
+                        && ch <= c
+                    {
+                        matched = true;
+                    }
+                    in_range = false;
+                } else if ch == c {
+                    matched = true;
                 }
+                prev_char = Some(c);
             }
         }
     }
 
-    // Pattern consumed; key must also be consumed
-    key.peek().is_none()
+    if negated {
+        Some((!matched, pi))
+    } else {
+        Some((matched, pi))
+    }
 }
 
 #[cfg(test)]
@@ -364,5 +359,14 @@ mod tests {
         // First char in class can be ]
         assert!(glob_match(b"[]abc]", b"]"));
         assert!(glob_match(b"[]abc]", b"a"));
+    }
+
+    #[test]
+    fn test_catastrophic_backtracking() {
+        // This pattern caused exponential backtracking with the recursive algorithm.
+        // It should complete in milliseconds with the iterative algorithm.
+        let key = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let pattern = b"a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
+        assert!(!glob_match(pattern, key));
     }
 }

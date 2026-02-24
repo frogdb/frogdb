@@ -370,6 +370,31 @@ impl ConnectionHandler {
         &mut self,
         response: frogdb_protocol::WireResponse,
     ) -> std::io::Result<()> {
+        // NullArray requires raw bytes (*-1\r\n) in RESP2 which the redis-protocol
+        // crate cannot produce (its Null is always $-1\r\n). In RESP3, null is just _\r\n.
+        if matches!(response, frogdb_protocol::WireResponse::NullArray) {
+            match self.state.protocol_version {
+                ProtocolVersion::Resp2 => {
+                    const NULL_ARRAY_BYTES: &[u8] = b"*-1\r\n";
+                    self.state
+                        .local_stats
+                        .add_bytes_sent(NULL_ARRAY_BYTES.len() as u64);
+                    self.framed.get_mut().write_all(NULL_ARRAY_BYTES).await?;
+                    return self.framed.get_mut().flush().await;
+                }
+                ProtocolVersion::Resp3 => {
+                    // RESP3 Null (_\r\n) - use the normal encoding path
+                    let frame = response.to_resp3_frame();
+                    let mut buf = BytesMut::new();
+                    redis_protocol::resp3::encode::complete::extend_encode(&mut buf, &frame)
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    self.state.local_stats.add_bytes_sent(buf.len() as u64);
+                    self.framed.get_mut().write_all(&buf).await?;
+                    return self.framed.get_mut().flush().await;
+                }
+            }
+        }
+
         match self.state.protocol_version {
             ProtocolVersion::Resp2 => {
                 // Use RESP2 encoding via the Framed codec

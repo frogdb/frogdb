@@ -78,7 +78,7 @@ pub fn response_to_lua(lua: &mlua::Lua, response: Response) -> LuaResult<Value> 
         }
         Response::Integer(n) => Ok(Value::Integer(n)),
         Response::Bulk(Some(data)) => Ok(Value::String(lua.create_string(data.as_ref())?)),
-        Response::Bulk(None) | Response::Null => Ok(Value::Boolean(false)), // Redis Lua convention: nil -> false
+        Response::Bulk(None) | Response::Null | Response::NullArray => Ok(Value::Boolean(false)), // Redis Lua convention: nil -> false
         Response::Array(arr) => {
             let table = lua.create_table()?;
             for (i, item) in arr.into_iter().enumerate() {
