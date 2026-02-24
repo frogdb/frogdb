@@ -1315,6 +1315,7 @@ dependencies = [
  "frogdb-core",
  "frogdb-protocol",
  "rand 0.8.5",
+ "ryu",
  "serde_json",
  "tokio",
  "tracing",

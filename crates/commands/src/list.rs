@@ -209,7 +209,7 @@ impl Command for LpopCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // LPOP key [count]
+        Arity::Range { min: 1, max: 2 } // LPOP key [count]
     }
 
     fn flags(&self) -> CommandFlags {
@@ -253,11 +253,8 @@ impl Command for LpopCommand {
                     ctx.store.delete(key);
                 }
 
-                if results.is_empty() {
-                    Ok(Response::null())
-                } else {
-                    Ok(Response::Array(results))
-                }
+                // When count arg is present, always return array (even if empty)
+                Ok(Response::Array(results))
             }
             None => {
                 let result = list.pop_front();
@@ -296,7 +293,7 @@ impl Command for RpopCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // RPOP key [count]
+        Arity::Range { min: 1, max: 2 } // RPOP key [count]
     }
 
     fn flags(&self) -> CommandFlags {
@@ -340,11 +337,8 @@ impl Command for RpopCommand {
                     ctx.store.delete(key);
                 }
 
-                if results.is_empty() {
-                    Ok(Response::null())
-                } else {
-                    Ok(Response::Array(results))
-                }
+                // When count arg is present, always return array (even if empty)
+                Ok(Response::Array(results))
             }
             None => {
                 let result = list.pop_back();
@@ -798,7 +792,11 @@ impl Command for LposCommand {
                     // Adjust rank for 0-based indexing
                     let adjusted_rank = if rank > 0 { rank - 1 } else { rank };
 
-                    let result_count = count.unwrap_or(1);
+                    let result_count = match count {
+                        Some(0) => usize::MAX, // COUNT 0 means return all matches
+                        Some(n) => n,
+                        None => 1,
+                    };
                     let positions = list.position(element, adjusted_rank, result_count, maxlen);
 
                     if count.is_some() {

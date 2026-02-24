@@ -26,7 +26,7 @@ impl Command for XinfoCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
-            return Err(CommandError::WrongArity { command: "XINFO" });
+            return Err(CommandError::WrongArity { command: "xinfo" });
         }
 
         let subcommand = args[0].to_ascii_uppercase();
@@ -65,7 +65,7 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
     // XINFO STREAM key [FULL [COUNT count]]
     if args.is_empty() {
         return Err(CommandError::WrongArity {
-            command: "XINFO|STREAM",
+            command: "xinfo|stream",
         });
     }
 
@@ -167,7 +167,7 @@ fn xinfo_groups(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
     // XINFO GROUPS key
     if args.is_empty() {
         return Err(CommandError::WrongArity {
-            command: "XINFO|GROUPS",
+            command: "xinfo|groups",
         });
     }
 
@@ -210,7 +210,7 @@ fn xinfo_consumers(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response,
     // XINFO CONSUMERS key group
     if args.len() < 2 {
         return Err(CommandError::WrongArity {
-            command: "XINFO|CONSUMERS",
+            command: "xinfo|consumers",
         });
     }
 

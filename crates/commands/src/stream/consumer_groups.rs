@@ -25,7 +25,7 @@ impl Command for XgroupCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
-            return Err(CommandError::WrongArity { command: "XGROUP" });
+            return Err(CommandError::WrongArity { command: "xgroup" });
         }
 
         let subcommand = args[0].to_ascii_uppercase();
@@ -74,7 +74,7 @@ fn xgroup_create(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, C
     // XGROUP CREATE key group id|$ [MKSTREAM] [ENTRIESREAD n]
     if args.len() < 3 {
         return Err(CommandError::WrongArity {
-            command: "XGROUP|CREATE",
+            command: "xgroup|create",
         });
     }
 
@@ -145,7 +145,7 @@ fn xgroup_destroy(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, 
     // XGROUP DESTROY key group
     if args.len() < 2 {
         return Err(CommandError::WrongArity {
-            command: "XGROUP|DESTROY",
+            command: "xgroup|destroy",
         });
     }
 
@@ -171,7 +171,7 @@ fn xgroup_createconsumer(
     // XGROUP CREATECONSUMER key group consumer
     if args.len() < 3 {
         return Err(CommandError::WrongArity {
-            command: "XGROUP|CREATECONSUMER",
+            command: "xgroup|createconsumer",
         });
     }
 
@@ -198,7 +198,7 @@ fn xgroup_delconsumer(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Respon
     // XGROUP DELCONSUMER key group consumer
     if args.len() < 3 {
         return Err(CommandError::WrongArity {
-            command: "XGROUP|DELCONSUMER",
+            command: "xgroup|delconsumer",
         });
     }
 
@@ -225,7 +225,7 @@ fn xgroup_setid(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
     // XGROUP SETID key group id|$ [ENTRIESREAD n]
     if args.len() < 3 {
         return Err(CommandError::WrongArity {
-            command: "XGROUP|SETID",
+            command: "xgroup|setid",
         });
     }
 

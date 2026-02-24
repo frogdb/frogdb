@@ -95,7 +95,7 @@ impl VmContextAccessor {
         if !handler.arity().check(args.len()) {
             return Err(format!(
                 "ERR wrong number of arguments for '{}' command",
-                handler.name()
+                handler.name().to_ascii_lowercase()
             ));
         }
 

@@ -873,14 +873,24 @@ impl Command for HrandfieldCommand {
 
                     // Multiple fields mode
                     if with_values {
-                        let mut results = Vec::with_capacity(random_fields.len() * 2);
-                        for (field, value) in random_fields {
-                            results.push(Response::bulk(field));
-                            if let Some(v) = value {
-                                results.push(Response::bulk(v));
+                        if ctx.protocol_version.is_resp3() {
+                            // RESP3: return as map of field -> value
+                            let pairs: Vec<_> = random_fields
+                                .into_iter()
+                                .map(|(f, v)| (Response::bulk(f), Response::bulk(v.unwrap())))
+                                .collect();
+                            Ok(Response::Map(pairs))
+                        } else {
+                            // RESP2: flat array of field, value, field, value, ...
+                            let mut results = Vec::with_capacity(random_fields.len() * 2);
+                            for (field, value) in random_fields {
+                                results.push(Response::bulk(field));
+                                if let Some(v) = value {
+                                    results.push(Response::bulk(v));
+                                }
                             }
+                            Ok(Response::Array(results))
                         }
-                        Ok(Response::Array(results))
                     } else {
                         let results: Vec<Response> = random_fields
                             .into_iter()

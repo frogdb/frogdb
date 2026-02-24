@@ -25,7 +25,7 @@ pub struct ClusterCommand;
 
 impl Command for ClusterCommand {
     fn name(&self) -> &'static str {
-        "CLUSTER"
+        "cluster"
     }
 
     fn arity(&self) -> Arity {
@@ -39,7 +39,7 @@ impl Command for ClusterCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
             return Err(CommandError::WrongArgCount {
-                command: "CLUSTER".to_string(),
+                command: "cluster".to_string(),
             });
         }
 
@@ -58,7 +58,7 @@ impl Command for ClusterCommand {
             "KEYSLOT" => {
                 if args.len() < 2 {
                     return Err(CommandError::WrongArgCount {
-                        command: "CLUSTER KEYSLOT".to_string(),
+                        command: "cluster keyslot".to_string(),
                     });
                 }
                 cluster_keyslot(&args[1])
@@ -66,7 +66,7 @@ impl Command for ClusterCommand {
             "COUNTKEYSINSLOT" => {
                 if args.len() < 2 {
                     return Err(CommandError::WrongArgCount {
-                        command: "CLUSTER COUNTKEYSINSLOT".to_string(),
+                        command: "cluster countkeysinslot".to_string(),
                     });
                 }
                 cluster_countkeysinslot(ctx, &args[1])
@@ -74,7 +74,7 @@ impl Command for ClusterCommand {
             "GETKEYSINSLOT" => {
                 if args.len() < 3 {
                     return Err(CommandError::WrongArgCount {
-                        command: "CLUSTER GETKEYSINSLOT".to_string(),
+                        command: "cluster getkeysinslot".to_string(),
                     });
                 }
                 cluster_getkeysinslot(ctx, &args[1], &args[2])
@@ -82,7 +82,7 @@ impl Command for ClusterCommand {
             "MEET" => {
                 if args.len() < 3 {
                     return Err(CommandError::WrongArgCount {
-                        command: "CLUSTER MEET".to_string(),
+                        command: "cluster meet".to_string(),
                     });
                 }
                 // CLUSTER MEET <ip> <port> [<cluster-bus-port>]
@@ -92,7 +92,7 @@ impl Command for ClusterCommand {
             "FORGET" => {
                 if args.len() < 2 {
                     return Err(CommandError::WrongArgCount {
-                        command: "CLUSTER FORGET".to_string(),
+                        command: "cluster forget".to_string(),
                     });
                 }
                 admin::cluster_forget(ctx, &args[1])
@@ -100,7 +100,7 @@ impl Command for ClusterCommand {
             "ADDSLOTS" => {
                 if args.len() < 2 {
                     return Err(CommandError::WrongArgCount {
-                        command: "CLUSTER ADDSLOTS".to_string(),
+                        command: "cluster addslots".to_string(),
                     });
                 }
                 admin::cluster_addslots(ctx, &args[1..])
@@ -108,7 +108,7 @@ impl Command for ClusterCommand {
             "DELSLOTS" => {
                 if args.len() < 2 {
                     return Err(CommandError::WrongArgCount {
-                        command: "CLUSTER DELSLOTS".to_string(),
+                        command: "cluster delslots".to_string(),
                     });
                 }
                 admin::cluster_delslots(ctx, &args[1..])
@@ -117,7 +117,7 @@ impl Command for ClusterCommand {
             "REPLICATE" => {
                 if args.len() < 2 {
                     return Err(CommandError::WrongArgCount {
-                        command: "CLUSTER REPLICATE".to_string(),
+                        command: "cluster replicate".to_string(),
                     });
                 }
                 admin::cluster_replicate(ctx, &args[1])
@@ -127,7 +127,7 @@ impl Command for ClusterCommand {
             "SET-CONFIG-EPOCH" => {
                 if args.len() < 2 {
                     return Err(CommandError::WrongArgCount {
-                        command: "CLUSTER SET-CONFIG-EPOCH".to_string(),
+                        command: "cluster set-config-epoch".to_string(),
                     });
                 }
                 admin::cluster_set_config_epoch(ctx, &args[1])
@@ -135,7 +135,7 @@ impl Command for ClusterCommand {
             "SETSLOT" => {
                 if args.len() < 3 {
                     return Err(CommandError::WrongArgCount {
-                        command: "CLUSTER SETSLOT".to_string(),
+                        command: "cluster setslot".to_string(),
                     });
                 }
                 admin::cluster_setslot(ctx, &args[1..])

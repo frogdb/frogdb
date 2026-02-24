@@ -54,6 +54,7 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
 
     // Deprecated string commands
     registry.register(string::GetsetCommand);
+    registry.register(string::SubstrCommand);
 
     // Numeric commands
     registry.register(string::IncrCommand);

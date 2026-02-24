@@ -292,7 +292,7 @@ impl Command for ObjectCommand {
         match subcommand.as_slice() {
             b"ENCODING" => {
                 if args.len() < 2 {
-                    return Err(CommandError::WrongArity { command: "OBJECT" });
+                    return Err(CommandError::WrongArity { command: "object" });
                 }
                 let key = &args[1];
 
@@ -367,7 +367,7 @@ impl Command for ObjectCommand {
             b"FREQ" => {
                 // LFU frequency counter (placeholder - always returns 0)
                 if args.len() < 2 {
-                    return Err(CommandError::WrongArity { command: "OBJECT" });
+                    return Err(CommandError::WrongArity { command: "object" });
                 }
                 let key = &args[1];
 
@@ -380,7 +380,7 @@ impl Command for ObjectCommand {
             b"IDLETIME" => {
                 // Return 0 for now (we don't track idle time accurately yet)
                 if args.len() < 2 {
-                    return Err(CommandError::WrongArity { command: "OBJECT" });
+                    return Err(CommandError::WrongArity { command: "object" });
                 }
                 let key = &args[1];
 
@@ -392,7 +392,7 @@ impl Command for ObjectCommand {
             }
             b"REFCOUNT" => {
                 if args.len() < 2 {
-                    return Err(CommandError::WrongArity { command: "OBJECT" });
+                    return Err(CommandError::WrongArity { command: "object" });
                 }
                 let key = &args[1];
 
@@ -462,7 +462,7 @@ impl Command for DebugCommand {
         match subcommand.as_slice() {
             b"OBJECT" => {
                 if args.len() < 2 {
-                    return Err(CommandError::WrongArity { command: "DEBUG" });
+                    return Err(CommandError::WrongArity { command: "debug" });
                 }
                 let key = &args[1];
 
@@ -530,7 +530,7 @@ impl Command for DebugCommand {
             }
             b"HASHING" => {
                 if args.len() < 2 {
-                    return Err(CommandError::WrongArity { command: "DEBUG" });
+                    return Err(CommandError::WrongArity { command: "debug" });
                 }
 
                 let num_shards = ctx.num_shards;

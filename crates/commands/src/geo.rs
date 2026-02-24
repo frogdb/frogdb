@@ -75,7 +75,7 @@ impl Command for GeoaddCommand {
         // Parse coordinate-member triplets
         let remaining = &args[i..];
         if remaining.len() < 3 || !remaining.len().is_multiple_of(3) {
-            return Err(CommandError::WrongArity { command: "GEOADD" });
+            return Err(CommandError::WrongArity { command: "geoadd" });
         }
 
         let zset = get_or_create_geo(ctx, key)?;

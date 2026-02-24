@@ -227,7 +227,7 @@ impl Command for XclaimCommand {
         }
 
         if ids.is_empty() {
-            return Err(CommandError::WrongArity { command: "XCLAIM" });
+            return Err(CommandError::WrongArity { command: "xclaim" });
         }
 
         // First pass: determine which IDs should be claimed (read-only)

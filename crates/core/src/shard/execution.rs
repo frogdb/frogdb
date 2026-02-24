@@ -37,7 +37,7 @@ impl ShardWorker {
         if !handler.arity().check(command.args.len()) {
             return Response::error(format!(
                 "ERR wrong number of arguments for '{}' command",
-                handler.name()
+                handler.name().to_ascii_lowercase()
             ));
         }
 
