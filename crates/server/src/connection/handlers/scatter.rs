@@ -426,11 +426,11 @@ impl ConnectionHandler {
     /// Handle INFO command - gather info from all shards.
     pub(crate) async fn handle_info(&self, args: &[Bytes]) -> Response {
         // Execute on local shard (INFO mostly returns static data or aggregate stats)
-        let cmd = frogdb_protocol::ParsedCommand {
+        let cmd = std::sync::Arc::new(frogdb_protocol::ParsedCommand {
             name: Bytes::from_static(b"INFO"),
             args: args.to_vec(),
-        };
-        self.execute_on_shard(self.shard_id, &cmd).await
+        });
+        self.execute_on_shard(self.shard_id, cmd).await
     }
 }
 

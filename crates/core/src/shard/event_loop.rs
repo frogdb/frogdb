@@ -39,7 +39,7 @@ impl ShardWorker {
                                 let _ = response_tx.send(err);
                                 continue;
                             }
-                            let response = self.execute_command(&command, conn_id, protocol_version).await;
+                            let response = self.execute_command(command.as_ref(), conn_id, protocol_version).await;
                             let _ = response_tx.send(response);
                         }
                         ShardMessage::ScatterRequest { request_id: _, keys, operation, conn_id, response_tx } => {

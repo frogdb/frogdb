@@ -69,7 +69,9 @@
       "Bash(tail:*)",
       "WebFetch(domain:mise.jdx.dev)",
       "WebFetch(domain:repology.org)",
-      "WebFetch(domain:ghcr.io)"
+      "WebFetch(domain:ghcr.io)",
+      "Bash(samply load:*)",
+      "Bash(head:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

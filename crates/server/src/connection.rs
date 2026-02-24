@@ -430,9 +430,10 @@ impl ConnectionHandler {
                         }
                     };
 
-                    // Parse frame into command
+                    // Parse frame into command and wrap in Arc to avoid cloning
+                    // when dispatching to shard workers
                     let cmd = match ParsedCommand::try_from(frame) {
-                        Ok(cmd) => cmd,
+                        Ok(cmd) => Arc::new(cmd),
                         Err(e) => {
                             let _ = self.send_response(Response::error(format!("ERR {}", e))).await;
                             continue;
@@ -461,24 +462,26 @@ impl ConnectionHandler {
                         break;
                     }
 
+                    // Compute the uppercase command name once for the entire pipeline
+                    let cmd_name = cmd.name_uppercase_string();
+
                     // Wait if server is paused (for non-exempt commands)
-                    self.wait_if_paused(&cmd).await;
+                    self.wait_if_paused(&cmd_name).await;
 
                     // Start timing for both metrics and slowlog
                     let start_time = std::time::Instant::now();
-                    let cmd_name_for_metrics = String::from_utf8_lossy(&cmd.name).to_uppercase();
                     let timer = frogdb_telemetry::CommandTimer::with_band_tracker(
-                        cmd_name_for_metrics.clone(),
+                        cmd_name.clone(),
                         self.metrics_recorder.clone(),
                         self.band_tracker.clone(),
                     );
 
                     // Start request span for distributed tracing (if enabled)
                     let request_span = self.shared_tracer.as_ref()
-                        .map(|t| t.start_request_span(&cmd_name_for_metrics, self.state.id));
+                        .map(|t| t.start_request_span(&cmd_name, self.state.id));
 
                     // Route and execute (with transaction and pub/sub handling)
-                    let responses = self.route_and_execute_with_transaction(&cmd).await;
+                    let responses = self.route_and_execute_with_transaction(&cmd, &cmd_name).await;
 
                     // Check for PSYNC_HANDOFF signal - this requires special handling
                     // because we need to hand off the TCP connection to the replication handler
@@ -499,7 +502,7 @@ impl ConnectionHandler {
                     let elapsed_us = start_time.elapsed().as_micros() as u64;
 
                     // Record per-client command statistics
-                    self.state.local_stats.record_command(&cmd_name_for_metrics, elapsed_us);
+                    self.state.local_stats.record_command(&cmd_name, elapsed_us);
 
                     // Record metrics - check for errors in responses
                     let has_error = responses.iter().any(|r| matches!(r, Response::Error(_)));
@@ -710,19 +713,16 @@ impl ConnectionHandler {
 
     /// Wait if the server is paused (CLIENT PAUSE).
     /// This queues commands (not drops them) by blocking until pause ends.
-    async fn wait_if_paused(&self, cmd: &ParsedCommand) {
+    async fn wait_if_paused(&self, cmd_name: &str) {
         // Get command flags to determine if this is a write command
-        let cmd_name = cmd.name_uppercase();
-        let cmd_name_str = String::from_utf8_lossy(&cmd_name);
-
-        let is_write_command = match self.registry.get(&cmd_name_str) {
+        let is_write_command = match self.registry.get(cmd_name) {
             Some(handler) => handler.flags().contains(CommandFlags::WRITE),
             None => false, // Unknown commands treated as non-write
         };
 
         // Certain commands are always exempt from pause
         let is_exempt = matches!(
-            cmd_name_str.as_ref(),
+            cmd_name,
             "CLIENT" | "PING" | "QUIT" | "RESET" | "INFO" | "CONFIG" | "DEBUG" | "SLOWLOG"
         );
 

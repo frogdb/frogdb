@@ -23,9 +23,25 @@ impl ParsedCommand {
         Self { name, args }
     }
 
-    /// Get the command name as uppercase string for lookup.
+    /// Get the command name as uppercase bytes for lookup.
     pub fn name_uppercase(&self) -> Vec<u8> {
         self.name.to_ascii_uppercase()
+    }
+
+    /// Get the command name as an uppercase `String`.
+    ///
+    /// Performs ASCII uppercase conversion and UTF-8 conversion in one step.
+    /// More efficient than `String::from_utf8_lossy(&self.name).to_uppercase()`
+    /// since command names are always ASCII.
+    pub fn name_uppercase_string(&self) -> String {
+        // SAFETY: Redis command names are always ASCII, so to_ascii_uppercase
+        // produces valid UTF-8. from_utf8 is infallible here but we use
+        // the unchecked variant to avoid the redundant validation.
+        let bytes = self.name.to_ascii_uppercase();
+        // Command names come from the wire and are validated ASCII;
+        // use from_utf8_lossy for safety against malformed input.
+        String::from_utf8(bytes)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
     }
 }
 

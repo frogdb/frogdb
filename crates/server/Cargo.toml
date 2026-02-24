@@ -46,6 +46,9 @@ axum.workspace = true
 tower.workspace = true
 schemars.workspace = true
 socket2 = "0.5"
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"
 hyper = { version = "1", features = ["http1", "server"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
