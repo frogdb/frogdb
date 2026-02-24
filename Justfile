@@ -209,12 +209,13 @@ profile-heap *args:
 # Profile FrogDB under load (full workflow)
 # Usage: just profile-load [workload] [requests]
 # Example: just profile-load mixed 50000
+# Example: just profile-load mixed 50000 --shards 3 -t 8 -c 50
 profile-load workload="mixed" requests="10000" *args:
-    uv run tools/loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} {{args}}
+    uv run loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} {{args}}
 
 # Profile with save-only (no auto-open)
 profile-load-save workload="mixed" requests="10000" *args:
-    uv run tools/loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} --save-only {{args}}
+    uv run loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} --save-only {{args}}
 
 # =============================================================================
 # Cross-Compilation (for faster Jepsen builds)
