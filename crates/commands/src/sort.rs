@@ -115,7 +115,7 @@ fn extract_elements(ctx: &CommandContext, key: &Bytes) -> Result<Option<Vec<Byte
         None => return Ok(None),
     };
 
-    match value {
+    match &*value {
         Value::List(list) => Ok(Some(list.iter().cloned().collect())),
         Value::Set(set) => Ok(Some(set.members().cloned().collect())),
         Value::SortedSet(zset) => Ok(Some(zset.iter().map(|(m, _)| m.clone()).collect())),
@@ -152,7 +152,9 @@ fn resolve_pattern(ctx: &CommandContext, pattern: &[u8], element: &[u8]) -> Opti
 
         // Look up hash field
         let key_bytes = Bytes::from(key);
-        if let Some(Value::Hash(hash)) = ctx.store.get(&key_bytes) {
+        if let Some(value) = ctx.store.get(&key_bytes)
+            && let Value::Hash(hash) = &*value
+        {
             return hash.get(field).cloned();
         }
         None
@@ -164,7 +166,9 @@ fn resolve_pattern(ctx: &CommandContext, pattern: &[u8], element: &[u8]) -> Opti
         key.extend_from_slice(&pattern[star_pos + 1..]);
 
         let key_bytes = Bytes::from(key);
-        if let Some(Value::String(s)) = ctx.store.get(&key_bytes) {
+        if let Some(value) = ctx.store.get(&key_bytes)
+            && let Value::String(s) = &*value
+        {
             return Some(s.as_bytes().clone());
         }
         None
@@ -822,7 +826,7 @@ mod tests {
 
         // Verify stored list
         let stored = ctx.store.get(&Bytes::from("result")).unwrap();
-        if let Value::List(list) = stored {
+        if let Value::List(list) = &*stored {
             assert_eq!(list.len(), 3);
             assert_eq!(list.get(0), Some(&Bytes::from("1")));
             assert_eq!(list.get(1), Some(&Bytes::from("2")));

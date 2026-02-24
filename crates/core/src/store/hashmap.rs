@@ -3,6 +3,7 @@
 use bytes::Bytes;
 use griddle::HashMap;
 use rand::prelude::IteratorRandom;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
@@ -14,9 +15,14 @@ use crate::types::{KeyMetadata, KeyType, SetCondition, SetOptions, SetResult, Va
 use super::Store;
 
 /// Entry in the store with value and metadata.
+///
+/// Values are wrapped in `Arc` for copy-on-write semantics:
+/// - Reads: cheap ref-count bump via `Arc::clone()`
+/// - Writes with no readers: zero-copy (refcount == 1)
+/// - Writes with outstanding readers: clone-on-write via `Arc::make_mut()`
 #[derive(Debug)]
 struct Entry {
-    value: Value,
+    value: Arc<Value>,
     metadata: KeyMetadata,
 }
 
@@ -63,7 +69,10 @@ impl HashMapStore {
             self.expiry_index.set(key.clone(), expires_at);
         }
 
-        let entry = Entry { value, metadata };
+        let entry = Entry {
+            value: Arc::new(value),
+            metadata,
+        };
         self.data.insert(key, entry);
     }
 
@@ -102,8 +111,8 @@ impl Default for HashMapStore {
 }
 
 impl Store for HashMapStore {
-    fn get(&self, key: &[u8]) -> Option<Value> {
-        self.data.get(key).map(|e| e.value.clone())
+    fn get(&self, key: &[u8]) -> Option<Arc<Value>> {
+        self.data.get(key).map(|e| Arc::clone(&e.value))
     }
 
     fn set(&mut self, key: Bytes, value: Value) -> Option<Value> {
@@ -112,7 +121,7 @@ impl Store for HashMapStore {
         let old_value = if let Some(old_entry) = self.data.get(&key) {
             let old_size = Self::entry_memory_size(&key, &old_entry.value);
             self.memory_used = self.memory_used.saturating_sub(old_size);
-            Some(old_entry.value.clone())
+            Some(Arc::try_unwrap(old_entry.value.clone()).unwrap_or_else(|arc| (*arc).clone()))
         } else {
             None
         };
@@ -120,7 +129,7 @@ impl Store for HashMapStore {
         self.memory_used += new_size;
 
         let entry = Entry {
-            value,
+            value: Arc::new(value),
             metadata: KeyMetadata::new(new_size),
         };
         self.data.insert(key, entry);
@@ -237,7 +246,7 @@ impl Store for HashMapStore {
     // Expiry-aware methods
     // ========================================================================
 
-    fn get_with_expiry_check(&mut self, key: &[u8]) -> Option<Value> {
+    fn get_with_expiry_check(&mut self, key: &[u8]) -> Option<Arc<Value>> {
         // Check for expiry and delete if expired
         if self.check_and_delete_expired(key) {
             return None;
@@ -246,7 +255,7 @@ impl Store for HashMapStore {
         // Update last access time and return value
         if let Some(entry) = self.data.get_mut(key) {
             entry.metadata.touch();
-            Some(entry.value.clone())
+            Some(Arc::clone(&entry.value))
         } else {
             None
         }
@@ -262,9 +271,10 @@ impl Store for HashMapStore {
             _ => {}
         }
 
-        // Get old value if needed
-        let old_value = if opts.return_old {
+        // Get old value if needed (convert Arc<Value> to owned Value)
+        let old_value: Option<Value> = if opts.return_old {
             self.get(&key)
+                .map(|arc| Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone()))
         } else {
             None
         };
@@ -293,7 +303,10 @@ impl Store for HashMapStore {
         let mut metadata = KeyMetadata::new(new_size);
         metadata.expires_at = new_expiry;
 
-        let entry = Entry { value, metadata };
+        let entry = Entry {
+            value: Arc::new(value),
+            metadata,
+        };
         self.data.insert(key.clone(), entry);
 
         // Update expiry index
@@ -365,7 +378,7 @@ impl Store for HashMapStore {
             let size = Self::entry_memory_size(key, &entry.value);
             self.memory_used = self.memory_used.saturating_sub(size);
             self.expiry_index.remove(key);
-            Some(entry.value)
+            Some(Arc::try_unwrap(entry.value).unwrap_or_else(|arc| (*arc).clone()))
         } else {
             None
         }
@@ -379,7 +392,8 @@ impl Store for HashMapStore {
 
         self.data.get_mut(key).map(|e| {
             e.metadata.touch();
-            &mut e.value
+            // Copy-on-write: clones the Value only if refcount > 1
+            Arc::make_mut(&mut e.value)
         })
     }
 

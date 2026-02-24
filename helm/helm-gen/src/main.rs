@@ -283,6 +283,10 @@ struct PersistenceConfig {
     sync_interval_ms: u64,
     write_buffer_size_mb: usize,
     compression: String,
+    block_cache_size_mb: usize,
+    bloom_filter_bits: i32,
+    max_write_buffer_number: i32,
+    compaction_rate_limit_mb: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -414,6 +418,10 @@ impl HelmValues {
                     sync_interval_ms: config.persistence.sync_interval_ms,
                     write_buffer_size_mb: config.persistence.write_buffer_size_mb,
                     compression: config.persistence.compression.clone(),
+                    block_cache_size_mb: config.persistence.block_cache_size_mb,
+                    bloom_filter_bits: config.persistence.bloom_filter_bits,
+                    max_write_buffer_number: config.persistence.max_write_buffer_number,
+                    compaction_rate_limit_mb: config.persistence.compaction_rate_limit_mb,
                 },
                 snapshot: SnapshotConfig {
                     dir: "/data/snapshots".to_string(),

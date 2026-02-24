@@ -43,6 +43,7 @@ pub use traits::{ClusterSlotOps, EvictionOps, ExpiryOps, ScanOps, StorageOps};
 pub use hashmap::HashMapStore;
 
 use bytes::Bytes;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::noop::ExpiryIndex;
@@ -195,7 +196,10 @@ pub trait Store: Send {
     // ========================================================================
 
     /// Get a value by key.
-    fn get(&self, key: &[u8]) -> Option<Value>;
+    ///
+    /// Returns an `Arc<Value>` for zero-copy reads. The Arc ref-count bump
+    /// is much cheaper than deep-cloning large values like hashes or lists.
+    fn get(&self, key: &[u8]) -> Option<Arc<Value>>;
 
     /// Set a value, returns previous value if any.
     fn set(&mut self, key: Bytes, value: Value) -> Option<Value>;
@@ -227,6 +231,9 @@ pub trait Store: Send {
     fn all_keys(&self) -> Vec<Bytes>;
 
     /// Get a mutable reference to a value (for in-place modifications).
+    ///
+    /// Uses copy-on-write internally: if the value is shared (Arc refcount > 1),
+    /// it will be cloned before returning the mutable reference.
     fn get_mut(&mut self, key: &[u8]) -> Option<&mut Value>;
 
     // ========================================================================
@@ -254,7 +261,7 @@ pub trait Store: Send {
     // ========================================================================
 
     /// Get a value, checking for expiry first (lazy expiry).
-    fn get_with_expiry_check(&mut self, key: &[u8]) -> Option<Value> {
+    fn get_with_expiry_check(&mut self, key: &[u8]) -> Option<Arc<Value>> {
         self.get(key)
     }
 
@@ -288,12 +295,14 @@ pub trait Store: Send {
     }
 
     /// Get and delete a key atomically (GETDEL command).
+    ///
+    /// Returns an owned `Value` since it's removed from the store.
     fn get_and_delete(&mut self, key: &[u8]) -> Option<Value> {
         let value = self.get(key);
         if value.is_some() {
             self.delete(key);
         }
-        value
+        value.map(|arc| Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone()))
     }
 
     /// Get all keys that have expired at or before `now`.
