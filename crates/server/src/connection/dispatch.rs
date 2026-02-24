@@ -322,9 +322,7 @@ impl ConnectionHandler {
         // PING is registered as a Standard (shard) command but needs special handling
         // in pub/sub mode to return array format ["pong", <message>].
         if self.state.pubsub.in_pubsub_mode()
-            && let Some(responses) = self
-                .dispatch_connection_state(&cmd_name_str, &cmd.args)
-                .await
+            && let Some(responses) = self.dispatch_connection_state(cmd_name, &cmd.args).await
         {
             return responses;
         }
