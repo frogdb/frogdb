@@ -195,6 +195,11 @@ impl Acceptor {
         loop {
             match self.listener.accept().await {
                 Ok((socket, addr)) => {
+                    // Disable Nagle's algorithm for lower latency on small writes
+                    if let Err(e) = socket.set_nodelay(true) {
+                        error!(error = %e, "Failed to set TCP_NODELAY");
+                    }
+
                     let conn_id = next_conn_id();
                     let shard_id = self.assigner.assign();
 

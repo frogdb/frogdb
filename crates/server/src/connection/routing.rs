@@ -5,6 +5,8 @@
 //! - `execute_cross_shard_copy` - Two-phase cross-shard COPY operation
 //! - `execute_on_shard` - Send a command to a specific shard
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use frogdb_core::{ScatterOp, ShardMessage, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
@@ -17,17 +19,20 @@ use crate::server::next_txid;
 
 impl ConnectionHandler {
     /// Route command to appropriate shard and execute.
-    pub(crate) async fn route_and_execute(&self, cmd: &ParsedCommand) -> Response {
-        let cmd_name = cmd.name_uppercase();
-        let cmd_name_str = String::from_utf8_lossy(&cmd_name);
-
+    ///
+    /// `cmd_name` is the precomputed uppercase command name to avoid redundant allocations.
+    pub(crate) async fn route_and_execute(
+        &self,
+        cmd: &Arc<ParsedCommand>,
+        cmd_name: &str,
+    ) -> Response {
         // Lookup command
-        let handler = match self.registry.get(&cmd_name_str) {
+        let handler = match self.registry.get(cmd_name) {
             Some(h) => h,
             None => {
                 return Response::error(format!(
                     "ERR unknown command '{}', with args beginning with:",
-                    cmd_name_str
+                    cmd_name
                 ));
             }
         };
@@ -50,14 +55,9 @@ impl ConnectionHandler {
             && !keys.is_empty()
         {
             let access_type = key_access_type_for_flags(handler.flags());
-            let subcommand = extract_subcommand(&cmd_name_str, &cmd.args);
+            let subcommand = extract_subcommand(cmd_name, &cmd.args);
             for key in &keys {
-                if !user.check_command_with_key(
-                    &cmd_name_str,
-                    subcommand.as_deref(),
-                    key,
-                    access_type,
-                ) {
+                if !user.check_command_with_key(cmd_name, subcommand.as_deref(), key, access_type) {
                     let client_info =
                         format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
                     let key_str = String::from_utf8_lossy(key);
@@ -73,13 +73,13 @@ impl ConnectionHandler {
 
         // Keyless commands: execute on local shard
         if keys.is_empty() {
-            return self.execute_on_shard(self.shard_id, cmd).await;
+            return self.execute_on_shard(self.shard_id, Arc::clone(cmd)).await;
         }
 
         // Single-key command: route to owner shard
         if keys.len() == 1 {
             let target_shard = shard_for_key(keys[0], self.num_shards);
-            return self.execute_on_shard(target_shard, cmd).await;
+            return self.execute_on_shard(target_shard, Arc::clone(cmd)).await;
         }
 
         // Multi-key command: check if all keys are on the same shard
@@ -90,7 +90,7 @@ impl ConnectionHandler {
 
         if all_same_shard {
             // All keys on same shard - execute directly
-            return self.execute_on_shard(first_shard, cmd).await;
+            return self.execute_on_shard(first_shard, Arc::clone(cmd)).await;
         }
 
         // Keys span multiple shards
@@ -105,12 +105,12 @@ impl ConnectionHandler {
         }
 
         // Special handling for COPY - it's a two-phase operation (read + write)
-        if cmd_name_str == "COPY" {
+        if cmd_name == "COPY" {
             return self.execute_cross_shard_copy(&cmd.args).await;
         }
 
         // Determine the scatter operation based on command name
-        let scatter_op = match cmd_name_str.as_ref() {
+        let scatter_op = match cmd_name {
             "MGET" => Some(ScatterOp::MGet),
             "MSET" => {
                 // Build pairs from args
@@ -278,11 +278,15 @@ impl ConnectionHandler {
     }
 
     /// Execute command on a specific shard.
-    pub(crate) async fn execute_on_shard(&self, shard_id: usize, cmd: &ParsedCommand) -> Response {
+    pub(crate) async fn execute_on_shard(
+        &self,
+        shard_id: usize,
+        cmd: Arc<ParsedCommand>,
+    ) -> Response {
         let (response_tx, response_rx) = oneshot::channel();
 
         let msg = ShardMessage::Execute {
-            command: cmd.clone(),
+            command: cmd,
             conn_id: self.state.id,
             txid: None, // Single-shard operations don't need txid
             protocol_version: self.state.protocol_version,

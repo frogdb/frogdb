@@ -73,7 +73,7 @@ impl ConnectionHandler {
                 let dump_cmd = ParsedCommand::new(Bytes::from("DUMP"), vec![key.clone()]);
                 if sender
                     .send(ShardMessage::Execute {
-                        command: dump_cmd,
+                        command: std::sync::Arc::new(dump_cmd),
                         conn_id: self.state.id,
                         txid: None,
                         protocol_version: self.state.protocol_version,
@@ -115,7 +115,7 @@ impl ConnectionHandler {
                 let pttl_cmd = ParsedCommand::new(Bytes::from("PTTL"), vec![key.clone()]);
                 if sender
                     .send(ShardMessage::Execute {
-                        command: pttl_cmd,
+                        command: std::sync::Arc::new(pttl_cmd),
                         conn_id: self.state.id,
                         txid: None,
                         protocol_version: self.state.protocol_version,
@@ -154,7 +154,7 @@ impl ConnectionHandler {
                     let del_cmd = ParsedCommand::new(Bytes::from("DEL"), vec![key.clone()]);
                     let _ = sender
                         .send(ShardMessage::Execute {
-                            command: del_cmd,
+                            command: std::sync::Arc::new(del_cmd),
                             conn_id: self.state.id,
                             txid: None,
                             protocol_version: self.state.protocol_version,

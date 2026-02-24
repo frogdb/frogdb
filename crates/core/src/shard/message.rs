@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -21,7 +22,7 @@ use super::types::{
 pub enum ShardMessage {
     /// Execute a command on this shard.
     Execute {
-        command: ParsedCommand,
+        command: Arc<ParsedCommand>,
         conn_id: u64,
         /// Transaction ID for VLL ordering (optional for single-shard operations).
         txid: Option<u64>,

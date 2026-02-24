@@ -74,7 +74,7 @@ impl ReplicaCommandExecutor {
         let (response_tx, _response_rx) = oneshot::channel();
 
         let msg = ShardMessage::Execute {
-            command: cmd,
+            command: std::sync::Arc::new(cmd),
             conn_id: REPLICA_INTERNAL_CONN_ID,
             txid: None,
             protocol_version: ProtocolVersion::Resp2,

@@ -4,6 +4,8 @@
 //! and executing the main command pipeline (transaction handling, pub/sub mode,
 //! cluster validation, etc.).
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use frogdb_core::{ConnectionLevelOp, ExecutionStrategy};
 use frogdb_protocol::Response;
@@ -278,54 +280,54 @@ impl ConnectionHandler {
 
     /// Route and execute a command, handling transaction and pub/sub modes.
     /// Returns a Vec of responses since pub/sub commands can return multiple messages.
+    ///
+    /// `cmd_name` is the precomputed uppercase command name to avoid redundant allocations.
     pub(crate) async fn route_and_execute_with_transaction(
         &mut self,
-        cmd: &frogdb_protocol::ParsedCommand,
+        cmd: &Arc<frogdb_protocol::ParsedCommand>,
+        cmd_name: &str,
     ) -> Vec<Response> {
-        let cmd_name = cmd.name_uppercase();
-        let cmd_name_str = String::from_utf8_lossy(&cmd_name);
-
         // Handle AUTH command (always allowed, even without authentication)
-        if cmd_name_str == "AUTH" {
+        if cmd_name == "AUTH" {
             return vec![self.handle_auth(&cmd.args).await];
         }
 
         // Handle HELLO command (always allowed, even without authentication)
-        if cmd_name_str == "HELLO" {
+        if cmd_name == "HELLO" {
             return vec![self.handle_hello(&cmd.args).await];
         }
 
         // Handle ACL command
-        if cmd_name_str == "ACL" {
+        if cmd_name == "ACL" {
             return vec![self.handle_acl_command(&cmd.args).await];
         }
 
         // Run pre-execution checks (auth, admin port, ACL, pub/sub mode)
-        if let Some(error_response) = self.run_pre_checks(&cmd_name_str, &cmd.args) {
+        if let Some(error_response) = self.run_pre_checks(cmd_name, &cmd.args) {
             return vec![error_response];
         }
 
         // Category-based dispatch using registry-driven handler lookup
         // This handles: pub/sub, transactions, scripting, functions, admin commands
-        if let Some(handler) = self.connection_level_handler_for(&cmd_name_str)
+        if let Some(handler) = self.connection_level_handler_for(cmd_name)
             && let Some(responses) = self
-                .dispatch_connection_level(handler, &cmd_name_str, &cmd.args)
+                .dispatch_connection_level(handler, cmd_name, &cmd.args)
                 .await
         {
             return responses;
         }
 
         // Handle persistence commands (need snapshot coordinator)
-        if cmd_name_str == "BGSAVE" {
+        if cmd_name == "BGSAVE" {
             return vec![self.handle_bgsave(&cmd.args)];
         }
-        if cmd_name_str == "LASTSAVE" {
+        if cmd_name == "LASTSAVE" {
             return vec![self.handle_lastsave()];
         }
 
         // Handle PSYNC command - validates args and returns handoff signal
         // The actual handoff happens in the run() loop when it detects PSYNC_HANDOFF
-        if cmd_name_str == "PSYNC" {
+        if cmd_name == "PSYNC" {
             // Check if we have a primary replication handler (we're running as primary)
             if self.primary_replication_handler.is_none() {
                 return vec![Response::error(
@@ -333,11 +335,11 @@ impl ConnectionHandler {
                 )];
             }
             // Execute PSYNC command which will return PSYNC_HANDOFF signal
-            return vec![self.route_and_execute(cmd).await];
+            return vec![self.route_and_execute(cmd, cmd_name).await];
         }
 
         // Handle server commands that need scatter-gather routing
-        match cmd_name_str.as_ref() {
+        match cmd_name {
             "SCAN" => return vec![self.handle_scan(&cmd.args).await],
             "KEYS" => return vec![self.handle_keys(&cmd.args).await],
             "DBSIZE" => return vec![self.handle_dbsize().await],
@@ -353,7 +355,7 @@ impl ConnectionHandler {
         if self.state.transaction.queue.is_some() {
             // Check if it's a blocking command - not allowed in MULTI
             // Use execution_strategy() for type-safe blocking detection
-            if self.is_blocking_command(&cmd_name_str) {
+            if self.is_blocking_command(cmd_name) {
                 return vec![Response::error(
                     "ERR Blocking commands are not allowed inside a transaction",
                 )];
@@ -362,19 +364,19 @@ impl ConnectionHandler {
         }
 
         // Handle ASKING command (sets connection flag)
-        if cmd_name_str == "ASKING" {
+        if cmd_name == "ASKING" {
             self.state.asking = true;
             return vec![Response::ok()];
         }
 
         // Handle READONLY command (sets connection flag)
-        if cmd_name_str == "READONLY" {
+        if cmd_name == "READONLY" {
             self.state.readonly = true;
             return vec![Response::ok()];
         }
 
         // Handle READWRITE command (clears readonly flag)
-        if cmd_name_str == "READWRITE" {
+        if cmd_name == "READWRITE" {
             self.state.readonly = false;
             return vec![Response::ok()];
         }
@@ -385,7 +387,7 @@ impl ConnectionHandler {
         }
 
         // Normal execution
-        let response = self.route_and_execute(cmd).await;
+        let response = self.route_and_execute(cmd, cmd_name).await;
 
         // Check if this is a blocking command that needs to wait
         if let Response::BlockingNeeded { keys, timeout, op } = response {
