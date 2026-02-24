@@ -8,10 +8,10 @@ This document details comprehensive performance profiling and optimization strat
 |----------|-------------|
 | [PROFILING.md](PROFILING.md) | Build profiles, CPU/memory profiling tools, async task profiling, benchmarks |
 | [QUICK_WINS.md](QUICK_WINS.md) | Low-effort, high-impact optimizations (jemalloc, caching, pre-sizing) |
-| [MEMORY.md](MEMORY.md) | Arc-wrapped values, response buffer pools, arena allocator |
-| [IO.md](IO.md) | WAL batching, RocksDB write path, io_uring integration |
+| [MEMORY.md](MEMORY.md) | Response buffer pools, arena allocator |
+| [IO.md](IO.md) | io_uring integration |
 | [IO_URING.md](IO_URING.md) | Completion-based I/O deep dive: runtime comparison (compio vs monoio vs glommio), migration options, safety concerns |
-| [DATA_STRUCTURES.md](DATA_STRUCTURES.md) | Streaming SCAN, sorted set clone elimination, skip list |
+| [DATA_STRUCTURES.md](DATA_STRUCTURES.md) | Streaming SCAN, skip list |
 | [CONCURRENCY.md](CONCURRENCY.md) | Lock-free WAL, pub/sub zero-copy, connection pooling |
 | [ADVANCED.md](ADVANCED.md) | SIMD pattern matching, vectored I/O |
 | [SINGLE_SHARD.md](SINGLE_SHARD.md) | Three-tier single-shard mode optimizations |
@@ -22,7 +22,6 @@ This document details comprehensive performance profiling and optimization strat
 
 | Category | Anti-Pattern | Solution |
 |----------|--------------|----------|
-| Memory | Deep cloning on read | Arc/Cow wrappers |
 | Memory | Unbounded buffers | Bounded channels, backpressure |
 | Memory | Per-request allocations | Object pools |
 | Concurrency | Global locks | Sharded locks, lock-free structures |
@@ -38,11 +37,11 @@ This document details comprehensive performance profiling and optimization strat
 | File | Optimizations |
 |------|---------------|
 | `crates/core/src/store/hashmap.rs` | SCAN iteration (optimized: direct iterator) |
-| `crates/core/src/store.rs` | GET cloning |
+| `crates/core/src/store.rs` | Arc-wrapped values (optimized) |
 | `crates/core/src/persistence/wal.rs` | WAL batching, mutex contention |
-| `crates/types/src/types.rs` | Value enum, Arc wrapping, sorted set remove_range (optimized) |
+| `crates/types/src/types.rs` | Value enum, sorted set remove_range (optimized), sorted set argument consumption (optimized) |
 | `crates/types/src/glob.rs` | Glob matching (optimized: fast paths) |
-| `crates/persistence/src/rocks.rs` | CF caching (optimized), RocksDB tuning |
+| `crates/persistence/src/rocks.rs` | CF caching (optimized), RocksDB tuning (optimized: bloom filter, block cache, per-level compression, compaction triggers) |
 | `crates/server/src/connection.rs` | RESP3 buffer reuse (optimized) |
 | `crates/core/src/pubsub.rs` | Zero-copy broadcasting |
 | `crates/server/src/main.rs` | jemalloc allocator, single-thread runtime |
