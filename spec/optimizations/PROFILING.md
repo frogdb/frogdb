@@ -56,7 +56,6 @@ For profiling tokio task-level performance, use `tokio-metrics` and `tracing` sp
 - [ ] Evaluate `tracing-tracy` for interactive real-time profiling during development
 
 > **Research concept:** For causal profiling adapted to async runtimes, see [TOKIO_CAUSAL_PROFILER.md](../TOKIO_CAUSAL_PROFILER.md).
-- [ ] Add `[profile.profiling]` build profile to `Cargo.toml`
 - [ ] Add `scan.rs` benchmark - SCAN with 10K, 100K, 1M keys
 - [ ] Add `large_values.rs` benchmark - GET/SET with 1KB, 10KB, 100KB values
 - [ ] Add `sorted_set_scale.rs` benchmark - ZADD/ZRANGE at large cardinalities
