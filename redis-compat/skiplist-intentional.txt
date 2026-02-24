@@ -7,19 +7,12 @@
 # =============================================================================
 # FrogDB uses a single database per instance; SELECT is not supported
 unit/introspection
-unit/multi
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 # CONFIG REWRITE is not supported; changes via CONFIG SET are transient
 unit/introspection-2
-
-# =============================================================================
-# CROSS-SLOT OPERATIONS
-# =============================================================================
-# FrogDB rejects multi-key operations when keys hash to different slots
-# (These tests expect cross-slot operations to succeed in standalone mode)
 
 # =============================================================================
 # BITFIELD LIMITATIONS
@@ -38,6 +31,25 @@ unit/scripting
 # =============================================================================
 # Requires redis-cli binary (not applicable to FrogDB)
 integration/redis-cli
+
+# =============================================================================
+# DEBUG COMMANDS (Not Planned)
+# =============================================================================
+# DEBUG SEGFAULT, DEBUG RELOAD, DEBUG CRASH-AND-RECOVER, etc.
+# These are unsafe diagnostic commands not intended for production
+unit/debug
+
+# =============================================================================
+# MONITOR COMMAND (Not Planned)
+# =============================================================================
+# MONITOR is a diagnostic command with significant performance overhead
+unit/monitor
+
+# =============================================================================
+# MODULES (Not Planned)
+# =============================================================================
+# FrogDB does not have a modular architecture
+unit/moduleapi
 
 # =============================================================================
 # INDIVIDUAL TESTS
