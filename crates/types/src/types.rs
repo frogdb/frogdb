@@ -1068,10 +1068,9 @@ impl SortedSetValue {
                     old_score: Some(old_score),
                 };
             }
-            // Remove old entry from scores index
+            // Remove old entry from scores index, insert new entry
             self.scores
                 .remove(&(OrderedFloat(old_score), member.clone()));
-            // Insert new entry
             self.scores
                 .insert((OrderedFloat(score), member.clone()), ());
             self.members.insert(member, score);
@@ -1081,9 +1080,10 @@ impl SortedSetValue {
                 old_score: Some(old_score),
             }
         } else {
-            // New member
-            self.members.insert(member.clone(), score);
-            self.scores.insert((OrderedFloat(score), member), ());
+            // New member: insert into scores first (needs clone), then move into members
+            self.scores
+                .insert((OrderedFloat(score), member.clone()), ());
+            self.members.insert(member, score);
             ZAddResult {
                 added: true,
                 changed: false,
@@ -1096,9 +1096,8 @@ impl SortedSetValue {
     ///
     /// Returns the score if the member existed.
     pub fn remove(&mut self, member: &[u8]) -> Option<f64> {
-        if let Some(score) = self.members.remove(member) {
-            self.scores
-                .remove(&(OrderedFloat(score), Bytes::copy_from_slice(member)));
+        if let Some((member_key, score)) = self.members.remove_entry(member) {
+            self.scores.remove(&(OrderedFloat(score), member_key));
             Some(score)
         } else {
             None
@@ -1142,15 +1141,17 @@ impl SortedSetValue {
             return new_score;
         }
 
-        // Remove old entry if exists
+        // Remove old entry if exists and insert new
         if self.members.contains_key(&member) {
             self.scores
                 .remove(&(OrderedFloat(old_score), member.clone()));
+            self.scores
+                .insert((OrderedFloat(new_score), member.clone()), ());
+            self.members.insert(member, new_score);
+        } else {
+            self.members.insert(member.clone(), new_score);
+            self.scores.insert((OrderedFloat(new_score), member), ());
         }
-
-        // Insert new entry
-        self.members.insert(member.clone(), new_score);
-        self.scores.insert((OrderedFloat(new_score), member), ());
 
         new_score
     }

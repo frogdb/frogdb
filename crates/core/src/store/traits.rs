@@ -8,6 +8,7 @@
 //! - **Easier testing**: Mock implementations only need to implement relevant traits
 
 use bytes::Bytes;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::noop::ExpiryIndex;
@@ -23,7 +24,7 @@ use crate::types::{KeyMetadata, KeyType, SetOptions, SetResult, Value};
 /// It represents the minimal interface for a key-value store.
 pub trait StorageOps: Send {
     /// Get a value by key.
-    fn get(&self, key: &[u8]) -> Option<Value>;
+    fn get(&self, key: &[u8]) -> Option<Arc<Value>>;
 
     /// Set a value, returns previous value if any.
     fn set(&mut self, key: Bytes, value: Value) -> Option<Value>;
@@ -72,7 +73,7 @@ pub trait ExpiryOps: StorageOps {
     /// Get a value, checking for expiry first (lazy expiry).
     ///
     /// If the key is expired, it will be deleted and None returned.
-    fn get_with_expiry_check(&mut self, key: &[u8]) -> Option<Value> {
+    fn get_with_expiry_check(&mut self, key: &[u8]) -> Option<Arc<Value>> {
         // Default implementation just calls get()
         self.get(key)
     }
@@ -119,7 +120,7 @@ pub trait ExpiryOps: StorageOps {
         if value.is_some() {
             self.delete(key);
         }
-        value
+        value.map(|arc| Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone()))
     }
 
     /// Get all keys that have expired at or before `now`.

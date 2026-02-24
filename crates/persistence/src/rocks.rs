@@ -4,8 +4,8 @@
 //! and potential future optimizations like shard-specific tuning.
 
 use rocksdb::{
-    BoundColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, DBWithThreadMode,
-    MultiThreaded, Options, WriteBatch, WriteOptions,
+    BlockBasedOptions, BoundColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType,
+    DBWithThreadMode, MultiThreaded, Options, WriteBatch, WriteOptions,
 };
 use std::path::Path;
 use std::sync::Arc as StdArc;
@@ -40,6 +40,31 @@ pub struct RocksConfig {
 
     /// Whether to create the database if it doesn't exist (default: true).
     pub create_if_missing: bool,
+
+    /// Block cache size in bytes (default: 256MB).
+    /// Set to 0 to disable block cache.
+    pub block_cache_size: usize,
+
+    /// Bloom filter bits per key (default: 10).
+    /// Eliminates most negative key lookups from hitting disk.
+    pub bloom_filter_bits: i32,
+
+    /// Maximum number of write buffers (default: 4).
+    /// More buffers allow better flush pipelining.
+    pub max_write_buffer_number: i32,
+
+    /// Number of L0 files before triggering compaction (default: 8).
+    /// Higher values reduce write stalls at the cost of more L0 files.
+    pub level0_file_num_compaction_trigger: i32,
+
+    /// Target file size for the base level in bytes (default: 128MB).
+    pub target_file_size_base: u64,
+
+    /// Maximum total data size for the base level in bytes (default: 512MB).
+    pub max_bytes_for_level_base: u64,
+
+    /// Rate limiter for compaction I/O in MB/s (default: None = unlimited).
+    pub compaction_rate_limit_mb: Option<u64>,
 }
 
 impl Default for RocksConfig {
@@ -49,6 +74,13 @@ impl Default for RocksConfig {
             compression: CompressionType::Lz4,
             max_background_jobs: num_cpus::get() as i32,
             create_if_missing: true,
+            block_cache_size: 256 * 1024 * 1024, // 256MB
+            bloom_filter_bits: 10,
+            max_write_buffer_number: 4,
+            level0_file_num_compaction_trigger: 8,
+            target_file_size_base: 128 * 1024 * 1024, // 128MB
+            max_bytes_for_level_base: 512 * 1024 * 1024, // 512MB
+            compaction_rate_limit_mb: None,
         }
     }
 }
@@ -68,6 +100,7 @@ pub enum CompressionType {
 }
 
 impl CompressionType {
+    #[allow(dead_code)]
     fn to_rocksdb(self) -> DBCompressionType {
         match self {
             CompressionType::None => DBCompressionType::None,
@@ -104,10 +137,44 @@ impl RocksStore {
         db_opts.create_missing_column_families(true);
         db_opts.set_max_background_jobs(config.max_background_jobs);
 
+        // Optional rate limiter for compaction I/O
+        if let Some(rate_mb) = config.compaction_rate_limit_mb {
+            db_opts.set_ratelimiter(rate_mb as i64 * 1024 * 1024, 100_000, 10);
+        }
+
+        // Configure block-based table options with bloom filter and block cache
+        let mut block_opts = BlockBasedOptions::default();
+        if config.bloom_filter_bits > 0 {
+            block_opts.set_bloom_filter(config.bloom_filter_bits as f64, false);
+        }
+        if config.block_cache_size > 0 {
+            let cache = rocksdb::Cache::new_lru_cache(config.block_cache_size);
+            block_opts.set_block_cache(&cache);
+        }
+        block_opts.set_format_version(5);
+
         // Configure options for each column family
         let mut cf_opts = Options::default();
         cf_opts.set_write_buffer_size(config.write_buffer_size);
-        cf_opts.set_compression_type(config.compression.to_rocksdb());
+        cf_opts.set_max_write_buffer_number(config.max_write_buffer_number);
+        cf_opts.set_block_based_table_factory(&block_opts);
+
+        // Per-level compression: no compression for L0-L1 (fast), LZ4 for L2-L3, Zstd for L4+
+        cf_opts.set_compression_per_level(&[
+            DBCompressionType::None,
+            DBCompressionType::None,
+            DBCompressionType::Lz4,
+            DBCompressionType::Lz4,
+            DBCompressionType::Zstd,
+            DBCompressionType::Zstd,
+            DBCompressionType::Zstd,
+        ]);
+
+        // Compaction tuning
+        cf_opts
+            .set_level_zero_file_num_compaction_trigger(config.level0_file_num_compaction_trigger);
+        cf_opts.set_target_file_size_base(config.target_file_size_base);
+        cf_opts.set_max_bytes_for_level_base(config.max_bytes_for_level_base);
 
         // Build column family descriptors
         let cf_names: Vec<String> = (0..num_shards).map(|i| format!("shard_{}", i)).collect();

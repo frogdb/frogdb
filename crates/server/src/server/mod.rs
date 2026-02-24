@@ -898,6 +898,17 @@ impl Server {
             compression: parse_compression(&config.compression),
             max_background_jobs: num_cpus::get() as i32,
             create_if_missing: true,
+            block_cache_size: config.block_cache_size_mb * 1024 * 1024,
+            bloom_filter_bits: config.bloom_filter_bits,
+            max_write_buffer_number: config.max_write_buffer_number,
+            level0_file_num_compaction_trigger: 8,
+            target_file_size_base: 128 * 1024 * 1024,
+            max_bytes_for_level_base: 512 * 1024 * 1024,
+            compaction_rate_limit_mb: if config.compaction_rate_limit_mb > 0 {
+                Some(config.compaction_rate_limit_mb)
+            } else {
+                None
+            },
         };
 
         // Open RocksDB

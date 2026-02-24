@@ -33,6 +33,22 @@ pub struct PersistenceConfig {
     #[serde(default = "default_compression")]
     pub compression: String,
 
+    /// RocksDB block cache size in MB (default: 256).
+    #[serde(default = "default_block_cache_size_mb")]
+    pub block_cache_size_mb: usize,
+
+    /// RocksDB bloom filter bits per key (default: 10). Set to 0 to disable.
+    #[serde(default = "default_bloom_filter_bits")]
+    pub bloom_filter_bits: i32,
+
+    /// Maximum number of RocksDB write buffers (default: 4).
+    #[serde(default = "default_max_write_buffer_number")]
+    pub max_write_buffer_number: i32,
+
+    /// RocksDB compaction rate limit in MB/s (default: 0 = unlimited).
+    #[serde(default = "default_compaction_rate_limit_mb")]
+    pub compaction_rate_limit_mb: u64,
+
     /// Batch size threshold in KB before flushing.
     #[serde(default = "default_batch_size_threshold_kb")]
     pub batch_size_threshold_kb: usize,
@@ -66,6 +82,22 @@ fn default_compression() -> String {
     "lz4".to_string()
 }
 
+fn default_block_cache_size_mb() -> usize {
+    256
+}
+
+fn default_bloom_filter_bits() -> i32 {
+    10
+}
+
+fn default_max_write_buffer_number() -> i32 {
+    4
+}
+
+fn default_compaction_rate_limit_mb() -> u64 {
+    0 // unlimited
+}
+
 fn default_batch_size_threshold_kb() -> usize {
     4096 // 4MB
 }
@@ -83,6 +115,10 @@ impl Default for PersistenceConfig {
             sync_interval_ms: default_sync_interval_ms(),
             write_buffer_size_mb: default_write_buffer_size_mb(),
             compression: default_compression(),
+            block_cache_size_mb: default_block_cache_size_mb(),
+            bloom_filter_bits: default_bloom_filter_bits(),
+            max_write_buffer_number: default_max_write_buffer_number(),
+            compaction_rate_limit_mb: default_compaction_rate_limit_mb(),
             batch_size_threshold_kb: default_batch_size_threshold_kb(),
             batch_timeout_ms: default_batch_timeout_ms(),
         }

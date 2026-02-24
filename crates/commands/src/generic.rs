@@ -7,6 +7,8 @@
 //! - UNLINK - async delete (same as DEL for now)
 //! - OBJECT ENCODING/FREQ/IDLETIME - key introspection
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
@@ -94,8 +96,8 @@ impl Command for RenameCommand {
         // Delete old key
         ctx.store.delete(old_key);
 
-        // Set new key with same value
-        ctx.store.set(new_key.clone(), value);
+        // Set new key with same value (unwrap Arc since we're moving it)
+        ctx.store.set(new_key.clone(), Arc::unwrap_or_clone(value));
 
         // Restore expiry if any
         if let Some(expires_at) = expiry {
@@ -164,8 +166,8 @@ impl Command for RenamenxCommand {
         // Delete old key
         ctx.store.delete(old_key);
 
-        // Set new key with same value
-        ctx.store.set(new_key.clone(), value);
+        // Set new key with same value (unwrap Arc since we're moving it)
+        ctx.store.set(new_key.clone(), Arc::unwrap_or_clone(value));
 
         // Restore expiry if any
         if let Some(expires_at) = expiry {
@@ -298,7 +300,7 @@ impl Command for ObjectCommand {
 
                 match ctx.store.get(key) {
                     Some(value) => {
-                        let encoding = match &value {
+                        let encoding = match &*value {
                             Value::String(sv) => {
                                 if sv.as_integer().is_some() {
                                     "int"
@@ -468,7 +470,7 @@ impl Command for DebugCommand {
 
                 match ctx.store.get(key) {
                     Some(value) => {
-                        let encoding = match &value {
+                        let encoding = match &*value {
                             Value::String(sv) => {
                                 if sv.as_integer().is_some() {
                                     "int"
@@ -675,8 +677,8 @@ impl Command for CopyCommand {
             ctx.store.delete(dest);
         }
 
-        // Clone and set the value
-        ctx.store.set(dest.clone(), value);
+        // Set the value (unwrap Arc since we're copying it)
+        ctx.store.set(dest.clone(), Arc::unwrap_or_clone(value));
 
         // Copy expiry if source had one
         if let Some(expires_at) = expiry {

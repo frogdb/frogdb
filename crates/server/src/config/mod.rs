@@ -478,6 +478,18 @@ write_buffer_size_mb = 64
 # Compression type: "none", "snappy", "lz4", "zstd"
 compression = "lz4"
 
+# RocksDB block cache size in MB (0 = disabled)
+block_cache_size_mb = 256
+
+# RocksDB bloom filter bits per key (0 = disabled)
+bloom_filter_bits = 10
+
+# Maximum number of RocksDB write buffers
+max_write_buffer_number = 4
+
+# RocksDB compaction rate limit in MB/s (0 = unlimited)
+compaction_rate_limit_mb = 0
+
 # Batch size threshold in KB before flushing
 batch_size_threshold_kb = 4096
 
