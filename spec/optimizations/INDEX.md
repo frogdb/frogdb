@@ -37,10 +37,13 @@ This document details comprehensive performance profiling and optimization strat
 
 | File | Optimizations |
 |------|---------------|
-| `crates/core/src/store.rs` | GET cloning, SCAN iteration |
+| `crates/core/src/store/hashmap.rs` | SCAN iteration (optimized: direct iterator) |
+| `crates/core/src/store.rs` | GET cloning |
 | `crates/core/src/persistence/wal.rs` | WAL batching, mutex contention |
-| `crates/core/src/types.rs` | Value enum, Arc wrapping |
-| `crates/core/src/persistence/rocks.rs` | CF caching, RocksDB tuning |
+| `crates/types/src/types.rs` | Value enum, Arc wrapping, sorted set remove_range (optimized) |
+| `crates/types/src/glob.rs` | Glob matching (optimized: fast paths) |
+| `crates/persistence/src/rocks.rs` | CF caching (optimized), RocksDB tuning |
+| `crates/server/src/connection.rs` | RESP3 buffer reuse (optimized) |
 | `crates/core/src/pubsub.rs` | Zero-copy broadcasting |
 | `crates/server/src/main.rs` | jemalloc allocator, single-thread runtime |
 | `crates/server/src/connection/routing.rs` | Shard routing, scatter-gather bypass, channel hop elimination |
