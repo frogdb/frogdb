@@ -3,12 +3,16 @@
 //! This module handles CONFIG subcommands:
 //! - CONFIG GET - Get configuration parameters
 //! - CONFIG SET - Set configuration parameters
+//! - CONFIG RESETSTAT - Reset server statistics
+//! - CONFIG REWRITE - Rewrite configuration file (no-op)
 //! - CONFIG HELP - Show help text
 //!
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
+use frogdb_core::ShardMessage;
 use frogdb_protocol::Response;
+use tokio::sync::oneshot;
 
 use crate::connection::ConnectionHandler;
 use crate::runtime_config::ConfigManager;
@@ -26,6 +30,8 @@ impl ConnectionHandler {
         match subcommand_str.as_ref() {
             "GET" => self.handle_config_get(&args[1..]),
             "SET" => self.handle_config_set(&args[1..]).await,
+            "RESETSTAT" => self.handle_config_resetstat().await,
+            "REWRITE" => Response::ok(),
             "HELP" => self.handle_config_help(),
             _ => Response::error(format!(
                 "ERR unknown subcommand '{}'. Try CONFIG HELP.",
@@ -69,6 +75,26 @@ impl ConnectionHandler {
             Ok(()) => Response::ok(),
             Err(e) => Response::error(e.to_string()),
         }
+    }
+
+    /// Handle CONFIG RESETSTAT - reset server statistics.
+    ///
+    /// Broadcasts a reset to all shard workers to clear:
+    /// - Latency monitor data (all events)
+    /// - Slow query log entries
+    /// - Peak memory counters
+    async fn handle_config_resetstat(&self) -> Response {
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            if sender
+                .send(ShardMessage::ResetStats { response_tx })
+                .await
+                .is_ok()
+            {
+                let _ = response_rx.await;
+            }
+        }
+        Response::ok()
     }
 
     /// Handle CONFIG HELP - return help text.
