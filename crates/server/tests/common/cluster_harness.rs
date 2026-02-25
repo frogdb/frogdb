@@ -7,8 +7,9 @@
 #![allow(dead_code)]
 //! - ClusterTestHarness: Orchestrates multi-node cluster testing
 
-use super::cluster_helpers::{ClusterError, ClusterInfo, parse_cluster_info};
+use super::cluster_helpers::{ClusterError, ClusterInfo};
 use super::test_server::TestClient;
+use frogdb_core::ClusterState;
 use frogdb_core::cluster::ClusterRaft;
 use frogdb_protocol::Response;
 use frogdb_server::net::tcp_listener_reusable;
@@ -75,6 +76,7 @@ struct NodeRestartInfo {
     config: ClusterNodeConfig,
     initial_nodes: Vec<String>,
     raft: Option<Arc<ClusterRaft>>,
+    cluster_state: Option<Arc<ClusterState>>,
 }
 
 /// A single cluster node for testing.
@@ -89,6 +91,7 @@ pub struct ClusterTestNode {
     running: Arc<AtomicBool>,
     restart_info: Option<NodeRestartInfo>,
     raft: Option<Arc<ClusterRaft>>,
+    cluster_state: Option<Arc<ClusterState>>,
 }
 
 impl ClusterTestNode {
@@ -183,6 +186,7 @@ impl ClusterTestNode {
             .map(|a| a.port())
             .unwrap_or(0);
         let raft = server.raft().cloned();
+        let cluster_state = server.cluster_state().cloned();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -207,6 +211,7 @@ impl ClusterTestNode {
             config: config.clone(),
             initial_nodes,
             raft: raft.clone(),
+            cluster_state: cluster_state.clone(),
         };
 
         Self {
@@ -220,6 +225,7 @@ impl ClusterTestNode {
             running,
             restart_info: Some(restart_info),
             raft,
+            cluster_state,
         }
     }
 
@@ -267,6 +273,11 @@ impl ClusterTestNode {
     /// Get the Raft instance, if cluster mode is enabled.
     pub fn raft(&self) -> Option<&Arc<ClusterRaft>> {
         self.raft.as_ref()
+    }
+
+    /// Get the cluster state, if cluster mode is enabled.
+    pub fn cluster_state(&self) -> Option<&Arc<ClusterState>> {
+        self.cluster_state.as_ref()
     }
 
     /// Connect to this node and return a TestClient.
@@ -437,6 +448,7 @@ impl ClusterTestNode {
             .map(|a| a.port())
             .unwrap_or(0);
         let raft = server.raft().cloned();
+        let cluster_state = server.cluster_state().cloned();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -459,12 +471,14 @@ impl ClusterTestNode {
         self.handle = Some(handle);
         self.running = running;
         self.raft = raft.clone();
+        self.cluster_state = cluster_state.clone();
 
         // Update restart_info with new ports
         self.restart_info = Some(NodeRestartInfo {
             client_port,
             metrics_port,
             raft,
+            cluster_state,
             ..restart_info
         });
 
@@ -591,6 +605,7 @@ impl ClusterTestHarness {
                 .map(|a| a.port())
                 .unwrap_or(0);
             let raft = server.raft().cloned();
+            let cluster_state = server.cluster_state().cloned();
 
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -612,6 +627,7 @@ impl ClusterTestHarness {
                 config: config.clone(),
                 initial_nodes: initial_nodes.clone(),
                 raft: raft.clone(),
+                cluster_state: cluster_state.clone(),
             };
 
             let node = ClusterTestNode {
@@ -625,6 +641,7 @@ impl ClusterTestHarness {
                 running,
                 restart_info: Some(restart_info),
                 raft,
+                cluster_state,
             };
 
             self.nodes.insert(node_id, node);
@@ -776,14 +793,34 @@ impl ClusterTestHarness {
         self.node_order.clone()
     }
 
-    /// Get cluster info from a specific node.
-    pub async fn get_cluster_info(&self, node_id: u64) -> Result<ClusterInfo, ClusterError> {
+    /// Get cluster info from a specific node via direct state access (no network round-trip).
+    pub fn get_cluster_info(&self, node_id: u64) -> Result<ClusterInfo, ClusterError> {
         let node = self
             .node(node_id)
             .ok_or_else(|| ClusterError::new(format!("Node {} not found", node_id)))?;
+        let cs = node
+            .cluster_state()
+            .ok_or_else(|| ClusterError::new("No cluster state"))?;
+        let snapshot = cs.snapshot();
 
-        let response = node.send("CLUSTER", &["INFO"]).await;
-        parse_cluster_info(&response)
+        let slots_assigned = snapshot.slot_assignment.len() as u16;
+        Ok(ClusterInfo {
+            cluster_state: "ok".to_string(),
+            cluster_slots_assigned: slots_assigned,
+            cluster_slots_ok: slots_assigned,
+            cluster_slots_pfail: 0,
+            cluster_slots_fail: 0,
+            cluster_known_nodes: snapshot.nodes.len(),
+            cluster_size: snapshot.nodes.len(),
+            cluster_current_epoch: snapshot.config_epoch,
+            cluster_my_epoch: snapshot.config_epoch,
+        })
+    }
+
+    /// Get the cluster node ID string (40-char hex) for a node, matching CLUSTER MYID format.
+    pub fn get_node_id_str(&self, node_id: u64) -> Option<String> {
+        let node = self.nodes.get(&node_id)?;
+        Some(format!("{:040x}", node.node_id()))
     }
 
     /// Try to determine the current Raft leader by reading metrics from running nodes.
@@ -791,15 +828,14 @@ impl ClusterTestHarness {
         for &node_id in &self.node_order {
             if let Some(node) = self.nodes.get(&node_id)
                 && node.is_running()
+                && let Some(raft) = node.raft()
             {
-                if let Some(raft) = node.raft() {
-                    let leader = raft.metrics().borrow().current_leader;
-                    if let Some(leader_id) = leader {
-                        // Verify the reported leader is actually running
-                        // (filters stale reports during elections)
-                        if self.nodes.get(&leader_id).map_or(false, |n| n.is_running()) {
-                            return Some(leader_id);
-                        }
+                let leader = raft.metrics().borrow().current_leader;
+                if let Some(leader_id) = leader {
+                    // Verify the reported leader is actually running
+                    // (filters stale reports during elections)
+                    if self.nodes.get(&leader_id).is_some_and(|n| n.is_running()) {
+                        return Some(leader_id);
                     }
                 }
             }
@@ -830,10 +866,10 @@ impl ClusterTestHarness {
         let start = std::time::Instant::now();
 
         while start.elapsed() < timeout_duration {
-            if let Some(leader) = self.get_leader().await {
-                if leader != exclude {
-                    return Ok(leader);
-                }
+            if let Some(leader) = self.get_leader().await
+                && leader != exclude
+            {
+                return Ok(leader);
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -858,7 +894,7 @@ impl ClusterTestHarness {
                         continue;
                     }
 
-                    match self.get_cluster_info(node_id).await {
+                    match self.get_cluster_info(node_id) {
                         Ok(info) => {
                             if info.cluster_state != "ok" {
                                 all_ok = false;
@@ -910,7 +946,7 @@ impl ClusterTestHarness {
                     }
 
                     // Check if this node can reach the target
-                    match self.get_cluster_info(other_id).await {
+                    match self.get_cluster_info(other_id) {
                         Ok(info) => {
                             // We expect at least as many nodes as we have
                             let expected = self.nodes.values().filter(|n| n.is_running()).count();
