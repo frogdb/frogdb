@@ -124,7 +124,7 @@ fn append_section(
         b"server" => build_server_info(),
         b"clients" => build_clients_info(),
         b"memory" => build_memory_info(ctx),
-        b"persistence" => build_persistence_info(),
+        b"persistence" => build_persistence_info(ctx),
         b"stats" => build_stats_info(ctx),
         b"replication" => build_replication_info(ctx),
         b"cpu" => build_cpu_info(),
@@ -245,52 +245,55 @@ fn build_memory_info(ctx: &mut CommandContext) -> String {
     )
 }
 
-fn build_persistence_info() -> String {
+fn build_persistence_info(ctx: &mut CommandContext) -> String {
+    let dirty = ctx.store.dirty();
     // Note: Real-time WAL lag metrics are available via STATUS JSON command
     // which aggregates data from all shards. The values here are placeholders
     // since INFO runs per-shard without server-level aggregation context.
-    "# Persistence\r\n\
-     loading:0\r\n\
-     async_loading:0\r\n\
-     persistence_enabled:1\r\n\
-     durability_mode:periodic\r\n\
-     wal_pending_ops:0\r\n\
-     wal_pending_bytes:0\r\n\
-     wal_durability_lag_ms:0\r\n\
-     wal_sync_lag_ms:0\r\n\
-     wal_last_flush_time:0\r\n\
-     wal_last_sync_time:0\r\n\
-     wal_writes_total:0\r\n\
-     wal_bytes_total:0\r\n\
-     current_cow_peak:0\r\n\
-     current_cow_size:0\r\n\
-     current_cow_size_age:0\r\n\
-     current_fork_perc:0.00\r\n\
-     current_save_keys_processed:0\r\n\
-     current_save_keys_total:0\r\n\
-     rdb_changes_since_last_save:0\r\n\
-     rdb_bgsave_in_progress:0\r\n\
-     rdb_last_save_time:0\r\n\
-     rdb_last_bgsave_status:ok\r\n\
-     rdb_last_bgsave_time_sec:-1\r\n\
-     rdb_current_bgsave_time_sec:-1\r\n\
-     rdb_saves:0\r\n\
-     rdb_last_cow_size:0\r\n\
-     rdb_last_load_keys_expired:0\r\n\
-     rdb_last_load_keys_loaded:0\r\n\
-     aof_enabled:0\r\n\
-     aof_rewrite_in_progress:0\r\n\
-     aof_rewrite_scheduled:0\r\n\
-     aof_last_rewrite_time_sec:-1\r\n\
-     aof_current_rewrite_time_sec:-1\r\n\
-     aof_last_bgrewrite_status:ok\r\n\
-     aof_rewrites:0\r\n\
-     aof_rewrites_consecutive_failures:0\r\n\
-     aof_last_write_status:ok\r\n\
-     aof_last_cow_size:0\r\n\
-     module_fork_in_progress:0\r\n\
-     module_fork_last_cow_size:0\r\n\r\n"
-        .to_string()
+    format!(
+        "# Persistence\r\n\
+         loading:0\r\n\
+         async_loading:0\r\n\
+         persistence_enabled:1\r\n\
+         durability_mode:periodic\r\n\
+         wal_pending_ops:0\r\n\
+         wal_pending_bytes:0\r\n\
+         wal_durability_lag_ms:0\r\n\
+         wal_sync_lag_ms:0\r\n\
+         wal_last_flush_time:0\r\n\
+         wal_last_sync_time:0\r\n\
+         wal_writes_total:0\r\n\
+         wal_bytes_total:0\r\n\
+         current_cow_peak:0\r\n\
+         current_cow_size:0\r\n\
+         current_cow_size_age:0\r\n\
+         current_fork_perc:0.00\r\n\
+         current_save_keys_processed:0\r\n\
+         current_save_keys_total:0\r\n\
+         rdb_changes_since_last_save:{}\r\n\
+         rdb_bgsave_in_progress:0\r\n\
+         rdb_last_save_time:0\r\n\
+         rdb_last_bgsave_status:ok\r\n\
+         rdb_last_bgsave_time_sec:-1\r\n\
+         rdb_current_bgsave_time_sec:-1\r\n\
+         rdb_saves:0\r\n\
+         rdb_last_cow_size:0\r\n\
+         rdb_last_load_keys_expired:0\r\n\
+         rdb_last_load_keys_loaded:0\r\n\
+         aof_enabled:0\r\n\
+         aof_rewrite_in_progress:0\r\n\
+         aof_rewrite_scheduled:0\r\n\
+         aof_last_rewrite_time_sec:-1\r\n\
+         aof_current_rewrite_time_sec:-1\r\n\
+         aof_last_bgrewrite_status:ok\r\n\
+         aof_rewrites:0\r\n\
+         aof_rewrites_consecutive_failures:0\r\n\
+         aof_last_write_status:ok\r\n\
+         aof_last_cow_size:0\r\n\
+         module_fork_in_progress:0\r\n\
+         module_fork_last_cow_size:0\r\n\r\n",
+        dirty,
+    )
 }
 
 fn build_stats_info(ctx: &mut CommandContext) -> String {

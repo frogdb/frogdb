@@ -52,13 +52,15 @@ impl FunctionLibrary {
     }
 
     /// Add a function to this library.
+    /// Function names are stored lowercase for case-insensitive lookup.
     pub fn add_function(&mut self, function: RegisteredFunction) {
-        self.functions.insert(function.name.clone(), function);
+        let key = function.name.to_ascii_lowercase();
+        self.functions.insert(key, function);
     }
 
-    /// Get a function by name.
+    /// Get a function by name (case-insensitive).
     pub fn get_function(&self, name: &str) -> Option<&RegisteredFunction> {
-        self.functions.get(name)
+        self.functions.get(&name.to_ascii_lowercase())
     }
 
     /// Get all function names in this library.

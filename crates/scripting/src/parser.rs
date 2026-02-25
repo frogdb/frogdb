@@ -26,52 +26,54 @@ pub fn parse_shebang(code: &str) -> Result<ShebangInfo, FunctionError> {
         });
     }
 
-    let shebang_content = &first_line[2..].trim();
+    let after_shebang = &first_line[2..];
 
-    // Parse engine (first word)
-    let parts: Vec<&str> = shebang_content.split_whitespace().collect();
-    if parts.is_empty() {
-        return Err(FunctionError::InvalidShebang {
-            message: "Missing engine in shebang".to_string(),
-        });
-    }
+    // Engine is the text immediately after #! up to the first whitespace.
+    // For "#!lua name=foo", engine="lua". For "#! name=foo", engine="".
+    let (engine_str, metadata_str) = match after_shebang.find(char::is_whitespace) {
+        Some(idx) => (&after_shebang[..idx], after_shebang[idx..].trim()),
+        None => (after_shebang.trim(), ""),
+    };
 
-    let engine = parts[0].to_string();
+    let engine = engine_str.to_string();
 
-    // Currently only lua is supported
+    // Currently only lua is supported (case-insensitive)
     if !engine.eq_ignore_ascii_case("lua") {
         return Err(FunctionError::UnsupportedEngine { engine });
     }
 
-    // Parse key=value pairs
-    let mut name = None;
+    // Parse key=value metadata pairs
+    let mut name: Option<String> = None;
 
-    for part in &parts[1..] {
+    for part in metadata_str.split_whitespace() {
         if let Some(("name", value)) = part.split_once('=') {
+            if name.is_some() {
+                return Err(FunctionError::InvalidShebang {
+                    message: "Invalid metadata value, name argument was given multiple times"
+                        .to_string(),
+                });
+            }
+            // Strip surrounding quotes if present
+            let value = if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+                &value[1..value.len() - 1]
+            } else {
+                value
+            };
             name = Some(value.to_string());
+        } else {
+            return Err(FunctionError::InvalidShebang {
+                message: format!("Invalid metadata value given: {}", part),
+            });
         }
     }
 
     let name = name.ok_or_else(|| FunctionError::InvalidShebang {
-        message: "Missing name= in shebang".to_string(),
+        message: "Library name was not given".to_string(),
     })?;
 
-    if name.is_empty() {
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         return Err(FunctionError::InvalidShebang {
-            message: "Library name cannot be empty".to_string(),
-        });
-    }
-
-    // Validate name (alphanumeric and underscores only)
-    if !name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err(FunctionError::InvalidShebang {
-            message: format!(
-                "Library name '{}' contains invalid characters (only alphanumeric, _, - allowed)",
-                name
-            ),
+            message: "Library names can only contain letters, numbers, or underscores(_) and must be at least one character long".to_string(),
         });
     }
 
@@ -169,8 +171,8 @@ mod tests {
     #[test]
     fn test_parse_shebang_with_dashes() {
         let code = "#!lua name=my-lib\ncode";
-        let info = parse_shebang(code).unwrap();
-        assert_eq!(info.name, "my-lib");
+        let result = parse_shebang(code);
+        assert!(matches!(result, Err(FunctionError::InvalidShebang { .. })));
     }
 
     #[test]

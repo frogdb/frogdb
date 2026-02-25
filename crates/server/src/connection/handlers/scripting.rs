@@ -663,12 +663,13 @@ impl ConnectionHandler {
         }
 
         // Check for REPLACE option
-        let (replace, code) =
-            if args.len() >= 2 && args[0].to_ascii_uppercase() == b"REPLACE".as_slice() {
-                (true, &args[1])
-            } else {
-                (false, &args[0])
-            };
+        let (replace, code) = if args.len() == 1 {
+            (false, &args[0])
+        } else if args.len() == 2 && args[0].to_ascii_uppercase() == b"REPLACE".as_slice() {
+            (true, &args[1])
+        } else {
+            return Response::error("ERR Unknown option given");
+        };
 
         let code_str = match std::str::from_utf8(code) {
             Ok(s) => s,

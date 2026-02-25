@@ -402,7 +402,7 @@ impl ConnectionHandler {
                 }
             }
         } else {
-            PauseMode::Write // Default mode
+            PauseMode::All // Default mode per Redis 7.x
         };
 
         self.client_registry.pause(mode, timeout_ms);

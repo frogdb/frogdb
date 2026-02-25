@@ -390,4 +390,18 @@ pub trait Store: Send {
         let _ = slot;
         0
     }
+
+    // ========================================================================
+    // Dirty tracking - RDB changes since last save
+    // ========================================================================
+
+    /// Get the number of changes since last save (for INFO persistence).
+    fn dirty(&self) -> u64 {
+        0
+    }
+
+    /// Increment the dirty counter by the given amount.
+    fn increment_dirty(&mut self, count: u64) {
+        let _ = count;
+    }
 }

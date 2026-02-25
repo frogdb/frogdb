@@ -469,12 +469,14 @@ impl ScriptExecutor {
 
         // Build function execution code
         // This loads the library first, then calls the function
+        // Function names are looked up case-insensitively (lowercased)
+        let function_name_lower = function_name.to_ascii_lowercase();
         let execution_code = format!(
             r#"
 -- Load the library (this registers functions in redis.functions)
 {}
 
--- Get the registered function
+-- Get the registered function (case-insensitive lookup via lowercase keys)
 local fn = __frogdb_functions and __frogdb_functions["{}"]
 if not fn then
     error("Function not found after loading library: {}")
@@ -483,7 +485,7 @@ end
 -- Call the function with KEYS and ARGV
 return fn(KEYS, ARGV)
 "#,
-            library_code_clean, function_name, function_name
+            library_code_clean, function_name_lower, function_name
         );
 
         // Set up function registration before loading
@@ -566,7 +568,8 @@ return fn(KEYS, ARGV)
                             )
                         })?;
 
-                        functions_table.set(name, callback)?;
+                        // Store with lowercase key for case-insensitive lookup
+                        functions_table.set(name.to_ascii_lowercase(), callback)?;
                     }
 
                     // Simple form: redis.register_function('name', callback)
@@ -586,7 +589,9 @@ return fn(KEYS, ARGV)
                             }
                         };
 
-                        functions_table.set(name.to_str()?, callback)?;
+                        // Store with lowercase key for case-insensitive lookup
+                        let name_str = name.to_str()?;
+                        functions_table.set(name_str.to_ascii_lowercase(), callback)?;
                     }
 
                     _ => {

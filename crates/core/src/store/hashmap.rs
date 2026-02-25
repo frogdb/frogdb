@@ -32,6 +32,8 @@ pub struct HashMapStore {
     data: HashMap<Bytes, Entry>,
     expiry_index: ExpiryIndex,
     memory_used: usize,
+    /// Number of changes since last save (for INFO persistence rdb_changes_since_last_save).
+    dirty: u64,
 }
 
 impl HashMapStore {
@@ -41,6 +43,7 @@ impl HashMapStore {
             data: HashMap::new(),
             expiry_index: ExpiryIndex::new(),
             memory_used: 0,
+            dirty: 0,
         }
     }
 
@@ -52,6 +55,7 @@ impl HashMapStore {
             data: HashMap::new(),
             expiry_index,
             memory_used: 0,
+            dirty: 0,
         }
     }
 
@@ -489,6 +493,18 @@ impl Store for HashMapStore {
 
     fn count_keys_in_slot(&self, slot: u16) -> usize {
         self.data.keys().filter(|k| slot_for_key(k) == slot).count()
+    }
+
+    // ========================================================================
+    // Dirty tracking
+    // ========================================================================
+
+    fn dirty(&self) -> u64 {
+        self.dirty
+    }
+
+    fn increment_dirty(&mut self, count: u64) {
+        self.dirty = self.dirty.wrapping_add(count);
     }
 }
 

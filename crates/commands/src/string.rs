@@ -85,7 +85,9 @@ impl Command for SetexCommand {
         let value = args[2].clone();
 
         if seconds <= 0 {
-            return Err(CommandError::NotInteger);
+            return Err(CommandError::InvalidArgument {
+                message: "invalid expire time in 'setex' command".to_string(),
+            });
         }
 
         let opts = SetOptions {
@@ -131,7 +133,9 @@ impl Command for PsetexCommand {
         let value = args[2].clone();
 
         if ms <= 0 {
-            return Err(CommandError::NotInteger);
+            return Err(CommandError::InvalidArgument {
+                message: "invalid expire time in 'psetex' command".to_string(),
+            });
         }
 
         let opts = SetOptions {
@@ -434,8 +438,13 @@ impl Command for GetexCommand {
                     if i >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    let seconds = parse_u64(&args[i])?;
-                    let expires_at = Instant::now() + Duration::from_secs(seconds);
+                    let seconds = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
+                    if seconds <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'getex' command".to_string(),
+                        });
+                    }
+                    let expires_at = Instant::now() + Duration::from_secs(seconds as u64);
                     ctx.store.set_expiry(key, expires_at);
                 }
                 b"PX" => {
@@ -443,8 +452,13 @@ impl Command for GetexCommand {
                     if i >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    let ms = parse_u64(&args[i])?;
-                    let expires_at = Instant::now() + Duration::from_millis(ms);
+                    let ms = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
+                    if ms <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'getex' command".to_string(),
+                        });
+                    }
+                    let expires_at = Instant::now() + Duration::from_millis(ms as u64);
                     ctx.store.set_expiry(key, expires_at);
                 }
                 b"EXAT" => {
@@ -452,8 +466,13 @@ impl Command for GetexCommand {
                     if i >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    let ts = parse_u64(&args[i])?;
-                    let target = UNIX_EPOCH + Duration::from_secs(ts);
+                    let ts = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
+                    if ts <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'getex' command".to_string(),
+                        });
+                    }
+                    let target = UNIX_EPOCH + Duration::from_secs(ts as u64);
                     let now = SystemTime::now();
                     if let Ok(duration) = target.duration_since(now) {
                         ctx.store.set_expiry(key, Instant::now() + duration);
@@ -464,8 +483,13 @@ impl Command for GetexCommand {
                     if i >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    let ts = parse_u64(&args[i])?;
-                    let target = UNIX_EPOCH + Duration::from_millis(ts);
+                    let ts = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
+                    if ts <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'getex' command".to_string(),
+                        });
+                    }
+                    let target = UNIX_EPOCH + Duration::from_millis(ts as u64);
                     let now = SystemTime::now();
                     if let Ok(duration) = target.duration_since(now) {
                         ctx.store.set_expiry(key, Instant::now() + duration);

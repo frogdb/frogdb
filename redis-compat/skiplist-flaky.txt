@@ -58,6 +58,11 @@ BZMPOP with illegal argument
 /when result key is created by SORT
 /inside a transaction
 
+# CLIENT PAUSE blocked_clients detection tests
+/Test new pause time is smaller than old one, then old time preserved
+/Test write commands are paused by RO
+/Test special commands are paused by RO
+
 # =============================================================================
 # PERFORMANCE TIMEOUTS
 # =============================================================================

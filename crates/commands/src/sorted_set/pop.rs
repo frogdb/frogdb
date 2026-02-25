@@ -26,7 +26,6 @@ impl Command for ZpopminCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let is_resp3 = ctx.protocol_version.is_resp3();
         let count = if args.len() > 1 {
             let c = parse_i64(&args[1])?;
             if c < 0 {
@@ -51,11 +50,9 @@ impl Command for ZpopminCommand {
             ctx.store.delete(key);
         }
 
-        if is_resp3 {
-            Ok(scored_array_resp3(results, true))
-        } else {
-            Ok(scored_array(results, true))
-        }
+        // ZPOPMIN always uses flat format [member, score, member, score, ...]
+        // in both RESP2 and RESP3
+        Ok(scored_array(results, true))
     }
 
     impl_keys_first!();
@@ -82,7 +79,6 @@ impl Command for ZpopmaxCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let is_resp3 = ctx.protocol_version.is_resp3();
         let count = if args.len() > 1 {
             let c = parse_i64(&args[1])?;
             if c < 0 {
@@ -107,11 +103,9 @@ impl Command for ZpopmaxCommand {
             ctx.store.delete(key);
         }
 
-        if is_resp3 {
-            Ok(scored_array_resp3(results, true))
-        } else {
-            Ok(scored_array(results, true))
-        }
+        // ZPOPMAX always uses flat format [member, score, member, score, ...]
+        // in both RESP2 and RESP3
+        Ok(scored_array(results, true))
     }
 
     impl_keys_first!();
@@ -151,7 +145,6 @@ impl Command for ZmpopCommand {
 
         let keys = &args[1..numkeys + 1];
         let remaining = &args[numkeys + 1..];
-        let is_resp3 = ctx.protocol_version.is_resp3();
 
         // Check all keys are in same shard
         require_same_shard(keys, ctx.num_shards)?;
@@ -227,11 +220,9 @@ impl Command for ZmpopCommand {
             }
 
             if !results.is_empty() {
-                let pop_result = if is_resp3 {
-                    scored_array_resp3(results, true)
-                } else {
-                    scored_array(results, true)
-                };
+                // ZMPOP always uses nested format [[member, score], ...]
+                // in both RESP2 and RESP3
+                let pop_result = scored_array_resp3(results, true);
                 return Ok(Response::Array(vec![
                     Response::bulk(key.clone()),
                     pop_result,

@@ -21,6 +21,12 @@ use super::utils::{
     NxXxOptions, format_float, get_or_create_zset as get_or_create_geo, parse_f64, parse_usize,
 };
 
+/// Format a distance value with 4 decimal places, matching Redis's `addReplyDoubleDistance`
+/// which uses `%.4f` format.
+fn format_distance(dist: f64) -> String {
+    format!("{:.4}", dist)
+}
+
 /// Search result with member and optional distance/hash/coordinates.
 #[derive(Debug)]
 struct GeoSearchResult {
@@ -182,7 +188,7 @@ impl Command for GeodistCommand {
                 let dist_m = haversine_distance(lon1, lat1, lon2, lat2);
                 let dist = unit.from_meters(dist_m);
 
-                Ok(Response::bulk(Bytes::from(format_float(dist))))
+                Ok(Response::bulk(Bytes::from(format_distance(dist))))
             }
             None => Ok(Response::null()),
         }
@@ -333,8 +339,8 @@ impl Command for GeosearchCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        // Parse search options
-        let opts = parse_geosearch_options(&args[1..], ctx, key)?;
+        // Parse search options (GEOSEARCH does not accept STOREDIST)
+        let opts = parse_geosearch_options(&args[1..], ctx, key, false)?;
         let results = execute_geosearch(ctx, key, &opts)?;
 
         // Format results
@@ -373,17 +379,18 @@ impl Command for GeosearchstoreCommand {
         let destkey = &args[0];
         let srckey = &args[1];
 
-        // Parse search options - if source key doesn't exist and FROMMEMBER is used,
-        // we need to handle gracefully (return 0 and delete dest)
-        let opts = match parse_geosearch_options(&args[2..], ctx, srckey) {
-            Ok(opts) => opts,
-            Err(_) if ctx.store.get(srckey).is_none() => {
-                // Source key doesn't exist - delete dest and return 0
-                ctx.store.delete(destkey);
-                return Ok(Response::Integer(0));
-            }
-            Err(e) => return Err(e),
-        };
+        // If source key doesn't exist, delete dest and return 0.
+        // We must check this before parsing options because FROMMEMBER
+        // would error trying to look up a member in a non-existent key.
+        if ctx.store.get(srckey).is_none() {
+            // Still need to validate the options syntax, but use a special
+            // mode that skips FROMMEMBER member lookup on missing keys.
+            let _ = parse_geosearch_options(&args[2..], ctx, srckey, true)?;
+            ctx.store.delete(destkey);
+            return Ok(Response::Integer(0));
+        }
+
+        let opts = parse_geosearch_options(&args[2..], ctx, srckey, true)?;
         let results = execute_geosearch(ctx, srckey, &opts)?;
 
         if results.is_empty() {
@@ -668,10 +675,14 @@ struct GeoSearchOptions {
 }
 
 /// Parse GEOSEARCH options from args.
+///
+/// `allow_storedist` controls whether the STOREDIST option is accepted (only
+/// valid for GEOSEARCHSTORE, not for GEOSEARCH).
 fn parse_geosearch_options(
     args: &[Bytes],
     ctx: &CommandContext,
     key: &Bytes,
+    allow_storedist: bool,
 ) -> Result<GeoSearchOptions, CommandError> {
     let mut center: Option<Coordinates> = None;
     let mut radius_m: Option<f64> = None;
@@ -687,16 +698,31 @@ fn parse_geosearch_options(
     let mut desc = false;
     let mut store_dist = false;
 
+    // Track which source/shape options were specified for conflict detection
+    let mut has_from_member = false;
+    let mut has_from_lonlat = false;
+    let mut has_by_radius = false;
+    let mut has_by_box = false;
+
     let mut i = 0;
     while i < args.len() {
         let opt = args[i].to_ascii_uppercase();
         match opt.as_slice() {
             b"FROMMEMBER" => {
+                if has_from_member || has_from_lonlat {
+                    return Err(CommandError::InvalidArgument {
+                        message: "exactly one of FROMMEMBER or FROMLONLAT can be provided"
+                            .to_string(),
+                    });
+                }
                 if i + 1 >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
+                has_from_member = true;
                 let member = &args[i + 1];
 
+                // When the key doesn't exist, we skip member lookup — the caller
+                // (GEOSEARCHSTORE) will handle returning 0.
                 center = match ctx.store.get(key) {
                     Some(value) => {
                         let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
@@ -718,20 +744,24 @@ fn parse_geosearch_options(
                         })?)
                     }
                     None => {
-                        return Err(CommandError::InvalidArgument {
-                            message: format!(
-                                "could not decode requested zset member: {}",
-                                String::from_utf8_lossy(member)
-                            ),
-                        });
+                        // Key doesn't exist — use a dummy center; the caller
+                        // will short-circuit before using it.
+                        Some(Coordinates::new(0.0, 0.0).unwrap())
                     }
                 };
                 i += 2;
             }
             b"FROMLONLAT" => {
+                if has_from_member || has_from_lonlat {
+                    return Err(CommandError::InvalidArgument {
+                        message: "exactly one of FROMMEMBER or FROMLONLAT can be provided"
+                            .to_string(),
+                    });
+                }
                 if i + 2 >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
+                has_from_lonlat = true;
                 let lon = parse_f64(&args[i + 1])?;
                 let lat = parse_f64(&args[i + 2])?;
                 center = Some(Coordinates::new(lon, lat).ok_or_else(|| {
@@ -742,18 +772,30 @@ fn parse_geosearch_options(
                 i += 3;
             }
             b"BYRADIUS" => {
+                if has_by_radius || has_by_box {
+                    return Err(CommandError::InvalidArgument {
+                        message: "exactly one of BYRADIUS and BYBOX can be provided".to_string(),
+                    });
+                }
                 if i + 2 >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
+                has_by_radius = true;
                 let radius = parse_f64(&args[i + 1])?;
                 unit = DistanceUnit::parse(&args[i + 2]).ok_or(CommandError::SyntaxError)?;
                 radius_m = Some(unit.to_meters(radius));
                 i += 3;
             }
             b"BYBOX" => {
+                if has_by_radius || has_by_box {
+                    return Err(CommandError::InvalidArgument {
+                        message: "exactly one of BYRADIUS and BYBOX can be provided".to_string(),
+                    });
+                }
                 if i + 3 >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
+                has_by_box = true;
                 let w = parse_f64(&args[i + 1])?;
                 let h = parse_f64(&args[i + 2])?;
                 unit = DistanceUnit::parse(&args[i + 3]).ok_or(CommandError::SyntaxError)?;
@@ -795,6 +837,9 @@ fn parse_geosearch_options(
                 i += 1;
             }
             b"STOREDIST" => {
+                if !allow_storedist {
+                    return Err(CommandError::SyntaxError);
+                }
                 store_dist = true;
                 i += 1;
             }
@@ -804,10 +849,19 @@ fn parse_geosearch_options(
         }
     }
 
-    let center = center.ok_or(CommandError::SyntaxError)?;
-    if radius_m.is_none() && width_m.is_none() {
-        return Err(CommandError::SyntaxError);
+    // Validate required options with Redis-compatible error messages
+    if !has_from_member && !has_from_lonlat {
+        return Err(CommandError::InvalidArgument {
+            message: "exactly one of FROMMEMBER or FROMLONLAT can be provided".to_string(),
+        });
     }
+    if !has_by_radius && !has_by_box {
+        return Err(CommandError::InvalidArgument {
+            message: "exactly one of BYRADIUS and BYBOX can be provided".to_string(),
+        });
+    }
+
+    let center = center.ok_or(CommandError::SyntaxError)?;
 
     Ok(GeoSearchOptions {
         center,
@@ -951,11 +1005,7 @@ fn execute_geosearch(
                         results.push(GeoSearchResult {
                             member,
                             dist,
-                            hash: if opts.with_hash || opts.store_dist {
-                                Some(hash)
-                            } else {
-                                None
-                            },
+                            hash: Some(hash),
                             coords: if opts.with_coord {
                                 Some((lon, lat))
                             } else {
@@ -1015,7 +1065,7 @@ fn format_geosearch_results(
                 if let Some(dist) = r.dist
                     && opts.with_dist
                 {
-                    items.push(Response::bulk(Bytes::from(format_float(dist))));
+                    items.push(Response::bulk(Bytes::from(format_distance(dist))));
                 }
 
                 if let Some(hash) = r.hash

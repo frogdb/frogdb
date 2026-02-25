@@ -87,7 +87,7 @@ impl fmt::Display for FunctionError {
                 )
             }
             FunctionError::InvalidShebang { message } => {
-                write!(f, "ERR Missing or invalid shebang: {}", message)
+                write!(f, "ERR {}", message)
             }
             FunctionError::NoFunctionsRegistered => {
                 write!(f, "ERR No functions registered in library")
@@ -99,7 +99,7 @@ impl fmt::Display for FunctionError {
                 write!(f, "ERR Error parsing library: {}", message)
             }
             FunctionError::LoadError { message } => {
-                write!(f, "ERR Error loading library: {}", message)
+                write!(f, "ERR Error compiling function: {}", message)
             }
             FunctionError::ExecutionError { message } => {
                 write!(f, "ERR Error running function: {}", message)
@@ -118,11 +118,7 @@ impl fmt::Display for FunctionError {
                 write!(f, "ERR function has performed writes and cannot be killed")
             }
             FunctionError::UnsupportedEngine { engine } => {
-                write!(
-                    f,
-                    "ERR Unsupported engine '{}'. Only 'lua' is supported.",
-                    engine
-                )
+                write!(f, "ERR Engine '{}' not found", engine)
             }
             FunctionError::SerializationError { message } => {
                 write!(f, "ERR Serialization error: {}", message)

@@ -5,7 +5,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use super::utils::parse_u64;
+use super::utils::parse_i64;
 
 /// PING command.
 pub struct PingCommand;
@@ -106,7 +106,7 @@ impl Command for CommandCommand {
         CommandFlags::READONLY | CommandFlags::LOADING | CommandFlags::STALE
     }
 
-    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
             // COMMAND - return info about all commands
             return Ok(Response::Array(vec![])); // Simplified for now
@@ -175,8 +175,29 @@ impl Command for CommandCommand {
                         command: "command|getkeys",
                     });
                 }
-                // For simplicity, return empty array
-                Ok(Response::Array(vec![]))
+
+                let cmd_name = String::from_utf8_lossy(&args[1]).to_ascii_uppercase();
+                let cmd_args = &args[2..];
+
+                if let Some(registry) = ctx.command_registry {
+                    if let Some(handler) = registry.get(&cmd_name) {
+                        let keys = handler.keys(cmd_args);
+                        let response: Vec<Response> = keys
+                            .into_iter()
+                            .map(|k| Response::bulk(Bytes::copy_from_slice(k)))
+                            .collect();
+                        Ok(Response::Array(response))
+                    } else {
+                        Err(CommandError::InvalidArgument {
+                            message: format!(
+                                "Invalid command specified, or key spec not found for '{}'",
+                                cmd_name
+                            ),
+                        })
+                    }
+                } else {
+                    Ok(Response::Array(vec![]))
+                }
             }
             b"HELP" => {
                 // COMMAND HELP
@@ -319,38 +340,52 @@ impl Command for SetCommand {
                     if i >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    let secs = parse_u64(&args[i])?;
-                    if secs == 0 {
-                        return Err(CommandError::NotInteger);
+                    let secs = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
+                    if secs <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'set' command".to_string(),
+                        });
                     }
-                    opts.expiry = Some(Expiry::Ex(secs));
+                    opts.expiry = Some(Expiry::Ex(secs as u64));
                 }
                 b"PX" => {
                     i += 1;
                     if i >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    let ms = parse_u64(&args[i])?;
-                    if ms == 0 {
-                        return Err(CommandError::NotInteger);
+                    let ms = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
+                    if ms <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'set' command".to_string(),
+                        });
                     }
-                    opts.expiry = Some(Expiry::Px(ms));
+                    opts.expiry = Some(Expiry::Px(ms as u64));
                 }
                 b"EXAT" => {
                     i += 1;
                     if i >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    let ts = parse_u64(&args[i])?;
-                    opts.expiry = Some(Expiry::ExAt(ts));
+                    let ts = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
+                    if ts <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'set' command".to_string(),
+                        });
+                    }
+                    opts.expiry = Some(Expiry::ExAt(ts as u64));
                 }
                 b"PXAT" => {
                     i += 1;
                     if i >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
-                    let ts = parse_u64(&args[i])?;
-                    opts.expiry = Some(Expiry::PxAt(ts));
+                    let ts = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
+                    if ts <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'set' command".to_string(),
+                        });
+                    }
+                    opts.expiry = Some(Expiry::PxAt(ts as u64));
                 }
                 _ => return Err(CommandError::SyntaxError),
             }
