@@ -79,8 +79,10 @@ impl FunctionRegistry {
         }
 
         // Check for function name conflicts with other libraries
+        // Function names are stored lowercase for case-insensitive lookup
         for func_name in library.functions.keys() {
-            if let Some(existing_lib) = self.function_index.get(func_name) {
+            let func_name_lower = func_name.to_ascii_lowercase();
+            if let Some(existing_lib) = self.function_index.get(&func_name_lower) {
                 // If replacing the same library, allow overwriting its functions
                 if existing_lib != &lib_name {
                     return Err(FunctionError::FunctionNameConflict {
@@ -94,15 +96,15 @@ impl FunctionRegistry {
         // If replacing, first remove old library's function index entries
         if replace && let Some(old_lib) = self.libraries.get(&lib_name) {
             for func_name in old_lib.functions.keys() {
-                self.function_index.remove(func_name);
+                self.function_index.remove(&func_name.to_ascii_lowercase());
             }
         }
 
-        // Build index for new functions
+        // Build index for new functions (stored lowercase for case-insensitive lookup)
         let function_names: Vec<String> = library.functions.keys().cloned().collect();
         for func_name in &function_names {
             self.function_index
-                .insert(func_name.clone(), lib_name.clone());
+                .insert(func_name.to_ascii_lowercase(), lib_name.clone());
         }
 
         // Store the library
@@ -120,9 +122,9 @@ impl FunctionRegistry {
                     name: name.to_string(),
                 })?;
 
-        // Remove function index entries
+        // Remove function index entries (keys stored lowercase)
         for func_name in library.functions.keys() {
-            self.function_index.remove(func_name);
+            self.function_index.remove(&func_name.to_ascii_lowercase());
         }
 
         Ok(())
@@ -139,9 +141,9 @@ impl FunctionRegistry {
         self.libraries.get(name)
     }
 
-    /// Get a function by name, returning both the function and its library name.
+    /// Get a function by name (case-insensitive), returning both the function and its library name.
     pub fn get_function(&self, name: &str) -> Option<(&RegisteredFunction, &str)> {
-        let lib_name = self.function_index.get(name)?;
+        let lib_name = self.function_index.get(&name.to_ascii_lowercase())?;
         let library = self.libraries.get(lib_name)?;
         let function = library.get_function(name)?;
         Some((function, lib_name))

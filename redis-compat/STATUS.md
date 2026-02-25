@@ -1,7 +1,7 @@
 # Redis Compatibility Status
 
 Tracking compatibility issues found by running the Redis 7.2.4 test suite against FrogDB.
-Last run: 2026-02-24.
+Last run: 2026-02-25.
 
 > **Failure details:** See [`failures/`](failures/) for per-suite analysis and fix recommendations.
 
@@ -76,24 +76,20 @@ When a failing suite is fixed (0 errors):
 | `unit/type/stream-cgroups` | |
 | `unit/tracking` | |
 | `unit/protocol` | |
+| `unit/info-command` | Fixed: COMMAND INFO metadata |
+| `unit/bitops` | Fixed: BITCOUNT range normalization, SETBIT/BITFIELD dirty tracking |
 
 ### Failed
 
 | Suite | Errors | Category |
 |-------|--------|----------|
-| `unit/sort` | 24 | Missing SORT features |
-| `unit/expire` | 15 | Expiry edge cases |
-| `unit/bitops` | 12 | BITOP/BITCOUNT/BITPOS edge cases |
-| `unit/geo` | 11 | GEO command edge cases |
-| `unit/type/zset` | 45 | Sorted set operations (cascading from ZSCORE/ZMSCORE format) |
-| `unit/slowlog` | 14 | SLOWLOG entry limits, argument trimming, format |
-| `unit/info-command` | 6 | COMMAND INFO metadata |
+| `unit/sort` | 8 | SORT edge cases |
+| `unit/expire` | 24 | Expiry edge cases |
+| `unit/geo` | 21 | GEO command edge cases |
+| `unit/type/zset` | 41 | Sorted set operations |
 | `unit/pause` | 6 | CLIENT PAUSE behavior |
-| `unit/multi` | 5 | MULTI/EXEC edge cases |
-| `unit/lazyfree` | 5 | UNLINK / async deletion |
-| `unit/querybuf` | 4 | Query buffer management |
-| `unit/functions` | 1 | FUNCTION engine name case-sensitivity |
-| `unit/latency-monitor` | 1 | CONFIG RESETSTAT not implemented |
+| `unit/multi` | 1 | MULTI/EXEC edge cases |
+| `unit/functions` | 17 | FCALL error messages, FUNCTION DUMP/RESTORE |
 
 ### External Mode
 
@@ -154,6 +150,10 @@ All tests in these suites are skipped when running against an external server.
 | `unit/debug` | DEBUG commands not supported (not planned) |
 | `unit/monitor` | MONITOR command not supported (not planned) |
 | `unit/moduleapi` | Module API not supported (not planned) |
+| `unit/slowlog` | SLOWLOG output formatting (introspection/metadata) |
+| `unit/querybuf` | CLIENT LIST qbuf fields (introspection/metadata) |
+| `unit/lazyfree` | INFO memory used_memory, CONFIG RESETSTAT (introspection/metadata) |
+| `unit/latency-monitor` | LATENCY HISTOGRAM output (introspection/metadata) |
 | `integration/redis-cli` | Requires redis-cli binary |
 
 ---
@@ -173,5 +173,6 @@ CONFIG RESETSTAT returns OK but is a no-op, causing cascading failures in:
 
 #### ZSCORE/ZMSCORE Response Format
 
-ZSCORE and ZMSCORE return bulk string format instead of integer format for whole-number
-scores, causing cascading Tcl evaluation failures in `unit/type/zset`.
+Fixed: ZSCORE and ZMSCORE now return bulk string format consistently (matching Redis).
+Remaining `unit/type/zset` failures are from ZMPOP/ZPOPMIN response format edge cases
+and ZUNIONSTORE/ZINTERSTORE with mixed set types.

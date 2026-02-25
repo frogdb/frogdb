@@ -275,17 +275,19 @@ pub fn bitcount(data: &[u8], start: Option<i64>, end: Option<i64>, bit_mode: boo
         let s = start.unwrap_or(0);
         let e = end.unwrap_or(bit_len - 1);
 
-        // Handle negative indices
-        let s = if s < 0 {
-            (bit_len + s).max(0)
-        } else {
-            s.min(bit_len - 1)
-        };
-        let e = if e < 0 {
-            (bit_len + e).max(0)
-        } else {
-            e.min(bit_len - 1)
-        };
+        // Early return: both negative and start > end (Redis behavior)
+        if s < 0 && e < 0 && s > e {
+            return 0;
+        }
+
+        // Convert negative indices
+        let s = if s < 0 { bit_len + s } else { s };
+        let e = if e < 0 { bit_len + e } else { e };
+
+        // Clamp: start only from below, end from both sides
+        let s = s.max(0);
+        let e = e.max(0);
+        let e = e.min(bit_len - 1);
 
         if s > e {
             return 0;
@@ -297,17 +299,19 @@ pub fn bitcount(data: &[u8], start: Option<i64>, end: Option<i64>, bit_mode: boo
         let s = start.unwrap_or(0);
         let e = end.unwrap_or(len - 1);
 
-        // Handle negative indices
-        let s = if s < 0 {
-            (len + s).max(0)
-        } else {
-            s.min(len - 1)
-        };
-        let e = if e < 0 {
-            (len + e).max(0)
-        } else {
-            e.min(len - 1)
-        };
+        // Early return: both negative and start > end (Redis behavior)
+        if s < 0 && e < 0 && s > e {
+            return 0;
+        }
+
+        // Convert negative indices
+        let s = if s < 0 { len + s } else { s };
+        let e = if e < 0 { len + e } else { e };
+
+        // Clamp: start only from below, end from both sides
+        let s = s.max(0);
+        let e = e.max(0);
+        let e = e.min(len - 1);
 
         if s > e {
             return 0;
@@ -612,6 +616,20 @@ mod tests {
         assert_eq!(bitcount(&data, Some(1), Some(1), false), 0);
         assert_eq!(bitcount(&data, Some(2), Some(2), false), 4);
         assert_eq!(bitcount(&data, Some(-1), Some(-1), false), 4);
+    }
+
+    #[test]
+    fn test_bitcount_out_of_range() {
+        // "xxxx" = 4 bytes, each 'x' = 0x78
+        let data = b"xxxx".to_vec();
+
+        // BITCOUNT returns 0 with out of range indexes
+        assert_eq!(bitcount(&data, Some(4), Some(10), false), 0);
+        assert_eq!(bitcount(&data, Some(32), Some(87), true), 0);
+
+        // BITCOUNT returns 0 with negative indexes where start > end
+        assert_eq!(bitcount(&data, Some(-6), Some(-7), false), 0);
+        assert_eq!(bitcount(&data, Some(-6), Some(-15), true), 0);
     }
 
     #[test]

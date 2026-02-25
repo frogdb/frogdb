@@ -152,7 +152,12 @@ impl Command for ZunionCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let numkeys = parse_usize(&args[0])?;
-        if numkeys == 0 || args.len() < numkeys + 1 {
+        if numkeys == 0 {
+            return Err(CommandError::InvalidArgument {
+                message: "at least 1 input key is needed for 'zunion' command".to_string(),
+            });
+        }
+        if args.len() < numkeys + 1 {
             return Err(CommandError::SyntaxError);
         }
 
@@ -231,7 +236,12 @@ impl Command for ZunionstoreCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = args[0].clone();
         let numkeys = parse_usize(&args[1])?;
-        if numkeys == 0 || args.len() < numkeys + 2 {
+        if numkeys == 0 {
+            return Err(CommandError::InvalidArgument {
+                message: "at least 1 input key is needed for 'zunionstore' command".to_string(),
+            });
+        }
+        if args.len() < numkeys + 2 {
             return Err(CommandError::SyntaxError);
         }
 
@@ -315,7 +325,12 @@ impl Command for ZinterCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let numkeys = parse_usize(&args[0])?;
-        if numkeys == 0 || args.len() < numkeys + 1 {
+        if numkeys == 0 {
+            return Err(CommandError::InvalidArgument {
+                message: "at least 1 input key is needed for 'zinter' command".to_string(),
+            });
+        }
+        if args.len() < numkeys + 1 {
             return Err(CommandError::SyntaxError);
         }
 
@@ -416,7 +431,12 @@ impl Command for ZinterstoreCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = args[0].clone();
         let numkeys = parse_usize(&args[1])?;
-        if numkeys == 0 || args.len() < numkeys + 2 {
+        if numkeys == 0 {
+            return Err(CommandError::InvalidArgument {
+                message: "at least 1 input key is needed for 'zinterstore' command".to_string(),
+            });
+        }
+        if args.len() < numkeys + 2 {
             return Err(CommandError::SyntaxError);
         }
 
@@ -629,7 +649,12 @@ impl Command for ZdiffCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let numkeys = parse_usize(&args[0])?;
-        if numkeys == 0 || args.len() < numkeys + 1 {
+        if numkeys == 0 {
+            return Err(CommandError::InvalidArgument {
+                message: "at least 1 input key is needed for 'zdiff' command".to_string(),
+            });
+        }
+        if args.len() < numkeys + 1 {
             return Err(CommandError::SyntaxError);
         }
 
@@ -714,7 +739,12 @@ impl Command for ZdiffstoreCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = args[0].clone();
         let numkeys = parse_usize(&args[1])?;
-        if numkeys == 0 || args.len() < numkeys + 2 {
+        if numkeys == 0 {
+            return Err(CommandError::InvalidArgument {
+                message: "at least 1 input key is needed for 'zdiffstore' command".to_string(),
+            });
+        }
+        if args.len() < numkeys + 2 {
             return Err(CommandError::SyntaxError);
         }
 

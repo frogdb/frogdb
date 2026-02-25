@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::error::CommandError;
+use crate::registry::CommandRegistry;
 use crate::replication::{ReplicationState, ReplicationTrackerImpl};
 use crate::shard::ShardMessage;
 use crate::store::{Store, ValueType};
@@ -427,6 +428,19 @@ pub struct CommandContext<'a> {
 
     /// Optional quorum checker for local cluster health detection.
     pub quorum_checker: Option<&'a dyn QuorumChecker>,
+
+    /// Optional command registry for introspection commands (COMMAND GETKEYS).
+    pub command_registry: Option<&'a Arc<CommandRegistry>>,
+
+    /// Number of dirty changes made by this command (for rdb_changes_since_last_save).
+    ///
+    /// Defaults to 0. Write commands that modify data should set this to indicate
+    /// how many logical changes were made. The shard uses this to track
+    /// `rdb_changes_since_last_save` in INFO persistence.
+    ///
+    /// Commands like SETBIT and BITFIELD SET should only set this when the value
+    /// actually changed.
+    pub dirty_delta: i64,
 }
 
 impl<'a> CommandContext<'a> {
@@ -453,6 +467,8 @@ impl<'a> CommandContext<'a> {
             raft: None,
             network_factory: None,
             quorum_checker: None,
+            command_registry: None,
+            dirty_delta: 0,
         }
     }
 
@@ -487,6 +503,8 @@ impl<'a> CommandContext<'a> {
             raft,
             network_factory,
             quorum_checker,
+            command_registry: None,
+            dirty_delta: 0,
         }
     }
 

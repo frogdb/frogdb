@@ -49,30 +49,32 @@ impl ShardWorker {
             return err.to_response();
         }
 
-        // Create command context
-        // Note: We need a mutable reference to the store, but we're inside ShardWorker
-        // This is safe because each shard is single-threaded
-        let store = &mut self.store as &mut dyn Store;
-        let mut ctx = CommandContext::with_cluster(
-            store,
-            &self.shard_senders,
-            self.shard_id,
-            self.num_shards,
-            conn_id,
-            protocol_version,
-            None, // replication_tracker - not available in shard
-            None, // replication_state - not available in shard
-            self.cluster_state.as_ref(),
-            self.node_id,
-            self.raft.as_ref(),
-            self.network_factory.as_ref(),
-            self.quorum_checker.as_ref().map(|q| q.as_ref()),
-        );
+        // Create command context and execute in a block so the mutable borrow
+        // on self.store (via ctx) is released before we need self.store again.
+        let (response, dirty_delta) = {
+            let store = &mut self.store as &mut dyn Store;
+            let mut ctx = CommandContext::with_cluster(
+                store,
+                &self.shard_senders,
+                self.shard_id,
+                self.num_shards,
+                conn_id,
+                protocol_version,
+                None, // replication_tracker - not available in shard
+                None, // replication_state - not available in shard
+                self.cluster_state.as_ref(),
+                self.node_id,
+                self.raft.as_ref(),
+                self.network_factory.as_ref(),
+                self.quorum_checker.as_ref().map(|q| q.as_ref()),
+            );
+            ctx.command_registry = Some(&self.registry);
 
-        // Execute
-        let response = match handler.execute(&mut ctx, &command.args) {
-            Ok(response) => response,
-            Err(err) => err.to_response(),
+            let response = match handler.execute(&mut ctx, &command.args) {
+                Ok(response) => response,
+                Err(err) => err.to_response(),
+            };
+            (response, ctx.dirty_delta)
         };
 
         // Track keyspace hits/misses for GET-like commands
@@ -90,9 +92,21 @@ impl ShardWorker {
             }
         }
 
-        // Increment version on write operations
+        // Increment version and dirty counter on write operations
         if is_write {
             self.increment_version();
+            // Use the command's dirty_delta for dirty tracking.
+            // - dirty_delta == 0 (default): command didn't set it, count as 1
+            // - dirty_delta > 0: command explicitly set dirty count
+            // - dirty_delta < 0: command explicitly says "no dirty change"
+            let dirty_amount = if dirty_delta > 0 {
+                dirty_delta as u64
+            } else if dirty_delta < 0 {
+                0
+            } else {
+                1 // Default: most write commands count as 1 dirty change
+            };
+            self.store.increment_dirty(dirty_amount);
 
             // Try to satisfy any blocking waiters after list/zset write operations
             let keys = handler.keys(&command.args);
@@ -270,8 +284,13 @@ impl ShardWorker {
             }
             ScatterOp::FlushDb => {
                 // Clear all keys in this shard
+                // Only increment version if there were keys to clear,
+                // so WATCH on non-existing keys is not aborted
+                let had_keys = self.store.len() > 0;
                 self.store.clear();
-                self.increment_version();
+                if had_keys {
+                    self.increment_version();
+                }
                 vec![(Bytes::from_static(b"__flushdb__"), Response::ok())]
             }
             ScatterOp::Scan {

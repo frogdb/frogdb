@@ -65,10 +65,10 @@ impl SortOptions {
                 i += 1;
                 let count = parse_i64(&args[i])?;
 
-                if offset < 0 || count < 0 {
-                    return Err(CommandError::NotInteger);
-                }
-                limit = Some((offset as usize, count as usize));
+                // Redis allows negative offsets (clamped to 0) and negative counts (treated as 0)
+                let offset = if offset < 0 { 0 } else { offset as usize };
+                let count = if count < 0 { 0 } else { count as usize };
+                limit = Some((offset, count));
             } else if arg_upper == b"GET" {
                 i += 1;
                 if i >= args.len() {

@@ -54,19 +54,28 @@ impl Command for SetbitCommand {
             });
         }
 
-        let old_bit = if let Some(existing) = ctx.store.get_mut(key) {
+        let (old_bit, is_dirty) = if let Some(existing) = ctx.store.get_mut(key) {
             if let Some(sv) = existing.as_string_mut() {
-                sv.setbit(offset, value as u8)
+                let byte_idx = (offset / 8) as usize;
+                let will_extend = byte_idx >= sv.as_bytes().len();
+                let old = sv.setbit(offset, value as u8);
+                // Dirty if the bit value changed or the string was extended
+                (old, old != value as u8 || will_extend)
             } else {
                 return Err(CommandError::WrongType);
             }
         } else {
-            // Create new empty string
+            // Create new empty string - always dirty (key creation)
             let mut sv = StringValue::new(Bytes::new());
             let old_bit = sv.setbit(offset, value as u8);
             ctx.store.set(key.clone(), Value::String(sv));
-            old_bit
+            (old_bit, true)
         };
+
+        // Signal dirty state to the shard for rdb_changes_since_last_save tracking
+        if !is_dirty {
+            ctx.dirty_delta = -1; // No actual change, suppress dirty increment
+        }
 
         Ok(Response::Integer(old_bit as i64))
     }
@@ -436,6 +445,9 @@ fn execute_bitfield(
     // Parse subcommands
     let subcommands = parse_bitfield_subcommands(&args[1..], readonly)?;
 
+    // Track whether the key is new (for dirty tracking)
+    let key_is_new = ctx.store.get(key).is_none();
+
     // Get or create the string value
     let mut data = if let Some(value) = ctx.store.get(key) {
         if let Some(sv) = value.as_string() {
@@ -450,6 +462,8 @@ fn execute_bitfield(
     let mut results = Vec::new();
     let mut overflow_mode = OverflowMode::default();
     let mut modified = false;
+    let mut dirty_count: i64 = 0;
+    let original_data = data.clone();
 
     for subcmd in subcommands {
         match subcmd {
@@ -464,9 +478,14 @@ fn execute_bitfield(
                 value,
             } => {
                 let bit_offset = offset.resolve(encoding);
+                let data_before = data.clone();
                 let old_value = frogdb_core::bitfield_set(&mut data, encoding, bit_offset, value);
                 results.push(Response::Integer(old_value));
                 modified = true;
+                // Dirty if the value changed, the data length changed, or the key is new
+                if key_is_new || data_before != data {
+                    dirty_count += 1;
+                }
             }
             BitfieldSubCommand::IncrBy {
                 encoding,
@@ -486,12 +505,18 @@ fn execute_bitfield(
                     None => results.push(Response::null()),
                 }
                 modified = true;
+                // INCRBY always counts as dirty
+                dirty_count += 1;
             }
             BitfieldSubCommand::Overflow(mode) => {
                 overflow_mode = mode;
             }
         }
     }
+
+    // If the key was new but no write subcommands were issued, don't count as dirty
+    // (GET-only operations don't create the key)
+    let _ = original_data;
 
     // Update the value if modified
     if modified {
@@ -503,6 +528,14 @@ fn execute_bitfield(
             new_sv.set_bytes(data);
             ctx.store.set(key.clone(), Value::String(new_sv));
         }
+    }
+
+    // Signal dirty state to the shard for rdb_changes_since_last_save tracking
+    if dirty_count > 0 {
+        ctx.dirty_delta = dirty_count;
+    } else if modified {
+        // Modified but no dirty subcommands -> suppress dirty increment
+        ctx.dirty_delta = -1;
     }
 
     Ok(Response::Array(results))

@@ -52,6 +52,24 @@ unit/monitor
 unit/moduleapi
 
 # =============================================================================
+# INTROSPECTION / METADATA SUITES
+# =============================================================================
+# These suites test internal Redis server metadata that FrogDB does not expose
+# or formats differently. Not planned for exact compatibility.
+
+# SLOWLOG output formatting differences
+unit/slowlog
+
+# CLIENT LIST qbuf fields not tracked
+unit/querybuf
+
+# INFO memory used_memory, CONFIG RESETSTAT
+unit/lazyfree
+
+# LATENCY HISTOGRAM output format
+unit/latency-monitor
+
+# =============================================================================
 # INDIVIDUAL TESTS
 # =============================================================================
 # FrogDB only supports RESP protocol, not inline commands
