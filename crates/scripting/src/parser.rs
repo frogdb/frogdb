@@ -39,7 +39,7 @@ pub fn parse_shebang(code: &str) -> Result<ShebangInfo, FunctionError> {
     let engine = parts[0].to_string();
 
     // Currently only lua is supported
-    if engine != "lua" {
+    if !engine.eq_ignore_ascii_case("lua") {
         return Err(FunctionError::UnsupportedEngine { engine });
     }
 
