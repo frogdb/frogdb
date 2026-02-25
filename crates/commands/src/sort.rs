@@ -188,6 +188,10 @@ fn compute_sort_key(
         if pattern.to_ascii_lowercase() == b"nosort" {
             return Ok(SortKey::NoSort);
         }
+        // Check for constant pattern (no *) - treat as nosort
+        if !pattern.contains(&b'*') {
+            return Ok(SortKey::NoSort);
+        }
         // Use external key value
         resolve_pattern(ctx, pattern, element)
     } else {
@@ -201,7 +205,9 @@ fn compute_sort_key(
                 Ok(SortKey::Alpha(v))
             } else {
                 // Try to parse as number
-                let num = parse_f64(&v)?;
+                let num = parse_f64(&v).map_err(|_| CommandError::InvalidArgument {
+                    message: "One or more scores can't be converted into double".to_string(),
+                })?;
                 Ok(SortKey::Numeric(num))
             }
         }
@@ -289,12 +295,29 @@ fn execute_sort(ctx: &mut CommandContext, opts: &SortOptions) -> Result<Response
     indexed.sort_by(|a, b| {
         let ord = a.1.cmp(&b.1, opts.ascending);
         if ord == std::cmp::Ordering::Equal {
-            // Preserve original order for equal elements
-            a.2.cmp(&b.2)
+            // For NoSort keys, preserve original insertion order
+            if matches!(a.1, SortKey::NoSort) {
+                a.2.cmp(&b.2)
+            } else {
+                // Lexicographic tiebreaker on element value (matching Redis behavior)
+                if opts.ascending {
+                    a.0.cmp(&b.0)
+                } else {
+                    b.0.cmp(&a.0)
+                }
+            }
         } else {
             ord
         }
     });
+
+    // NoSort + DESC: reverse element order (nosort or constant BY pattern)
+    if let Some(ref pattern) = opts.by_pattern {
+        let is_nosort = pattern.to_ascii_lowercase() == b"nosort" || !pattern.contains(&b'*');
+        if is_nosort && !opts.ascending {
+            indexed.reverse();
+        }
+    }
 
     // Apply LIMIT
     let sorted: Vec<Bytes> = if let Some((offset, count)) = opts.limit {
@@ -907,8 +930,8 @@ mod tests {
         let cmd = SortCommand;
         let result = cmd.execute(&mut ctx, &[Bytes::from("mylist")]);
 
-        // parse_f64 returns NotFloat for values that can't be parsed as float
-        assert!(matches!(result, Err(CommandError::NotFloat)));
+        // Should return the Redis-compatible error message
+        assert!(matches!(result, Err(CommandError::InvalidArgument { .. })));
     }
 
     #[test]
