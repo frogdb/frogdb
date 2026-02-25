@@ -94,22 +94,16 @@ When a failing suite is fixed (0 errors):
 ### External Mode
 
 All tests in these suites are skipped when running against an external server.
+These test user-facing behavior FrogDB should eventually support.
 
 | Suite |
 |-------|
-| `unit/aofrw` |
 | `unit/maxmemory` |
-| `unit/tls` |
-| `unit/oom-score-adj` |
-| `unit/shutdown` |
 | `unit/cluster/misc` |
 | `unit/cluster/cli` |
 | `unit/cluster/scripting` |
 | `unit/cluster/hostnames` |
-| `unit/cluster/human-announced-nodename` |
 | `unit/cluster/multi-slot-operations` |
-| `unit/cluster/slot-ownership` |
-| `unit/cluster/links` |
 | `unit/cluster/cluster-response-tls` |
 | `integration/block-repl` |
 | `integration/replication` |
@@ -117,25 +111,11 @@ All tests in these suites are skipped when running against an external server.
 | `integration/replication-3` |
 | `integration/replication-4` |
 | `integration/replication-psync` |
-| `integration/replication-buffer` |
-| `integration/shutdown` |
-| `integration/aof` |
-| `integration/aof-race` |
-| `integration/aof-multi-part` |
-| `integration/rdb` |
-| `integration/corrupt-dump` |
-| `integration/corrupt-dump-fuzzer` |
-| `integration/convert-zipmap-hash-on-load` |
-| `integration/convert-ziplist-hash-on-load` |
-| `integration/convert-ziplist-zset-on-load` |
-| `integration/logging` |
 | `integration/psync2` |
 | `integration/psync2-reg` |
 | `integration/psync2-pingoff` |
 | `integration/psync2-master-restart` |
 | `integration/failover` |
-| `integration/redis-benchmark` |
-| `integration/dismiss-mem` |
 
 ### Skipped
 
@@ -155,6 +135,27 @@ All tests in these suites are skipped when running against an external server.
 | `unit/lazyfree` | INFO memory used_memory, CONFIG RESETSTAT (introspection/metadata) |
 | `unit/latency-monitor` | LATENCY HISTOGRAM output (introspection/metadata) |
 | `integration/redis-cli` | Requires redis-cli binary |
+| `unit/aofrw` | Redis AOF rewrite internals |
+| `integration/aof` | Redis AOF file format/loading |
+| `integration/aof-race` | Redis AOF rewrite race conditions |
+| `integration/aof-multi-part` | Redis AOF manifest format |
+| `integration/rdb` | Redis RDB encoding/format |
+| `integration/corrupt-dump` | Corrupt RDB payload handling |
+| `integration/corrupt-dump-fuzzer` | RDB corruption fuzzing |
+| `integration/convert-zipmap-hash-on-load` | Legacy zipmap encoding migration |
+| `integration/convert-ziplist-hash-on-load` | Legacy ziplist hash encoding migration |
+| `integration/convert-ziplist-zset-on-load` | Legacy ziplist zset encoding migration |
+| `unit/shutdown` | Redis shutdown/signal handling |
+| `unit/oom-score-adj` | Linux OOM score adjustment |
+| `unit/tls` | Redis TLS transport configuration |
+| `integration/shutdown` | Shutdown with lagging replicas |
+| `integration/logging` | Server crash/stack trace logging |
+| `unit/cluster/human-announced-nodename` | Cluster log node naming internals |
+| `unit/cluster/slot-ownership` | Slot gossip propagation internals |
+| `unit/cluster/links` | Cluster inter-node link management |
+| `integration/replication-buffer` | Replication buffer memory management |
+| `integration/dismiss-mem` | Fork child memory dismissal |
+| `integration/redis-benchmark` | redis-benchmark tool integration |
 
 ---
 
