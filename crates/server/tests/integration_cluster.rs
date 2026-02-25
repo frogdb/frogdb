@@ -44,7 +44,7 @@ async fn test_cluster_formation_3_nodes() {
         .unwrap();
 
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).await.unwrap();
+        let info = harness.get_cluster_info(node_id).unwrap();
         assert_eq!(info.cluster_state, "ok");
         assert_eq!(info.cluster_known_nodes, 3);
     }
@@ -101,7 +101,7 @@ async fn test_single_node_cluster() {
     assert_eq!(harness.node_ids().len(), 1);
 
     let node_id = harness.node_ids()[0];
-    let info = harness.get_cluster_info(node_id).await.unwrap();
+    let info = harness.get_cluster_info(node_id).unwrap();
     // Currently returns hardcoded standalone response
     assert_eq!(info.cluster_state, "ok");
     assert_eq!(info.cluster_known_nodes, 1);
@@ -251,7 +251,7 @@ async fn test_add_node_to_cluster() {
 
     // Verify all nodes see 4 members
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).await.unwrap();
+        let info = harness.get_cluster_info(node_id).unwrap();
         assert_eq!(info.cluster_known_nodes, 4);
     }
 
@@ -311,7 +311,7 @@ async fn test_cluster_with_5_nodes() {
         .unwrap();
 
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).await.unwrap();
+        let info = harness.get_cluster_info(node_id).unwrap();
         assert_eq!(info.cluster_state, "ok");
         assert_eq!(info.cluster_known_nodes, 5);
     }
@@ -388,7 +388,7 @@ async fn test_node_restart_rejoins_cluster() {
         .await
         .unwrap();
 
-    let info = harness.get_cluster_info(victim).await.unwrap();
+    let info = harness.get_cluster_info(victim).unwrap();
     assert_eq!(info.cluster_state, "ok");
 
     harness.shutdown_all().await;
@@ -447,7 +447,7 @@ async fn test_graceful_shutdown_and_restart() {
 
     // Remaining nodes should still be operational
     for &id in &node_ids[1..] {
-        let info = harness.get_cluster_info(id).await.unwrap();
+        let info = harness.get_cluster_info(id).unwrap();
         assert_eq!(info.cluster_state, "ok");
     }
 
@@ -487,7 +487,7 @@ async fn test_custom_cluster_config() {
 
     // Verify cluster is operational
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).await.unwrap();
+        let info = harness.get_cluster_info(node_id).unwrap();
         assert_eq!(info.cluster_state, "ok");
     }
 
@@ -649,24 +649,9 @@ async fn test_ask_redirect_during_migration() {
     let source_node = harness.node(node_ids[0]).unwrap();
     let target_node = harness.node(node_ids[1]).unwrap();
 
-    // Get node IDs from CLUSTER MYID
-    let source_myid_resp = source_node.send("CLUSTER", &["MYID"]).await;
-    let target_myid_resp = target_node.send("CLUSTER", &["MYID"]).await;
-
-    let source_id = match &source_myid_resp {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
-    let target_id = match &target_myid_resp {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get node IDs via direct state access
+    let source_id = harness.get_node_id_str(node_ids[0]).unwrap();
+    let target_id = harness.get_node_id_str(node_ids[1]).unwrap();
 
     // Set slot 100 to MIGRATING state on source
     let migrate_resp = source_node
@@ -722,18 +707,10 @@ async fn test_asking_command_bypasses_migration_check() {
         .unwrap();
 
     let node_ids = harness.node_ids();
-    let source_node = harness.node(node_ids[0]).unwrap();
     let target_node = harness.node(node_ids[1]).unwrap();
 
-    // Get node IDs
-    let source_myid_resp = source_node.send("CLUSTER", &["MYID"]).await;
-    let source_id = match &source_myid_resp {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get source node ID via direct state access
+    let source_id = harness.get_node_id_str(node_ids[0]).unwrap();
 
     // Set slot 200 to IMPORTING state on target
     let import_resp = target_node
@@ -792,18 +769,10 @@ async fn test_asking_flag_cleared_after_use() {
         .unwrap();
 
     let node_ids = harness.node_ids();
-    let source_node = harness.node(node_ids[0]).unwrap();
     let target_node = harness.node(node_ids[1]).unwrap();
 
-    // Get source node ID
-    let source_myid_resp = source_node.send("CLUSTER", &["MYID"]).await;
-    let source_id = match &source_myid_resp {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get source node ID via direct state access
+    let source_id = harness.get_node_id_str(node_ids[0]).unwrap();
 
     // Set slot 300 to IMPORTING on target
     let import_resp = target_node
@@ -865,17 +834,9 @@ async fn test_cluster_setslot_importing() {
 
     let node_ids = harness.node_ids();
     let node = harness.node(node_ids[0]).unwrap();
-    let other_node = harness.node(node_ids[1]).unwrap();
 
-    // Get other node's ID
-    let other_myid = other_node.send("CLUSTER", &["MYID"]).await;
-    let other_id = match &other_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get other node's ID via direct state access
+    let other_id = harness.get_node_id_str(node_ids[1]).unwrap();
 
     // Set slot 1000 to IMPORTING
     let response = node
@@ -911,17 +872,9 @@ async fn test_cluster_setslot_migrating() {
 
     let node_ids = harness.node_ids();
     let node = harness.node(node_ids[0]).unwrap();
-    let other_node = harness.node(node_ids[1]).unwrap();
 
-    // Get other node's ID
-    let other_myid = other_node.send("CLUSTER", &["MYID"]).await;
-    let other_id = match &other_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get other node's ID via direct state access
+    let other_id = harness.get_node_id_str(node_ids[1]).unwrap();
 
     // Set slot 1001 to MIGRATING
     let response = node
@@ -958,15 +911,8 @@ async fn test_cluster_setslot_node() {
     let node_ids = harness.node_ids();
     let node = harness.node(node_ids[0]).unwrap();
 
-    // Get this node's ID
-    let myid_resp = node.send("CLUSTER", &["MYID"]).await;
-    let my_id = match &myid_resp {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get this node's ID via direct state access
+    let my_id = harness.get_node_id_str(node_ids[0]).unwrap();
 
     // Assign slot 1002 to this node using SETSLOT NODE
     let response = node
@@ -996,17 +942,9 @@ async fn test_cluster_setslot_stable() {
 
     let node_ids = harness.node_ids();
     let node = harness.node(node_ids[0]).unwrap();
-    let other_node = harness.node(node_ids[1]).unwrap();
 
-    // Get other node's ID
-    let other_myid = other_node.send("CLUSTER", &["MYID"]).await;
-    let other_id = match &other_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get other node's ID via direct state access
+    let other_id = harness.get_node_id_str(node_ids[1]).unwrap();
 
     // Set slot 1003 to MIGRATING
     let migrate_resp = node
@@ -1047,24 +985,9 @@ async fn test_migration_state_visible_in_cluster_nodes() {
     let source = harness.node(node_ids[0]).unwrap();
     let target = harness.node(node_ids[1]).unwrap();
 
-    // Get node IDs
-    let source_myid = source.send("CLUSTER", &["MYID"]).await;
-    let target_myid = target.send("CLUSTER", &["MYID"]).await;
-
-    let source_id = match &source_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
-    let target_id = match &target_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get node IDs via direct state access
+    let source_id = harness.get_node_id_str(node_ids[0]).unwrap();
+    let target_id = harness.get_node_id_str(node_ids[1]).unwrap();
 
     // Set up migration: slot 1004 migrating from source to target
     let migrate_resp = source
@@ -1182,7 +1105,7 @@ async fn test_partition_via_shutdown() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).await.unwrap();
+            let info = harness.get_cluster_info(node_id).unwrap();
             assert_eq!(
                 info.cluster_state, "ok",
                 "Node {} should be ok after recovery",
@@ -1348,7 +1271,7 @@ async fn test_seven_node_cluster() {
         .unwrap();
 
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).await.unwrap();
+        let info = harness.get_cluster_info(node_id).unwrap();
         assert_eq!(info.cluster_state, "ok");
         assert_eq!(info.cluster_known_nodes, 7);
     }
@@ -1425,24 +1348,9 @@ async fn test_concurrent_operations_during_migration() {
     let source = harness.node(node_ids[0]).unwrap();
     let target = harness.node(node_ids[1]).unwrap();
 
-    // Get node IDs for migration
-    let source_myid = source.send("CLUSTER", &["MYID"]).await;
-    let target_myid = target.send("CLUSTER", &["MYID"]).await;
-
-    let source_id = match &source_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
-    let target_id = match &target_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get node IDs via direct state access
+    let source_id = harness.get_node_id_str(node_ids[0]).unwrap();
+    let target_id = harness.get_node_id_str(node_ids[1]).unwrap();
 
     // Set up migration for slot 500
     let test_slot = 500u16;
@@ -1570,7 +1478,7 @@ async fn test_split_brain_writes_fail_on_minority() {
 
     // First verify cluster is healthy before partition
     let _pre_partition_node = harness.node(node_ids[3]).unwrap();
-    let info = harness.get_cluster_info(node_ids[3]).await.unwrap();
+    let info = harness.get_cluster_info(node_ids[3]).unwrap();
     eprintln!(
         "Pre-partition cluster state: {} (known_nodes: {})",
         info.cluster_state, info.cluster_known_nodes
@@ -1655,7 +1563,7 @@ async fn test_split_brain_writes_fail_on_minority() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).await.unwrap();
+            let info = harness.get_cluster_info(node_id).unwrap();
             assert_eq!(
                 info.cluster_state, "ok",
                 "Node {} should recover after majority restored",
@@ -1667,7 +1575,7 @@ async fn test_split_brain_writes_fail_on_minority() {
     // Verify cluster is operational after recovery (state=ok means quorum restored)
     // Note: We check cluster state rather than writes because slot assignment
     // may not be fully propagated immediately after recovery
-    let final_info = harness.get_cluster_info(node_ids[3]).await.unwrap();
+    let final_info = harness.get_cluster_info(node_ids[3]).unwrap();
     eprintln!(
         "Post-recovery cluster state: {} (known_nodes: {})",
         final_info.cluster_state, final_info.cluster_known_nodes
@@ -1717,29 +1625,9 @@ async fn test_failover_during_migration_preserves_data() {
         source_node_id, target_node_id, third_node_id
     );
 
-    // Get cluster node IDs for migration setup (need to do this in a scope to avoid borrow issues)
-    let (source_id, target_id) = {
-        let source = harness.node(source_node_id).unwrap();
-        let target = harness.node(target_node_id).unwrap();
-
-        let source_myid = source.send("CLUSTER", &["MYID"]).await;
-        let target_myid = target.send("CLUSTER", &["MYID"]).await;
-
-        match (&source_myid, &target_myid) {
-            (
-                frogdb_protocol::Response::Bulk(Some(s)),
-                frogdb_protocol::Response::Bulk(Some(t)),
-            ) => (
-                String::from_utf8_lossy(s).to_string(),
-                String::from_utf8_lossy(t).to_string(),
-            ),
-            _ => {
-                eprintln!("Could not get node IDs, skipping migration test");
-                harness.shutdown_all().await;
-                return;
-            }
-        }
-    };
+    // Get cluster node IDs via direct state access
+    let source_id = harness.get_node_id_str(source_node_id).unwrap();
+    let target_id = harness.get_node_id_str(target_node_id).unwrap();
 
     // Use slot 500 for migration test
     let test_slot = 500u16;
@@ -1851,7 +1739,7 @@ async fn test_failover_during_migration_preserves_data() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Final state verification
-    let final_info = harness.get_cluster_info(target_node_id).await.unwrap();
+    let final_info = harness.get_cluster_info(target_node_id).unwrap();
     eprintln!(
         "Final cluster state: {} (known_nodes: {})",
         final_info.cluster_state, final_info.cluster_known_nodes
@@ -1975,7 +1863,7 @@ async fn test_concurrent_failover_attempts() {
             }
 
             // Check cluster info - the node that sees itself as having quorum
-            if let Ok(info) = harness.get_cluster_info(node_id).await
+            if let Ok(info) = harness.get_cluster_info(node_id)
                 && info.cluster_state == "ok"
             {
                 // This node believes it can serve requests
@@ -2238,26 +2126,9 @@ async fn test_writes_during_migration_accessible_after() {
     let source = harness.node(node_ids[0]).unwrap();
     let target = harness.node(node_ids[1]).unwrap();
 
-    // Get node cluster IDs
-    let source_myid = source.send("CLUSTER", &["MYID"]).await;
-    let target_myid = target.send("CLUSTER", &["MYID"]).await;
-
-    let source_id = match &source_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            eprintln!("Could not get source MYID");
-            harness.shutdown_all().await;
-            return;
-        }
-    };
-    let target_id = match &target_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            eprintln!("Could not get target MYID");
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get node cluster IDs via direct state access
+    let source_id = harness.get_node_id_str(node_ids[0]).unwrap();
+    let target_id = harness.get_node_id_str(node_ids[1]).unwrap();
 
     // Use slot 600 for migration
     let test_slot = 600u16;
@@ -3044,7 +2915,7 @@ async fn test_partition_heals_cluster_recovers() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).await.unwrap();
+            let info = harness.get_cluster_info(node_id).unwrap();
             eprintln!("Node {} after heal: state={}", node_id, info.cluster_state);
             assert_eq!(
                 info.cluster_state, "ok",
@@ -3095,7 +2966,7 @@ async fn test_zombie_leader_detection() {
     if let Some(leader_node) = harness.node(leader)
         && leader_node.is_running()
     {
-        let info = harness.get_cluster_info(leader).await.unwrap();
+        let info = harness.get_cluster_info(leader).unwrap();
         eprintln!(
             "Zombie leader state: {} (known_nodes: {})",
             info.cluster_state, info.cluster_known_nodes
@@ -3202,24 +3073,9 @@ async fn test_client_follows_ask_redirect() {
     let source = harness.node(node_ids[0]).unwrap();
     let target = harness.node(node_ids[1]).unwrap();
 
-    // Get cluster node IDs
-    let source_myid = source.send("CLUSTER", &["MYID"]).await;
-    let target_myid = target.send("CLUSTER", &["MYID"]).await;
-
-    let source_id = match &source_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
-    let target_id = match &target_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get cluster node IDs via direct state access
+    let source_id = harness.get_node_id_str(node_ids[0]).unwrap();
+    let target_id = harness.get_node_id_str(node_ids[1]).unwrap();
 
     // Set up migration for slot 700
     let test_slot = 700u16;
@@ -3387,24 +3243,9 @@ async fn test_migrate_keys_between_nodes() {
     let source = harness.node(node_ids[0]).unwrap();
     let target = harness.node(node_ids[1]).unwrap();
 
-    // Get cluster node IDs
-    let source_myid = source.send("CLUSTER", &["MYID"]).await;
-    let target_myid = target.send("CLUSTER", &["MYID"]).await;
-
-    let source_id = match &source_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
-    let target_id = match &target_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get cluster node IDs via direct state access
+    let source_id = harness.get_node_id_str(node_ids[0]).unwrap();
+    let target_id = harness.get_node_id_str(node_ids[1]).unwrap();
 
     // Use slot 800 for migration
     let test_slot = 800u16;
@@ -3497,24 +3338,9 @@ async fn test_concurrent_reads_during_migration() {
     let source = harness.node(node_ids[0]).unwrap();
     let target = harness.node(node_ids[1]).unwrap();
 
-    // Get cluster node IDs
-    let source_myid = source.send("CLUSTER", &["MYID"]).await;
-    let target_myid = target.send("CLUSTER", &["MYID"]).await;
-
-    let source_id = match &source_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
-    let target_id = match &target_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get cluster node IDs via direct state access
+    let source_id = harness.get_node_id_str(node_ids[0]).unwrap();
+    let target_id = harness.get_node_id_str(node_ids[1]).unwrap();
 
     // Use slot 850
     let test_slot = 850u16;
@@ -3623,24 +3449,9 @@ async fn test_migration_cancelled_midway() {
     let source = harness.node(node_ids[0]).unwrap();
     let target = harness.node(node_ids[1]).unwrap();
 
-    // Get cluster node IDs
-    let source_myid = source.send("CLUSTER", &["MYID"]).await;
-    let target_myid = target.send("CLUSTER", &["MYID"]).await;
-
-    let source_id = match &source_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
-    let target_id = match &target_myid {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    // Get cluster node IDs via direct state access
+    let source_id = harness.get_node_id_str(node_ids[0]).unwrap();
+    let target_id = harness.get_node_id_str(node_ids[1]).unwrap();
 
     // Use slot 900
     let test_slot = 900u16;
@@ -3726,27 +3537,9 @@ async fn test_source_dies_during_migration() {
     let source_id = node_ids[0];
     let target_id = node_ids[1];
 
-    let (cluster_source_id, cluster_target_id) = {
-        let source = harness.node(source_id).unwrap();
-        let target = harness.node(target_id).unwrap();
-
-        let source_myid = source.send("CLUSTER", &["MYID"]).await;
-        let target_myid = target.send("CLUSTER", &["MYID"]).await;
-
-        match (&source_myid, &target_myid) {
-            (
-                frogdb_protocol::Response::Bulk(Some(s)),
-                frogdb_protocol::Response::Bulk(Some(t)),
-            ) => (
-                String::from_utf8_lossy(s).to_string(),
-                String::from_utf8_lossy(t).to_string(),
-            ),
-            _ => {
-                harness.shutdown_all().await;
-                return;
-            }
-        }
-    };
+    // Get cluster node IDs via direct state access
+    let cluster_source_id = harness.get_node_id_str(source_id).unwrap();
+    let cluster_target_id = harness.get_node_id_str(target_id).unwrap();
 
     // Use slot 950
     let test_slot = 950u16;
@@ -3804,7 +3597,7 @@ async fn test_source_dies_during_migration() {
                 .send("CLUSTER", &["SETSLOT", &test_slot.to_string(), "STABLE"])
                 .await;
 
-            let info = harness.get_cluster_info(node_id).await;
+            let info = harness.get_cluster_info(node_id);
             eprintln!("Node {} after source death: {:?}", node_id, info);
         }
     }
@@ -3890,7 +3683,7 @@ async fn test_rolling_restart() {
     // Note: cluster_state may be "fail" without manual slot assignment, but
     // the key property is that all nodes survived restart and rejoined.
     for &node_id in &node_ids {
-        let info = harness.get_cluster_info(node_id).await.unwrap();
+        let info = harness.get_cluster_info(node_id).unwrap();
         eprintln!(
             "Node {}: state={}, known_nodes={}",
             node_id, info.cluster_state, info.cluster_known_nodes
@@ -3980,17 +3773,7 @@ async fn test_cluster_forget_removes_node() {
 
     // Get the cluster node ID of the node we want to forget
     let victim_id = node_ids[2];
-    let victim_cluster_id = {
-        let victim = harness.node(victim_id).unwrap();
-        let myid_resp = victim.send("CLUSTER", &["MYID"]).await;
-        match &myid_resp {
-            frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-            _ => {
-                harness.shutdown_all().await;
-                return;
-            }
-        }
-    };
+    let victim_cluster_id = harness.get_node_id_str(victim_id).unwrap();
 
     eprintln!(
         "Will forget node {} (cluster ID: {})",
@@ -4056,7 +3839,7 @@ async fn test_large_cluster_10_nodes() {
 
     // Verify all nodes report healthy
     for node_id in harness.node_ids() {
-        let info = harness.get_cluster_info(node_id).await.unwrap();
+        let info = harness.get_cluster_info(node_id).unwrap();
         assert_eq!(info.cluster_state, "ok", "Node {} should be ok", node_id);
         assert_eq!(
             info.cluster_known_nodes, 10,
@@ -4233,7 +4016,7 @@ async fn test_simultaneous_node_restarts() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).await.unwrap();
+            let info = harness.get_cluster_info(node_id).unwrap();
             assert_eq!(info.cluster_state, "ok");
         }
     }
@@ -4267,7 +4050,7 @@ async fn test_node_restart_preserves_raft_state() {
     let follower = *node_ids.iter().find(|&&id| id != leader).unwrap();
 
     // Get current epoch (term) before restart
-    let pre_info = harness.get_cluster_info(follower).await.unwrap();
+    let pre_info = harness.get_cluster_info(follower).unwrap();
     let pre_epoch = pre_info.cluster_current_epoch;
     eprintln!("Pre-restart epoch: {}", pre_epoch);
 
@@ -4284,7 +4067,7 @@ async fn test_node_restart_preserves_raft_state() {
         .unwrap();
 
     // Get epoch after restart
-    let post_info = harness.get_cluster_info(follower).await.unwrap();
+    let post_info = harness.get_cluster_info(follower).unwrap();
     let post_epoch = post_info.cluster_current_epoch;
     eprintln!("Post-restart epoch: {}", post_epoch);
 
@@ -4458,7 +4241,7 @@ async fn test_flapping_node() {
         if let Some(node) = harness.node(node_id)
             && node.is_running()
         {
-            let info = harness.get_cluster_info(node_id).await.unwrap();
+            let info = harness.get_cluster_info(node_id).unwrap();
             eprintln!(
                 "Node {} after flapping: state={}",
                 node_id, info.cluster_state
@@ -4509,30 +4292,12 @@ async fn test_raft_snapshot_during_migration() {
     let source_node_id = leader;
     let target_node_id = *node_ids.iter().find(|&&id| id != leader).unwrap();
 
-    // Get cluster node IDs (different from harness node IDs)
+    // Get cluster node IDs via direct state access
     let source_node = harness.node(source_node_id).unwrap();
     let target_node = harness.node(target_node_id).unwrap();
 
-    let source_myid_resp = source_node.send("CLUSTER", &["MYID"]).await;
-    let target_myid_resp = target_node.send("CLUSTER", &["MYID"]).await;
-
-    let source_cluster_id = match &source_myid_resp {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            eprintln!("Could not get source MYID, skipping test");
-            harness.shutdown_all().await;
-            return;
-        }
-    };
-
-    let target_cluster_id = match &target_myid_resp {
-        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-        _ => {
-            eprintln!("Could not get target MYID, skipping test");
-            harness.shutdown_all().await;
-            return;
-        }
-    };
+    let source_cluster_id = harness.get_node_id_str(source_node_id).unwrap();
+    let target_cluster_id = harness.get_node_id_str(target_node_id).unwrap();
 
     eprintln!(
         "Source cluster ID: {}, Target cluster ID: {}",

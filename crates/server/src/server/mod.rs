@@ -1409,6 +1409,16 @@ impl Server {
         self.raft.as_ref()
     }
 
+    /// Get the cluster state, if cluster mode is enabled.
+    pub fn cluster_state(&self) -> Option<&Arc<ClusterState>> {
+        self.cluster_state.as_ref()
+    }
+
+    /// Get this node's ID, if cluster mode is enabled.
+    pub fn node_id(&self) -> Option<u64> {
+        self.node_id
+    }
+
     /// Get the latency baseline result from startup test (if available).
     pub fn latency_baseline(&self) -> Option<&LatencyTestResult> {
         self.latency_baseline.as_ref()
