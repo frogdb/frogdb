@@ -358,6 +358,19 @@ impl ConnectionHandler {
             return vec![self.route_and_execute(cmd, cmd_name).await];
         }
 
+        // If in transaction mode, queue the command instead of executing
+        // (must be checked BEFORE scatter-gather routing so FLUSHALL/FLUSHDB etc. get queued)
+        if self.state.transaction.queue.is_some() {
+            // Check if it's a blocking command - not allowed in MULTI
+            // Use execution_strategy() for type-safe blocking detection
+            if self.is_blocking_command(cmd_name) {
+                return vec![Response::error(
+                    "ERR Blocking commands are not allowed inside a transaction",
+                )];
+            }
+            return vec![self.queue_command(cmd)];
+        }
+
         // Handle server commands that need scatter-gather routing
         match cmd_name {
             "SCAN" => return vec![self.handle_scan(&cmd.args).await],
@@ -369,18 +382,6 @@ impl ConnectionHandler {
             "MIGRATE" => return vec![self.handle_migrate(&cmd.args).await],
             "SHUTDOWN" => return vec![self.handle_shutdown(&cmd.args).await],
             _ => {}
-        }
-
-        // If in transaction mode, queue the command instead of executing
-        if self.state.transaction.queue.is_some() {
-            // Check if it's a blocking command - not allowed in MULTI
-            // Use execution_strategy() for type-safe blocking detection
-            if self.is_blocking_command(cmd_name) {
-                return vec![Response::error(
-                    "ERR Blocking commands are not allowed inside a transaction",
-                )];
-            }
-            return vec![self.queue_command(cmd)];
         }
 
         // Handle ASKING command (sets connection flag)
