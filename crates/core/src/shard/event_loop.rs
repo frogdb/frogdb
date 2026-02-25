@@ -166,8 +166,10 @@ impl ShardWorker {
                             self.slowlog.reset();
                             let _ = response_tx.send(());
                         }
-                        ShardMessage::SlowlogAdd { duration_us, command, client_addr, client_name } => {
-                            self.slowlog.add(duration_us, &command, client_addr, client_name);
+                        ShardMessage::SlowlogAdd { duration_us, command, client_addr, client_name, max_len } => {
+                            // Keep shard slowlog max_len in sync with runtime config
+                            self.slowlog.set_max_len(max_len);
+                            self.slowlog.add_pre_truncated(duration_us, command, client_addr, client_name);
                         }
 
                         // Memory handlers
@@ -199,6 +201,16 @@ impl ShardWorker {
                         }
                         ShardMessage::LatencyReset { events, response_tx } => {
                             self.latency_monitor.reset(&events);
+                            let _ = response_tx.send(());
+                        }
+
+                        ShardMessage::ResetStats { response_tx } => {
+                            // Reset latency monitor (all events)
+                            self.latency_monitor.reset(&[]);
+                            // Reset slowlog
+                            self.slowlog.reset();
+                            // Reset peak memory
+                            self.peak_memory = 0;
                             let _ = response_tx.send(());
                         }
 

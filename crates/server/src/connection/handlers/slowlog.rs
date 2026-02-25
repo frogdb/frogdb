@@ -193,6 +193,9 @@ impl ConnectionHandler {
         let max_arg_len = self.config_manager.slowlog_max_arg_len();
         let truncated_args = SlowLog::truncate_args(&command_args, max_arg_len);
 
+        // Get current max_len to propagate to shard
+        let max_len = self.config_manager.slowlog_max_len();
+
         // Get client info
         let client_addr = self.state.addr.to_string();
         let client_name = self
@@ -211,6 +214,7 @@ impl ConnectionHandler {
                     command: truncated_args,
                     client_addr,
                     client_name,
+                    max_len,
                 })
                 .await;
         }

@@ -75,6 +75,26 @@ impl SlowLog {
         client_addr: String,
         client_name: String,
     ) {
+        let truncated_command = Self::truncate_args(command, self.max_arg_len);
+        self.add_pre_truncated(duration_us, truncated_command, client_addr, client_name);
+    }
+
+    /// Add a slow query entry with pre-truncated arguments.
+    ///
+    /// Use this when arguments have already been truncated by the caller
+    /// (e.g., in `maybe_log_slow_query`). If the log is at capacity, the
+    /// oldest entry is evicted.
+    pub fn add_pre_truncated(
+        &mut self,
+        duration_us: u64,
+        command: Vec<Bytes>,
+        client_addr: String,
+        client_name: String,
+    ) {
+        if self.max_len == 0 {
+            return;
+        }
+
         // Generate globally unique ID
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
@@ -84,20 +104,17 @@ impl SlowLog {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        // Truncate arguments
-        let truncated_command = Self::truncate_args(command, self.max_arg_len);
-
         let entry = SlowLogEntry {
             id,
             timestamp,
             duration_us,
-            command: truncated_command,
+            command,
             client_addr,
             client_name,
         };
 
         // Evict oldest if at capacity
-        if self.entries.len() >= self.max_len {
+        while self.entries.len() >= self.max_len {
             self.entries.pop_back();
         }
 
@@ -142,25 +159,40 @@ impl SlowLog {
         self.max_arg_len = max_arg_len;
     }
 
-    /// Truncate arguments to the specified maximum length.
+    /// Truncate arguments to match Redis slowlog behavior.
     ///
-    /// Arguments exceeding `max_arg_len` bytes are truncated and appended with
-    /// "... (N more bytes)" to indicate truncation.
+    /// - Arguments exceeding `max_arg_len` bytes are truncated to that length
+    ///   with `"... (N more bytes)"` appended as a suffix on the truncated arg.
+    /// - Commands with more than 32 arguments show only the first 32, with
+    ///   `"... (N more arguments)"` appended as an extra element.
     pub fn truncate_args(args: &[Bytes], max_arg_len: usize) -> Vec<Bytes> {
-        args.iter()
+        const MAX_ARGS: usize = 32;
+
+        let capped = args.len() > MAX_ARGS;
+        let iter_args = if capped { &args[..MAX_ARGS] } else { args };
+
+        let mut result: Vec<Bytes> = iter_args
+            .iter()
             .map(|arg| {
-                if arg.len() <= max_arg_len {
+                if max_arg_len == 0 || arg.len() <= max_arg_len {
                     arg.clone()
                 } else {
                     // Truncate and add indicator
                     let truncated = &arg[..max_arg_len];
                     let remaining = arg.len() - max_arg_len;
-                    let mut result = truncated.to_vec();
-                    result.extend_from_slice(format!("... ({} more bytes)", remaining).as_bytes());
-                    Bytes::from(result)
+                    let mut buf = truncated.to_vec();
+                    buf.extend_from_slice(format!("... ({} more bytes)", remaining).as_bytes());
+                    Bytes::from(buf)
                 }
             })
-            .collect()
+            .collect();
+
+        if capped {
+            let remaining = args.len() - MAX_ARGS;
+            result.push(Bytes::from(format!("... ({} more arguments)", remaining)));
+        }
+
+        result
     }
 }
 
@@ -299,11 +331,46 @@ mod tests {
         let short_arg = Bytes::from("short");
         let long_arg = Bytes::from("a".repeat(200));
 
-        let truncated = SlowLog::truncate_args(&[short_arg.clone(), long_arg], 128);
+        let truncated = SlowLog::truncate_args(&[short_arg.clone(), long_arg.clone()], 128);
 
+        assert_eq!(truncated.len(), 2); // No extra element (only 2 args)
         assert_eq!(truncated[0], short_arg); // Unchanged
         assert!(truncated[1].len() > 128); // Truncated + suffix
-        assert!(String::from_utf8_lossy(&truncated[1]).contains("more bytes"));
+        let truncated_str = String::from_utf8_lossy(&truncated[1]);
+        assert!(truncated_str.contains("... (72 more bytes)"));
+
+        // Verify the truncated arg starts with the first 128 bytes
+        assert_eq!(&truncated[1][..128], &long_arg[..128]);
+    }
+
+    #[test]
+    fn test_argument_cap_at_32() {
+        // Build a command with 35 arguments
+        let args: Vec<Bytes> = (0..35).map(|i| Bytes::from(format!("arg{}", i))).collect();
+
+        let truncated = SlowLog::truncate_args(&args, 128);
+
+        // Should have 32 args + 1 "... (N more arguments)" element = 33 total
+        assert_eq!(truncated.len(), 33);
+        // First 32 should be the original args
+        for i in 0..32 {
+            assert_eq!(truncated[i], args[i]);
+        }
+        // Last element should indicate remaining args
+        let last = String::from_utf8_lossy(&truncated[32]);
+        assert_eq!(last, "... (3 more arguments)");
+    }
+
+    #[test]
+    fn test_max_len_zero_skips_add() {
+        let mut log = create_test_slowlog(0);
+        log.add(
+            1000,
+            &[Bytes::from("GET"), Bytes::from("key1")],
+            "addr".to_string(),
+            String::new(),
+        );
+        assert_eq!(log.len(), 0);
     }
 
     #[test]

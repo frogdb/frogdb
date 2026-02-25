@@ -260,12 +260,14 @@ pub enum ShardMessage {
     SlowlogAdd {
         /// Duration in microseconds.
         duration_us: u64,
-        /// Command name and arguments.
+        /// Command name and arguments (pre-truncated).
         command: Vec<Bytes>,
         /// Client address.
         client_addr: String,
         /// Client name.
         client_name: String,
+        /// Current max-len setting (to keep shard in sync with config).
+        max_len: usize,
     },
 
     // =========================================================================
@@ -337,6 +339,13 @@ pub enum ShardMessage {
         period_secs: u64,
         /// Response channel.
         response_tx: oneshot::Sender<HotShardStatsResponse>,
+    },
+
+    /// Reset statistics (CONFIG RESETSTAT).
+    /// Clears latency monitor, slowlog, and peak memory.
+    ResetStats {
+        /// Response channel to acknowledge the reset.
+        response_tx: oneshot::Sender<()>,
     },
 
     /// Update shard configuration at runtime.
