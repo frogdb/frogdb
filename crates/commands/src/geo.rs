@@ -59,14 +59,22 @@ impl Command for GeoaddCommand {
 
         while i < args.len() {
             let arg = args[i].as_ref();
-            if let Some(new_opts) = nx_xx.try_parse(arg)? {
-                nx_xx = new_opts;
-                i += 1;
-            } else if arg.eq_ignore_ascii_case(b"CH") {
-                ch = true;
-                i += 1;
-            } else {
-                break;
+            let upper = arg.to_ascii_uppercase();
+            match upper.as_slice() {
+                b"NX" | b"XX" => {
+                    match nx_xx.try_parse(arg) {
+                        Ok(Some(new_opts)) => nx_xx = new_opts,
+                        Ok(None) => break,
+                        // XX+NX conflict - Redis returns syntax error for GEOADD
+                        Err(_) => return Err(CommandError::SyntaxError),
+                    }
+                    i += 1;
+                }
+                b"CH" => {
+                    ch = true;
+                    i += 1;
+                }
+                _ => break,
             }
         }
         let nx = nx_xx.nx;
@@ -365,8 +373,17 @@ impl Command for GeosearchstoreCommand {
         let destkey = &args[0];
         let srckey = &args[1];
 
-        // Parse search options
-        let opts = parse_geosearch_options(&args[2..], ctx, srckey)?;
+        // Parse search options - if source key doesn't exist and FROMMEMBER is used,
+        // we need to handle gracefully (return 0 and delete dest)
+        let opts = match parse_geosearch_options(&args[2..], ctx, srckey) {
+            Ok(opts) => opts,
+            Err(_) if ctx.store.get(srckey).is_none() => {
+                // Source key doesn't exist - delete dest and return 0
+                ctx.store.delete(destkey);
+                return Ok(Response::Integer(0));
+            }
+            Err(e) => return Err(e),
+        };
         let results = execute_geosearch(ctx, srckey, &opts)?;
 
         if results.is_empty() {
@@ -539,6 +556,72 @@ impl Command for GeoradiusbymemberCommand {
 
         let results = execute_geosearch(ctx, key, &opts)?;
         format_geosearch_results(&results, &opts)
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
+    }
+}
+
+// ============================================================================
+// GEORADIUS_RO - Read-only variant of GEORADIUS
+// ============================================================================
+
+pub struct GeoradiusRoCommand;
+
+impl Command for GeoradiusRoCommand {
+    fn name(&self) -> &'static str {
+        "GEORADIUS_RO"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(5)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        // Same logic as GEORADIUS
+        GeoradiusCommand.execute(ctx, args)
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
+    }
+}
+
+// ============================================================================
+// GEORADIUSBYMEMBER_RO - Read-only variant of GEORADIUSBYMEMBER
+// ============================================================================
+
+pub struct GeoradiusbymemberRoCommand;
+
+impl Command for GeoradiusbymemberRoCommand {
+    fn name(&self) -> &'static str {
+        "GEORADIUSBYMEMBER_RO"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(4)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        // Same logic as GEORADIUSBYMEMBER
+        GeoradiusbymemberCommand.execute(ctx, args)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

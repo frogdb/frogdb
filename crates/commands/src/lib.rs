@@ -239,6 +239,8 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(geo::GeosearchstoreCommand);
     registry.register(geo::GeoradiusCommand);
     registry.register(geo::GeoradiusbymemberCommand);
+    registry.register(geo::GeoradiusRoCommand);
+    registry.register(geo::GeoradiusbymemberRoCommand);
 
     // Bloom filter commands
     registry.register(bloom::BfReserve);
