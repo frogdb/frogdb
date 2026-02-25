@@ -781,15 +781,12 @@ impl ClusterTestHarness {
                 // Follower forwarded to leader → parse "REDIRECT <id> <addr>".
                 Response::Error(e) => {
                     let msg = String::from_utf8_lossy(e);
-                    if let Some(rest) = msg.strip_prefix("REDIRECT ") {
-                        if let Some(id_str) = rest.split_whitespace().next() {
-                            if let Ok(leader_id) = id_str.parse::<u64>() {
-                                // Verify the leader node is known to this harness.
-                                if self.nodes.contains_key(&leader_id) {
-                                    return Some(leader_id);
-                                }
-                            }
-                        }
+                    if let Some(rest) = msg.strip_prefix("REDIRECT ")
+                        && let Some(id_str) = rest.split_whitespace().next()
+                        && let Ok(leader_id) = id_str.parse::<u64>()
+                        && self.nodes.contains_key(&leader_id)
+                    {
+                        return Some(leader_id);
                     }
                     // "CLUSTERDOWN No leader available" → keep trying other nodes.
                 }

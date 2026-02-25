@@ -565,6 +565,13 @@ use frogdb_protocol::Response;
 pub fn score_response(score: f64, is_resp3: bool) -> Response {
     if is_resp3 && score.is_finite() {
         Response::Double(score)
+    } else if !is_resp3
+        && score.fract() == 0.0
+        && score.is_finite()
+        && score >= i64::MIN as f64
+        && score <= i64::MAX as f64
+    {
+        Response::Integer(score as i64)
     } else {
         Response::bulk(Bytes::from(format_float(score)))
     }

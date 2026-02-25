@@ -64,7 +64,7 @@ async fn test_zadd_options() {
 
     // Verify score was updated
     let response = client.command(&["ZSCORE", "myzset", "one"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("5"))));
+    assert_eq!(response, Response::Integer(5));
 
     // CH - return changed count
     let response = client.command(&["ZADD", "myzset", "CH", "10", "one"]).await;
@@ -131,8 +131,8 @@ async fn test_zmscore() {
     assert_eq!(
         response,
         Response::Array(vec![
-            Response::Bulk(Some(Bytes::from("1"))),
-            Response::Bulk(Some(Bytes::from("2"))),
+            Response::Integer(1),
+            Response::Integer(2),
             Response::Bulk(None),
         ])
     );
@@ -414,23 +414,27 @@ async fn test_zunionstore() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["ZADD", "zset1", "1", "a", "2", "b"]).await;
-    client.command(&["ZADD", "zset2", "3", "b", "4", "c"]).await;
+    client
+        .command(&["ZADD", "{z}zset1", "1", "a", "2", "b"])
+        .await;
+    client
+        .command(&["ZADD", "{z}zset2", "3", "b", "4", "c"])
+        .await;
 
     let response = client
-        .command(&["ZUNIONSTORE", "result", "2", "zset1", "zset2"])
+        .command(&["ZUNIONSTORE", "{z}result", "2", "{z}zset1", "{z}zset2"])
         .await;
     assert_eq!(response, Response::Integer(3)); // a, b, c
 
     // Check scores (default SUM aggregate)
-    let response = client.command(&["ZSCORE", "result", "a"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("1"))));
+    let response = client.command(&["ZSCORE", "{z}result", "a"]).await;
+    assert_eq!(response, Response::Integer(1));
 
-    let response = client.command(&["ZSCORE", "result", "b"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("5")))); // 2 + 3
+    let response = client.command(&["ZSCORE", "{z}result", "b"]).await;
+    assert_eq!(response, Response::Integer(5)); // 2 + 3
 
-    let response = client.command(&["ZSCORE", "result", "c"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("4"))));
+    let response = client.command(&["ZSCORE", "{z}result", "c"]).await;
+    assert_eq!(response, Response::Integer(4));
 
     server.shutdown().await;
 }
@@ -440,16 +444,20 @@ async fn test_zinterstore() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["ZADD", "zset1", "1", "a", "2", "b"]).await;
-    client.command(&["ZADD", "zset2", "3", "b", "4", "c"]).await;
+    client
+        .command(&["ZADD", "{z}zset1", "1", "a", "2", "b"])
+        .await;
+    client
+        .command(&["ZADD", "{z}zset2", "3", "b", "4", "c"])
+        .await;
 
     let response = client
-        .command(&["ZINTERSTORE", "result", "2", "zset1", "zset2"])
+        .command(&["ZINTERSTORE", "{z}result", "2", "{z}zset1", "{z}zset2"])
         .await;
     assert_eq!(response, Response::Integer(1)); // Only b is in both
 
-    let response = client.command(&["ZSCORE", "result", "b"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("5")))); // 2 + 3
+    let response = client.command(&["ZSCORE", "{z}result", "b"]).await;
+    assert_eq!(response, Response::Integer(5)); // 2 + 3
 
     server.shutdown().await;
 }
@@ -459,16 +467,20 @@ async fn test_zdiffstore() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["ZADD", "zset1", "1", "a", "2", "b"]).await;
-    client.command(&["ZADD", "zset2", "3", "b", "4", "c"]).await;
+    client
+        .command(&["ZADD", "{z}zset1", "1", "a", "2", "b"])
+        .await;
+    client
+        .command(&["ZADD", "{z}zset2", "3", "b", "4", "c"])
+        .await;
 
     let response = client
-        .command(&["ZDIFFSTORE", "result", "2", "zset1", "zset2"])
+        .command(&["ZDIFFSTORE", "{z}result", "2", "{z}zset1", "{z}zset2"])
         .await;
     assert_eq!(response, Response::Integer(1)); // Only a is in zset1 but not zset2
 
-    let response = client.command(&["ZSCORE", "result", "a"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("1"))));
+    let response = client.command(&["ZSCORE", "{z}result", "a"]).await;
+    assert_eq!(response, Response::Integer(1));
 
     server.shutdown().await;
 }

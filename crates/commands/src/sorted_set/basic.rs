@@ -50,6 +50,9 @@ impl Command for ZaddCommand {
 
         let mut pairs = Vec::with_capacity(remaining.len() / 2);
         for chunk in remaining.chunks(2) {
+            if chunk[0].is_empty() {
+                return Err(CommandError::NotFloat);
+            }
             let score = parse_f64(&chunk[0])?;
             let member = chunk[1].clone();
             pairs.push((member, score));
@@ -144,12 +147,12 @@ impl Command for ZaddCommand {
             }
 
             // Clean up empty zset created by get_or_create_zset if no members were added
-            if added == 0 && changed == 0 {
-                if let Some(v) = ctx.store.get(key)
-                    && v.as_sorted_set().is_some_and(|z| z.is_empty())
-                {
-                    ctx.store.delete(key);
-                }
+            if added == 0
+                && changed == 0
+                && let Some(v) = ctx.store.get(key)
+                && v.as_sorted_set().is_some_and(|z| z.is_empty())
+            {
+                ctx.store.delete(key);
             }
 
             if ch {
