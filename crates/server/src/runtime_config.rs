@@ -506,6 +506,13 @@ impl ConfigManager {
                 setter: Some(|_, _| Ok(())),
             },
             ParamMeta {
+                name: "lua-time-limit",
+                mutable: true,
+                noop: true,
+                getter: |_| "5000".to_string(),
+                setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
                 name: "hz",
                 mutable: true,
                 noop: true,
