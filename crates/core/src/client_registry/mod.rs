@@ -476,11 +476,42 @@ impl ClientRegistry {
     }
 
     /// Set pause state.
+    ///
+    /// Follows Redis semantics for overlapping pauses:
+    /// - Mode precedence: ALL takes priority over WRITE (never downgrade).
+    /// - Time preservation: the maximum of old and new end times is kept.
     pub fn pause(&self, mode: PauseMode, timeout_ms: u64) {
         let mut pause_state = self.pause_state.write().unwrap();
-        pause_state.mode = Some(mode);
-        pause_state.unpause_at =
-            Some(Instant::now() + std::time::Duration::from_millis(timeout_ms));
+        let now = Instant::now();
+        let new_unpause_at = now + std::time::Duration::from_millis(timeout_ms);
+
+        // Check whether the existing pause is still active (not expired).
+        let existing_active = matches!(pause_state.unpause_at, Some(t) if t > now);
+
+        // Determine effective mode: ALL takes priority over WRITE,
+        // but only if the existing pause hasn't expired yet.
+        let effective_mode = if existing_active {
+            match pause_state.mode {
+                Some(PauseMode::All) => PauseMode::All,
+                _ => mode,
+            }
+        } else {
+            mode
+        };
+
+        // Determine effective end time: keep the later of old and new,
+        // but only if the existing pause hasn't expired yet.
+        let effective_unpause_at = if existing_active {
+            match pause_state.unpause_at {
+                Some(existing) if existing > new_unpause_at => existing,
+                _ => new_unpause_at,
+            }
+        } else {
+            new_unpause_at
+        };
+
+        pause_state.mode = Some(effective_mode);
+        pause_state.unpause_at = Some(effective_unpause_at);
     }
 
     /// Clear pause state.
