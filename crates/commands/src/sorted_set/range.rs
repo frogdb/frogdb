@@ -197,8 +197,8 @@ impl Command for ZrevrangeCommand {
         let start = parse_i64(&args[1])?;
         let end = parse_i64(&args[2])?;
 
-        let with_scores = args.len() > 3
-            && args[3].to_ascii_uppercase().as_slice() == b"WITHSCORES";
+        let with_scores =
+            args.len() > 3 && args[3].to_ascii_uppercase().as_slice() == b"WITHSCORES";
 
         let value = match ctx.store.get(key) {
             Some(v) => v,

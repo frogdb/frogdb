@@ -1070,8 +1070,7 @@ impl Command for LmpopCommand {
                     return Err(CommandError::SyntaxError);
                 }
                 let c = parse_i64(&args[i]).map_err(|_| CommandError::InvalidArgument {
-                    message: "count value of LMPOP command is not an positive value"
-                        .to_string(),
+                    message: "count value of LMPOP command is not an positive value".to_string(),
                 })?;
                 if c <= 0 {
                     return Err(CommandError::InvalidArgument {
