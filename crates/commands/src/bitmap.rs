@@ -148,6 +148,11 @@ impl Command for BitcountCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
+        // Must have 0 or 2 range args (not 1)
+        if args.len() == 2 {
+            return Err(CommandError::SyntaxError);
+        }
+
         let (start, end, bit_mode) = if args.len() >= 3 {
             let start = Some(parse_i64(&args[1])?);
             let end = Some(parse_i64(&args[2])?);
@@ -228,20 +233,18 @@ impl Command for BitopCommand {
         }
 
         // Collect source strings
-        let sources: Vec<Bytes> = source_keys
-            .iter()
-            .map(|key| {
-                if let Some(value) = ctx.store.get(key) {
-                    if let Some(sv) = value.as_string() {
-                        sv.as_bytes()
-                    } else {
-                        Bytes::new()
-                    }
+        let mut sources: Vec<Bytes> = Vec::with_capacity(source_keys.len());
+        for key in source_keys {
+            if let Some(value) = ctx.store.get(key) {
+                if let Some(sv) = value.as_string() {
+                    sources.push(sv.as_bytes());
                 } else {
-                    Bytes::new()
+                    return Err(CommandError::WrongType);
                 }
-            })
-            .collect();
+            } else {
+                sources.push(Bytes::new());
+            }
+        }
 
         let source_refs: Vec<&[u8]> = sources.iter().map(|b| b.as_ref()).collect();
         let result = bitop(op, &source_refs);
@@ -302,9 +305,10 @@ impl Command for BitposCommand {
             });
         }
 
-        let (start, end, bit_mode) = if args.len() >= 3 {
+        let (start, end, bit_mode, end_given) = if args.len() >= 3 {
             let start = Some(parse_i64(&args[2])?);
-            let end = if args.len() >= 4 {
+            let end_given = args.len() >= 4;
+            let end = if end_given {
                 Some(parse_i64(&args[3])?)
             } else {
                 None
@@ -323,15 +327,15 @@ impl Command for BitposCommand {
                 false
             };
 
-            (start, end, bit_mode)
+            (start, end, bit_mode, end_given)
         } else {
-            (None, None, false)
+            (None, None, false, false)
         };
 
         let pos = match ctx.store.get(key) {
             Some(value) => {
                 if let Some(sv) = value.as_string() {
-                    sv.bitpos(bit as u8, start, end, bit_mode)
+                    sv.bitpos(bit as u8, start, end, bit_mode, end_given)
                 } else {
                     return Err(CommandError::WrongType);
                 }

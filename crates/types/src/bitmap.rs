@@ -359,6 +359,7 @@ pub fn bitpos(
     start: Option<i64>,
     end: Option<i64>,
     bit_mode: bool,
+    end_given: bool,
 ) -> Option<i64> {
     if data.is_empty() {
         // For empty string, if looking for 0, return 0; if looking for 1, return -1 (not found)
@@ -368,12 +369,11 @@ pub fn bitpos(
     let len = data.len() as i64;
 
     // Determine search range
-    let (start_pos, end_pos, range_specified) = if bit_mode {
+    let (start_pos, end_pos) = if bit_mode {
         // BIT mode: positions are bit indices
         let bit_len = len * 8;
         let s = start.unwrap_or(0);
         let e = end.unwrap_or(bit_len - 1);
-        let range_specified = start.is_some() || end.is_some();
 
         // Handle negative indices
         let s = if s < 0 {
@@ -391,12 +391,11 @@ pub fn bitpos(
             return None;
         }
 
-        (s as u64, e as u64, range_specified)
+        (s as u64, e as u64)
     } else {
         // BYTE mode (default): positions are byte indices
         let s = start.unwrap_or(0);
         let e = end.unwrap_or(len - 1);
-        let range_specified = start.is_some() || end.is_some();
 
         // Handle negative indices
         let s = if s < 0 { (len + s).max(0) } else { s.min(len) };
@@ -411,7 +410,7 @@ pub fn bitpos(
         }
 
         // Convert to bit positions
-        (s as u64 * 8, (e as u64 + 1) * 8 - 1, range_specified)
+        (s as u64 * 8, (e as u64 + 1) * 8 - 1)
     };
 
     // Search for the bit
@@ -423,8 +422,8 @@ pub fn bitpos(
     }
 
     // Not found in range
-    if bit == 0 && !range_specified {
-        // If looking for 0 without explicit range, return the first position after the string
+    if bit == 0 && !end_given {
+        // If looking for 0 without explicit end, return the first position after the string
         Some(len * 8)
     } else {
         None
@@ -619,13 +618,17 @@ mod tests {
     fn test_bitpos() {
         let data = vec![0b00000000, 0b11111111];
         // First 1 bit
-        assert_eq!(bitpos(&data, 1, None, None, false), Some(8));
+        assert_eq!(bitpos(&data, 1, None, None, false, false), Some(8));
         // First 0 bit
-        assert_eq!(bitpos(&data, 0, None, None, false), Some(0));
+        assert_eq!(bitpos(&data, 0, None, None, false, false), Some(0));
 
         let data2 = vec![0b11111111];
-        // Looking for 0 without range - returns position after string
-        assert_eq!(bitpos(&data2, 0, None, None, false), Some(8));
+        // Looking for 0 without end given - returns position after string
+        assert_eq!(bitpos(&data2, 0, None, None, false, false), Some(8));
+        // Looking for 0 with start only (no end given) - still returns position after string
+        assert_eq!(bitpos(&data2, 0, Some(0), None, false, false), Some(8));
+        // Looking for 0 with end given - returns None (not found in range)
+        assert_eq!(bitpos(&data2, 0, Some(0), Some(-1), false, true), None);
     }
 
     #[test]
