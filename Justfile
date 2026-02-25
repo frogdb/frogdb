@@ -124,6 +124,12 @@ lint:
     {{dyld-env}} {{rocksdb-env}} cargo clippy --all-targets -- -D warnings
     -cargo sweep --time 0
 
+# Run clippy lints for a specific crate
+lint-crate crate:
+    -cargo sweep --stamp
+    {{dyld-env}} {{rocksdb-env}} cargo clippy -p {{crate}} -- -D warnings
+    -cargo sweep --time 0
+
 # Run cargo-deny (license/security audit)
 deny:
     cargo deny check

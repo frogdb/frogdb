@@ -31,20 +31,36 @@ just concurrency        # Shuttle + Turmoil concurrency tests
 
 ## Verification Before Completing Code Changes
 
-**IMPORTANT:** Before marking any code change as complete, you MUST run all of the following commands and confirm they pass. Do NOT skip any of these steps.
+**IMPORTANT:** Before marking any code change as complete, you MUST verify it passes type-checking, formatting, linting, and tests. Scope the verification to the affected crate(s) to keep feedback fast.
+
+### Targeted verification (default — use when changes touch 1–2 crates)
 
 ```bash
-# 1. Type-check the entire workspace (fast, no codegen)
-just check
+# 1. Type-check the affected crate
+just check-crate <crate>        # e.g. just check-crate frogdb-server
 
-# 2. Check
+# 2. Check formatting (always workspace-wide, it's fast)
 just fmt
 
-# 3. Run clippy lints (must pass with no warnings)
-just lint
+# 3. Lint the affected crate
+just lint-crate <crate>         # e.g. just lint-crate frogdb-server
 
-# 4. Run all tests
-just test
+# 4. Run tests for the affected crate
+just test-crate <crate>         # e.g. just test-crate frogdb-server
+
+# 5. Run a single test by name (useful while iterating)
+just test-one <test_name>       # e.g. just test-one test_publish_subscribe
+```
+
+### Full workspace verification (use for large or cross-cutting changes)
+
+Run the full suite when changes span many crates, modify `Cargo.toml` workspace dependencies, or touch shared build/CI config:
+
+```bash
+just check    # type-check all targets
+just fmt      # format
+just lint     # clippy all targets
+just test     # test all crates
 ```
 
 ## Jepsen Tests (Conditional)
