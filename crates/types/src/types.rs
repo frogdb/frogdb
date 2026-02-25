@@ -613,9 +613,10 @@ impl StringValue {
         start: Option<i64>,
         end: Option<i64>,
         bit_mode: bool,
+        end_given: bool,
     ) -> Option<i64> {
         let bytes = self.as_bytes();
-        crate::bitmap::bitpos(&bytes, bit, start, end, bit_mode)
+        crate::bitmap::bitpos(&bytes, bit, start, end, bit_mode, end_given)
     }
 
     /// Get the raw bytes as a mutable vector for bitfield operations.
