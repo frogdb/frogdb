@@ -87,6 +87,34 @@ fn instant_to_unix_ms(instant: Instant) -> i64 {
 
 use super::utils::parse_i64;
 
+/// Condition for EXPIRE/PEXPIRE/EXPIREAT/PEXPIREAT subcommands.
+enum ExpireCondition {
+    /// NX: Set expiry only if key has no expiry.
+    Nx,
+    /// XX: Set expiry only if key already has expiry.
+    Xx,
+    /// GT: Set expiry only if new expiry > current expiry.
+    Gt,
+    /// LT: Set expiry only if new expiry < current expiry.
+    Lt,
+}
+
+/// Parse an optional NX/XX/GT/LT subcommand from the argument slice.
+fn parse_expire_condition(args: &[Bytes]) -> Result<Option<ExpireCondition>, CommandError> {
+    if args.len() > 2 {
+        let sub = args[2].to_ascii_uppercase();
+        match sub.as_slice() {
+            b"NX" => Ok(Some(ExpireCondition::Nx)),
+            b"XX" => Ok(Some(ExpireCondition::Xx)),
+            b"GT" => Ok(Some(ExpireCondition::Gt)),
+            b"LT" => Ok(Some(ExpireCondition::Lt)),
+            _ => Err(CommandError::SyntaxError),
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 // ============================================================================
 // EXPIRE - Set key expiration in seconds
 // ============================================================================
@@ -99,7 +127,7 @@ impl Command for ExpireCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Fixed(2) // EXPIRE key seconds
+        Arity::Range { min: 2, max: 3 } // EXPIRE key seconds [NX|XX|GT|LT]
     }
 
     fn flags(&self) -> CommandFlags {
@@ -110,15 +138,52 @@ impl Command for ExpireCommand {
         let key = &args[0];
         let seconds = parse_i64(&args[1])?;
 
+        // Reject values that would overflow when added to current time
+        if seconds > i64::MAX / 1000 {
+            return Err(CommandError::NotInteger);
+        }
+
+        let subcommand = parse_expire_condition(args)?;
+
+        // Check if key exists
+        if !ctx.store.contains(key) {
+            return Ok(Response::Integer(0));
+        }
+
+        let current_expiry = ctx.store.get_expiry(key);
+
+        // Check NX/XX conditions
+        match &subcommand {
+            Some(ExpireCondition::Nx) if current_expiry.is_some() => {
+                return Ok(Response::Integer(0));
+            }
+            Some(ExpireCondition::Xx) if current_expiry.is_none() => {
+                return Ok(Response::Integer(0));
+            }
+            _ => {}
+        }
+
         if seconds <= 0 {
-            // Non-positive expiry means delete the key
             let deleted = ctx.store.delete(key);
             return Ok(Response::Integer(if deleted { 1 } else { 0 }));
         }
 
         let expires_at = Instant::now() + Duration::from_secs(seconds as u64);
-        let result = ctx.store.set_expiry(key, expires_at);
 
+        // Check GT/LT conditions
+        if let Some(current) = current_expiry {
+            match &subcommand {
+                Some(ExpireCondition::Gt) if expires_at <= current => {
+                    return Ok(Response::Integer(0));
+                }
+                Some(ExpireCondition::Lt) if expires_at >= current => {
+                    return Ok(Response::Integer(0));
+                }
+                _ => {}
+            }
+        }
+
+        let result = ctx.store.set_expiry(key, expires_at);
         Ok(Response::Integer(if result { 1 } else { 0 }))
     }
 
@@ -143,7 +208,7 @@ impl Command for PexpireCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Fixed(2) // PEXPIRE key milliseconds
+        Arity::Range { min: 2, max: 3 } // PEXPIRE key milliseconds [NX|XX|GT|LT]
     }
 
     fn flags(&self) -> CommandFlags {
@@ -154,14 +219,52 @@ impl Command for PexpireCommand {
         let key = &args[0];
         let ms = parse_i64(&args[1])?;
 
+        // Reject values that would overflow when added to current time
+        if ms > i64::MAX / 1000 {
+            return Err(CommandError::NotInteger);
+        }
+
+        let subcommand = parse_expire_condition(args)?;
+
+        // Check if key exists
+        if !ctx.store.contains(key) {
+            return Ok(Response::Integer(0));
+        }
+
+        let current_expiry = ctx.store.get_expiry(key);
+
+        // Check NX/XX conditions
+        match &subcommand {
+            Some(ExpireCondition::Nx) if current_expiry.is_some() => {
+                return Ok(Response::Integer(0));
+            }
+            Some(ExpireCondition::Xx) if current_expiry.is_none() => {
+                return Ok(Response::Integer(0));
+            }
+            _ => {}
+        }
+
         if ms <= 0 {
             let deleted = ctx.store.delete(key);
             return Ok(Response::Integer(if deleted { 1 } else { 0 }));
         }
 
         let expires_at = Instant::now() + Duration::from_millis(ms as u64);
-        let result = ctx.store.set_expiry(key, expires_at);
 
+        // Check GT/LT conditions
+        if let Some(current) = current_expiry {
+            match &subcommand {
+                Some(ExpireCondition::Gt) if expires_at <= current => {
+                    return Ok(Response::Integer(0));
+                }
+                Some(ExpireCondition::Lt) if expires_at >= current => {
+                    return Ok(Response::Integer(0));
+                }
+                _ => {}
+            }
+        }
+
+        let result = ctx.store.set_expiry(key, expires_at);
         Ok(Response::Integer(if result { 1 } else { 0 }))
     }
 
@@ -186,7 +289,7 @@ impl Command for ExpireatCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Fixed(2) // EXPIREAT key timestamp
+        Arity::Range { min: 2, max: 3 } // EXPIREAT key timestamp [NX|XX|GT|LT]
     }
 
     fn flags(&self) -> CommandFlags {
@@ -196,6 +299,26 @@ impl Command for ExpireatCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let timestamp = parse_i64(&args[1])?;
+
+        let subcommand = parse_expire_condition(args)?;
+
+        // Check if key exists
+        if !ctx.store.contains(key) {
+            return Ok(Response::Integer(0));
+        }
+
+        let current_expiry = ctx.store.get_expiry(key);
+
+        // Check NX/XX conditions
+        match &subcommand {
+            Some(ExpireCondition::Nx) if current_expiry.is_some() => {
+                return Ok(Response::Integer(0));
+            }
+            Some(ExpireCondition::Xx) if current_expiry.is_none() => {
+                return Ok(Response::Integer(0));
+            }
+            _ => {}
+        }
 
         // Negative timestamps mean already expired — delete the key
         if timestamp < 0 {
@@ -209,6 +332,19 @@ impl Command for ExpireatCommand {
         if expires_at <= Instant::now() {
             let deleted = ctx.store.delete(key);
             return Ok(Response::Integer(if deleted { 1 } else { 0 }));
+        }
+
+        // Check GT/LT conditions
+        if let Some(current) = current_expiry {
+            match &subcommand {
+                Some(ExpireCondition::Gt) if expires_at <= current => {
+                    return Ok(Response::Integer(0));
+                }
+                Some(ExpireCondition::Lt) if expires_at >= current => {
+                    return Ok(Response::Integer(0));
+                }
+                _ => {}
+            }
         }
 
         let result = ctx.store.set_expiry(key, expires_at);
@@ -236,7 +372,7 @@ impl Command for PexpireatCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Fixed(2) // PEXPIREAT key timestamp_ms
+        Arity::Range { min: 2, max: 3 } // PEXPIREAT key timestamp_ms [NX|XX|GT|LT]
     }
 
     fn flags(&self) -> CommandFlags {
@@ -246,6 +382,26 @@ impl Command for PexpireatCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let timestamp_ms = parse_i64(&args[1])?;
+
+        let subcommand = parse_expire_condition(args)?;
+
+        // Check if key exists
+        if !ctx.store.contains(key) {
+            return Ok(Response::Integer(0));
+        }
+
+        let current_expiry = ctx.store.get_expiry(key);
+
+        // Check NX/XX conditions
+        match &subcommand {
+            Some(ExpireCondition::Nx) if current_expiry.is_some() => {
+                return Ok(Response::Integer(0));
+            }
+            Some(ExpireCondition::Xx) if current_expiry.is_none() => {
+                return Ok(Response::Integer(0));
+            }
+            _ => {}
+        }
 
         // Negative timestamps mean already expired — delete the key
         if timestamp_ms < 0 {
@@ -259,6 +415,19 @@ impl Command for PexpireatCommand {
         if expires_at <= Instant::now() {
             let deleted = ctx.store.delete(key);
             return Ok(Response::Integer(if deleted { 1 } else { 0 }));
+        }
+
+        // Check GT/LT conditions
+        if let Some(current) = current_expiry {
+            match &subcommand {
+                Some(ExpireCondition::Gt) if expires_at <= current => {
+                    return Ok(Response::Integer(0));
+                }
+                Some(ExpireCondition::Lt) if expires_at >= current => {
+                    return Ok(Response::Integer(0));
+                }
+                _ => {}
+            }
         }
 
         let result = ctx.store.set_expiry(key, expires_at);
