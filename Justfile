@@ -10,7 +10,7 @@ dyld-env := "DYLD_LIBRARY_PATH=/opt/homebrew/opt/llvm/lib"
 
 # System RocksDB: set FROGDB_SYSTEM_ROCKSDB=1 to link against system-installed RocksDB
 # Optionally set FROGDB_LIB_DIR to override the library path (default: /opt/homebrew/lib)
-use-system-rocksdb := env("FROGDB_SYSTEM_ROCKSDB", "")
+use-system-rocksdb := env("FROGDB_SYSTEM_ROCKSDB", "1")
 system-lib-dir := env("FROGDB_LIB_DIR", "/opt/homebrew/lib")
 # ROCKSDB_LIB_DIR and SNAPPY_LIB_DIR tell librocksdb-sys to use system libraries.
 # lz4-sys always compiles from vendored C source (4 small files, unavoidable).
@@ -59,28 +59,37 @@ alias c := check
 build:
     -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo build
+    -cargo sweep --time 0
 
 # Build with full debug info (for lldb/gdb variable inspection)
 build-debug:
     -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} CARGO_PROFILE_DEV_DEBUG=2 cargo build
+    -cargo sweep --time 0
 
 # Build release
 release:
     -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo build --release
+    -cargo sweep --time 0
 
 # Run all tests
 test:
+    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo test --all
+    -cargo sweep --time 0
 
 # Run tests for a specific crate
 test-crate crate:
+    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo test -p {{crate}}
+    -cargo sweep --time 0
 
 # Run a specific test
 test-one name:
+    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo test {{name}} -- --nocapture
+    -cargo sweep --time 0
 
 # Run property-based tests (proptest)
 proptest:
@@ -88,8 +97,10 @@ proptest:
 
 # Run concurrency tests (Shuttle + Turmoil)
 concurrency:
+    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-core --features shuttle --test concurrency
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-server --features turmoil --test simulation
+    -cargo sweep --time 0
 
 # Run browser integration tests (requires chromedriver running on port 9515)
 test-browser:
@@ -109,7 +120,9 @@ fmt-check:
 
 # Run clippy lints
 lint:
+    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo clippy --all-targets -- -D warnings
+    -cargo sweep --time 0
 
 # Run cargo-deny (license/security audit)
 deny:
