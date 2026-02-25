@@ -218,6 +218,13 @@ profile-heap *args:
 profile-load workload="mixed" requests="10000" *args:
     uv run loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} {{args}}
 
+# Run Docker benchmarks against FrogDB, Redis, Valkey, and Dragonfly
+# Usage: just benchmark [workload] [requests]
+# Example: just benchmark ycsb-a
+# Example: just benchmark write-heavy 200000
+benchmark workload="ycsb-a" requests="100000" *args:
+    uv run loadtest/scripts/benchmark.py -w {{workload}} --all --start-docker -n {{requests}} {{args}}
+
 # =============================================================================
 # Cross-Compilation (for faster Jepsen builds)
 # =============================================================================
