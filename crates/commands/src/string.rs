@@ -85,9 +85,7 @@ impl Command for SetexCommand {
         let value = args[2].clone();
 
         if seconds <= 0 {
-            return Err(CommandError::InvalidArgument {
-                message: "invalid expire time in 'setex' command".to_string(),
-            });
+            return Err(CommandError::NotInteger);
         }
 
         let opts = SetOptions {
@@ -133,9 +131,7 @@ impl Command for PsetexCommand {
         let value = args[2].clone();
 
         if ms <= 0 {
-            return Err(CommandError::InvalidArgument {
-                message: "invalid expire time in 'psetex' command".to_string(),
-            });
+            return Err(CommandError::NotInteger);
         }
 
         let opts = SetOptions {

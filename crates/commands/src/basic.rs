@@ -321,9 +321,7 @@ impl Command for SetCommand {
                     }
                     let secs = parse_u64(&args[i])?;
                     if secs == 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'set' command".to_string(),
-                        });
+                        return Err(CommandError::NotInteger);
                     }
                     opts.expiry = Some(Expiry::Ex(secs));
                 }
@@ -334,9 +332,7 @@ impl Command for SetCommand {
                     }
                     let ms = parse_u64(&args[i])?;
                     if ms == 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'set' command".to_string(),
-                        });
+                        return Err(CommandError::NotInteger);
                     }
                     opts.expiry = Some(Expiry::Px(ms));
                 }
