@@ -84,7 +84,7 @@ When a failing suite is fixed (0 errors):
 | Suite | Errors | Category |
 |-------|--------|----------|
 | `unit/sort` | 8 | SORT edge cases |
-| `unit/expire` | 24 | Expiry edge cases |
+| `unit/expire` | 22 | Expiry edge cases |
 | `unit/geo` | 21 | GEO command edge cases |
 | `unit/type/zset` | 41 | Sorted set operations |
 | `unit/pause` | 6 | CLIENT PAUSE behavior |
