@@ -26,8 +26,7 @@ impl Command for ZrankCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let member = &args[1];
-        let with_score = args.len() > 2
-            && args[2].to_ascii_uppercase().as_slice() == b"WITHSCORE";
+        let with_score = args.len() > 2 && args[2].to_ascii_uppercase().as_slice() == b"WITHSCORE";
 
         let null_response = if with_score {
             Response::NullArray
@@ -82,8 +81,7 @@ impl Command for ZrevrankCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let member = &args[1];
-        let with_score = args.len() > 2
-            && args[2].to_ascii_uppercase().as_slice() == b"WITHSCORE";
+        let with_score = args.len() > 2 && args[2].to_ascii_uppercase().as_slice() == b"WITHSCORE";
 
         let null_response = if with_score {
             Response::NullArray

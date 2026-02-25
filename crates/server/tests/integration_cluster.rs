@@ -4490,13 +4490,12 @@ async fn test_raft_snapshot_during_migration() {
         .await
         .unwrap();
 
-    eprintln!("Leader: {}", leader);
-
     let node_ids = harness.node_ids();
 
-    // Get node IDs for source and target of migration
-    let source_node_id = node_ids[0];
-    let target_node_id = node_ids[1];
+    // The leader must be the source since SETSLOT MIGRATING is a Raft op
+    // and uses my_node_id as the migration source.
+    let source_node_id = leader;
+    let target_node_id = *node_ids.iter().find(|&&id| id != leader).unwrap();
 
     // Get cluster node IDs (different from harness node IDs)
     let source_node = harness.node(source_node_id).unwrap();

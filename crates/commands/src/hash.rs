@@ -843,12 +843,7 @@ impl Command for HrandfieldCommand {
                     message: "value is out of range".to_string(),
                 });
             }
-            if with_values
-                && count
-                    .checked_neg()
-                    .and_then(|c| c.checked_mul(2))
-                    .is_none()
-            {
+            if with_values && count.checked_neg().and_then(|c| c.checked_mul(2)).is_none() {
                 return Err(CommandError::InvalidArgument {
                     message: "value is out of range".to_string(),
                 });

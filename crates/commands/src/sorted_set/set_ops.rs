@@ -79,11 +79,10 @@ fn parse_set_op_options(
                     return Err(CommandError::SyntaxError);
                 }
                 for j in 0..numkeys {
-                    let w = parse_f64(&args[i + 1 + j]).map_err(|_| {
-                        CommandError::InvalidArgument {
+                    let w =
+                        parse_f64(&args[i + 1 + j]).map_err(|_| CommandError::InvalidArgument {
                             message: "weight value is not a float".to_string(),
-                        }
-                    })?;
+                        })?;
                     if w.is_nan() {
                         return Err(CommandError::InvalidArgument {
                             message: "weight value is not a float".to_string(),
@@ -173,10 +172,7 @@ impl Command for ZunionCommand {
             if let Some(value) = ctx.store.get(key) {
                 for (member, score) in iter_zset_or_set(&value)? {
                     let weighted_score = score * weights[i];
-                    result
-                        .entry(member)
-                        .or_default()
-                        .push(weighted_score);
+                    result.entry(member).or_default().push(weighted_score);
                 }
             }
         }
@@ -259,10 +255,7 @@ impl Command for ZunionstoreCommand {
             if let Some(value) = ctx.store.get(key) {
                 for (member, score) in iter_zset_or_set(&value)? {
                     let weighted_score = score * weights[i];
-                    result
-                        .entry(member)
-                        .or_default()
-                        .push(weighted_score);
+                    result.entry(member).or_default().push(weighted_score);
                 }
             }
         }
@@ -354,15 +347,15 @@ impl Command for ZinterCommand {
                 None => return Ok(Response::Array(vec![])),
             };
 
-            result.retain(|member, scores| {
-                match zset_or_set_get_score(&value, member) {
+            result.retain(
+                |member, scores| match zset_or_set_get_score(&value, member) {
                     Ok(Some(score)) => {
                         scores.push(score * weights[i]);
                         true
                     }
                     _ => false,
-                }
-            });
+                },
+            );
 
             if result.is_empty() {
                 return Ok(Response::Array(vec![]));
@@ -465,15 +458,15 @@ impl Command for ZinterstoreCommand {
                 }
             };
 
-            result.retain(|member, scores| {
-                match zset_or_set_get_score(&value, member) {
+            result.retain(
+                |member, scores| match zset_or_set_get_score(&value, member) {
                     Ok(Some(score)) => {
                         scores.push(score * weights[i]);
                         true
                     }
                     _ => false,
-                }
-            });
+                },
+            );
 
             if result.is_empty() {
                 ctx.store.delete(&dest);
@@ -586,9 +579,7 @@ impl Command for ZintercardCommand {
                 None => return Ok(Response::Integer(0)),
             };
 
-            members.retain(|member| {
-                zset_or_set_contains(&value, member).unwrap_or(false)
-            });
+            members.retain(|member| zset_or_set_contains(&value, member).unwrap_or(false));
 
             if members.is_empty() {
                 return Ok(Response::Integer(0));
@@ -664,9 +655,7 @@ impl Command for ZdiffCommand {
         // Remove members that exist in other sets
         for key in keys.iter().skip(1) {
             if let Some(value) = ctx.store.get(key) {
-                result.retain(|member, _| {
-                    !zset_or_set_contains(&value, member).unwrap_or(false)
-                });
+                result.retain(|member, _| !zset_or_set_contains(&value, member).unwrap_or(false));
             }
 
             if result.is_empty() {
@@ -754,9 +743,7 @@ impl Command for ZdiffstoreCommand {
         // Remove members that exist in other sets
         for key in keys.iter().skip(1) {
             if let Some(value) = ctx.store.get(key) {
-                result.retain(|member, _| {
-                    !zset_or_set_contains(&value, member).unwrap_or(false)
-                });
+                result.retain(|member, _| !zset_or_set_contains(&value, member).unwrap_or(false));
             }
 
             if result.is_empty() {

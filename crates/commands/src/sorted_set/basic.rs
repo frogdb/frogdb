@@ -235,9 +235,7 @@ impl Command for ZscoreCommand {
             Some(value) => {
                 let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
                 match zset.get_score(member) {
-                    Some(score) => {
-                        Ok(score_response(score, ctx.protocol_version.is_resp3()))
-                    }
+                    Some(score) => Ok(score_response(score, ctx.protocol_version.is_resp3())),
                     None => Ok(Response::null()),
                 }
             }

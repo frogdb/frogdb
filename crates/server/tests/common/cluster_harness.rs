@@ -760,20 +760,40 @@ impl ClusterTestHarness {
         parse_cluster_info(&response)
     }
 
-    /// Try to determine the current leader (if any).
-    /// This is a best-effort check based on cluster info.
+    /// Determine the current Raft leader by probing a running node with a
+    /// Raft-requiring command. If the node is the leader the command succeeds;
+    /// if not, the server returns a REDIRECT with the actual leader's node_id.
     pub async fn get_leader(&self) -> Option<u64> {
-        // In a Raft cluster, we'd query for the leader
-        // For now, return the first running node as a placeholder
         for &node_id in &self.node_order {
-            if let Some(node) = self.nodes.get(&node_id)
-                && node.is_running()
-            {
-                // Verify node is responsive (cluster_state may be "fail" after
-                // partitions or without slot assignment, but node is still usable)
-                if self.get_cluster_info(node_id).await.is_ok() {
-                    return Some(node_id);
+            let Some(node) = self.nodes.get(&node_id) else {
+                continue;
+            };
+            if !node.is_running() {
+                continue;
+            }
+
+            // CLUSTER SETSLOT 0 STABLE is a safe no-op probe: it cancels
+            // migration on slot 0, which is virtually never migrating.
+            let resp = node.send("CLUSTER", &["SETSLOT", "0", "STABLE"]).await;
+            match &resp {
+                // This node handled the write → it is the leader.
+                Response::Simple(_) => return Some(node_id),
+                // Follower forwarded to leader → parse "REDIRECT <id> <addr>".
+                Response::Error(e) => {
+                    let msg = String::from_utf8_lossy(e);
+                    if let Some(rest) = msg.strip_prefix("REDIRECT ") {
+                        if let Some(id_str) = rest.split_whitespace().next() {
+                            if let Ok(leader_id) = id_str.parse::<u64>() {
+                                // Verify the leader node is known to this harness.
+                                if self.nodes.contains_key(&leader_id) {
+                                    return Some(leader_id);
+                                }
+                            }
+                        }
+                    }
+                    // "CLUSTERDOWN No leader available" → keep trying other nodes.
                 }
+                _ => {}
             }
         }
         None

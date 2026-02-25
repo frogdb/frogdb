@@ -647,10 +647,7 @@ pub fn scored_array_resp3(members: Vec<(Bytes, f64)>, with_scores: bool) -> Resp
             members
                 .into_iter()
                 .map(|(member, score)| {
-                    Response::Array(vec![
-                        Response::bulk(member),
-                        score_response(score, true),
-                    ])
+                    Response::Array(vec![Response::bulk(member), score_response(score, true)])
                 })
                 .collect(),
         )

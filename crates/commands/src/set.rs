@@ -724,11 +724,11 @@ impl Command for SintercardCommand {
                 if i >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                limit = Some(parse_usize(&args[i]).map_err(|_| {
-                    CommandError::InvalidArgument {
+                limit = Some(
+                    parse_usize(&args[i]).map_err(|_| CommandError::InvalidArgument {
                         message: "LIMIT can't be negative".to_string(),
-                    }
-                })?);
+                    })?,
+                );
             } else {
                 return Err(CommandError::SyntaxError);
             }
