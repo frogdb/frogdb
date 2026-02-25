@@ -1404,6 +1404,11 @@ impl Server {
         self.cluster_bus_listener.as_ref().map(|l| l.local_addr())
     }
 
+    /// Get the Raft instance, if cluster mode is enabled.
+    pub fn raft(&self) -> Option<&Arc<ClusterRaft>> {
+        self.raft.as_ref()
+    }
+
     /// Get the latency baseline result from startup test (if available).
     pub fn latency_baseline(&self) -> Option<&LatencyTestResult> {
         self.latency_baseline.as_ref()

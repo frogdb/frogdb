@@ -9,6 +9,7 @@
 
 use super::cluster_helpers::{ClusterError, ClusterInfo, parse_cluster_info};
 use super::test_server::TestClient;
+use frogdb_core::cluster::ClusterRaft;
 use frogdb_protocol::Response;
 use frogdb_server::net::tcp_listener_reusable;
 use frogdb_server::{Config, Server, ServerListeners};
@@ -73,6 +74,7 @@ struct NodeRestartInfo {
     data_dir: PathBuf,
     config: ClusterNodeConfig,
     initial_nodes: Vec<String>,
+    raft: Option<Arc<ClusterRaft>>,
 }
 
 /// A single cluster node for testing.
@@ -86,6 +88,7 @@ pub struct ClusterTestNode {
     data_dir: Option<PathBuf>,
     running: Arc<AtomicBool>,
     restart_info: Option<NodeRestartInfo>,
+    raft: Option<Arc<ClusterRaft>>,
 }
 
 impl ClusterTestNode {
@@ -179,6 +182,7 @@ impl ClusterTestNode {
             .and_then(|r| r.ok())
             .map(|a| a.port())
             .unwrap_or(0);
+        let raft = server.raft().cloned();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -202,6 +206,7 @@ impl ClusterTestNode {
             data_dir: data_dir.clone(),
             config: config.clone(),
             initial_nodes,
+            raft: raft.clone(),
         };
 
         Self {
@@ -214,6 +219,7 @@ impl ClusterTestNode {
             data_dir: Some(data_dir),
             running,
             restart_info: Some(restart_info),
+            raft,
         }
     }
 
@@ -258,6 +264,11 @@ impl ClusterTestNode {
         self.running.load(Ordering::SeqCst)
     }
 
+    /// Get the Raft instance, if cluster mode is enabled.
+    pub fn raft(&self) -> Option<&Arc<ClusterRaft>> {
+        self.raft.as_ref()
+    }
+
     /// Connect to this node and return a TestClient.
     /// Retries on transient errors (e.g. EADDRNOTAVAIL during rapid restarts).
     pub async fn connect(&self) -> TestClient {
@@ -291,6 +302,10 @@ impl ClusterTestNode {
 
     /// Gracefully shutdown the node.
     pub async fn shutdown(&mut self) {
+        // Shutdown the Raft instance to stop background tasks (heartbeats, elections)
+        if let Some(ref raft) = self.raft {
+            let _ = raft.shutdown().await;
+        }
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
@@ -307,6 +322,11 @@ impl ClusterTestNode {
     /// locks are released. In a real crash the OS handles this; in single-process
     /// tests we must do it ourselves.
     pub async fn kill(&mut self) {
+        // Shutdown the Raft instance to stop background tasks (heartbeats, elections)
+        // so other nodes can detect the failure and elect a new leader.
+        if let Some(ref raft) = self.raft {
+            let _ = raft.shutdown().await;
+        }
         // Send shutdown signal to allow the server to clean up child tasks
         // (Raft, replication, etc.) that hold RocksDB handles.
         if let Some(tx) = self.shutdown_tx.take() {
@@ -416,6 +436,7 @@ impl ClusterTestNode {
             .and_then(|r| r.ok())
             .map(|a| a.port())
             .unwrap_or(0);
+        let raft = server.raft().cloned();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -437,11 +458,13 @@ impl ClusterTestNode {
         self.shutdown_tx = Some(shutdown_tx);
         self.handle = Some(handle);
         self.running = running;
+        self.raft = raft.clone();
 
         // Update restart_info with new ports
         self.restart_info = Some(NodeRestartInfo {
             client_port,
             metrics_port,
+            raft,
             ..restart_info
         });
 
@@ -567,6 +590,7 @@ impl ClusterTestHarness {
                 .and_then(|r| r.ok())
                 .map(|a| a.port())
                 .unwrap_or(0);
+            let raft = server.raft().cloned();
 
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -587,6 +611,7 @@ impl ClusterTestHarness {
                 data_dir: data_dir.clone(),
                 config: config.clone(),
                 initial_nodes: initial_nodes.clone(),
+                raft: raft.clone(),
             };
 
             let node = ClusterTestNode {
@@ -599,6 +624,7 @@ impl ClusterTestHarness {
                 data_dir: Some(data_dir),
                 running,
                 restart_info: Some(restart_info),
+                raft,
             };
 
             self.nodes.insert(node_id, node);
@@ -760,37 +786,22 @@ impl ClusterTestHarness {
         parse_cluster_info(&response)
     }
 
-    /// Determine the current Raft leader by probing a running node with a
-    /// Raft-requiring command. If the node is the leader the command succeeds;
-    /// if not, the server returns a REDIRECT with the actual leader's node_id.
+    /// Try to determine the current Raft leader by reading metrics from running nodes.
     pub async fn get_leader(&self) -> Option<u64> {
         for &node_id in &self.node_order {
-            let Some(node) = self.nodes.get(&node_id) else {
-                continue;
-            };
-            if !node.is_running() {
-                continue;
-            }
-
-            // CLUSTER SETSLOT 0 STABLE is a safe no-op probe: it cancels
-            // migration on slot 0, which is virtually never migrating.
-            let resp = node.send("CLUSTER", &["SETSLOT", "0", "STABLE"]).await;
-            match &resp {
-                // This node handled the write → it is the leader.
-                Response::Simple(_) => return Some(node_id),
-                // Follower forwarded to leader → parse "REDIRECT <id> <addr>".
-                Response::Error(e) => {
-                    let msg = String::from_utf8_lossy(e);
-                    if let Some(rest) = msg.strip_prefix("REDIRECT ")
-                        && let Some(id_str) = rest.split_whitespace().next()
-                        && let Ok(leader_id) = id_str.parse::<u64>()
-                        && self.nodes.contains_key(&leader_id)
-                    {
-                        return Some(leader_id);
+            if let Some(node) = self.nodes.get(&node_id)
+                && node.is_running()
+            {
+                if let Some(raft) = node.raft() {
+                    let leader = raft.metrics().borrow().current_leader;
+                    if let Some(leader_id) = leader {
+                        // Verify the reported leader is actually running
+                        // (filters stale reports during elections)
+                        if self.nodes.get(&leader_id).map_or(false, |n| n.is_running()) {
+                            return Some(leader_id);
+                        }
                     }
-                    // "CLUSTERDOWN No leader available" → keep trying other nodes.
                 }
-                _ => {}
             }
         }
         None
@@ -808,6 +819,26 @@ impl ClusterTestHarness {
         }
 
         Err(ClusterError::new("Timeout waiting for leader election"))
+    }
+
+    /// Wait for a new leader to be elected, excluding the given node ID.
+    pub async fn wait_for_new_leader(
+        &self,
+        exclude: u64,
+        timeout_duration: Duration,
+    ) -> Result<u64, ClusterError> {
+        let start = std::time::Instant::now();
+
+        while start.elapsed() < timeout_duration {
+            if let Some(leader) = self.get_leader().await {
+                if leader != exclude {
+                    return Ok(leader);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        Err(ClusterError::new("Timeout waiting for new leader election"))
     }
 
     /// Wait for cluster convergence (all nodes report same state).

@@ -337,9 +337,9 @@ async fn test_leader_failover() {
     // Kill the leader
     harness.kill_node(original_leader).await;
 
-    // Wait for new leader election
+    // Wait for new leader election (excluding the killed leader)
     let new_leader = harness
-        .wait_for_leader(Duration::from_secs(15))
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
         .await
         .unwrap();
     assert_ne!(new_leader, original_leader);
@@ -1217,9 +1217,9 @@ async fn test_asymmetric_node_failure() {
     // Kill only the leader
     harness.kill_node(original_leader).await;
 
-    // Wait for new leader election
+    // Wait for new leader election (excluding the killed leader)
     let new_leader = harness
-        .wait_for_leader(Duration::from_secs(15))
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
         .await
         .unwrap();
 
@@ -1276,10 +1276,19 @@ async fn test_rapid_failover_cycles() {
 
     // Kill leader, wait for election, repeat 3 times
     for cycle in 0..3 {
-        let current_leader = harness
-            .wait_for_leader(Duration::from_secs(15))
-            .await
-            .unwrap();
+        let current_leader = if killed_leaders.is_empty() {
+            harness
+                .wait_for_leader(Duration::from_secs(15))
+                .await
+                .unwrap()
+        } else {
+            // After killing previous leaders, wait for a new one that isn't killed
+            let last_killed = *killed_leaders.last().unwrap();
+            harness
+                .wait_for_new_leader(last_killed, Duration::from_secs(15))
+                .await
+                .unwrap()
+        };
 
         eprintln!("Cycle {}: Killing leader {}", cycle + 1, current_leader);
         harness.kill_node(current_leader).await;
@@ -1928,8 +1937,11 @@ async fn test_concurrent_failover_attempts() {
     // With 5 nodes and 1 dead, we have 4 nodes - still quorum
     let election_start = std::time::Instant::now();
 
-    // Wait for new leader election (one of the remaining 4 nodes)
-    let new_leader = match harness.wait_for_leader(Duration::from_secs(15)).await {
+    // Wait for new leader election (one of the remaining 4 nodes, excluding killed leader)
+    let new_leader = match harness
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
+        .await
+    {
         Ok(leader) => {
             let election_time = election_start.elapsed();
             eprintln!("New leader {} elected in {:?}", leader, election_time);
@@ -2072,9 +2084,9 @@ async fn test_data_survives_leader_failover() {
     eprintln!("Killing leader: {}", original_leader);
     harness.kill_node(original_leader).await;
 
-    // Wait for new leader election
+    // Wait for new leader election (excluding the killed leader)
     let new_leader = harness
-        .wait_for_leader(Duration::from_secs(15))
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
         .await
         .unwrap();
     eprintln!("New leader: {}", new_leader);
@@ -2778,9 +2790,9 @@ async fn test_promoted_replica_has_all_data() {
     eprintln!("Killing leader: {}", original_leader);
     harness.kill_node(original_leader).await;
 
-    // Wait for new leader
+    // Wait for new leader (excluding the killed leader)
     let new_leader = harness
-        .wait_for_leader(Duration::from_secs(15))
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
         .await
         .unwrap();
     eprintln!("New leader (promoted): {}", new_leader);
