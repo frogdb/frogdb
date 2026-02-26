@@ -118,40 +118,28 @@ integration/redis-benchmark
 # INLINE PROTOCOL — FrogDB only supports RESP, not inline commands
 unit/keyspace#Commands pipelining
 
-# BLOCKED CLIENT DETECTION (unit/type/list)
-# FrogDB doesn't update blocked_clients in CLIENT LIST / INFO
-unit/type/list#/should not awake blocked client
-unit/type/list#/with zero timeout should block indefinitely
-unit/type/list#/with a client BLPOPing the target list
-unit/type/list#/with multiple blocked clients
-unit/type/list#/with same key multiple times should work
-unit/type/list#/with variadic LPUSH
-unit/type/list#/maintains order of elements after failure
-unit/type/list#/does not affect WATCH while still blocked
-unit/type/list#/PUSH resulting from BRPOPLPUSH affect WATCH
-unit/type/list#/should increase dirty
-unit/type/list#/propagate as pop with count command to replica
-unit/type/list#BRPOPLPUSH inside a transaction
+# BLOCKED LIST CORRECTNESS (unit/type/list)
+# LPUSH+DEL race: shard notifies waiter after LPUSH before DEL completes, so the
+# blocked client reads the value that is then deleted — atomicity gap in notify path.
+unit/type/list#BLPOP, LPUSH + DEL should not awake blocked client
+unit/type/list#BLPOP, LPUSH + DEL + SET should not awake blocked client
+unit/type/list#BLMPOP_LEFT, LPUSH + DEL should not awake blocked client
+unit/type/list#BLMPOP_LEFT, LPUSH + DEL + SET should not awake blocked client
+# MULTI/EXEC isolation: blocking client sees intermediate MULTI state
+unit/type/list#MULTI/EXEC is isolated from the point of view of BLPOP
+unit/type/list#MULTI/EXEC is isolated from the point of view of BLMPOP_LEFT
+# BLMOVE notify: BLMOVE does not wake clients blocked on the destination list
+unit/type/list#/BLMOVE.*with a client BLPOPing
+# BRPOPLPUSH/BLMOVE cross-list correctness: destination type check, ordering, multi-client
+unit/type/list#BRPOPLPUSH with wrong destination type
+unit/type/list#BRPOPLPUSH maintains order of elements after failure
+unit/type/list#BRPOPLPUSH with multiple blocked clients
+unit/type/list#BLMPOP with multiple blocked clients
 unit/type/list#Linked LMOVEs
 unit/type/list#Circular BRPOPLPUSH
 unit/type/list#Self-referential BRPOPLPUSH
-unit/type/list#BRPOPLPUSH timeout
-unit/type/list#/chaining BRPOPLPUSH
-unit/type/list#Regression for a crash with blocking ops and pipelining
-unit/type/list#/with wrong destination type
-unit/type/list#/MULTI/EXEC is isolated from the point of view of BL
-unit/type/list#/: with single empty list argument
-unit/type/list#/: arguments are empty
-unit/type/list#/: with non-integer timeout
-unit/type/list#/^B[LR]POP: timeout$
-unit/type/list#/^BLMPOP_(LEFT|RIGHT): timeout$
-unit/type/list#/when new key is moved into place
-unit/type/list#/when result key is created by SORT
-unit/type/list#/inside a transaction
-unit/type/list#/client unblock tests
-unit/type/list#/Unblock fairness
-unit/type/list#BLPOP: timeout value out of range
-unit/type/list#/Blocking command accounted only once in commandstats
+# Blocking commands inside MULTI: FrogDB rejects them; Redis executes non-blocking
+unit/type/list#BRPOPLPUSH inside a transaction
 
 # BLOCKED CLIENT DETECTION (unit/type/zset)
 unit/type/zset#/with variadic ZADD

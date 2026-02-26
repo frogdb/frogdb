@@ -461,6 +461,27 @@ impl ClientRegistry {
         }
     }
 
+    /// Update blocked state for a client.
+    pub fn update_blocked_state(&self, id: u64, blocked: bool) {
+        let mut clients = self.clients.write().unwrap();
+        if let Some(entry) = clients.get_mut(&id) {
+            if blocked {
+                entry.flags |= ClientFlags::BLOCKED;
+            } else {
+                entry.flags.remove(ClientFlags::BLOCKED);
+            }
+        }
+    }
+
+    /// Count the number of currently blocked clients.
+    pub fn blocked_client_count(&self) -> usize {
+        let clients = self.clients.read().unwrap();
+        clients
+            .values()
+            .filter(|e| e.flags.contains(ClientFlags::BLOCKED))
+            .count()
+    }
+
     /// Update MULTI/EXEC state.
     pub fn update_multi_state(&self, id: u64, in_multi: bool, queue_len: usize) {
         let mut clients = self.clients.write().unwrap();

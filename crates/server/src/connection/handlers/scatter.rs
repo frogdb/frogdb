@@ -430,7 +430,25 @@ impl ConnectionHandler {
             name: Bytes::from_static(b"INFO"),
             args: args.to_vec(),
         });
-        self.execute_on_shard(self.shard_id, cmd).await
+        let mut response = self.execute_on_shard(self.shard_id, cmd).await;
+
+        // Patch the Clients section with live data from the registry.
+        if let Response::Bulk(Some(ref bytes)) = response {
+            let s = String::from_utf8_lossy(bytes);
+            let blocked = self.client_registry.blocked_client_count();
+            let connected = self.client_registry.client_count();
+            let patched = s
+                .replace(
+                    "blocked_clients:0\r\n",
+                    &format!("blocked_clients:{blocked}\r\n"),
+                )
+                .replace(
+                    "connected_clients:1\r\n",
+                    &format!("connected_clients:{connected}\r\n"),
+                );
+            response = Response::bulk(Bytes::from(patched));
+        }
+        response
     }
 }
 
