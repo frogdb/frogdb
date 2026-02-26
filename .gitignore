@@ -63,6 +63,9 @@ jepsen/frogdb/store
 *.profdata
 coverage/
 
+# Causal profiling output
+causal-profile.json
+
 # OS-specific files
 .DS_Store
 Thumbs.db

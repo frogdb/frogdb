@@ -102,6 +102,12 @@ concurrency:
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-server --features turmoil --test simulation
     -cargo sweep --time 0
 
+# Run tokio-coz causal profiler tests (requires tokio_unstable)
+test-coz:
+    -cargo sweep --stamp
+    RUSTFLAGS="--cfg tokio_unstable" cargo test -p tokio-coz
+    -cargo sweep --time 0
+
 # Run browser integration tests (requires chromedriver running on port 9515)
 test-browser:
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-browser-tests --features browser-tests
@@ -197,6 +203,22 @@ redis-compat-clean:
 # Show Redis compatibility coverage
 redis-compat-coverage:
     uv run redis-compat/coverage.py
+
+# =============================================================================
+# Causal Profiling (tokio-coz)
+# =============================================================================
+
+# Build with causal profiling support (tokio_unstable + causal-profile feature)
+# Usage: just build-causal [profile]  (debug or release, default: debug)
+build-causal profile="debug":
+    -cargo sweep --stamp
+    RUSTFLAGS="--cfg tokio_unstable" {{dyld-env}} {{rocksdb-env}} cargo build -p frogdb-server --features causal-profile {{ if profile == "release" { "--release" } else { "" } }}
+    -cargo sweep --time 0
+
+# Causal-profile FrogDB under load (tokio-coz)
+# Usage: just causal-profile [workload] [duration_secs] [--profile release]
+causal-profile workload="mixed" duration="90" *args:
+    uv run loadtest/scripts/causal_profile.py -w {{workload}} --duration {{duration}} {{args}}
 
 # =============================================================================
 # Profiling (requires: cargo-flamegraph, samply, heaptrack)

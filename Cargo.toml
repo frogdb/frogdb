@@ -22,6 +22,7 @@ members = [
     "helm/helm-gen",
     "grafana/dashboard-gen",
     "tools/workflow-gen",
+    "crates/tokio-coz",
 ]
 
 [workspace.package]
@@ -51,6 +52,7 @@ bitflags = "2"
 ordered-float = "4"
 rand = "0.8"
 parking_lot = "0.12"
+dashmap = "6"
 
 # Property-based testing
 proptest = "1"
@@ -116,6 +118,7 @@ frogdb-debug = { path = "crates/debug" }
 frogdb-telemetry = { path = "crates/telemetry" }
 frogdb-metrics-derive = { path = "crates/metrics-derive" }
 frogdb-testing = { path = "crates/testing" }
+tokio-coz = { path = "crates/tokio-coz" }
 
 # Benchmarking
 criterion = { version = "0.5", features = ["async_tokio"] }

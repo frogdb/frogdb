@@ -77,6 +77,8 @@ def main() -> None:
                         help="Clients per thread (default: 25)")
     parser.add_argument("-n", "--requests", type=int, default=10000,
                         help="Requests per client (default: 10000)")
+    parser.add_argument("--test-time", type=int, default=None,
+                        help="Run for N seconds instead of a fixed request count")
     parser.add_argument("-d", "--datasize", type=int, default=128,
                         help="Data size in bytes (default: 128)")
     parser.add_argument("--ratio", default="1:1",
@@ -118,15 +120,20 @@ def main() -> None:
         "-p", str(args.port),
         "--threads", str(args.threads),
         "--clients", str(args.clients),
-        "--requests", str(args.requests),
         "--data-size", str(args.datasize),
         "--ratio", ratio,
         "--key-pattern", key_pattern,
         "--key-maximum", str(args.key_maximum),
         "--pipeline", str(args.pipeline),
         "--hide-histogram",
-        "--print-percentiles",
+        "--print-percentiles", "50,99,99.9",
     ]
+
+    # Use --test-time (duration) or --requests (count)
+    if args.test_time is not None:
+        cmd_args.extend(["--test-time", str(args.test_time)])
+    else:
+        cmd_args.extend(["--requests", str(args.requests)])
 
     if args.json_file:
         cmd_args.extend(["--json-out-file", args.json_file])
@@ -136,7 +143,6 @@ def main() -> None:
 
     # Print configuration
     total_clients = args.threads * args.clients
-    total_requests = total_clients * args.requests
 
     print("=" * 60)
     print("FrogDB memtier_benchmark Test")
@@ -145,8 +151,12 @@ def main() -> None:
     print(f"Threads:        {args.threads}")
     print(f"Clients/Thread: {args.clients}")
     print(f"Total Clients:  {total_clients}")
-    print(f"Requests/Client:{args.requests}")
-    print(f"Total Requests: {total_requests}")
+    if args.test_time is not None:
+        print(f"Duration:       {args.test_time} seconds")
+    else:
+        total_requests = total_clients * args.requests
+        print(f"Requests/Client:{args.requests}")
+        print(f"Total Requests: {total_requests}")
     print(f"Data size:      {args.datasize} bytes")
     print(f"Ratio (R:W):    {ratio}")
     print(f"Key pattern:    {key_pattern}")

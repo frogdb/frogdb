@@ -57,7 +57,7 @@ use redis_protocol::codec::Resp2;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
-use tracing::{debug, info, trace, warn};
+use tracing::{Instrument, debug, info, trace, warn};
 
 use crate::config::TracingConfig;
 use crate::net::TcpStream;
@@ -494,7 +494,7 @@ impl ConnectionHandler {
                 }
 
                 // Handle client commands
-                frame_result = self.framed.next() => {
+                frame_result = self.framed.next().instrument(tracing::info_span!("cmd_read")) => {
                     let frame = match frame_result {
                         Some(Ok(frame)) => frame,
                         Some(Err(e)) => {
@@ -564,7 +564,10 @@ impl ConnectionHandler {
                         .map(|t| t.start_request_span(&cmd_name, self.state.id));
 
                     // Route and execute (with transaction and pub/sub handling)
-                    let responses = self.route_and_execute_with_transaction(&cmd, &cmd_name).await;
+                    let responses = self
+                        .route_and_execute_with_transaction(&cmd, &cmd_name)
+                        .instrument(tracing::info_span!("cmd_execute", cmd = %cmd_name))
+                        .await;
 
                     // Check for PSYNC_HANDOFF signal - this requires special handling
                     // because we need to hand off the TCP connection to the replication handler
@@ -608,6 +611,10 @@ impl ConnectionHandler {
                         span.end();
                     }
 
+                    // Record causal profiling throughput progress point
+                    #[cfg(feature = "causal-profile")]
+                    tokio_coz::progress!("commands_processed");
+
                     // Log to slowlog if threshold exceeded and command not exempt
                     self.maybe_log_slow_query(&cmd, elapsed_us).await;
 
@@ -622,12 +629,19 @@ impl ConnectionHandler {
                                 self.state.skip_next_reply = false;
                                 // Skip sending this response
                             } else if responses.len() == 1 {
-                                if self.send_response(responses.into_iter().next().unwrap()).await.is_err() {
+                                if self.send_response(responses.into_iter().next().unwrap())
+                                    .instrument(tracing::info_span!("resp_write"))
+                                    .await
+                                    .is_err()
+                                {
                                     debug!(conn_id = self.state.id, "Failed to send response");
                                     break;
                                 }
                             } else if !responses.is_empty()
-                                && self.send_responses_batch(responses).await.is_err()
+                                && self.send_responses_batch(responses)
+                                    .instrument(tracing::info_span!("resp_write"))
+                                    .await
+                                    .is_err()
                             {
                                 debug!(conn_id = self.state.id, "Failed to send batch response");
                                 break;
