@@ -6,8 +6,8 @@ Builds with causal profiling support, runs the server with the profiler active,
 generates load, then captures the causal profiling report.
 
 Usage:
-    python causal_profile.py --workload mixed --requests 50000
-    python causal_profile.py -w read-heavy -n 100000 --shards 4
+    python causal_profile.py --workload mixed --duration 120
+    python causal_profile.py -w read-heavy --duration 90 --shards 4
 """
 
 import argparse
@@ -48,7 +48,7 @@ def build_causal_binary() -> None:
 
 def run_causal_profile(
     workload: str,
-    requests: int,
+    duration: int,
     threads: int = 4,
     clients: int = 25,
     shards: int | None = None,
@@ -58,11 +58,13 @@ def run_causal_profile(
     build_causal_binary()
 
     # Server environment: disable persistence, enable causal profiling
+    # Filter out FROGDB_SYSTEM_ROCKSDB — it's a build flag, not a server config key,
+    # and figment rejects unknown FROGDB_* env vars.
     server_env = {
-        **os.environ,
-        "FROGDB_PERSISTENCE__ENABLED": "false",
-        "COZ_PROFILE": "1",
+        k: v for k, v in os.environ.items() if k != "FROGDB_SYSTEM_ROCKSDB"
     }
+    server_env["FROGDB_PERSISTENCE__ENABLED"] = "false"
+    server_env["COZ_PROFILE"] = "1"
     if shards is not None:
         server_env["FROGDB_SERVER__NUM_SHARDS"] = str(shards)
 
@@ -89,14 +91,14 @@ def run_causal_profile(
             sys.exit(1)
         print(f"FrogDB ready on port {SERVER_PORT}")
 
-        # Run load test using run_memtier.py
-        print(f"Running {workload} workload ({requests} requests)...")
+        # Run load test using run_memtier.py (duration-based for profiling)
+        print(f"Running {workload} workload for {duration} seconds...")
         memtier_result = subprocess.run(
             [
                 sys.executable,
                 str(Path(__file__).parent / "run_memtier.py"),
                 "-w", workload,
-                "-n", str(requests),
+                "--test-time", str(duration),
                 "-t", str(threads),
                 "-c", str(clients),
             ],
@@ -139,10 +141,10 @@ def main():
         help="Workload preset",
     )
     parser.add_argument(
-        "-n", "--requests",
+        "--duration",
         type=int,
-        default=100000,
-        help="Number of requests per client",
+        default=90,
+        help="Load test duration in seconds (default: 90, enough for ~5 profiling spans)",
     )
     parser.add_argument(
         "-t", "--threads",
@@ -167,7 +169,7 @@ def main():
 
     run_causal_profile(
         workload=args.workload,
-        requests=args.requests,
+        duration=args.duration,
         threads=args.threads,
         clients=args.clients,
         shards=args.shards,
