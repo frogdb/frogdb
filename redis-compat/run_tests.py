@@ -57,30 +57,24 @@ def get_project_root() -> Path:
 
 
 def parse_skiplists(script_dir: Path) -> tuple[list[str], list[str]]:
-    """Parse all skiplist files and separate unit names from test names.
+    """Parse the skiplist and separate suite names from individual test names.
 
     Returns (skip_units, skip_tests) where:
     - skip_units: entries like "unit/protocol" that skip entire test files (--skipunit)
     - skip_tests: individual test name patterns (--skipfile)
     """
-    skipfiles = [
-        script_dir / "skiplist-intentional.txt",
-        script_dir / "skiplist-not-implemented.txt",
-        script_dir / "skiplist-flaky.txt",
-    ]
+    skipfile = script_dir / "skiplist.txt"
 
     skip_units: list[str] = []
     skip_tests: list[str] = []
 
-    for skipfile in skipfiles:
-        if not skipfile.exists():
-            continue
+    if skipfile.exists():
         with open(skipfile) as f:
             for line in f:
                 stripped = line.strip()
                 if not stripped or stripped.startswith("#"):
                     continue
-                # Unit names look like "unit/foo" or "integration/bar".
+                # Suite names look like "unit/foo" or "integration/bar".
                 # Everything else (exact names, /regex patterns) is a test name.
                 if stripped.startswith(("unit/", "integration/")):
                     skip_units.append(stripped)
