@@ -83,6 +83,8 @@ impl ConnectionHandler {
             shard_id: target_shard,
             keys: keys.clone(),
         });
+        self.client_registry
+            .update_blocked_state(self.state.id, true);
 
         // Wait for response with timeout
         let result = if let Some(deadline) = deadline {
@@ -96,6 +98,8 @@ impl ConnectionHandler {
 
         // Clear blocked state
         self.state.blocked = None;
+        self.client_registry
+            .update_blocked_state(self.state.id, false);
 
         match result {
             Ok(Ok(response)) => response,

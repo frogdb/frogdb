@@ -15,7 +15,10 @@
 //! - latency_baseline: Intrinsic latency test results (if startup test was run)
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy,
+};
 use frogdb_protocol::Response;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -54,6 +57,10 @@ impl Command for InfoCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::READONLY | CommandFlags::LOADING | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
