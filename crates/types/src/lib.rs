@@ -27,9 +27,10 @@ pub use bitmap::{
 pub use bloom::{BloomFilterValue, BloomLayer};
 pub use error::{CommandError, RespError};
 pub use geo::{
-    BoundingBox, Coordinates, DistanceUnit, EARTH_RADIUS_M, GEOHASH_BITS, LAT_MAX, LAT_MIN,
-    LON_MAX, LON_MIN, geohash_decode, geohash_encode, geohash_range_for_bbox, geohash_to_score,
-    geohash_to_string, haversine_distance, is_within_box, is_within_radius, score_to_geohash,
+    BoundingBox, Coordinates, DistanceUnit, EARTH_RADIUS_M, GEOHASH_BITS, GeoHashBits, LAT_MAX,
+    LAT_MIN, LON_MAX, LON_MIN, geohash_calculate_areas, geohash_decode, geohash_encode,
+    geohash_range_for_bbox, geohash_score_range, geohash_to_score, geohash_to_string,
+    haversine_distance, is_within_box, is_within_radius, score_to_geohash,
 };
 pub use glob::glob_match;
 pub use hyperloglog::{HLL_DENSE_SIZE, HLL_REGISTERS, HyperLogLogValue};

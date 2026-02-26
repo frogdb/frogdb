@@ -117,10 +117,25 @@ impl BoundingBox {
             (LON_MIN, LON_MAX)
         } else {
             let lon_delta = lat_delta / cos_pole;
-            (
-                (center.lon - lon_delta).max(LON_MIN),
-                (center.lon + lon_delta).min(LON_MAX),
-            )
+            if lon_delta >= 180.0 {
+                (LON_MIN, LON_MAX)
+            } else {
+                let raw_min = center.lon - lon_delta;
+                let raw_max = center.lon + lon_delta;
+                // Wrap across the antimeridian instead of clamping.
+                // When min > max, contains() will use OR logic.
+                let min_lon = if raw_min < LON_MIN {
+                    raw_min + 360.0
+                } else {
+                    raw_min
+                };
+                let max_lon = if raw_max > LON_MAX {
+                    raw_max - 360.0
+                } else {
+                    raw_max
+                };
+                (min_lon, max_lon)
+            }
         };
 
         Self {
@@ -150,10 +165,23 @@ impl BoundingBox {
             (LON_MIN, LON_MAX)
         } else {
             let lon_delta = (width_m / 2.0) / EARTH_RADIUS_M * (180.0 / PI) / cos_pole;
-            (
-                (center.lon - lon_delta).max(LON_MIN),
-                (center.lon + lon_delta).min(LON_MAX),
-            )
+            if lon_delta >= 180.0 {
+                (LON_MIN, LON_MAX)
+            } else {
+                let raw_min = center.lon - lon_delta;
+                let raw_max = center.lon + lon_delta;
+                let min_lon = if raw_min < LON_MIN {
+                    raw_min + 360.0
+                } else {
+                    raw_min
+                };
+                let max_lon = if raw_max > LON_MAX {
+                    raw_max - 360.0
+                } else {
+                    raw_max
+                };
+                (min_lon, max_lon)
+            }
         };
 
         Self {
@@ -166,10 +194,13 @@ impl BoundingBox {
 
     /// Check if coordinates are within this bounding box.
     pub fn contains(&self, coords: Coordinates) -> bool {
-        coords.lon >= self.min_lon
-            && coords.lon <= self.max_lon
-            && coords.lat >= self.min_lat
-            && coords.lat <= self.max_lat
+        let lon_in = if self.min_lon <= self.max_lon {
+            coords.lon >= self.min_lon && coords.lon <= self.max_lon
+        } else {
+            // Antimeridian crossing: the box wraps around +/-180
+            coords.lon >= self.min_lon || coords.lon <= self.max_lon
+        };
+        lon_in && coords.lat >= self.min_lat && coords.lat <= self.max_lat
     }
 }
 
@@ -334,6 +365,258 @@ pub fn is_within_box(center: Coordinates, point: Coordinates, width_m: f64, heig
     let lat_dist = haversine_distance(center.lon, center.lat, center.lon, point.lat);
 
     lon_dist <= width_m / 2.0 && lat_dist <= height_m / 2.0
+}
+
+// ============================================================================
+// 9-Area Geohash Scanning (matching Redis's membersOfAllNeighbors)
+// ============================================================================
+
+/// Mercator projection maximum value (meters), matching Redis.
+const MERCATOR_MAX: f64 = 20037726.37;
+
+/// A geohash encoded at an arbitrary step size (1-26).
+#[derive(Debug, Clone, Copy)]
+pub struct GeoHashBits {
+    pub bits: u64,
+    pub step: u8,
+}
+
+/// Encode longitude/latitude at an arbitrary step size (1-26).
+/// Same normalization as `geohash_encode` but using `step` instead of 26.
+fn geohash_encode_at_step(lon: f64, lat: f64, step: u8) -> GeoHashBits {
+    let lon = lon.clamp(LON_MIN, LON_MAX);
+    let lat = lat.clamp(LAT_MIN, LAT_MAX);
+
+    let lon_norm = (lon - LON_MIN) / (LON_MAX - LON_MIN);
+    let lat_norm = (lat - LAT_MIN) / (LAT_MAX - LAT_MIN);
+
+    let max_val = (1u64 << step) - 1;
+    let lon_int = ((lon_norm * (1u64 << step) as f64) as u64).min(max_val);
+    let lat_int = ((lat_norm * (1u64 << step) as f64) as u64).min(max_val);
+
+    // Interleave: lon in odd positions, lat in even (matching Redis's interleave64(lat, lon))
+    let s = step as u32;
+    let mut hash = 0u64;
+    for i in 0..s {
+        hash |= ((lon_int >> (s - 1 - i)) & 1) << (s * 2 - 1 - i * 2);
+        hash |= ((lat_int >> (s - 1 - i)) & 1) << (s * 2 - 2 - i * 2);
+    }
+
+    GeoHashBits { bits: hash, step }
+}
+
+/// Left-shift a geohash to fill 52 bits (matching Redis's `geohashAlign52Bits`).
+fn geohash_align_52_bits(hash: &GeoHashBits) -> u64 {
+    hash.bits << (52 - hash.step as u32 * 2)
+}
+
+/// Compute the sorted-set score range [min, max) for a geohash cell.
+/// `min` is inclusive, `max` is exclusive.
+pub fn geohash_score_range(hash: &GeoHashBits) -> (f64, f64) {
+    let min = geohash_align_52_bits(hash);
+    let max = geohash_align_52_bits(&GeoHashBits {
+        bits: hash.bits + 1,
+        step: hash.step,
+    });
+    (min as f64, max as f64)
+}
+
+/// Estimate geohash step size for a given search radius and latitude.
+/// Matches Redis's `geohashEstimateStepsByRadius`.
+fn geohash_estimate_steps_by_radius(radius_m: f64, lat: f64) -> u8 {
+    if radius_m == 0.0 {
+        return 26;
+    }
+    let mut range = radius_m;
+    let mut step: i32 = 1;
+    while range < MERCATOR_MAX {
+        range *= 2.0;
+        step += 1;
+    }
+    step -= 2; // Ensure range is included in worst case
+    if !(-66.0..=66.0).contains(&lat) {
+        step -= 1;
+        if !(-80.0..=80.0).contains(&lat) {
+            step -= 1;
+        }
+    }
+    step.clamp(1, 26) as u8
+}
+
+/// Move a geohash in the longitude direction (odd/x bits).
+/// Matches Redis's `geohash_move_x`.
+fn geohash_move_x(hash: &mut GeoHashBits, d: i8) {
+    if d == 0 {
+        return;
+    }
+    let total_bits = hash.step as u32 * 2;
+    let x_mask = 0xAAAA_AAAA_AAAA_AAAAu64 >> (64 - total_bits);
+    let y_mask = 0x5555_5555_5555_5555u64 >> (64 - total_bits);
+
+    let mut x = hash.bits & x_mask;
+    let y = hash.bits & y_mask;
+    let zz = y_mask;
+
+    if d > 0 {
+        x = x.wrapping_add(zz.wrapping_add(1));
+    } else {
+        x = (x | zz).wrapping_sub(zz.wrapping_add(1));
+    }
+    x &= x_mask;
+    hash.bits = x | y;
+}
+
+/// Move a geohash in the latitude direction (even/y bits).
+/// Matches Redis's `geohash_move_y`.
+fn geohash_move_y(hash: &mut GeoHashBits, d: i8) {
+    if d == 0 {
+        return;
+    }
+    let total_bits = hash.step as u32 * 2;
+    let x_mask = 0xAAAA_AAAA_AAAA_AAAAu64 >> (64 - total_bits);
+    let y_mask = 0x5555_5555_5555_5555u64 >> (64 - total_bits);
+
+    let x = hash.bits & x_mask;
+    let mut y = hash.bits & y_mask;
+    let zz = x_mask;
+
+    if d > 0 {
+        y = y.wrapping_add(zz.wrapping_add(1));
+    } else {
+        y = (y | zz).wrapping_sub(zz.wrapping_add(1));
+    }
+    y &= y_mask;
+    hash.bits = x | y;
+}
+
+/// Compute the 8 neighbor cells of a geohash.
+/// Returns in Redis order: [N, S, E, W, NE, NW, SE, SW].
+fn geohash_neighbors(hash: &GeoHashBits) -> [GeoHashBits; 8] {
+    let mut neighbors = [*hash; 8];
+
+    // N: y+1
+    geohash_move_y(&mut neighbors[0], 1);
+    // S: y-1
+    geohash_move_y(&mut neighbors[1], -1);
+    // E: x+1
+    geohash_move_x(&mut neighbors[2], 1);
+    // W: x-1
+    geohash_move_x(&mut neighbors[3], -1);
+    // NE: x+1, y+1
+    geohash_move_x(&mut neighbors[4], 1);
+    geohash_move_y(&mut neighbors[4], 1);
+    // NW: x-1, y+1
+    geohash_move_x(&mut neighbors[5], -1);
+    geohash_move_y(&mut neighbors[5], 1);
+    // SE: x+1, y-1
+    geohash_move_x(&mut neighbors[6], 1);
+    geohash_move_y(&mut neighbors[6], -1);
+    // SW: x-1, y-1
+    geohash_move_x(&mut neighbors[7], -1);
+    geohash_move_y(&mut neighbors[7], -1);
+
+    neighbors
+}
+
+/// Decode a geohash cell into its coordinate ranges.
+/// Returns (min_lon, max_lon, min_lat, max_lat).
+fn geohash_decode_area(hash: &GeoHashBits) -> (f64, f64, f64, f64) {
+    let s = hash.step as u32;
+
+    let mut lon_int = 0u64;
+    let mut lat_int = 0u64;
+    for i in 0..s {
+        lon_int |= ((hash.bits >> (s * 2 - 1 - i * 2)) & 1) << (s - 1 - i);
+        lat_int |= ((hash.bits >> (s * 2 - 2 - i * 2)) & 1) << (s - 1 - i);
+    }
+
+    let scale = (1u64 << s) as f64;
+    let lon_range = LON_MAX - LON_MIN;
+    let lat_range = LAT_MAX - LAT_MIN;
+
+    let min_lon = lon_int as f64 / scale * lon_range + LON_MIN;
+    let max_lon = (lon_int + 1) as f64 / scale * lon_range + LON_MIN;
+    let min_lat = lat_int as f64 / scale * lat_range + LAT_MIN;
+    let max_lat = (lat_int + 1) as f64 / scale * lat_range + LAT_MIN;
+
+    (min_lon, max_lon, min_lat, max_lat)
+}
+
+/// Compute the raw (unclamped) bounding box for the decrease_step check.
+/// Matches Redis's `geohashBoundingBox`. Returns (min_lon, min_lat, max_lon, max_lat).
+/// Longitude values may be inverted (min > max) when spanning the antimeridian.
+fn geohash_raw_bbox(
+    center: Coordinates,
+    half_width_m: f64,
+    half_height_m: f64,
+) -> (f64, f64, f64, f64) {
+    let lat_delta = (half_height_m / EARTH_RADIUS_M) * (180.0 / PI);
+    let min_lat = center.lat - lat_delta;
+    let max_lat = center.lat + lat_delta;
+
+    let pole_lat = if center.lat >= 0.0 {
+        center.lat + lat_delta
+    } else {
+        center.lat - lat_delta
+    };
+    let cos_pole = (pole_lat * PI / 180.0).cos();
+    let lon_delta = (half_width_m / EARTH_RADIUS_M / cos_pole) * (180.0 / PI);
+
+    let min_lon = center.lon - lon_delta;
+    let max_lon = center.lon + lon_delta;
+
+    (min_lon, min_lat, max_lon, max_lat)
+}
+
+/// Check if the 3x3 geohash grid needs larger cells (decrease step).
+/// Compares decoded neighbor edges against the raw bounding box.
+/// Matches Redis's decrease_step logic in `geohashCalculateAreasByShapeWGS84`.
+fn needs_decrease_step(
+    raw_bbox: (f64, f64, f64, f64), // (min_lon, min_lat, max_lon, max_lat)
+    neighbors: &[GeoHashBits; 8],
+) -> bool {
+    let (bbox_min_lon, bbox_min_lat, bbox_max_lon, bbox_max_lat) = raw_bbox;
+
+    let (_, _, _, n_max_lat) = geohash_decode_area(&neighbors[0]); // N
+    let (_, _, s_min_lat, _) = geohash_decode_area(&neighbors[1]); // S
+    let (_, e_max_lon, _, _) = geohash_decode_area(&neighbors[2]); // E
+    let (w_min_lon, _, _, _) = geohash_decode_area(&neighbors[3]); // W
+
+    n_max_lat < bbox_max_lat
+        || s_min_lat > bbox_min_lat
+        || e_max_lon < bbox_max_lon
+        || w_min_lon > bbox_min_lon
+}
+
+/// Calculate the 9 geohash areas (center + 8 neighbors) for a geo search.
+/// Returns areas in Redis's iteration order: center, N, S, E, W, NE, NW, SE, SW.
+///
+/// `search_radius_m` is used for step estimation (radius for circular, diagonal for box).
+/// `bbox_half_width_m` and `bbox_half_height_m` are the half-dimensions used for the
+/// bounding box check (both equal radius for circular; width/2 and height/2 for box).
+pub fn geohash_calculate_areas(
+    center: Coordinates,
+    search_radius_m: f64,
+    bbox_half_width_m: f64,
+    bbox_half_height_m: f64,
+) -> Vec<GeoHashBits> {
+    let mut step = geohash_estimate_steps_by_radius(search_radius_m, center.lat);
+    let mut hash = geohash_encode_at_step(center.lon, center.lat, step);
+    let mut neighbors = geohash_neighbors(&hash);
+
+    // Check if the 3x3 grid is too small to cover the search bounding box.
+    // If so, decrease step (make cells larger) and recalculate.
+    let raw_bbox = geohash_raw_bbox(center, bbox_half_width_m, bbox_half_height_m);
+    if step > 1 && needs_decrease_step(raw_bbox, &neighbors) {
+        step -= 1;
+        hash = geohash_encode_at_step(center.lon, center.lat, step);
+        neighbors = geohash_neighbors(&hash);
+    }
+
+    let mut areas = Vec::with_capacity(9);
+    areas.push(hash);
+    areas.extend_from_slice(&neighbors);
+    areas
 }
 
 #[cfg(test)]
