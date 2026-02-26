@@ -145,6 +145,22 @@ fn resolve_pattern(ctx: &CommandContext, pattern: &[u8], element: &[u8]) -> Opti
         let key_part = &pattern[..arrow_idx];
         let field = &pattern[arrow_idx + 2..];
 
+        // If field is empty (pattern ends with "->"), treat as plain string key lookup
+        // on the full expanded pattern (including the "->").
+        if field.is_empty() {
+            let mut key = Vec::with_capacity(pattern.len() - 1 + element.len());
+            key.extend_from_slice(&pattern[..star_pos]);
+            key.extend_from_slice(element);
+            key.extend_from_slice(&pattern[star_pos + 1..]);
+            let key_bytes = Bytes::from(key);
+            if let Some(value) = ctx.store.get(&key_bytes)
+                && let Value::String(s) = &*value
+            {
+                return Some(s.as_bytes().clone());
+            }
+            return None;
+        }
+
         let mut key = Vec::with_capacity(key_part.len() - 1 + element.len());
         key.extend_from_slice(&key_part[..star_pos]);
         key.extend_from_slice(element);
@@ -186,10 +202,6 @@ fn compute_sort_key(
     let value = if let Some(pattern) = by_pattern {
         // Check for "nosort" pattern - keep original order
         if pattern.to_ascii_lowercase() == b"nosort" {
-            return Ok(SortKey::NoSort);
-        }
-        // Check for constant pattern (no *) - treat as nosort
-        if !pattern.contains(&b'*') {
             return Ok(SortKey::NoSort);
         }
         // Use external key value
@@ -311,9 +323,9 @@ fn execute_sort(ctx: &mut CommandContext, opts: &SortOptions) -> Result<Response
         }
     });
 
-    // NoSort + DESC: reverse element order (nosort or constant BY pattern)
+    // NoSort + DESC: reverse element order
     if let Some(ref pattern) = opts.by_pattern {
-        let is_nosort = pattern.to_ascii_lowercase() == b"nosort" || !pattern.contains(&b'*');
+        let is_nosort = pattern.to_ascii_lowercase() == b"nosort";
         if is_nosort && !opts.ascending {
             indexed.reverse();
         }
@@ -435,22 +447,29 @@ impl Command for SortCommand {
 
         let mut keys = vec![args[0].as_ref()];
 
-        // Find STORE destination if present
+        // Find the last STORE destination (Redis uses the last one when multiple STORE appear)
+        let mut store_key: Option<&[u8]> = None;
         let mut i = 1;
         while i < args.len() {
             let arg_upper = args[i].to_ascii_uppercase();
             if arg_upper == b"STORE" && i + 1 < args.len() {
-                keys.push(args[i + 1].as_ref());
-                break;
+                store_key = Some(args[i + 1].as_ref());
+                i += 2;
+                continue;
             }
             // Skip arguments that take a parameter
-            if arg_upper == b"BY" || arg_upper == b"LIMIT" || arg_upper == b"GET" {
-                i += 1;
+            if arg_upper == b"BY" || arg_upper == b"GET" {
+                i += 2;
+                continue;
             }
-            if arg_upper == b"LIMIT" && i + 1 < args.len() {
-                i += 1; // LIMIT takes two parameters
+            if arg_upper == b"LIMIT" && i + 2 < args.len() {
+                i += 3; // LIMIT takes two parameters
+                continue;
             }
             i += 1;
+        }
+        if let Some(dest) = store_key {
+            keys.push(dest);
         }
 
         keys
