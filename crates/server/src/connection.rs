@@ -494,7 +494,7 @@ impl ConnectionHandler {
                 }
 
                 // Handle client commands
-                frame_result = self.framed.next() => {
+                frame_result = self.framed.next().instrument(tracing::info_span!("cmd_read")) => {
                     let frame = match frame_result {
                         Some(Ok(frame)) => frame,
                         Some(Err(e)) => {
