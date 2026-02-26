@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""
+Causal-profile FrogDB under load using tokio-coz and memtier_benchmark.
+
+Builds with causal profiling support, runs the server with the profiler active,
+generates load, then captures the causal profiling report.
+
+Usage:
+    python causal_profile.py --workload mixed --requests 50000
+    python causal_profile.py -w read-heavy -n 100000 --shards 4
+"""
+
+import argparse
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+SERVER_PORT = 6379
+STARTUP_TIMEOUT = 30  # seconds
+
+
+def wait_for_port(port: int, timeout: float = STARTUP_TIMEOUT) -> bool:
+    """Wait for a port to become available."""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except (ConnectionRefusedError, OSError):
+            time.sleep(0.2)
+    return False
+
+
+def build_causal_binary() -> None:
+    """Build FrogDB with causal profiling support via just."""
+    print("Building with causal profiling support...")
+    subprocess.run(
+        ["just", "build-causal"],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+
+
+def run_causal_profile(
+    workload: str,
+    requests: int,
+    threads: int = 4,
+    clients: int = 25,
+    shards: int | None = None,
+) -> None:
+    """Run the full causal profiling workflow."""
+    # Build first
+    build_causal_binary()
+
+    # Server environment: disable persistence, enable causal profiling
+    server_env = {
+        **os.environ,
+        "FROGDB_PERSISTENCE__ENABLED": "false",
+        "COZ_PROFILE": "1",
+    }
+    if shards is not None:
+        server_env["FROGDB_SERVER__NUM_SHARDS"] = str(shards)
+
+    binary = REPO_ROOT / "target" / "debug" / "frogdb-server"
+    if not binary.exists():
+        print(f"Error: binary not found at {binary}", file=sys.stderr)
+        sys.exit(1)
+
+    shard_info = f" ({shards} shards)" if shards else ""
+    print(f"Starting FrogDB with causal profiling{shard_info}...")
+    server_proc = subprocess.Popen(
+        [str(binary)],
+        env=server_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    try:
+        # Wait for server to be ready
+        print("Waiting for FrogDB to start...")
+        if not wait_for_port(SERVER_PORT):
+            print("Error: FrogDB failed to start within timeout", file=sys.stderr)
+            server_proc.terminate()
+            sys.exit(1)
+        print(f"FrogDB ready on port {SERVER_PORT}")
+
+        # Run load test using run_memtier.py
+        print(f"Running {workload} workload ({requests} requests)...")
+        memtier_result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parent / "run_memtier.py"),
+                "-w", workload,
+                "-n", str(requests),
+                "-t", str(threads),
+                "-c", str(clients),
+            ],
+        )
+
+        if memtier_result.returncode != 0:
+            print("Warning: Load test had non-zero exit code", file=sys.stderr)
+
+    finally:
+        # Stop server gracefully (triggers profiler report + JSON write)
+        print("Stopping server (writing causal profile report)...")
+        server_proc.send_signal(signal.SIGINT)
+        try:
+            stdout, stderr = server_proc.communicate(timeout=30)
+            # Print profiler output (report goes to stdout/stderr)
+            if stdout:
+                print(stdout.decode(errors="replace"))
+            if stderr:
+                print(stderr.decode(errors="replace"), file=sys.stderr)
+        except subprocess.TimeoutExpired:
+            print("Warning: server did not exit within timeout, killing", file=sys.stderr)
+            server_proc.kill()
+
+    report_path = Path("causal-profile.json")
+    if report_path.exists():
+        print(f"\nCausal profile report written to: {report_path}")
+    else:
+        print("\nWarning: causal-profile.json not found (profiling may not have run)")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Causal-profile FrogDB under load using tokio-coz",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "-w", "--workload",
+        choices=["read-heavy", "write-heavy", "mixed"],
+        default="mixed",
+        help="Workload preset",
+    )
+    parser.add_argument(
+        "-n", "--requests",
+        type=int,
+        default=100000,
+        help="Number of requests per client",
+    )
+    parser.add_argument(
+        "-t", "--threads",
+        type=int,
+        default=4,
+        help="Number of memtier threads",
+    )
+    parser.add_argument(
+        "-c", "--clients",
+        type=int,
+        default=25,
+        help="Clients per thread",
+    )
+    parser.add_argument(
+        "--shards",
+        type=int,
+        default=4,
+        help="Number of FrogDB shards (default: 4)",
+    )
+
+    args = parser.parse_args()
+
+    run_causal_profile(
+        workload=args.workload,
+        requests=args.requests,
+        threads=args.threads,
+        clients=args.clients,
+        shards=args.shards,
+    )
+
+
+if __name__ == "__main__":
+    main()

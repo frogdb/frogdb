@@ -60,8 +60,7 @@ struct Cli {
     startup_latency_check: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Handle --generate-config
@@ -102,14 +101,55 @@ async fn main() -> Result<()> {
         config.latency.startup_test = true;
     }
 
-    // Initialize logging
+    // --- Causal profiling setup (compile-time + runtime gated) ---
+    #[cfg(all(tokio_unstable, feature = "causal-profile"))]
+    let profiler = {
+        use tokio_coz::{CausalProfiler, ProfilerConfig};
+        CausalProfiler::new(
+            ProfilerConfig::new()
+                .experiment_duration(std::time::Duration::from_secs(1))
+                .speedup_steps(vec![0, 25, 50, 75, 100])
+                .rounds_per_experiment(2)
+                .output_path("causal-profile.json"),
+        )
+    };
+
+    // Initialize logging (with SpanTracker layer when profiling)
+    #[cfg(all(tokio_unstable, feature = "causal-profile"))]
+    config.init_logging_with_layer(profiler.tracing_layer())?;
+    #[cfg(not(all(tokio_unstable, feature = "causal-profile")))]
     config.init_logging()?;
 
     info!(config = %config.to_json(), "Starting FrogDB server");
 
-    // Create and run server
-    let server = Server::new(config).await?;
-    server.run().await?;
+    // Build runtime with hooks when profiling
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+
+    #[cfg(all(tokio_unstable, feature = "causal-profile"))]
+    {
+        builder
+            .on_task_spawn(profiler.on_task_spawn())
+            .on_before_task_poll(profiler.on_before_task_poll())
+            .on_after_task_poll(profiler.on_after_task_poll())
+            .on_task_terminate(profiler.on_task_terminate());
+    }
+
+    let runtime = builder.build()?;
+
+    runtime.block_on(async {
+        #[cfg(all(tokio_unstable, feature = "causal-profile"))]
+        if std::env::var("COZ_PROFILE").is_ok() {
+            info!("Causal profiling enabled — starting experiment engine");
+            profiler.start().await;
+        }
+
+        let server = Server::new(config).await?;
+        server.run().await
+    })?;
+
+    #[cfg(all(tokio_unstable, feature = "causal-profile"))]
+    profiler.report();
 
     Ok(())
 }

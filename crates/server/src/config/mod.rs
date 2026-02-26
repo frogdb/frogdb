@@ -430,6 +430,34 @@ impl Config {
         Ok(())
     }
 
+    /// Initialize logging with an additional tracing layer (e.g. for causal profiling).
+    pub fn init_logging_with_layer<L>(&self, extra_layer: L) -> Result<()>
+    where
+        L: tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
+    {
+        let filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(&self.logging.level));
+
+        match self.logging.format.to_lowercase().as_str() {
+            "json" => {
+                tracing_subscriber::registry()
+                    .with(extra_layer)
+                    .with(filter)
+                    .with(fmt::layer().json())
+                    .init();
+            }
+            _ => {
+                tracing_subscriber::registry()
+                    .with(extra_layer)
+                    .with(filter)
+                    .with(fmt::layer())
+                    .init();
+            }
+        }
+
+        Ok(())
+    }
+
     /// Generate default TOML configuration.
     pub fn default_toml() -> String {
         r#"# FrogDB Configuration File

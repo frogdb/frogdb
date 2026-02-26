@@ -125,7 +125,7 @@ def main() -> None:
         "--key-maximum", str(args.key_maximum),
         "--pipeline", str(args.pipeline),
         "--hide-histogram",
-        "--print-percentiles",
+        "--print-percentiles", "50,99,99.9",
     ]
 
     if args.json_file:

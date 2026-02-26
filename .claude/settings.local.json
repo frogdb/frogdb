@@ -71,7 +71,8 @@
       "WebFetch(domain:repology.org)",
       "WebFetch(domain:ghcr.io)",
       "Bash(samply load:*)",
-      "Bash(head:*)"
+      "Bash(head:*)",
+      "Bash(just redis-compat:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

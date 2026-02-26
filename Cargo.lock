@@ -1494,6 +1494,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tikv-jemallocator",
  "tokio",
+ "tokio-coz",
  "tokio-util",
  "toml",
  "tower 0.5.3",

@@ -205,6 +205,21 @@ redis-compat-coverage:
     uv run redis-compat/coverage.py
 
 # =============================================================================
+# Causal Profiling (tokio-coz)
+# =============================================================================
+
+# Build with causal profiling support (tokio_unstable + causal-profile feature)
+build-causal:
+    -cargo sweep --stamp
+    RUSTFLAGS="--cfg tokio_unstable" {{dyld-env}} {{rocksdb-env}} cargo build -p frogdb-server --features causal-profile
+    -cargo sweep --time 0
+
+# Causal-profile FrogDB under load (tokio-coz)
+# Usage: just causal-profile [workload] [requests]
+causal-profile workload="mixed" requests="10000" *args:
+    uv run loadtest/scripts/causal_profile.py -w {{workload}} -n {{requests}} {{args}}
+
+# =============================================================================
 # Profiling (requires: cargo-flamegraph, samply, heaptrack)
 # Install: brew bundle / nix-shell
 # =============================================================================
