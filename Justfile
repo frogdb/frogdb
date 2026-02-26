@@ -160,6 +160,16 @@ clean:
 clean-stale:
     cargo sweep --time 0
 
+# Clean stale build artifacts across all worktrees (requires: cargo install cargo-sweep)
+clean-worktrees:
+    #!/usr/bin/env bash
+    for dir in $(git worktree list --porcelain | grep '^worktree ' | cut -d' ' -f2); do
+        if [ -d "$dir/target" ]; then
+            echo "Sweeping $dir/target..."
+            cargo sweep --time 0 "$dir"
+        fi
+    done
+
 # Watch for changes and type-check (requires: cargo install cargo-watch)
 watch:
     {{dyld-env}} {{rocksdb-env}} cargo watch -x 'check --all-targets'
