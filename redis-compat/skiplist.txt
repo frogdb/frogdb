@@ -8,64 +8,48 @@
 #
 # Sections:
 #   INTENTIONAL  - FrogDB deliberately differs from Redis behavior
-#   NOT-IMPLEMENTED - Feature not yet built
-#   FLAKY        - Environment-dependent, timing, or infrastructure gaps
+#   FLAKY        - Individual tests with environment/infrastructure gaps
 
 # =============================================================================
 # INTENTIONAL INCOMPATIBILITIES
+# (from STATUS.md — suite-level skips only)
 # =============================================================================
 
-# DATABASE MODEL
-# FrogDB uses a single database per instance; SELECT is not supported
+# Single-DB model; SELECT not supported
 unit/introspection
 
-# CONFIGURATION
-# CONFIG REWRITE is not supported; changes via CONFIG SET are transient
+# CONFIG REWRITE not supported
 unit/introspection-2
 
-# BITFIELD LIMITATIONS
-# BITFIELD u64 is not supported (limited to u63)
+# BITFIELD u64 intentionally limited to u63
 unit/bitfield
 
-# SCRIPTING
-# FrogDB enforces strict key validation (all keys must be in KEYS array)
+# Strict key validation (all keys must be in KEYS array)
 unit/scripting
 
-# INTEGRATION
-# Requires redis-cli binary (not applicable to FrogDB)
-integration/redis-cli
-
-# DEBUG COMMANDS (Not Planned)
-# DEBUG SEGFAULT, DEBUG RELOAD, DEBUG CRASH-AND-RECOVER, etc.
-# These are unsafe diagnostic commands not intended for production
+# DEBUG commands not supported (not planned)
 unit/debug
 
-# MONITOR COMMAND (Not Planned)
-# MONITOR is a diagnostic command with significant performance overhead
+# MONITOR command not supported (not planned)
 unit/monitor
 
-# MODULES (Not Planned)
-# FrogDB does not have a modular architecture
+# Module API not supported (not planned)
 unit/moduleapi
 
-# INTROSPECTION / METADATA SUITES
-# These suites test internal Redis server metadata that FrogDB does not expose
-# or formats differently. Not planned for exact compatibility.
-
-# SLOWLOG output formatting differences
+# SLOWLOG output formatting (introspection/metadata)
 unit/slowlog
 
-# CLIENT LIST qbuf fields not tracked
+# CLIENT LIST qbuf fields (introspection/metadata)
 unit/querybuf
 
-# INFO memory used_memory, CONFIG RESETSTAT
+# INFO memory used_memory, CONFIG RESETSTAT (introspection/metadata)
 unit/lazyfree
 
-# LATENCY HISTOGRAM output format
+# LATENCY HISTOGRAM output (introspection/metadata)
 unit/latency-monitor
 
-# PERSISTENCE INTERNALS
-# FrogDB uses its own storage engine; Redis AOF/RDB formats are not applicable
+# Requires redis-cli binary
+integration/redis-cli
 
 # Redis AOF rewrite internals
 unit/aofrw
@@ -97,9 +81,6 @@ integration/convert-ziplist-hash-on-load
 # Legacy ziplist zset encoding migration
 integration/convert-ziplist-zset-on-load
 
-# PROCESS / OS INTERNALS
-# Redis process management, OS-level features not applicable to FrogDB
-
 # Redis shutdown/signal handling
 unit/shutdown
 
@@ -115,9 +96,6 @@ integration/shutdown
 # Server crash/stack trace logging
 integration/logging
 
-# CLUSTER INTERNALS
-# Redis cluster protocol internals not applicable to FrogDB's clustering model
-
 # Cluster log node naming internals
 unit/cluster/human-announced-nodename
 
@@ -127,53 +105,26 @@ unit/cluster/slot-ownership
 # Cluster inter-node link management
 unit/cluster/links
 
-# REPLICATION INTERNALS
-# Redis replication buffer/memory internals not applicable to FrogDB
-
 # Replication buffer memory management
 integration/replication-buffer
 
 # Fork child memory dismissal
 integration/dismiss-mem
 
-# TOOLS
-# External Redis tools not applicable to FrogDB
-
 # redis-benchmark tool integration
 integration/redis-benchmark
+
+# =============================================================================
+# FLAKY / ENVIRONMENT-DEPENDENT
+# (individual tests within otherwise-passing suites)
+# =============================================================================
 
 # INLINE PROTOCOL
 # FrogDB only supports RESP protocol, not inline commands
 Commands pipelining
 
-# =============================================================================
-# NOT YET IMPLEMENTED
-# =============================================================================
-
-# STREAMS
-# XREAD BLOCK tests will timeout waiting for blocked clients
-unit/type/stream
-unit/type/stream-cgroups
-
-# CLIENT TRACKING
-# Client-side caching / tracking not yet implemented
-unit/tracking
-
-# PROTOCOL
-# Empty query (\r\n) handling causes decode error, crashes suite on first test
-unit/protocol
-
-# =============================================================================
-# FLAKY / ENVIRONMENT-DEPENDENT
-# =============================================================================
-
 # BLOCKED CLIENT DETECTION
-# FrogDB doesn't update `blocked_clients` in CLIENT LIST / INFO,
-# causing tests that poll for blocked state to timeout or fail.
-# All tests that require a client to actually block on an empty key
-# and be woken up by another client will fail.
-
-# Tests that poll for blocked clients (regex patterns)
+# FrogDB doesn't update blocked_clients in CLIENT LIST / INFO
 /should not awake blocked client
 /with zero timeout should block indefinitely
 /with a client BLPOPing the target list
@@ -186,8 +137,6 @@ unit/protocol
 /PUSH resulting from BRPOPLPUSH affect WATCH
 /should increase dirty
 /propagate as pop with count command to replica
-
-# BRPOPLPUSH-specific blocking tests
 BRPOPLPUSH inside a transaction
 Linked LMOVEs
 Circular BRPOPLPUSH
@@ -196,20 +145,13 @@ BRPOPLPUSH timeout
 /chaining BRPOPLPUSH
 Regression for a crash with blocking ops and pipelining
 /with wrong destination type
-
-# MULTI/EXEC + blocking command isolation tests
 /MULTI/EXEC is isolated from the point of view of BL
 /MULTI/EXEC is isolated from the point of view of BZ
-
-# BZPOP/BZMPOP blocking tests
 BZPOP/BZMPOP against wrong type
 BZMPOP with illegal argument
 /BZMPOP should not blocks on non key arguments
 /BZPOPMIN.* readraw
 /BZMPOP readraw
-
-# BLPOP/BRPOP/BLMPOP blocking-on-empty-key tests
-# These all require the client to block and be woken up
 /: with single empty list argument
 /: arguments are empty
 /: with non-integer timeout
@@ -218,111 +160,62 @@ BZMPOP with illegal argument
 /when new key is moved into place
 /when result key is created by SORT
 /inside a transaction
-
-# CLIENT PAUSE blocked_clients detection tests
 /Test new pause time is smaller than old one, then old time preserved
 /Test write commands are paused by RO
 /Test special commands are paused by RO
+/client unblock tests
+/Unblock fairness
 
 # PERFORMANCE TIMEOUTS
-# Large randomized set/sorted-set difference operations timeout
 SDIFF fuzzing
 /ZDIFF fuzzing
-
-# Stress tests that hang or timeout on FrogDB
 /ziplist implementation: encoding stress testing
 /Hash fuzzing #[12] - \d+ fields
-
-# Direct and BY-const SORT speed benchmarks reliably time out in the test
-# harness; the BY-key and BY-hash variants in the same suite pass fine.
 /SORT speed.*directly
 /SORT speed.*<const>
-
-# PIPELINING stresser causes broken pipe
 /PIPELINING stresser
+/PFCOUNT multiple-keys merge returns cardinality of union
 
-# PubSub messages with CLIENT REPLY OFF requires CLIENT REPLY to
-# properly bypass reply suppression for pubsub notifications
+# PUBSUB / NOTIFICATIONS
 PubSub messages with CLIENT REPLY OFF
-
-# Subscription cleanup after UNSUBSCRIBE without arguments leaves stale
-# subscriptions in shard, causing PUBLISH to return wrong subscriber count.
 /after UNSUBSCRIBE without arguments
 /after PUNSUBSCRIBE without arguments
-
-# NUMPAT off-by-one in pattern subscription tracking
 NUMPATs returns the number of unique patterns
-
-# notify-keyspace-events config not supported
 /Keyspace notifications
-
-# RESP3 pub/sub doesn't restrict client to pub/sub-only mode;
-# These tests use HELLO 3 + SUBSCRIBE which in Redis RESP3 doesn't
-# put the client in pub/sub-only mode, but FrogDB does.
 /publish to self inside
 /unsubscribe inside multi
 
 # SELECT (FrogDB is single-database)
 SELECT an out of range DB
 
-# SHARD CRASH: SRANDMEMBER count overflow
-# SRANDMEMBER with a very large count value causes a shard worker panic
-# (ERR shard dropped request), making all subsequent suites fail with
-# ERR shard unavailable. Must be skipped to prevent cascading failures.
+# SRANDMEMBER count overflow crashes shard worker
 SRANDMEMBER count overflow
 
-# HLL CORRUPTION DETECTION
-# FrogDB stores HLL as a separate type, not as a raw string like Redis.
-# APPEND/SETRANGE on an HLL key returns WRONGTYPE instead of corrupting
-# the internal representation, so corruption detection tests cannot pass.
+# HLL STORAGE
+# FrogDB stores HLL as a separate type; corruption/sparse tests don't apply
 /Corrupted sparse HyperLogLogs are detected
 /Corrupted dense HyperLogLogs are detected
 /Fuzzing dense/sparse encoding
-
-# PFSELFTEST is a debug-only command; external server test framework
-# transforms the expected value, causing a guaranteed mismatch.
 HyperLogLog self test passes
-
-# FrogDB HLL is always dense (no sparse encoding); these tests depend on
-# CONFIG SET hll-sparse-max-bytes which FrogDB doesn't support.
 /HyperLogLogs are promote from sparse to dense
 /Change hll-sparse-max-bytes
 /Hyperloglog promote to dense well in different hll-sparse-max-bytes
 HyperLogLog sparse encoding stress test
-
-# Multi-key PFCOUNT with 10k iterations of scatter-gather times out
-/PFCOUNT multiple-keys merge returns cardinality of union
-
-# Cache invalidation test uses GETRANGE on HLL (assumes string storage)
 /PFADD / PFCOUNT cache invalidation works
 
-# HASH ZIPLIST ENCODING ORDER
-# FrogDB uses HashMap (unordered) for hash storage, so field iteration
-# order differs from Redis's ziplist/listpack which preserves insertion order.
-# These tests compare exact field ordering which is implementation-specific.
+# HASH ENCODING ORDER
+# FrogDB uses unordered HashMap; insertion-order tests don't apply
 /Hash ziplist of various encodings
 
-# BLPOP TIMEOUT HEX PARSING
-# Redis parses timeout as long double which handles hex notation (0x...).
-# Rust's f64::parse doesn't support hex, so this specific edge case fails.
+# BLPOP HEX TIMEOUT
+# Rust's f64::parse doesn't support hex notation (0x...)
 BLPOP: timeout value out of range
 
-# CLIENT UNBLOCK / UNBLOCK FAIRNESS
-# Requires CLIENT UNBLOCK command and blocked client detection infrastructure
-/client unblock tests
-/Unblock fairness
-
 # SMOVE WATCH NOTIFICATION
-# SMOVE re-adding an existing member should not trigger WATCH notification
-# on the destination key. Requires precise WATCH/MULTI interaction tracking.
 SMOVE only notify dstset when the addition is successful
 
-# CONFIG RESETSTAT / COMMANDSTATS
-# CONFIG RESETSTAT is not implemented
+# CONFIG RESETSTAT (no-op in FrogDB)
 /Blocking command accounted only once in commandstats
 
-# SORTED SET + REGULAR SET MIXING (with weights)
-# Redis allows WEIGHTS with regular sets in Z*STORE operations.
-# FrogDB accepts regular sets in Z*STORE but the specific "with weights"
-# variant may have edge cases around weight application order.
+# SORTED SET + REGULAR SET WITH WEIGHTS
 /with a regular set and weights
