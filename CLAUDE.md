@@ -28,6 +28,7 @@ just concurrency        # Shuttle + Turmoil concurrency tests
 ```
 
 - builds can consume many Gigabytes of space, free space after completing a task by running `just clean-stale`
+- this project uses multiple git worktrees; to clean stale artifacts across all worktrees run `just clean-worktrees`
 
 ## Verification Before Completing Code Changes
 
