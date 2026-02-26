@@ -102,6 +102,12 @@ concurrency:
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-server --features turmoil --test simulation
     -cargo sweep --time 0
 
+# Run tokio-coz causal profiler tests (requires tokio_unstable)
+test-coz:
+    -cargo sweep --stamp
+    RUSTFLAGS="--cfg tokio_unstable" cargo test -p tokio-coz
+    -cargo sweep --time 0
+
 # Run browser integration tests (requires chromedriver running on port 9515)
 test-browser:
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-browser-tests --features browser-tests
