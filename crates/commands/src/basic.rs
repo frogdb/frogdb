@@ -346,6 +346,11 @@ impl Command for SetCommand {
                             message: "invalid expire time in 'set' command".to_string(),
                         });
                     }
+                    if secs > i64::MAX / 1000 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'set' command".to_string(),
+                        });
+                    }
                     opts.expiry = Some(Expiry::Ex(secs as u64));
                 }
                 b"PX" => {

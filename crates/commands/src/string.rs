@@ -444,6 +444,11 @@ impl Command for GetexCommand {
                             message: "invalid expire time in 'getex' command".to_string(),
                         });
                     }
+                    if seconds > i64::MAX / 1000 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'getex' command".to_string(),
+                        });
+                    }
                     let expires_at = Instant::now() + Duration::from_secs(seconds as u64);
                     ctx.store.set_expiry(key, expires_at);
                 }
