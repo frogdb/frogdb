@@ -8,6 +8,7 @@ generates load, then captures the causal profiling report.
 Usage:
     python causal_profile.py --workload mixed --duration 120
     python causal_profile.py -w read-heavy --duration 90 --shards 4
+    python causal_profile.py --profile release --duration 120
 """
 
 import argparse
@@ -36,11 +37,11 @@ def wait_for_port(port: int, timeout: float = STARTUP_TIMEOUT) -> bool:
     return False
 
 
-def build_causal_binary() -> None:
+def build_causal_binary(profile: str = "debug") -> None:
     """Build FrogDB with causal profiling support via just."""
-    print("Building with causal profiling support...")
+    print(f"Building with causal profiling support ({profile})...")
     subprocess.run(
-        ["just", "build-causal"],
+        ["just", "build-causal", profile],
         cwd=REPO_ROOT,
         check=True,
     )
@@ -52,10 +53,11 @@ def run_causal_profile(
     threads: int = 4,
     clients: int = 25,
     shards: int | None = None,
+    profile: str = "debug",
 ) -> None:
     """Run the full causal profiling workflow."""
     # Build first
-    build_causal_binary()
+    build_causal_binary(profile)
 
     # Server environment: disable persistence, enable causal profiling
     # Filter out FROGDB_SYSTEM_ROCKSDB — it's a build flag, not a server config key,
@@ -68,7 +70,8 @@ def run_causal_profile(
     if shards is not None:
         server_env["FROGDB_SERVER__NUM_SHARDS"] = str(shards)
 
-    binary = REPO_ROOT / "target" / "debug" / "frogdb-server"
+    target_dir = "release" if profile == "release" else "debug"
+    binary = REPO_ROOT / "target" / target_dir / "frogdb-server"
     if not binary.exists():
         print(f"Error: binary not found at {binary}", file=sys.stderr)
         sys.exit(1)
@@ -164,6 +167,12 @@ def main():
         default=4,
         help="Number of FrogDB shards (default: 4)",
     )
+    parser.add_argument(
+        "--profile",
+        choices=["debug", "release"],
+        default="debug",
+        help="Build profile (default: debug)",
+    )
 
     args = parser.parse_args()
 
@@ -173,6 +182,7 @@ def main():
         threads=args.threads,
         clients=args.clients,
         shards=args.shards,
+        profile=args.profile,
     )
 
 

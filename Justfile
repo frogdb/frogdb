@@ -209,13 +209,14 @@ redis-compat-coverage:
 # =============================================================================
 
 # Build with causal profiling support (tokio_unstable + causal-profile feature)
-build-causal:
+# Usage: just build-causal [profile]  (debug or release, default: debug)
+build-causal profile="debug":
     -cargo sweep --stamp
-    RUSTFLAGS="--cfg tokio_unstable" {{dyld-env}} {{rocksdb-env}} cargo build -p frogdb-server --features causal-profile
+    RUSTFLAGS="--cfg tokio_unstable" {{dyld-env}} {{rocksdb-env}} cargo build -p frogdb-server --features causal-profile {{ if profile == "release" { "--release" } else { "" } }}
     -cargo sweep --time 0
 
 # Causal-profile FrogDB under load (tokio-coz)
-# Usage: just causal-profile [workload] [duration_secs]
+# Usage: just causal-profile [workload] [duration_secs] [--profile release]
 causal-profile workload="mixed" duration="90" *args:
     uv run loadtest/scripts/causal_profile.py -w {{workload}} --duration {{duration}} {{args}}
 
