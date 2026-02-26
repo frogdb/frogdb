@@ -48,7 +48,7 @@ pub mod state;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub use crate::config::ProfilerConfig;
+pub use crate::config::{ProfilerConfig, SelectionStrategy};
 use crate::delay::DelayController;
 use crate::experiment::ExperimentEngine;
 use crate::progress::ProgressPointRegistry;
@@ -60,6 +60,7 @@ use crate::state::SharedState;
 /// then call `start()` to begin profiling.
 pub struct CausalProfiler {
     state: Arc<SharedState>,
+    #[cfg_attr(not(tokio_unstable), allow(dead_code))]
     delay: Arc<DelayController>,
     config: ProfilerConfig,
     results: Arc<ResultCollector>,

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rand::Rng;
 
-use crate::config::ProfilerConfig;
+use crate::config::{ProfilerConfig, SelectionStrategy};
 use crate::progress::ProgressPointRegistry;
 use crate::results::{ExperimentResult, ResultCollector};
 use crate::state::SharedState;
@@ -39,6 +39,8 @@ impl ExperimentEngine {
         // Wait a bit for spans to be discovered before starting experiments.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
+        let mut cycle_index: usize = 0;
+
         while self.running.load(Ordering::Relaxed) {
             let span_keys = self.state.all_span_keys();
             if span_keys.is_empty() {
@@ -47,10 +49,16 @@ impl ExperimentEngine {
                 continue;
             }
 
-            // Randomly select a span to experiment on.
-            let span = {
-                let mut rng = rand::thread_rng();
-                span_keys[rng.gen_range(0..span_keys.len())]
+            let span = match self.config.selection_strategy {
+                SelectionStrategy::Random => {
+                    let mut rng = rand::thread_rng();
+                    span_keys[rng.gen_range(0..span_keys.len())]
+                }
+                SelectionStrategy::RoundRobin => {
+                    let idx = cycle_index % span_keys.len();
+                    cycle_index += 1;
+                    span_keys[idx]
+                }
             };
 
             let span_name = self
