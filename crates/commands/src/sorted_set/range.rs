@@ -4,6 +4,7 @@ use frogdb_protocol::Response;
 
 use crate::utils::{
     members_array, parse_i64, parse_lex_bound, parse_score_bound, parse_usize, scored_array,
+    scored_array_resp3,
 };
 
 // ============================================================================
@@ -27,6 +28,7 @@ impl Command for ZrangeCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
+        let is_resp3 = ctx.protocol_version.is_resp3();
 
         // Parse options
         let mut by_score = false;
@@ -35,6 +37,7 @@ impl Command for ZrangeCommand {
         let mut with_scores = false;
         let mut limit_offset: usize = 0;
         let mut limit_count: Option<usize> = None;
+        let mut has_limit = false;
 
         let mut i = 3;
         while i < args.len() {
@@ -48,6 +51,7 @@ impl Command for ZrangeCommand {
                     if i + 2 >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
+                    has_limit = true;
                     limit_offset = parse_usize(&args[i + 1])?;
                     let count = parse_i64(&args[i + 2])?;
                     limit_count = if count < 0 {
@@ -67,6 +71,16 @@ impl Command for ZrangeCommand {
             return Err(CommandError::SyntaxError);
         }
 
+        // LIMIT requires BYSCORE or BYLEX
+        if has_limit && !by_score && !by_lex {
+            return Err(CommandError::SyntaxError);
+        }
+
+        // BYLEX is incompatible with WITHSCORES
+        if by_lex && with_scores {
+            return Err(CommandError::SyntaxError);
+        }
+
         let value = match ctx.store.get(key) {
             Some(v) => v,
             None => return Ok(Response::Array(vec![])),
@@ -75,23 +89,25 @@ impl Command for ZrangeCommand {
         let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
         let results = if by_score {
-            // Range by score
-            let min = parse_score_bound(&args[1])?;
-            let max = parse_score_bound(&args[2])?;
-
+            // In REV mode, args[1] is the max and args[2] is the min (swapped from forward)
             if rev {
+                let max = parse_score_bound(&args[1])?;
+                let min = parse_score_bound(&args[2])?;
                 zset.rev_range_by_score(&min, &max, limit_offset, limit_count)
             } else {
+                let min = parse_score_bound(&args[1])?;
+                let max = parse_score_bound(&args[2])?;
                 zset.range_by_score(&min, &max, limit_offset, limit_count)
             }
         } else if by_lex {
-            // Range by lex
-            let min = parse_lex_bound(&args[1])?;
-            let max = parse_lex_bound(&args[2])?;
-
+            // In REV mode, args[1] is the max and args[2] is the min (swapped from forward)
             if rev {
+                let max = parse_lex_bound(&args[1])?;
+                let min = parse_lex_bound(&args[2])?;
                 zset.rev_range_by_lex(&min, &max, limit_offset, limit_count)
             } else {
+                let min = parse_lex_bound(&args[1])?;
+                let max = parse_lex_bound(&args[2])?;
                 zset.range_by_lex(&min, &max, limit_offset, limit_count)
             }
         } else {
@@ -106,7 +122,12 @@ impl Command for ZrangeCommand {
             }
         };
 
-        Ok(scored_array(results, with_scores))
+        // In RESP3, WITHSCORES responses use nested [member, Double(score)] pairs
+        if is_resp3 && with_scores {
+            Ok(scored_array_resp3(results, true))
+        } else {
+            Ok(scored_array(results, with_scores))
+        }
     }
 
     impl_keys_first!();
@@ -197,8 +218,19 @@ impl Command for ZrevrangeCommand {
         let start = parse_i64(&args[1])?;
         let end = parse_i64(&args[2])?;
 
-        let with_scores =
-            args.len() > 3 && args[3].to_ascii_uppercase().as_slice() == b"WITHSCORES";
+        // Only WITHSCORES is accepted; anything else is a syntax error
+        let with_scores = if args.len() > 3 {
+            if args[3].to_ascii_uppercase().as_slice() == b"WITHSCORES" {
+                if args.len() > 4 {
+                    return Err(CommandError::SyntaxError);
+                }
+                true
+            } else {
+                return Err(CommandError::SyntaxError);
+            }
+        } else {
+            false
+        };
 
         let value = match ctx.store.get(key) {
             Some(v) => v,

@@ -3,7 +3,9 @@ use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, im
 use frogdb_protocol::Response;
 
 use crate::utils::require_same_shard;
-use crate::utils::{parse_i64, parse_usize, scored_array, scored_array_resp3};
+use crate::utils::{
+    parse_i64, parse_usize, scored_array, scored_array_resp3, scored_array_with_scores_resp3,
+};
 
 // ============================================================================
 // ZPOPMIN - Pop minimum score members
@@ -26,16 +28,17 @@ impl Command for ZpopminCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let count = if args.len() > 1 {
+        let is_resp3 = ctx.protocol_version.is_resp3();
+        let (count, has_count) = if args.len() > 1 {
             let c = parse_i64(&args[1])?;
             if c < 0 {
                 return Err(CommandError::InvalidArgument {
                     message: "value must be positive".to_string(),
                 });
             }
-            c as usize
+            (c as usize, true)
         } else {
-            1
+            (1, false)
         };
 
         let zset = match ctx.store.get_mut(key) {
@@ -50,9 +53,14 @@ impl Command for ZpopminCommand {
             ctx.store.delete(key);
         }
 
-        // ZPOPMIN always uses flat format [member, score, member, score, ...]
-        // in both RESP2 and RESP3
-        Ok(scored_array(results, true))
+        // In RESP3 with an explicit count argument, return an array of [member, score] pairs.
+        // In RESP3 without count, return a flat [member, score] array.
+        // In RESP2, always return a flat [member, score, ...] array with bulk string scores.
+        if is_resp3 && has_count {
+            Ok(scored_array_resp3(results, true))
+        } else {
+            Ok(scored_array_with_scores_resp3(results, true, is_resp3))
+        }
     }
 
     impl_keys_first!();
@@ -79,16 +87,17 @@ impl Command for ZpopmaxCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let count = if args.len() > 1 {
+        let is_resp3 = ctx.protocol_version.is_resp3();
+        let (count, has_count) = if args.len() > 1 {
             let c = parse_i64(&args[1])?;
             if c < 0 {
                 return Err(CommandError::InvalidArgument {
                     message: "value must be positive".to_string(),
                 });
             }
-            c as usize
+            (c as usize, true)
         } else {
-            1
+            (1, false)
         };
 
         let zset = match ctx.store.get_mut(key) {
@@ -103,9 +112,14 @@ impl Command for ZpopmaxCommand {
             ctx.store.delete(key);
         }
 
-        // ZPOPMAX always uses flat format [member, score, member, score, ...]
-        // in both RESP2 and RESP3
-        Ok(scored_array(results, true))
+        // In RESP3 with an explicit count argument, return an array of [member, score] pairs.
+        // In RESP3 without count, return a flat [member, score] array.
+        // In RESP2, always return a flat [member, score, ...] array with bulk string scores.
+        if is_resp3 && has_count {
+            Ok(scored_array_resp3(results, true))
+        } else {
+            Ok(scored_array_with_scores_resp3(results, true, is_resp3))
+        }
     }
 
     impl_keys_first!();
@@ -294,6 +308,19 @@ impl Command for ZrandmemberCommand {
             let count = parse_i64(&args[1])?;
             let with_scores =
                 args.len() > 2 && args[2].to_ascii_uppercase().as_slice() == b"WITHSCORES";
+
+            // Redis rejects i64::MIN (can't negate without overflow) and counts
+            // with magnitude > LONG_MAX/2 when WITHSCORES is specified.
+            if count == i64::MIN {
+                return Err(CommandError::InvalidArgument {
+                    message: "value is out of range".to_string(),
+                });
+            }
+            if with_scores && count.abs() > i64::MAX / 2 {
+                return Err(CommandError::InvalidArgument {
+                    message: "value is out of range".to_string(),
+                });
+            }
 
             let results = zset.random_members(count);
 

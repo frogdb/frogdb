@@ -549,7 +549,12 @@ impl Command for ZintercardCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let numkeys = parse_usize(&args[0])?;
-        if numkeys == 0 || args.len() < numkeys + 1 {
+        if numkeys == 0 {
+            return Err(CommandError::InvalidArgument {
+                message: "at least 1 input key is needed for 'zintercard' command".to_string(),
+            });
+        }
+        if args.len() < numkeys + 1 {
             return Err(CommandError::SyntaxError);
         }
 
@@ -745,6 +750,9 @@ impl Command for ZdiffstoreCommand {
             });
         }
         if args.len() < numkeys + 2 {
+            return Err(CommandError::SyntaxError);
+        }
+        if args.len() > numkeys + 2 {
             return Err(CommandError::SyntaxError);
         }
 

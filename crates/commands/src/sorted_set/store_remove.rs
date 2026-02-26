@@ -41,6 +41,7 @@ impl Command for ZrangestoreCommand {
         let mut rev = false;
         let mut limit_offset: usize = 0;
         let mut limit_count: Option<usize> = None;
+        let mut has_limit = false;
 
         let mut i = 4;
         while i < args.len() {
@@ -53,6 +54,7 @@ impl Command for ZrangestoreCommand {
                     if i + 2 >= args.len() {
                         return Err(CommandError::SyntaxError);
                     }
+                    has_limit = true;
                     limit_offset = parse_usize(&args[i + 1])?;
                     let count = parse_i64(&args[i + 2])?;
                     limit_count = if count < 0 {
@@ -71,6 +73,11 @@ impl Command for ZrangestoreCommand {
             return Err(CommandError::SyntaxError);
         }
 
+        // LIMIT requires BYSCORE or BYLEX
+        if has_limit && !by_score && !by_lex {
+            return Err(CommandError::SyntaxError);
+        }
+
         let value = match ctx.store.get(src) {
             Some(v) => v,
             None => {
@@ -81,21 +88,25 @@ impl Command for ZrangestoreCommand {
         let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
         let results = if by_score {
-            let min = parse_score_bound(&args[2])?;
-            let max = parse_score_bound(&args[3])?;
-
+            // In REV mode, args[2] is the max and args[3] is the min (swapped from forward)
             if rev {
+                let max = parse_score_bound(&args[2])?;
+                let min = parse_score_bound(&args[3])?;
                 zset.rev_range_by_score(&min, &max, limit_offset, limit_count)
             } else {
+                let min = parse_score_bound(&args[2])?;
+                let max = parse_score_bound(&args[3])?;
                 zset.range_by_score(&min, &max, limit_offset, limit_count)
             }
         } else if by_lex {
-            let min = parse_lex_bound(&args[2])?;
-            let max = parse_lex_bound(&args[3])?;
-
+            // In REV mode, args[2] is the max and args[3] is the min (swapped from forward)
             if rev {
+                let max = parse_lex_bound(&args[2])?;
+                let min = parse_lex_bound(&args[3])?;
                 zset.rev_range_by_lex(&min, &max, limit_offset, limit_count)
             } else {
+                let min = parse_lex_bound(&args[2])?;
+                let max = parse_lex_bound(&args[3])?;
                 zset.range_by_lex(&min, &max, limit_offset, limit_count)
             }
         } else {

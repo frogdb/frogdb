@@ -1487,19 +1487,22 @@ impl SortedSetValue {
             return vec![];
         }
 
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+
         if count > 0 {
-            // Return unique members
+            // Return unique members (no duplicates), up to members.len()
             let count = (count as usize).min(members.len());
-            // Simple reservoir sampling or just take first N for now
-            // In production, we'd use proper random sampling
-            members.into_iter().take(count).collect()
+            let mut shuffled = members;
+            shuffled.shuffle(&mut rng);
+            shuffled.truncate(count);
+            shuffled
         } else {
-            // Allow duplicates
-            let count = (-count) as usize;
-            // Return members (allowing duplicates)
-            let mut result = Vec::with_capacity(count);
-            for i in 0..count {
-                let idx = i % members.len();
+            // Allow duplicates: pick randomly with replacement
+            let n = (-count) as usize;
+            let mut result = Vec::with_capacity(n);
+            for _ in 0..n {
+                let idx = rng.gen_range(0..members.len());
                 result.push(members[idx].clone());
             }
             result
