@@ -49,7 +49,11 @@ fn instant_to_unix_secs(instant: Instant) -> i64 {
         let target = now_system + duration;
         target
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
+            .map(|d| {
+                let secs = d.as_secs() as i64;
+                // Round up if there are subsecond nanos to counteract truncation drift
+                if d.subsec_nanos() > 0 { secs + 1 } else { secs }
+            })
             .unwrap_or(-1)
     } else {
         // Already expired
@@ -72,7 +76,15 @@ fn instant_to_unix_ms(instant: Instant) -> i64 {
         let target = now_system + duration;
         target
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
+            .map(|d| {
+                let ms = d.as_millis() as i64;
+                // Round up if there are sub-millisecond nanos to counteract truncation drift
+                if d.subsec_nanos() % 1_000_000 > 0 {
+                    ms + 1
+                } else {
+                    ms
+                }
+            })
             .unwrap_or(-1)
     } else {
         // Already expired
@@ -123,17 +135,26 @@ fn parse_expire_conditions(args: &[Bytes]) -> Result<ExpireConditions, CommandEr
             b"XX" => conditions.xx = true,
             b"GT" => conditions.gt = true,
             b"LT" => conditions.lt = true,
-            _ => return Err(CommandError::SyntaxError),
+            _ => {
+                let option_str = String::from_utf8_lossy(&sub);
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Unsupported option {}", option_str),
+                });
+            }
         }
     }
 
     // NX and (XX|GT|LT) are mutually exclusive
     if conditions.nx && (conditions.xx || conditions.gt || conditions.lt) {
-        return Err(CommandError::SyntaxError);
+        return Err(CommandError::InvalidArgument {
+            message: "NX and XX, GT or LT options at the same time are not compatible".to_string(),
+        });
     }
     // GT and LT are mutually exclusive
     if conditions.gt && conditions.lt {
-        return Err(CommandError::SyntaxError);
+        return Err(CommandError::InvalidArgument {
+            message: "GT and LT options at the same time are not compatible".to_string(),
+        });
     }
 
     Ok(conditions)
@@ -162,9 +183,22 @@ impl Command for ExpireCommand {
         let key = &args[0];
         let seconds = parse_i64(&args[1])?;
 
-        // Reject values that would overflow when added to current time
-        if seconds > i64::MAX / 1000 {
-            return Err(CommandError::NotInteger);
+        // Reject values outside i64 millisecond range
+        if !(i64::MIN / 1000..=i64::MAX / 1000).contains(&seconds) {
+            return Err(CommandError::InvalidArgument {
+                message: "invalid expire time in 'expire' command".to_string(),
+            });
+        }
+        // Also reject if converting to ms and adding to current time would overflow
+        let ms = seconds * 1000;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        if ms > i64::MAX - now_ms {
+            return Err(CommandError::InvalidArgument {
+                message: "invalid expire time in 'expire' command".to_string(),
+            });
         }
 
         let conditions = parse_expire_conditions(args)?;
@@ -243,9 +277,15 @@ impl Command for PexpireCommand {
         let key = &args[0];
         let ms = parse_i64(&args[1])?;
 
-        // Reject values that would overflow when added to current time
-        if ms > i64::MAX / 1000 {
-            return Err(CommandError::NotInteger);
+        // Reject if adding to current time would overflow
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        if ms > i64::MAX - now_ms {
+            return Err(CommandError::InvalidArgument {
+                message: "invalid expire time in 'pexpire' command".to_string(),
+            });
         }
 
         let conditions = parse_expire_conditions(args)?;

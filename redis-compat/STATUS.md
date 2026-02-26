@@ -79,13 +79,13 @@ When a failing suite is fixed (0 errors):
 | `unit/info-command` | Fixed: COMMAND INFO metadata |
 | `unit/bitops` | Fixed: BITCOUNT range normalization, SETBIT/BITFIELD dirty tracking |
 | `unit/type/zset` | Fixed: ZPOPMIN/ZPOPMAX RESP3 format, ZRANDMEMBER randomness/overflow, ZRANGE/ZRANGESTORE REV+LIMIT, float e+308 format, ZINTERCARD/ZDIFFSTORE error messages |
+| `unit/expire` | Fixed: EXPIRE/PEXPIRE option conflict error messages, big-integer overflow bounds, EXPIRETIME/PEXPIRETIME off-by-one rounding |
 
 ### Failed
 
 | Suite | Errors | Category |
 |-------|--------|----------|
 | `unit/sort` | 8 | SORT edge cases |
-| `unit/expire` | 22 | Expiry edge cases |
 | `unit/geo` | 21 | GEO command edge cases |
 | `unit/pause` | 6 | CLIENT PAUSE behavior |
 | `unit/multi` | 1 | MULTI/EXEC edge cases |
