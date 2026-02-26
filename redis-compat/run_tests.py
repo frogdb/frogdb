@@ -74,10 +74,15 @@ def parse_skiplists(script_dir: Path) -> tuple[list[str], list[str]]:
                 stripped = line.strip()
                 if not stripped or stripped.startswith("#"):
                     continue
-                # Suite names look like "unit/foo" or "integration/bar".
-                # Everything else (exact names, /regex patterns) is a test name.
-                if stripped.startswith(("unit/", "integration/")):
+                # "suite#test" format: suite prefix is informational, extract the test part.
+                if "#" in stripped and stripped.startswith(("unit/", "integration/")):
+                    test_part = stripped.split("#", 1)[1]
+                    if test_part:
+                        skip_tests.append(test_part)
+                # Bare suite names like "unit/foo" or "integration/bar" skip the whole suite.
+                elif stripped.startswith(("unit/", "integration/")):
                     skip_units.append(stripped)
+                # Everything else: exact name or /regex/ pattern.
                 else:
                     skip_tests.append(stripped)
 
