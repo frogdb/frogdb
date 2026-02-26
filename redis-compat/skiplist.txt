@@ -1,18 +1,14 @@
 # Redis Compatibility Skip List
 #
 # Format: one entry per line
-#   - Lines starting with "unit/" or "integration/" skip the entire test suite
-#   - Other lines are matched against individual test names
-#   - Lines starting with / are treated as regex patterns (e.g. /SORT speed.*)
+#   - "unit/foo" or "integration/foo"   → skip the entire suite
+#   - "unit/foo#test name"              → skip one test within that suite
+#   - "unit/foo#/regex pattern"         → skip tests matching regex within that suite
 #   - Lines starting with # are comments
-#
-# Sections:
-#   INTENTIONAL  - FrogDB deliberately differs from Redis behavior
-#   FLAKY        - Individual tests with environment/infrastructure gaps
 
 # =============================================================================
 # INTENTIONAL INCOMPATIBILITIES
-# (from STATUS.md — suite-level skips only)
+# (from STATUS.md — suite-level skips)
 # =============================================================================
 
 # Single-DB model; SELECT not supported
@@ -119,103 +115,102 @@ integration/redis-benchmark
 # (individual tests within otherwise-passing suites)
 # =============================================================================
 
-# INLINE PROTOCOL
-# FrogDB only supports RESP protocol, not inline commands
-Commands pipelining
+# INLINE PROTOCOL — FrogDB only supports RESP, not inline commands
+unit/keyspace#Commands pipelining
 
-# BLOCKED CLIENT DETECTION
+# BLOCKED CLIENT DETECTION (unit/type/list)
 # FrogDB doesn't update blocked_clients in CLIENT LIST / INFO
-/should not awake blocked client
-/with zero timeout should block indefinitely
-/with a client BLPOPing the target list
-/with multiple blocked clients
-/with same key multiple times should work
-/with variadic LPUSH
-/with variadic ZADD
-/maintains order of elements after failure
-/does not affect WATCH while still blocked
-/PUSH resulting from BRPOPLPUSH affect WATCH
-/should increase dirty
-/propagate as pop with count command to replica
-BRPOPLPUSH inside a transaction
-Linked LMOVEs
-Circular BRPOPLPUSH
-Self-referential BRPOPLPUSH
-BRPOPLPUSH timeout
-/chaining BRPOPLPUSH
-Regression for a crash with blocking ops and pipelining
-/with wrong destination type
-/MULTI/EXEC is isolated from the point of view of BL
-/MULTI/EXEC is isolated from the point of view of BZ
-BZPOP/BZMPOP against wrong type
-BZMPOP with illegal argument
-/BZMPOP should not blocks on non key arguments
-/BZPOPMIN.* readraw
-/BZMPOP readraw
-/: with single empty list argument
-/: arguments are empty
-/: with non-integer timeout
-/^B[LR]POP: timeout$
-/^BLMPOP_(LEFT|RIGHT): timeout$
-/when new key is moved into place
-/when result key is created by SORT
-/inside a transaction
-/Test new pause time is smaller than old one, then old time preserved
-/Test write commands are paused by RO
-/Test special commands are paused by RO
-/client unblock tests
-/Unblock fairness
+unit/type/list#/should not awake blocked client
+unit/type/list#/with zero timeout should block indefinitely
+unit/type/list#/with a client BLPOPing the target list
+unit/type/list#/with multiple blocked clients
+unit/type/list#/with same key multiple times should work
+unit/type/list#/with variadic LPUSH
+unit/type/list#/maintains order of elements after failure
+unit/type/list#/does not affect WATCH while still blocked
+unit/type/list#/PUSH resulting from BRPOPLPUSH affect WATCH
+unit/type/list#/should increase dirty
+unit/type/list#/propagate as pop with count command to replica
+unit/type/list#BRPOPLPUSH inside a transaction
+unit/type/list#Linked LMOVEs
+unit/type/list#Circular BRPOPLPUSH
+unit/type/list#Self-referential BRPOPLPUSH
+unit/type/list#BRPOPLPUSH timeout
+unit/type/list#/chaining BRPOPLPUSH
+unit/type/list#Regression for a crash with blocking ops and pipelining
+unit/type/list#/with wrong destination type
+unit/type/list#/MULTI/EXEC is isolated from the point of view of BL
+unit/type/list#/: with single empty list argument
+unit/type/list#/: arguments are empty
+unit/type/list#/: with non-integer timeout
+unit/type/list#/^B[LR]POP: timeout$
+unit/type/list#/^BLMPOP_(LEFT|RIGHT): timeout$
+unit/type/list#/when new key is moved into place
+unit/type/list#/when result key is created by SORT
+unit/type/list#/inside a transaction
+unit/type/list#/client unblock tests
+unit/type/list#/Unblock fairness
+unit/type/list#BLPOP: timeout value out of range
+unit/type/list#/Blocking command accounted only once in commandstats
+
+# BLOCKED CLIENT DETECTION (unit/type/zset)
+unit/type/zset#/with variadic ZADD
+unit/type/zset#/propagate as pop with count command to replica
+unit/type/zset#/MULTI/EXEC is isolated from the point of view of BZ
+unit/type/zset#BZPOP/BZMPOP against wrong type
+unit/type/zset#BZMPOP with illegal argument
+unit/type/zset#/BZMPOP should not blocks on non key arguments
+unit/type/zset#/BZPOPMIN.* readraw
+unit/type/zset#/BZMPOP readraw
+
+# CLIENT PAUSE blocked_clients detection
+unit/pause#/Test new pause time is smaller than old one, then old time preserved
+unit/pause#/Test write commands are paused by RO
+unit/pause#/Test special commands are paused by RO
 
 # PERFORMANCE TIMEOUTS
-SDIFF fuzzing
-/ZDIFF fuzzing
-/ziplist implementation: encoding stress testing
-/Hash fuzzing #[12] - \d+ fields
-/SORT speed.*directly
-/SORT speed.*<const>
-/PIPELINING stresser
-/PFCOUNT multiple-keys merge returns cardinality of union
+unit/type/set#SDIFF fuzzing
+unit/type/zset#/ZDIFF fuzzing
+unit/type/list-3#/ziplist implementation: encoding stress testing
+unit/type/hash#/Hash fuzzing #[12] - \d+ fields
+unit/sort#/SORT speed.*directly
+unit/sort#/SORT speed.*<const>
+unit/other#/PIPELINING stresser
+unit/hyperloglog#/PFCOUNT multiple-keys merge returns cardinality of union
 
 # PUBSUB / NOTIFICATIONS
-PubSub messages with CLIENT REPLY OFF
-/after UNSUBSCRIBE without arguments
-/after PUNSUBSCRIBE without arguments
-NUMPATs returns the number of unique patterns
-/Keyspace notifications
-/publish to self inside
-/unsubscribe inside multi
+unit/pubsub#PubSub messages with CLIENT REPLY OFF
+unit/pubsub#/after UNSUBSCRIBE without arguments
+unit/pubsub#/after PUNSUBSCRIBE without arguments
+unit/pubsub#NUMPATs returns the number of unique patterns
+unit/pubsub#/Keyspace notifications
+unit/pubsub#/publish to self inside
+unit/pubsub#/unsubscribe inside multi
 
 # SELECT (FrogDB is single-database)
-SELECT an out of range DB
+unit/other#SELECT an out of range DB
 
 # SRANDMEMBER count overflow crashes shard worker
-SRANDMEMBER count overflow
+unit/type/set#SRANDMEMBER count overflow
 
 # HLL STORAGE
 # FrogDB stores HLL as a separate type; corruption/sparse tests don't apply
-/Corrupted sparse HyperLogLogs are detected
-/Corrupted dense HyperLogLogs are detected
-/Fuzzing dense/sparse encoding
-HyperLogLog self test passes
-/HyperLogLogs are promote from sparse to dense
-/Change hll-sparse-max-bytes
-/Hyperloglog promote to dense well in different hll-sparse-max-bytes
-HyperLogLog sparse encoding stress test
-/PFADD / PFCOUNT cache invalidation works
+unit/hyperloglog#/Corrupted sparse HyperLogLogs are detected
+unit/hyperloglog#/Corrupted dense HyperLogLogs are detected
+unit/hyperloglog#/Fuzzing dense/sparse encoding
+unit/hyperloglog#HyperLogLog self test passes
+unit/hyperloglog#/HyperLogLogs are promote from sparse to dense
+unit/hyperloglog#/Change hll-sparse-max-bytes
+unit/hyperloglog#/Hyperloglog promote to dense well in different hll-sparse-max-bytes
+unit/hyperloglog#HyperLogLog sparse encoding stress test
+unit/hyperloglog#/PFADD / PFCOUNT cache invalidation works
 
 # HASH ENCODING ORDER
 # FrogDB uses unordered HashMap; insertion-order tests don't apply
-/Hash ziplist of various encodings
-
-# BLPOP HEX TIMEOUT
-# Rust's f64::parse doesn't support hex notation (0x...)
-BLPOP: timeout value out of range
+unit/type/hash#/Hash ziplist of various encodings
 
 # SMOVE WATCH NOTIFICATION
-SMOVE only notify dstset when the addition is successful
-
-# CONFIG RESETSTAT (no-op in FrogDB)
-/Blocking command accounted only once in commandstats
+unit/type/set#SMOVE only notify dstset when the addition is successful
 
 # SORTED SET + REGULAR SET WITH WEIGHTS
-/with a regular set and weights
+unit/type/zset#/with a regular set and weights
