@@ -11,6 +11,7 @@ use bytes::Bytes;
 use frogdb_core::{ScatterOp, ShardMessage, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
+use tracing::Instrument;
 
 use crate::connection::ConnectionHandler;
 use crate::connection::util::{extract_subcommand, key_access_type_for_flags};
@@ -136,7 +137,10 @@ impl ConnectionHandler {
                     self.metrics_recorder.clone(),
                     self.state.id,
                 );
-                executor.execute(strategy.as_ref(), &cmd.args).await
+                executor
+                    .execute(strategy.as_ref(), &cmd.args)
+                    .instrument(tracing::info_span!("scatter_gather"))
+                    .await
             }
             None => {
                 // Command doesn't support scatter-gather
@@ -283,6 +287,13 @@ impl ConnectionHandler {
         shard_id: usize,
         cmd: Arc<ParsedCommand>,
     ) -> Response {
+        self.execute_on_shard_inner(shard_id, cmd)
+            .instrument(tracing::info_span!("shard_roundtrip", shard_id))
+            .await
+    }
+
+    /// Inner implementation of shard execution (channel send + response wait).
+    async fn execute_on_shard_inner(&self, shard_id: usize, cmd: Arc<ParsedCommand>) -> Response {
         let (response_tx, response_rx) = oneshot::channel();
 
         let msg = ShardMessage::Execute {

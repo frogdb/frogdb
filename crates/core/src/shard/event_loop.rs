@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
+use tracing::Instrument;
 
 use crate::store::Store;
 
@@ -39,7 +40,11 @@ impl ShardWorker {
                                 let _ = response_tx.send(err);
                                 continue;
                             }
-                            let response = self.execute_command(command.as_ref(), conn_id, protocol_version).await;
+                            let shard_id = self.shard_id;
+                            let response = self
+                                .execute_command(command.as_ref(), conn_id, protocol_version)
+                                .instrument(tracing::info_span!("shard_execute", shard_id))
+                                .await;
                             let _ = response_tx.send(response);
                         }
                         ShardMessage::ScatterRequest { request_id: _, keys, operation, conn_id, response_tx } => {

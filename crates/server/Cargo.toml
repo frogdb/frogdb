@@ -12,6 +12,10 @@ path = "src/main.rs"
 [features]
 shuttle = ["dep:shuttle", "frogdb-core/shuttle"]
 turmoil = ["dep:turmoil"]
+causal-profile = ["dep:tokio-coz"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
 
 [dependencies]
 frogdb-protocol.workspace = true
@@ -41,6 +45,7 @@ sha2.workspace = true
 hex.workspace = true
 shuttle = { workspace = true, optional = true }
 turmoil = { workspace = true, optional = true }
+tokio-coz = { workspace = true, optional = true }
 openraft.workspace = true
 axum.workspace = true
 tower.workspace = true
