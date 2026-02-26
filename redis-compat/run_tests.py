@@ -292,6 +292,7 @@ def build_tcl_command(
     skip_units: list[str],
     suite: str | None = None,
     tags: list[str] | None = None,
+    only_tests: list[str] | None = None,
     verbose: bool = False,
 ) -> list[str]:
     """Build the tclsh command for running Redis tests."""
@@ -322,6 +323,10 @@ def build_tcl_command(
     if suite:
         cmd.extend(["--single", suite])
 
+    if only_tests:
+        for test in only_tests:
+            cmd.extend(["--only", test])
+
     if verbose:
         cmd.append("--verbose")
 
@@ -338,6 +343,7 @@ def run_single_suite(
     timeout: int,
     server: FrogDBServer,
     tags: list[str] | None = None,
+    only_tests: list[str] | None = None,
     verbose: bool = False,
 ) -> dict:
     """Run a single suite with timeout and crash detection. Returns result dict."""
@@ -349,6 +355,7 @@ def run_single_suite(
         skip_units=skip_units,
         suite=suite,
         tags=tags,
+        only_tests=only_tests,
         verbose=verbose,
     )
 
@@ -529,6 +536,17 @@ def main() -> None:
         help="Run a single test suite (e.g., unit/type/string)",
     )
     parser.add_argument(
+        "--test",
+        type=str,
+        action="append",
+        dest="only_tests",
+        metavar="TEST",
+        help=(
+            "Run only the named test (or /regex/ pattern). "
+            "Requires --single. Can be repeated."
+        ),
+    )
+    parser.add_argument(
         "--tags",
         type=str,
         action="append",
@@ -621,6 +639,7 @@ def main() -> None:
             timeout=args.suite_timeout,
             server=server,
             tags=args.tags,
+            only_tests=args.only_tests,
             verbose=args.verbose,
         )
 

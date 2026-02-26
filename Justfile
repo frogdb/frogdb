@@ -196,6 +196,11 @@ doc:
 redis-compat *args:
     uv run redis-compat/run_tests.py {{args}}
 
+# Run a single Redis compatibility test by name (requires --single <suite>)
+# Example: just redis-compat-one unit/sort "SORT extracts multiple STORE correctly"
+redis-compat-one suite test:
+    uv run redis-compat/run_tests.py --single {{suite}} --test {{quote(test)}} --skip-build --verbose
+
 # Clean Redis test cache
 redis-compat-clean:
     rm -rf .redis-tests/
