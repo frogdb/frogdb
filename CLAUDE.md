@@ -1,13 +1,5 @@
 # FrogDB
 
-## System RocksDB (Faster Builds)
-
-**IMPORTANT:** Always set `FROGDB_SYSTEM_ROCKSDB=1` when running `just` commands to dynamically link
-against the system-installed RocksDB instead of building from source. This significantly speeds up
-builds.
-
-All `just` recipes that invoke cargo respect this flag automatically.
-
 ## Build System
 
 This project uses `just` (see `Justfile`) as the command runner. Always use `just` instead of running `cargo` directly.
@@ -32,7 +24,7 @@ just concurrency        # Shuttle + Turmoil concurrency tests
 
 ## Verification Before Completing Code Changes
 
-**IMPORTANT:** Before marking any code change as complete, you MUST verify it passes type-checking, formatting, linting, and tests. Scope the verification to the affected crate(s) to keep feedback fast.
+**IMPORTANT:** Run verification **once at the end of the entire task**, not after each individual step. Only when all code changes are complete, verify the work passes type-checking, formatting, linting, and tests. Scope the verification to the affected crate(s) to keep feedback fast.
 
 ### Targeted verification (default — use when changes touch 1–2 crates)
 

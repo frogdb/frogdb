@@ -9,6 +9,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use frogdb_core::{ConnectionLevelOp, ExecutionStrategy};
 use frogdb_protocol::Response;
+use tracing::Instrument;
 
 use crate::connection::ConnectionHandler;
 use crate::connection::router::ConnectionLevelHandler;
@@ -408,7 +409,10 @@ impl ConnectionHandler {
         }
 
         // Normal execution
-        let response = self.route_and_execute(cmd, cmd_name).await;
+        let response = self
+            .route_and_execute(cmd, cmd_name)
+            .instrument(tracing::info_span!("cmd_route"))
+            .await;
 
         // Check if this is a blocking command that needs to wait
         if let Response::BlockingNeeded { keys, timeout, op } = response {
