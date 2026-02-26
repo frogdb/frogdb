@@ -12,8 +12,9 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags, Coordinates,
-    DistanceUnit, SortedSetValue, Value, geohash_decode, geohash_encode, geohash_to_score,
-    geohash_to_string, haversine_distance, is_within_box, score_to_geohash,
+    DistanceUnit, ScoreBound, SortedSetValue, Value, geohash_calculate_areas, geohash_decode,
+    geohash_encode, geohash_score_range, geohash_to_score, geohash_to_string, haversine_distance,
+    is_within_box, score_to_geohash,
 };
 use frogdb_protocol::Response;
 
@@ -1035,6 +1036,12 @@ fn parse_georadius_options(args: &[Bytes]) -> Result<GeoRadiusOptions, CommandEr
 }
 
 /// Execute a geo search and return results.
+///
+/// Uses Redis's 9-area geohash scanning strategy: estimate a coarse geohash
+/// step size based on the search radius, encode the center at that step, then
+/// iterate the center cell + 8 neighbor cells in order (center, N, S, E, W,
+/// NE, NW, SE, SW). Within each cell, members appear in ascending score order.
+/// This produces the same default iteration order as Redis.
 fn execute_geosearch(
     ctx: &CommandContext,
     key: &Bytes,
@@ -1044,59 +1051,97 @@ fn execute_geosearch(
         Some(value) => {
             let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
-            // Create bounding box for initial filtering
+            // Create bounding box for filtering
             let bbox = if let Some(radius_m) = opts.radius_m {
                 BoundingBox::from_radius(opts.center, radius_m)
             } else {
                 BoundingBox::from_box(opts.center, opts.width_m.unwrap(), opts.height_m.unwrap())
             };
 
+            // Compute search radius for step estimation and bbox half-dimensions
+            let (search_radius_m, bbox_hw, bbox_hh) = if let Some(r) = opts.radius_m {
+                (r, r, r)
+            } else {
+                let w = opts.width_m.unwrap();
+                let h = opts.height_m.unwrap();
+                (
+                    ((w / 2.0).powi(2) + (h / 2.0).powi(2)).sqrt(),
+                    w / 2.0,
+                    h / 2.0,
+                )
+            };
+
+            let areas = geohash_calculate_areas(opts.center, search_radius_m, bbox_hw, bbox_hh);
+
             let mut results = Vec::new();
+            let mut last_processed: Option<(u64, u8)> = None;
+            let mut early_exit = false;
 
-            // Scan all members (could be optimized with geohash range queries)
-            for (member, score) in zset.to_vec() {
-                let hash = score_to_geohash(score);
-                let (lon, lat) = geohash_decode(hash);
+            for area in &areas {
+                // Skip duplicate areas (matching Redis's membersOfAllNeighbors)
+                if let Some((prev_bits, prev_step)) = last_processed
+                    && area.bits == prev_bits
+                    && area.step == prev_step
+                {
+                    continue;
+                }
+                last_processed = Some((area.bits, area.step));
 
-                // Quick bounding box check
-                if let Some(coords) = Coordinates::new(lon, lat) {
-                    if !bbox.contains(coords) {
-                        continue;
-                    }
+                let (min_score, max_score) = geohash_score_range(area);
+                let members = zset.range_by_score(
+                    &ScoreBound::Inclusive(min_score),
+                    &ScoreBound::Exclusive(max_score),
+                    0,
+                    None,
+                );
 
-                    // Precise distance/box check
-                    let dist_m = haversine_distance(opts.center.lon, opts.center.lat, lon, lat);
+                for (member, score) in members {
+                    let hash = score_to_geohash(score);
+                    let (lon, lat) = geohash_decode(hash);
 
-                    let in_area = if let Some(radius_m) = opts.radius_m {
-                        dist_m <= radius_m
-                    } else {
-                        is_within_box(
-                            opts.center,
-                            coords,
-                            opts.width_m.unwrap(),
-                            opts.height_m.unwrap(),
-                        )
-                    };
+                    if let Some(coords) = Coordinates::new(lon, lat) {
+                        if !bbox.contains(coords) {
+                            continue;
+                        }
 
-                    if in_area {
-                        let dist = Some(opts.unit.from_meters(dist_m));
+                        let dist_m = haversine_distance(opts.center.lon, opts.center.lat, lon, lat);
 
-                        results.push(GeoSearchResult {
-                            member,
-                            dist,
-                            hash: Some(hash),
-                            coords: if opts.with_coord {
-                                Some((lon, lat))
-                            } else {
-                                None
-                            },
-                        });
+                        let in_area = if let Some(radius_m) = opts.radius_m {
+                            dist_m <= radius_m
+                        } else {
+                            is_within_box(
+                                opts.center,
+                                coords,
+                                opts.width_m.unwrap(),
+                                opts.height_m.unwrap(),
+                            )
+                        };
 
-                        // Early exit if ANY and we have enough results
-                        if opts.any && opts.count.map(|c| results.len() >= c).unwrap_or(false) {
-                            break;
+                        if in_area {
+                            let dist = Some(opts.unit.from_meters(dist_m));
+
+                            results.push(GeoSearchResult {
+                                member,
+                                dist,
+                                hash: Some(hash),
+                                coords: if opts.with_coord {
+                                    Some((lon, lat))
+                                } else {
+                                    None
+                                },
+                            });
+
+                            // Early exit if ANY and we have enough results
+                            if opts.any && opts.count.map(|c| results.len() >= c).unwrap_or(false) {
+                                early_exit = true;
+                                break;
+                            }
                         }
                     }
+                }
+
+                if early_exit {
+                    break;
                 }
             }
 
