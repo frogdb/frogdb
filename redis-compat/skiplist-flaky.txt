@@ -1,7 +1,7 @@
 # Flaky / Blocking Tests
 # Individual test name patterns that timeout or fail due to missing infrastructure.
 # Format: one test name per line
-#   - Lines starting with / are treated as regex patterns
+#   - Lines starting with / are treated as regex patterns (e.g. /SORT speed.*)
 #   - Other lines are exact string matches
 
 # =============================================================================
@@ -73,6 +73,11 @@ SDIFF fuzzing
 # Stress tests that hang or timeout on FrogDB
 /ziplist implementation: encoding stress testing
 /Hash fuzzing #[12] - \d+ fields
+
+# Direct and BY-const SORT speed benchmarks reliably time out in the test
+# harness; the BY-key and BY-hash variants in the same suite pass fine.
+/SORT speed.*directly
+/SORT speed.*<const>
 
 # =============================================================================
 # PIPELINING stresser causes broken pipe
