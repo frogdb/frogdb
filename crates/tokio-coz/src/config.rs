@@ -1,5 +1,17 @@
 use std::time::Duration;
 
+/// Controls the order in which spans are selected for experiments.
+#[derive(Debug, Clone, Default)]
+pub enum SelectionStrategy {
+    /// Pick a span uniformly at random each cycle. Some spans may be skipped
+    /// entirely in short runs (default, matches original behavior).
+    #[default]
+    Random,
+    /// Cycle through all discovered spans in order, guaranteeing every span
+    /// is visited before any is revisited.
+    RoundRobin,
+}
+
 /// Configuration for the causal profiler.
 #[derive(Debug, Clone)]
 pub struct ProfilerConfig {
@@ -15,6 +27,8 @@ pub struct ProfilerConfig {
     pub output_path: Option<String>,
     /// Number of rounds to repeat each (span, speedup%) pair.
     pub rounds_per_experiment: u32,
+    /// Strategy for selecting which span to experiment on each cycle.
+    pub selection_strategy: SelectionStrategy,
 }
 
 impl Default for ProfilerConfig {
@@ -26,6 +40,7 @@ impl Default for ProfilerConfig {
             max_delay: Duration::from_millis(100),
             output_path: Some("tokio-coz-profile.json".to_string()),
             rounds_per_experiment: 3,
+            selection_strategy: SelectionStrategy::Random,
         }
     }
 }
@@ -67,6 +82,11 @@ impl ProfilerConfig {
 
     pub fn rounds_per_experiment(mut self, n: u32) -> Self {
         self.rounds_per_experiment = n;
+        self
+    }
+
+    pub fn selection_strategy(mut self, s: SelectionStrategy) -> Self {
+        self.selection_strategy = s;
         self
     }
 }

@@ -104,12 +104,13 @@ fn main() -> Result<()> {
     // --- Causal profiling setup (compile-time + runtime gated) ---
     #[cfg(all(tokio_unstable, feature = "causal-profile"))]
     let profiler = {
-        use tokio_coz::{CausalProfiler, ProfilerConfig};
+        use tokio_coz::{CausalProfiler, ProfilerConfig, SelectionStrategy};
         CausalProfiler::new(
             ProfilerConfig::new()
                 .experiment_duration(std::time::Duration::from_secs(1))
-                .speedup_steps(vec![0, 25, 50, 75, 100])
-                .rounds_per_experiment(2)
+                .speedup_steps(vec![0, 50, 100])
+                .rounds_per_experiment(4)
+                .selection_strategy(SelectionStrategy::RoundRobin)
                 .output_path("causal-profile.json"),
         )
     };
