@@ -575,12 +575,11 @@ impl ConnectionHandler {
 
         // Parse arguments: function numkeys [key ...] [arg ...]
         let function_name = args[0].clone();
-        let numkeys = match std::str::from_utf8(&args[1])
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-        {
-            Some(n) => n,
-            None => return Response::error("ERR value is not an integer or out of range"),
+        let numkeys_raw = std::str::from_utf8(&args[1]).unwrap_or("");
+        let numkeys = match numkeys_raw.parse::<i64>() {
+            Ok(n) if n < 0 => return Response::error("ERR Number of keys can't be negative"),
+            Ok(n) => n as usize,
+            Err(_) => return Response::error("ERR Bad number of keys provided"),
         };
 
         // Validate we have enough args
@@ -713,18 +712,32 @@ impl ConnectionHandler {
             let opt = args[i].to_ascii_uppercase();
             match opt.as_slice() {
                 b"LIBRARYNAME" => {
+                    if pattern.is_some() {
+                        return Response::error(format!(
+                            "ERR Unknown argument {}",
+                            String::from_utf8_lossy(&args[i])
+                        ));
+                    }
                     i += 1;
                     if i >= args.len() {
-                        return Response::error("ERR syntax error");
+                        return Response::error(
+                            "ERR library name argument was not given",
+                        );
                     }
                     pattern = std::str::from_utf8(&args[i]).ok();
                 }
                 b"WITHCODE" => {
+                    if with_code {
+                        return Response::error(format!(
+                            "ERR Unknown argument {}",
+                            String::from_utf8_lossy(&args[i])
+                        ));
+                    }
                     with_code = true;
                 }
                 _ => {
                     return Response::error(format!(
-                        "ERR unknown option '{}'",
+                        "ERR Unknown argument {}",
                         String::from_utf8_lossy(&args[i])
                     ));
                 }
@@ -744,9 +757,9 @@ impl ConnectionHandler {
                 // library_name
                 Response::bulk(Bytes::from_static(b"library_name")),
                 Response::bulk(Bytes::from(lib.name.clone())),
-                // engine
+                // engine (normalized to uppercase for Redis compatibility)
                 Response::bulk(Bytes::from_static(b"engine")),
-                Response::bulk(Bytes::from(lib.engine.clone())),
+                Response::bulk(Bytes::from(lib.engine.to_ascii_uppercase())),
                 // functions
                 Response::bulk(Bytes::from_static(b"functions")),
             ];
@@ -757,6 +770,10 @@ impl ConnectionHandler {
                 func_info.push(Response::bulk(Bytes::from_static(b"name")));
                 func_info.push(Response::bulk(Bytes::from(func.name.clone())));
 
+                func_info.push(Response::bulk(Bytes::from_static(b"description")));
+                let desc = func.description.clone().unwrap_or_default();
+                func_info.push(Response::bulk(Bytes::from(desc)));
+
                 func_info.push(Response::bulk(Bytes::from_static(b"flags")));
                 let flags: Vec<Response> = func
                     .flags
@@ -765,11 +782,6 @@ impl ConnectionHandler {
                     .map(|f| Response::bulk(Bytes::from(f)))
                     .collect();
                 func_info.push(Response::Array(flags));
-
-                if let Some(ref desc) = func.description {
-                    func_info.push(Response::bulk(Bytes::from_static(b"description")));
-                    func_info.push(Response::bulk(Bytes::from(desc.clone())));
-                }
 
                 funcs.push(Response::Array(func_info));
             }
@@ -821,7 +833,12 @@ impl ConnectionHandler {
         if !args.is_empty() {
             let mode = args[0].to_ascii_uppercase();
             if mode.as_slice() != b"ASYNC" && mode.as_slice() != b"SYNC" {
-                return Response::error("ERR FUNCTION FLUSH only supports ASYNC and SYNC options");
+                return Response::error("ERR FUNCTION FLUSH only supports SYNC|ASYNC option");
+            }
+            if args.len() > 1 {
+                return Response::error(
+                    "ERR unknown subcommand or wrong number of arguments for 'flush'. Try FUNCTION HELP.",
+                );
             }
         }
 
@@ -900,6 +917,13 @@ impl ConnectionHandler {
         }
 
         let payload = &args[0];
+
+        if args.len() > 2 {
+            return Response::error(
+                "ERR unknown subcommand or wrong number of arguments for 'restore'. Try FUNCTION HELP.",
+            );
+        }
+
         let policy = if args.len() > 1 {
             match frogdb_core::RestorePolicy::from_str(&String::from_utf8_lossy(&args[1])) {
                 Ok(p) => p,

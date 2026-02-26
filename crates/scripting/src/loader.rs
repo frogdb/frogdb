@@ -66,8 +66,14 @@ fn execute_in_sandbox(code: &str) -> Result<Vec<CapturedRegistration>, FunctionE
     // Execute the library code
     lua.load(code_without_shebang)
         .exec()
-        .map_err(|e| FunctionError::LoadError {
-            message: format!("Lua error: {}", e),
+        .map_err(|e| {
+            // Strip newlines from the error — Lua errors include stack traces
+            // with newlines, but RESP simple errors must be a single line.
+            let msg = format!("Lua error: {}", e);
+            let first_line = msg.lines().next().unwrap_or(&msg);
+            FunctionError::LoadError {
+                message: first_line.to_string(),
+            }
         })?;
 
     // Extract captured registrations
@@ -267,33 +273,52 @@ fn parse_flags_value(value: &Value) -> LuaResult<FunctionFlags> {
 
             // Check for array-style flags: {"no-writes", "allow-oom"}
             let mut idx = 1;
-            while let Ok(flag_name) = t.get::<String>(idx) {
-                match flag_name.as_str() {
-                    "no-writes" => flags |= FunctionFlags::NO_WRITES,
-                    "allow-oom" => flags |= FunctionFlags::ALLOW_OOM,
-                    "allow-stale" => flags |= FunctionFlags::ALLOW_STALE,
-                    "no-cluster" => flags |= FunctionFlags::NO_CLUSTER,
-                    other => {
-                        return Err(mlua::Error::RuntimeError(format!(
-                            "Unknown flag: {}",
-                            other
-                        )));
+            let mut found_array = false;
+            while let Ok(flag_val) = t.get::<Value>(idx) {
+                match flag_val {
+                    Value::Nil => break, // End of array
+                    Value::String(s) => {
+                        found_array = true;
+                        let flag_name = s.to_str().map_err(|_| {
+                            mlua::Error::RuntimeError(
+                                "unknown flag given".to_string(),
+                            )
+                        })?;
+                        match flag_name.as_ref() {
+                            "no-writes" => flags |= FunctionFlags::NO_WRITES,
+                            "allow-oom" => flags |= FunctionFlags::ALLOW_OOM,
+                            "allow-stale" => flags |= FunctionFlags::ALLOW_STALE,
+                            "no-cluster" => flags |= FunctionFlags::NO_CLUSTER,
+                            other => {
+                                return Err(mlua::Error::RuntimeError(format!(
+                                    "unknown flag given: {}",
+                                    other
+                                )));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(mlua::Error::RuntimeError(
+                            "unknown flag given".to_string(),
+                        ));
                     }
                 }
                 idx += 1;
             }
 
             // Also check for table-style flags: {["no-writes"] = true}
-            for pair in t.pairs::<String, bool>() {
-                if let Ok((key, value)) = pair
-                    && value
-                {
-                    match key.as_str() {
-                        "no-writes" => flags |= FunctionFlags::NO_WRITES,
-                        "allow-oom" => flags |= FunctionFlags::ALLOW_OOM,
-                        "allow-stale" => flags |= FunctionFlags::ALLOW_STALE,
-                        "no-cluster" => flags |= FunctionFlags::NO_CLUSTER,
-                        _ => {} // Ignore non-flag keys or already processed array items
+            if !found_array {
+                for pair in t.pairs::<String, bool>() {
+                    if let Ok((key, value)) = pair
+                        && value
+                    {
+                        match key.as_str() {
+                            "no-writes" => flags |= FunctionFlags::NO_WRITES,
+                            "allow-oom" => flags |= FunctionFlags::ALLOW_OOM,
+                            "allow-stale" => flags |= FunctionFlags::ALLOW_STALE,
+                            "no-cluster" => flags |= FunctionFlags::NO_CLUSTER,
+                            _ => {} // Ignore non-flag keys
+                        }
                     }
                 }
             }
@@ -301,7 +326,7 @@ fn parse_flags_value(value: &Value) -> LuaResult<FunctionFlags> {
             Ok(flags)
         }
         _ => Err(mlua::Error::RuntimeError(
-            "flags must be a table".to_string(),
+            "flags argument to redis.register_function must be a table representing function flags".to_string(),
         )),
     }
 }

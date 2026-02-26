@@ -90,14 +90,14 @@ pub fn restore_libraries(data: &[u8]) -> Result<Vec<(String, String)>, FunctionE
     if data.len() < 13 {
         // 4 (magic) + 1 (version) + 4 (num_libs) + 8 (checksum) minimum when empty
         return Err(FunctionError::SerializationError {
-            message: "Dump too short".to_string(),
+            message: "DUMP payload version or checksum are wrong".to_string(),
         });
     }
 
     // Verify magic
     if &data[0..4] != MAGIC {
         return Err(FunctionError::SerializationError {
-            message: "Invalid dump format (bad magic)".to_string(),
+            message: "DUMP payload version or checksum are wrong".to_string(),
         });
     }
 
@@ -105,7 +105,7 @@ pub fn restore_libraries(data: &[u8]) -> Result<Vec<(String, String)>, FunctionE
     let version = data[4];
     if version != DUMP_VERSION {
         return Err(FunctionError::SerializationError {
-            message: format!("Unsupported dump version: {}", version),
+            message: "DUMP payload version or checksum are wrong".to_string(),
         });
     }
 
@@ -113,13 +113,13 @@ pub fn restore_libraries(data: &[u8]) -> Result<Vec<(String, String)>, FunctionE
     let checksum_offset = data.len() - 8;
     let stored_checksum = u64::from_le_bytes(data[checksum_offset..].try_into().map_err(|_| {
         FunctionError::SerializationError {
-            message: "Invalid checksum".to_string(),
+            message: "DUMP payload version or checksum are wrong".to_string(),
         }
     })?);
     let computed_checksum = compute_checksum(&data[..checksum_offset]);
     if stored_checksum != computed_checksum {
         return Err(FunctionError::SerializationError {
-            message: "Checksum mismatch".to_string(),
+            message: "DUMP payload version or checksum are wrong".to_string(),
         });
     }
 

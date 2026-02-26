@@ -70,11 +70,7 @@ impl fmt::Display for FunctionError {
                 write!(f, "ERR Function not found: {}", name)
             }
             FunctionError::LibraryAlreadyExists { name } => {
-                write!(
-                    f,
-                    "ERR Library '{}' already exists. Use REPLACE to update.",
-                    name
-                )
+                write!(f, "ERR Library {} already exists", name)
             }
             FunctionError::FunctionNameConflict {
                 function_name,
