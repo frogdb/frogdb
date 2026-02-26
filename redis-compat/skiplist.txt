@@ -202,3 +202,26 @@ unit/type/set#SMOVE only notify dstset when the addition is successful
 
 # SORTED SET + REGULAR SET WITH WEIGHTS
 unit/type/zset#/with a regular set and weights
+
+# SCRIPT KILL (unit/functions)
+# FrogDB is multi-threaded; long-running scripts don't block other clients
+unit/functions#FUNCTION - test function kill
+unit/functions#FUNCTION - test script kill not working on function
+unit/functions#FUNCTION - test function kill not working on eval
+
+# LIBRARIES (unit/functions)
+# FUNCTION LOAD failures in the LIBRARIES context produce malformed error
+# responses that corrupt the connection state (Bad protocol errors cascade).
+# Affects registration validation, named argument validation, and load-time
+# execution tests.
+unit/functions#/^LIBRARIES -
+
+# FCALL_RO / NO-WRITES FLAG ENFORCEMENT (unit/functions)
+# FrogDB doesn't yet enforce the no-writes flag pre-execution check or
+# reject FCALL_RO for functions without no-writes flag
+unit/functions#FUNCTION - write script on fcall_ro
+unit/functions#FUNCTION - write script with no-writes flag
+
+# REDIS VERSION API (unit/functions)
+# Uses Lua bit library which isn't available in FrogDB's Lua VM
+unit/functions#FUNCTION - redis version api

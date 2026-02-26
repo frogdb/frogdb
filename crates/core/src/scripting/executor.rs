@@ -499,10 +499,9 @@ return fn(KEYS, ARGV)
             self.vm.clear_command_context();
             self.vm.cleanup_execution();
             self.running.store(false, Ordering::Relaxed);
-            return Err(ScriptError::Runtime(format!(
-                "FCALL_RO called but function '{}' performed a write",
-                function_name
-            )));
+            return Err(ScriptError::Runtime(
+                "Write commands are not allowed from read-only scripts".to_string(),
+            ));
         }
 
         // Cleanup
