@@ -42,7 +42,10 @@ pub fn format_float(f: f64) -> String {
         return "0".to_string();
     }
 
-    if f.fract() == 0.0 && f.abs() < 1e15 {
+    // Redis uses %.17g which uses decimal notation for exponents < 17 (i.e., values < 1e17).
+    // For integer-valued floats within f64's exact integer range (up to 2^53 ≈ 9e15),
+    // return as plain integer string matching Redis's behavior.
+    if f.fract() == 0.0 && f.abs() < 1e17 {
         return format!("{:.0}", f);
     }
 
@@ -51,9 +54,14 @@ pub fn format_float(f: f64) -> String {
     let mut buf = ryu::Buffer::new();
     let s = buf.format(f);
 
-    // ryu may produce "1e100" or "1.5e-10" style output — Redis uses similar
-    // notation but formats it like "1e100" (no leading zero in exponent).
-    // ryu already matches this convention, so we can return as-is.
+    // Redis uses C's %.17g format which includes "e+308" (with explicit '+' sign
+    // for positive exponents). ryu produces "e308" (no '+'), so we normalize here.
+    if let Some(e_pos) = s.find('e') {
+        let after_e = &s[e_pos + 1..];
+        if !after_e.starts_with('-') && !after_e.starts_with('+') {
+            return format!("{}e+{}", &s[..e_pos], after_e);
+        }
+    }
     s.to_string()
 }
 

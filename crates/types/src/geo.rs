@@ -95,30 +95,72 @@ pub struct BoundingBox {
 
 impl BoundingBox {
     /// Create a bounding box from center point and radius (in meters).
+    ///
+    /// Matches Redis's `geohashBoundingBox`: uses the **pole-side** latitude
+    /// (lat + lat_delta for north, lat - lat_delta for south) when computing the
+    /// longitude delta, since the pole side has the smallest cosine and thus the
+    /// widest angular span for a given linear distance.
     pub fn from_radius(center: Coordinates, radius_m: f64) -> Self {
-        // Calculate lat/lon deltas for the radius
         let lat_delta = radius_m / EARTH_RADIUS_M * (180.0 / PI);
-        let lon_delta = lat_delta / (center.lat * PI / 180.0).cos();
+        let min_lat = (center.lat - lat_delta).max(LAT_MIN);
+        let max_lat = (center.lat + lat_delta).min(LAT_MAX);
+
+        // Use pole-side latitude to get the widest longitude extent.
+        let pole_lat = if center.lat >= 0.0 {
+            center.lat + lat_delta // north hemisphere: top edge is closer to pole
+        } else {
+            center.lat - lat_delta // south hemisphere: bottom edge is closer to pole
+        };
+        let cos_pole = (pole_lat * PI / 180.0).cos();
+
+        let (min_lon, max_lon) = if cos_pole < 1e-12 {
+            (LON_MIN, LON_MAX)
+        } else {
+            let lon_delta = lat_delta / cos_pole;
+            (
+                (center.lon - lon_delta).max(LON_MIN),
+                (center.lon + lon_delta).min(LON_MAX),
+            )
+        };
 
         Self {
-            min_lon: (center.lon - lon_delta).max(LON_MIN),
-            max_lon: (center.lon + lon_delta).min(LON_MAX),
-            min_lat: (center.lat - lat_delta).max(LAT_MIN),
-            max_lat: (center.lat + lat_delta).min(LAT_MAX),
+            min_lon,
+            max_lon,
+            min_lat,
+            max_lat,
         }
     }
 
     /// Create a bounding box from center point and width/height (in meters).
+    ///
+    /// Uses the same pole-side latitude convention as `from_radius`.
     pub fn from_box(center: Coordinates, width_m: f64, height_m: f64) -> Self {
         let lat_delta = (height_m / 2.0) / EARTH_RADIUS_M * (180.0 / PI);
-        let lon_delta =
-            (width_m / 2.0) / EARTH_RADIUS_M * (180.0 / PI) / (center.lat * PI / 180.0).cos();
+        let min_lat = (center.lat - lat_delta).max(LAT_MIN);
+        let max_lat = (center.lat + lat_delta).min(LAT_MAX);
+
+        let pole_lat = if center.lat >= 0.0 {
+            center.lat + lat_delta
+        } else {
+            center.lat - lat_delta
+        };
+        let cos_pole = (pole_lat * PI / 180.0).cos();
+
+        let (min_lon, max_lon) = if cos_pole < 1e-12 {
+            (LON_MIN, LON_MAX)
+        } else {
+            let lon_delta = (width_m / 2.0) / EARTH_RADIUS_M * (180.0 / PI) / cos_pole;
+            (
+                (center.lon - lon_delta).max(LON_MIN),
+                (center.lon + lon_delta).min(LON_MAX),
+            )
+        };
 
         Self {
-            min_lon: (center.lon - lon_delta).max(LON_MIN),
-            max_lon: (center.lon + lon_delta).min(LON_MAX),
-            min_lat: (center.lat - lat_delta).max(LAT_MIN),
-            max_lat: (center.lat + lat_delta).min(LAT_MAX),
+            min_lon,
+            max_lon,
+            min_lat,
+            max_lat,
         }
     }
 
@@ -176,25 +218,51 @@ pub fn geohash_decode(hash: u64) -> (f64, f64) {
         lat_int |= ((hash >> (50 - i * 2)) & 1) << (GEOHASH_BITS - 1 - i);
     }
 
-    // Convert back to coordinates
-    let lon = lon_int as f64 / (1u64 << GEOHASH_BITS) as f64 * (LON_MAX - LON_MIN) + LON_MIN;
-    let lat = lat_int as f64 / (1u64 << GEOHASH_BITS) as f64 * (LAT_MAX - LAT_MIN) + LAT_MIN;
+    // Convert back to coordinates — use the center of the geohash cell, matching Redis's behavior.
+    // Redis computes (min + max) / 2 = (lon_int + 0.5) * step + LON_MIN
+    let scale = (1u64 << GEOHASH_BITS) as f64;
+    let lon = (lon_int as f64 + 0.5) / scale * (LON_MAX - LON_MIN) + LON_MIN;
+    let lat = (lat_int as f64 + 0.5) / scale * (LAT_MAX - LAT_MIN) + LAT_MIN;
 
     (lon, lat)
 }
 
-/// Convert a 52-bit geohash to an 11-character base32 string.
+/// Encode coordinates as an 11-character standard geohash string.
 ///
-/// Uses the standard geohash alphabet: 0-9b-hjkmnp-z (no a, i, l, o).
-pub fn geohash_to_string(hash: u64) -> String {
+/// This re-encodes using the **standard** geohash latitude range [-90, 90]
+/// (not the internal Mercator range [-85.05, 85.05]), matching Redis's
+/// GEOHASH command behaviour. The last character is always '0' because
+/// only 50 of 55 bits carry information at 26-step precision.
+pub fn geohash_to_string(lon: f64, lat: f64) -> String {
     const ALPHABET: &[u8; 32] = b"0123456789bcdefghjkmnpqrstuvwxyz";
+    const STEP: u32 = 26;
 
-    // Pad to 55 bits (11 characters * 5 bits)
-    let padded = hash << 3;
+    // Standard geohash uses [-90, 90] latitude, [-180, 180] longitude.
+    let lon_c = lon.clamp(LON_MIN, LON_MAX);
+    let lat_c = lat.clamp(-90.0, 90.0);
+    let lon_norm = (lon_c - LON_MIN) / (LON_MAX - LON_MIN);
+    let lat_norm = (lat_c - (-90.0)) / (90.0 - (-90.0));
 
+    let max_val = (1u64 << STEP) - 1;
+    let lon_int = ((lon_norm * (1u64 << STEP) as f64) as u64).min(max_val);
+    let lat_int = ((lat_norm * (1u64 << STEP) as f64) as u64).min(max_val);
+
+    // Interleave: lon in odd bit-positions (51, 49, …, 1), lat in even (50, 48, …, 0).
+    // This matches Redis's interleave64(lat, lon) output.
+    let mut hash = 0u64;
+    for i in 0..STEP {
+        hash |= ((lon_int >> (STEP - 1 - i)) & 1) << (51 - i * 2);
+        hash |= ((lat_int >> (STEP - 1 - i)) & 1) << (50 - i * 2);
+    }
+
+    // Extract 10 × 5-bit groups + last char always '0' (matching Redis).
     let mut result = String::with_capacity(11);
-    for i in 0..11 {
-        let idx = ((padded >> (55 - 5 - i * 5)) & 0x1F) as usize;
+    for i in 0..11u32 {
+        let idx = if i == 10 {
+            0
+        } else {
+            ((hash >> (52 - ((i + 1) * 5))) & 0x1F) as usize
+        };
         result.push(ALPHABET[idx] as char);
     }
 
@@ -258,11 +326,14 @@ pub fn is_within_radius(center: Coordinates, point: Coordinates, radius_m: f64) 
 }
 
 /// Check if a point is within a given box.
+///
+/// Matches Redis's `geohashGetDistanceIfInRectangle`: east-west distance is
+/// measured at the **point's** latitude, not the center's.
 pub fn is_within_box(center: Coordinates, point: Coordinates, width_m: f64, height_m: f64) -> bool {
-    let dx = haversine_distance(center.lon, center.lat, point.lon, center.lat);
-    let dy = haversine_distance(center.lon, center.lat, center.lon, point.lat);
+    let lon_dist = haversine_distance(center.lon, point.lat, point.lon, point.lat);
+    let lat_dist = haversine_distance(center.lon, center.lat, center.lon, point.lat);
 
-    dx <= width_m / 2.0 && dy <= height_m / 2.0
+    lon_dist <= width_m / 2.0 && lat_dist <= height_m / 2.0
 }
 
 #[cfg(test)]
@@ -298,12 +369,13 @@ mod tests {
 
     #[test]
     fn test_geohash_to_string() {
-        // Test encoding for San Francisco
-        let hash = geohash_encode(-122.4194, 37.7749);
-        let hash_str = geohash_to_string(hash);
+        // Wikipedia example: (-5.6, 42.6) → "ezs42e44yx0"
+        let hash_str = geohash_to_string(-5.6, 42.6);
+        assert_eq!(hash_str, "ezs42e44yx0");
+
+        // San Francisco
+        let hash_str = geohash_to_string(-122.4194, 37.7749);
         assert_eq!(hash_str.len(), 11);
-        // Should produce a valid 11-char geohash string
-        // Note: different geohash implementations may produce slightly different results
         assert!(hash_str.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 

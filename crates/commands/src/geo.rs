@@ -86,10 +86,10 @@ impl Command for GeoaddCommand {
         let nx = nx_xx.nx;
         let xx = nx_xx.xx;
 
-        // Parse coordinate-member triplets
+        // Parse coordinate-member triplets: must be at least one triplet, divisible by 3
         let remaining = &args[i..];
         if remaining.len() < 3 || !remaining.len().is_multiple_of(3) {
-            return Err(CommandError::WrongArity { command: "geoadd" });
+            return Err(CommandError::SyntaxError);
         }
 
         let zset = get_or_create_geo(ctx, key)?;
@@ -215,7 +215,7 @@ impl Command for GeohashCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // GEOHASH key member [member ...]
+        Arity::AtLeast(1) // GEOHASH key [member ...]
     }
 
     fn flags(&self) -> CommandFlags {
@@ -226,6 +226,11 @@ impl Command for GeohashCommand {
         let key = &args[0];
         let members = &args[1..];
 
+        // No members → empty array
+        if members.is_empty() {
+            return Ok(Response::Array(vec![]));
+        }
+
         match ctx.store.get(key) {
             Some(value) => {
                 let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
@@ -234,8 +239,8 @@ impl Command for GeohashCommand {
                     .iter()
                     .map(|member| match zset.get_score(member) {
                         Some(score) => {
-                            let hash = score_to_geohash(score);
-                            let hash_str = geohash_to_string(hash);
+                            let (lon, lat) = geohash_decode(score_to_geohash(score));
+                            let hash_str = geohash_to_string(lon, lat);
                             Response::bulk(Bytes::from(hash_str))
                         }
                         None => Response::null(),
@@ -271,7 +276,7 @@ impl Command for GeoposCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // GEOPOS key member [member ...]
+        Arity::AtLeast(1) // GEOPOS key [member ...]
     }
 
     fn flags(&self) -> CommandFlags {
@@ -444,7 +449,7 @@ impl Command for GeoradiusCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+        CommandFlags::WRITE
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -457,6 +462,14 @@ impl Command for GeoradiusCommand {
         // Parse options
         let extra_opts = &args[5..];
         let radius_opts = parse_georadius_options(extra_opts)?;
+
+        if (radius_opts.store.is_some() || radius_opts.store_dist)
+            && (radius_opts.with_coord || radius_opts.with_dist || radius_opts.with_hash)
+        {
+            return Err(CommandError::InvalidArgument {
+                message: "STORE option in GEORADIUS is not compatible with WITHDIST, WITHHASH and WITHCOORD options".to_string(),
+            });
+        }
 
         let coords = Coordinates::new(lon, lat).ok_or_else(|| CommandError::InvalidArgument {
             message: format!("invalid longitude,latitude pair {},{}", lon, lat),
@@ -472,13 +485,34 @@ impl Command for GeoradiusCommand {
             with_dist: radius_opts.with_dist,
             with_hash: radius_opts.with_hash,
             count: radius_opts.count,
-            any: false,
+            any: radius_opts.any,
             asc: radius_opts.asc,
             desc: radius_opts.desc,
-            store_dist: false,
+            store_dist: radius_opts.store_dist,
         };
 
         let results = execute_geosearch(ctx, key, &opts)?;
+
+        // Handle STORE option: store results in destination key and return count
+        if let Some(dest) = radius_opts.store {
+            if results.is_empty() {
+                ctx.store.delete(&dest);
+                return Ok(Response::Integer(0));
+            }
+            let mut dest_zset = SortedSetValue::new();
+            for result in &results {
+                let score = if opts.store_dist {
+                    result.dist.unwrap_or(0.0)
+                } else {
+                    geohash_to_score(result.hash.unwrap_or(0))
+                };
+                dest_zset.add(result.member.clone(), score);
+            }
+            let count = dest_zset.len();
+            ctx.store.set(dest, Value::SortedSet(dest_zset));
+            return Ok(Response::Integer(count as i64));
+        }
+
         format_geosearch_results(&results, &opts)
     }
 
@@ -507,7 +541,7 @@ impl Command for GeoradiusbymemberCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+        CommandFlags::WRITE
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -516,7 +550,19 @@ impl Command for GeoradiusbymemberCommand {
         let radius = parse_f64(&args[2])?;
         let unit = DistanceUnit::parse(&args[3]).ok_or(CommandError::SyntaxError)?;
 
-        // Get member's coordinates
+        // Parse options first so we know if STORE is set
+        let extra_opts = &args[4..];
+        let radius_opts = parse_georadius_options(extra_opts)?;
+
+        if (radius_opts.store.is_some() || radius_opts.store_dist)
+            && (radius_opts.with_coord || radius_opts.with_dist || radius_opts.with_hash)
+        {
+            return Err(CommandError::InvalidArgument {
+                message: "STORE option in GEORADIUS is not compatible with WITHDIST, WITHHASH and WITHCOORD options".to_string(),
+            });
+        }
+
+        // Get member's coordinates; if key doesn't exist, return early
         let coords = match ctx.store.get(key) {
             Some(value) => {
                 let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
@@ -538,12 +584,15 @@ impl Command for GeoradiusbymemberCommand {
                     }
                 }
             }
-            None => return Ok(Response::Array(vec![])),
+            None => {
+                // Key doesn't exist — with STORE, delete dest and return 0
+                if let Some(dest) = radius_opts.store {
+                    ctx.store.delete(&dest);
+                    return Ok(Response::Integer(0));
+                }
+                return Ok(Response::Array(vec![]));
+            }
         };
-
-        // Parse options
-        let extra_opts = &args[4..];
-        let radius_opts = parse_georadius_options(extra_opts)?;
 
         let opts = GeoSearchOptions {
             center: coords,
@@ -555,13 +604,34 @@ impl Command for GeoradiusbymemberCommand {
             with_dist: radius_opts.with_dist,
             with_hash: radius_opts.with_hash,
             count: radius_opts.count,
-            any: false,
+            any: radius_opts.any,
             asc: radius_opts.asc,
             desc: radius_opts.desc,
-            store_dist: false,
+            store_dist: radius_opts.store_dist,
         };
 
         let results = execute_geosearch(ctx, key, &opts)?;
+
+        // Handle STORE option: store results and return count
+        if let Some(dest) = radius_opts.store {
+            if results.is_empty() {
+                ctx.store.delete(&dest);
+                return Ok(Response::Integer(0));
+            }
+            let mut dest_zset = SortedSetValue::new();
+            for result in &results {
+                let score = if opts.store_dist {
+                    result.dist.unwrap_or(0.0)
+                } else {
+                    geohash_to_score(result.hash.unwrap_or(0))
+                };
+                dest_zset.add(result.member.clone(), score);
+            }
+            let count = dest_zset.len();
+            ctx.store.set(dest, Value::SortedSet(dest_zset));
+            return Ok(Response::Integer(count as i64));
+        }
+
         format_geosearch_results(&results, &opts)
     }
 
@@ -651,6 +721,7 @@ struct GeoRadiusOptions {
     with_dist: bool,
     with_hash: bool,
     count: Option<usize>,
+    any: bool,
     asc: bool,
     desc: bool,
     store: Option<Bytes>,
@@ -710,10 +781,7 @@ fn parse_geosearch_options(
         match opt.as_slice() {
             b"FROMMEMBER" => {
                 if has_from_member || has_from_lonlat {
-                    return Err(CommandError::InvalidArgument {
-                        message: "exactly one of FROMMEMBER or FROMLONLAT can be provided"
-                            .to_string(),
-                    });
+                    return Err(CommandError::SyntaxError);
                 }
                 if i + 1 >= args.len() {
                     return Err(CommandError::SyntaxError);
@@ -753,10 +821,7 @@ fn parse_geosearch_options(
             }
             b"FROMLONLAT" => {
                 if has_from_member || has_from_lonlat {
-                    return Err(CommandError::InvalidArgument {
-                        message: "exactly one of FROMMEMBER or FROMLONLAT can be provided"
-                            .to_string(),
-                    });
+                    return Err(CommandError::SyntaxError);
                 }
                 if i + 2 >= args.len() {
                     return Err(CommandError::SyntaxError);
@@ -773,9 +838,7 @@ fn parse_geosearch_options(
             }
             b"BYRADIUS" => {
                 if has_by_radius || has_by_box {
-                    return Err(CommandError::InvalidArgument {
-                        message: "exactly one of BYRADIUS and BYBOX can be provided".to_string(),
-                    });
+                    return Err(CommandError::SyntaxError);
                 }
                 if i + 2 >= args.len() {
                     return Err(CommandError::SyntaxError);
@@ -788,9 +851,7 @@ fn parse_geosearch_options(
             }
             b"BYBOX" => {
                 if has_by_radius || has_by_box {
-                    return Err(CommandError::InvalidArgument {
-                        message: "exactly one of BYRADIUS and BYBOX can be provided".to_string(),
-                    });
+                    return Err(CommandError::SyntaxError);
                 }
                 if i + 3 >= args.len() {
                     return Err(CommandError::SyntaxError);
@@ -827,6 +888,11 @@ fn parse_geosearch_options(
                     any = true;
                     i += 1;
                 }
+            }
+            b"ANY" => {
+                return Err(CommandError::InvalidArgument {
+                    message: "the ANY option requires the COUNT option".to_string(),
+                });
             }
             b"ASC" => {
                 asc = true;
@@ -886,6 +952,7 @@ fn parse_georadius_options(args: &[Bytes]) -> Result<GeoRadiusOptions, CommandEr
     let mut with_dist = false;
     let mut with_hash = false;
     let mut count: Option<usize> = None;
+    let mut any = false;
     let mut asc = false;
     let mut desc = false;
     let mut store: Option<Bytes> = None;
@@ -913,6 +980,17 @@ fn parse_georadius_options(args: &[Bytes]) -> Result<GeoRadiusOptions, CommandEr
                 }
                 count = Some(parse_usize(&args[i + 1])?);
                 i += 2;
+                // Check for ANY after COUNT
+                if i < args.len() && args[i].to_ascii_uppercase().as_slice() == b"ANY" {
+                    any = true;
+                    i += 1;
+                }
+            }
+            b"ANY" => {
+                // ANY without COUNT is an error
+                return Err(CommandError::InvalidArgument {
+                    message: "the ANY option requires the COUNT option".to_string(),
+                });
             }
             b"ASC" => {
                 asc = true;
@@ -930,8 +1008,12 @@ fn parse_georadius_options(args: &[Bytes]) -> Result<GeoRadiusOptions, CommandEr
                 i += 2;
             }
             b"STOREDIST" => {
+                if i + 1 >= args.len() {
+                    return Err(CommandError::SyntaxError);
+                }
+                store = Some(args[i + 1].clone());
                 store_dist = true;
-                i += 1;
+                i += 2;
             }
             _ => {
                 return Err(CommandError::SyntaxError);
@@ -944,6 +1026,7 @@ fn parse_georadius_options(args: &[Bytes]) -> Result<GeoRadiusOptions, CommandEr
         with_dist,
         with_hash,
         count,
+        any,
         asc,
         desc,
         store,
@@ -996,11 +1079,7 @@ fn execute_geosearch(
                     };
 
                     if in_area {
-                        let dist = if opts.with_dist || opts.asc || opts.desc || opts.store_dist {
-                            Some(opts.unit.from_meters(dist_m))
-                        } else {
-                            None
-                        };
+                        let dist = Some(opts.unit.from_meters(dist_m));
 
                         results.push(GeoSearchResult {
                             member,
@@ -1021,8 +1100,9 @@ fn execute_geosearch(
                 }
             }
 
-            // Sort results
-            if opts.asc {
+            // Sort results: explicit ASC/DESC, or implicit ASC when COUNT is set without ANY
+            let sort_asc = opts.asc || (!opts.desc && opts.count.is_some() && !opts.any);
+            if sort_asc {
                 results.sort_by(|a, b| {
                     a.dist
                         .unwrap_or(0.0)
