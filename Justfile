@@ -215,9 +215,9 @@ build-causal:
     -cargo sweep --time 0
 
 # Causal-profile FrogDB under load (tokio-coz)
-# Usage: just causal-profile [workload] [requests]
-causal-profile workload="mixed" requests="10000" *args:
-    uv run loadtest/scripts/causal_profile.py -w {{workload}} -n {{requests}} {{args}}
+# Usage: just causal-profile [workload] [duration_secs]
+causal-profile workload="mixed" duration="90" *args:
+    uv run loadtest/scripts/causal_profile.py -w {{workload}} --duration {{duration}} {{args}}
 
 # =============================================================================
 # Profiling (requires: cargo-flamegraph, samply, heaptrack)
