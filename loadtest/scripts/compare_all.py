@@ -950,8 +950,10 @@ def main() -> None:
 
     if use_cpu_isolation and args.start_docker:
         try:
+            # Include frogdb in CPU assignments when running in Docker
+            assignment_backends = (["frogdb"] + comparison_backends) if frogdb_in_docker else comparison_backends
             cpu_assignments = calculate_cpu_assignments(
-                backends_to_run, args.cpus, args.isolate, args.start_core
+                assignment_backends, args.cpus, args.isolate, args.start_core
             )
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
