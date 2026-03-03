@@ -691,6 +691,9 @@ impl ConnectionHandler {
             };
             match registry.load_library(library, replace) {
                 Ok(_) => {}
+                Err(frogdb_core::FunctionError::LibraryAlreadyExists { name }) => {
+                    return Response::error(format!("ERR Library '{}' already exists", name));
+                }
                 Err(e) => return Response::error(e.to_string()),
             }
         }
@@ -720,9 +723,7 @@ impl ConnectionHandler {
                     }
                     i += 1;
                     if i >= args.len() {
-                        return Response::error(
-                            "ERR library name argument was not given",
-                        );
+                        return Response::error("ERR library name argument was not given");
                     }
                     pattern = std::str::from_utf8(&args[i]).ok();
                 }

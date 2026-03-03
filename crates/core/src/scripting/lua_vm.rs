@@ -238,8 +238,6 @@ impl LuaVm {
             "loadfile",
             "dofile",
             "load",           // Can load bytecode
-            "rawset",         // Can bypass metatables
-            "rawget",         // Can bypass metatables
             "setfenv",        // Lua 5.1 only, but be safe
             "getfenv",        // Lua 5.1 only, but be safe
             "module",         // Deprecated
@@ -290,6 +288,34 @@ impl LuaVm {
         globals
             .set("os", os_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set os: {}", e)))?;
+
+        // Protect _G with a readonly metatable.
+        // Snapshot all current globals into a backing table, then clear _G so
+        // reads go through __index and writes trigger __newindex (which errors).
+        // rawset/rawget are kept available for this snippet but excluded from
+        // the backing table so user scripts cannot access them.
+        self.lua
+            .load(
+                r#"
+local _rawset = rawset
+local _real_G = {}
+for k, v in pairs(_G) do _real_G[k] = v end
+_real_G.rawset = nil
+_real_G.rawget = nil
+setmetatable(_G, {
+    __newindex = function() error("Attempt to modify a readonly table") end,
+    __index = _real_G,
+    __metatable = "The metatable is locked",
+})
+local _keys = {}
+for k in pairs(_G) do _keys[#_keys + 1] = k end
+for _, k in ipairs(_keys) do _rawset(_G, k, nil) end
+"#,
+            )
+            .exec()
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to apply global protection: {}", e))
+            })?;
 
         Ok(())
     }
@@ -366,7 +392,7 @@ impl LuaVm {
             })?;
         }
         globals
-            .set("KEYS", keys_table)
+            .raw_set("KEYS", keys_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set KEYS: {}", e)))?;
 
         // Create ARGV table
@@ -383,7 +409,7 @@ impl LuaVm {
             })?;
         }
         globals
-            .set("ARGV", argv_table)
+            .raw_set("ARGV", argv_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set ARGV: {}", e)))?;
 
         Ok(())
@@ -393,10 +419,10 @@ impl LuaVm {
     pub fn cleanup_execution(&self) {
         self.remove_timeout_hook();
 
-        // Clear KEYS and ARGV
+        // Clear KEYS and ARGV (use raw_set to bypass readonly metatable)
         let globals = self.lua.globals();
-        let _ = globals.set("KEYS", Value::Nil);
-        let _ = globals.set("ARGV", Value::Nil);
+        let _ = globals.raw_set("KEYS", Value::Nil);
+        let _ = globals.raw_set("ARGV", Value::Nil);
 
         // Reset state
         self.state.lock_or_panic("LuaVm::cleanup_execution").reset();
@@ -413,6 +439,9 @@ impl LuaVm {
         let chunk = self.lua.load(source);
 
         // Execute
+        // Note: error messages are stripped to the first line because RESP simple
+        // errors must not contain newlines. Lua stack traces would otherwise
+        // corrupt the protocol stream.
         let result = chunk.eval::<Value>().map_err(|e| match e {
             mlua::Error::MemoryError(_) => ScriptError::MemoryLimitExceeded,
             mlua::Error::SyntaxError { message, .. } => ScriptError::Compilation(message),
@@ -424,10 +453,15 @@ impl LuaVm {
                 } else if msg.contains("killed") {
                     ScriptError::Killed
                 } else {
-                    ScriptError::Runtime(msg)
+                    let first_line = msg.lines().next().unwrap_or(&msg).to_string();
+                    ScriptError::Runtime(first_line)
                 }
             }
-            _ => ScriptError::Runtime(e.to_string()),
+            _ => {
+                let msg = e.to_string();
+                let first_line = msg.lines().next().unwrap_or(&msg).to_string();
+                ScriptError::Runtime(first_line)
+            }
         })?;
 
         Ok(result)
@@ -545,7 +579,7 @@ impl LuaVm {
             .map_err(|e| ScriptError::Internal(format!("Failed to set LOG_WARNING: {}", e)))?;
 
         globals
-            .set("redis", redis_table)
+            .raw_set("redis", redis_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set redis: {}", e)))?;
 
         Ok(())

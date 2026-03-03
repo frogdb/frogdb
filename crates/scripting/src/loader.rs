@@ -55,6 +55,33 @@ fn execute_in_sandbox(code: &str) -> Result<Vec<CapturedRegistration>, FunctionE
     setup_register_function_binding(&lua, registrations.clone())
         .map_err(|e| FunctionError::LoadError { message: e })?;
 
+    // Remove getmetatable from loader sandbox (Redis doesn't expose it during FUNCTION LOAD)
+    // and set up strict global access so accessing undefined globals raises an error.
+    {
+        let globals = lua.globals();
+        globals
+            .raw_set("getmetatable", Value::Nil)
+            .map_err(|e| FunctionError::LoadError {
+                message: format!("Failed to remove getmetatable: {}", e),
+            })?;
+    }
+    lua.load(
+        r#"
+setmetatable(_G, {
+    __index = function(t, k)
+        error("Script attempted to access nonexistent global variable '" .. tostring(k) .. "'")
+    end,
+    __newindex = function()
+        error("Attempt to modify a readonly table")
+    end,
+})
+"#,
+    )
+    .exec()
+    .map_err(|e| FunctionError::LoadError {
+        message: format!("Failed to apply loader sandbox protection: {}", e),
+    })?;
+
     // Skip the shebang line when executing (Lua doesn't understand #!)
     let code_without_shebang = if code.starts_with("#!") {
         // Find the first newline and skip past it
@@ -64,17 +91,15 @@ fn execute_in_sandbox(code: &str) -> Result<Vec<CapturedRegistration>, FunctionE
     };
 
     // Execute the library code
-    lua.load(code_without_shebang)
-        .exec()
-        .map_err(|e| {
-            // Strip newlines from the error — Lua errors include stack traces
-            // with newlines, but RESP simple errors must be a single line.
-            let msg = format!("Lua error: {}", e);
-            let first_line = msg.lines().next().unwrap_or(&msg);
-            FunctionError::LoadError {
-                message: first_line.to_string(),
-            }
-        })?;
+    lua.load(code_without_shebang).exec().map_err(|e| {
+        // Strip newlines from the error — Lua errors include stack traces
+        // with newlines, but RESP simple errors must be a single line.
+        let msg = format!("Lua error: {}", e);
+        let first_line = msg.lines().next().unwrap_or(&msg);
+        FunctionError::LoadError {
+            message: first_line.to_string(),
+        }
+    })?;
 
     // Extract captured registrations
     let regs = registrations
@@ -280,9 +305,7 @@ fn parse_flags_value(value: &Value) -> LuaResult<FunctionFlags> {
                     Value::String(s) => {
                         found_array = true;
                         let flag_name = s.to_str().map_err(|_| {
-                            mlua::Error::RuntimeError(
-                                "unknown flag given".to_string(),
-                            )
+                            mlua::Error::RuntimeError("unknown flag given".to_string())
                         })?;
                         match flag_name.as_ref() {
                             "no-writes" => flags |= FunctionFlags::NO_WRITES,
@@ -298,9 +321,7 @@ fn parse_flags_value(value: &Value) -> LuaResult<FunctionFlags> {
                         }
                     }
                     _ => {
-                        return Err(mlua::Error::RuntimeError(
-                            "unknown flag given".to_string(),
-                        ));
+                        return Err(mlua::Error::RuntimeError("unknown flag given".to_string()));
                     }
                 }
                 idx += 1;
@@ -326,7 +347,8 @@ fn parse_flags_value(value: &Value) -> LuaResult<FunctionFlags> {
             Ok(flags)
         }
         _ => Err(mlua::Error::RuntimeError(
-            "flags argument to redis.register_function must be a table representing function flags".to_string(),
+            "flags argument to redis.register_function must be a table representing function flags"
+                .to_string(),
         )),
     }
 }
