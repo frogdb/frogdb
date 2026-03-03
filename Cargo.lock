@@ -1425,6 +1425,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-redis-regression"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-protocol",
+ "frogdb-test-harness",
+ "redis-protocol",
+ "tokio",
+]
+
+[[package]]
 name = "frogdb-replication"
 version = "0.1.0"
 dependencies = [
@@ -1472,6 +1483,7 @@ dependencies = [
  "frogdb-protocol",
  "frogdb-replication",
  "frogdb-telemetry",
+ "frogdb-test-harness",
  "frogdb-testing",
  "futures",
  "hex",
@@ -1527,6 +1539,20 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "frogdb-test-harness"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-protocol",
+ "frogdb-server",
+ "futures",
+ "redis-protocol",
+ "reqwest",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

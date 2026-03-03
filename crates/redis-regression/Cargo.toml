@@ -1,0 +1,12 @@
+[package]
+name = "frogdb-redis-regression"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+frogdb-test-harness.workspace = true
+frogdb-protocol = { path = "../protocol" }
+redis-protocol = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+bytes.workspace = true

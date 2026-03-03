@@ -1,0 +1,15 @@
+[package]
+name = "frogdb-test-harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+frogdb-server = { path = "../server" }
+frogdb-protocol = { path = "../protocol" }
+redis-protocol = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+tokio-util.workspace = true
+bytes.workspace = true
+futures.workspace = true
+reqwest = { version = "0.12", features = ["json"] }

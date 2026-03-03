@@ -23,6 +23,8 @@ members = [
     "grafana/dashboard-gen",
     "tools/workflow-gen",
     "crates/tokio-coz",
+    "crates/test-harness",
+    "crates/redis-regression",
 ]
 
 [workspace.package]
@@ -118,6 +120,7 @@ frogdb-debug = { path = "crates/debug" }
 frogdb-telemetry = { path = "crates/telemetry" }
 frogdb-metrics-derive = { path = "crates/metrics-derive" }
 frogdb-testing = { path = "crates/testing" }
+frogdb-test-harness = { path = "crates/test-harness" }
 tokio-coz = { path = "crates/tokio-coz" }
 
 # Benchmarking
