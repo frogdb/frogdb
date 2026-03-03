@@ -1,7 +1,7 @@
 # Redis Compatibility Status
 
 Tracking compatibility issues found by running the Redis 7.2.4 test suite against FrogDB.
-Last run: 2026-02-25.
+Last run: 2026-03-03.
 
 > **Failure details:** See [`failures/`](failures/) for per-suite analysis and fix recommendations.
 
@@ -81,15 +81,15 @@ When a failing suite is fixed (0 errors):
 | `unit/type/zset` | Fixed: ZPOPMIN/ZPOPMAX RESP3 format, ZRANDMEMBER randomness/overflow, ZRANGE/ZRANGESTORE REV+LIMIT, float e+308 format, ZINTERCARD/ZDIFFSTORE error messages |
 | `unit/expire` | Fixed: EXPIRE/PEXPIRE option conflict error messages, big-integer overflow bounds, EXPIRETIME/PEXPIRETIME off-by-one rounding |
 | `unit/geo` | Fixed: 9-area geohash scanning for pole-crossing/oblique iteration order, antimeridian bbox wrapping |
+| `unit/functions` | Fixed: Lua sandbox global protection and loader restrictions |
 
 ### Failed
 
 | Suite | Errors | Category |
 |-------|--------|----------|
-| `unit/sort` | 8 | SORT edge cases |
+| `unit/sort` | 1 | SORT perf test timeout |
 | `unit/pause` | 6 | CLIENT PAUSE behavior |
 | `unit/multi` | 1 | MULTI/EXEC edge cases |
-| `unit/functions` | 17 | FCALL error messages, FUNCTION DUMP/RESTORE |
 
 ### External Mode
 
