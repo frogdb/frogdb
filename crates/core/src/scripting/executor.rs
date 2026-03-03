@@ -527,7 +527,7 @@ return fn(KEYS, ARGV)
         })?;
 
         globals
-            .set("__frogdb_functions", functions_table)
+            .raw_set("__frogdb_functions", functions_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set functions table: {}", e)))?;
 
         // Get the redis table and add register_function
