@@ -115,7 +115,10 @@ impl ExperimentEngine {
 }
 
 /// Compute deltas between two snapshots of (name, count) pairs.
-fn compute_deltas(before: &[(String, u64)], after: &[(String, u64)]) -> Vec<(String, u64)> {
+pub(crate) fn compute_deltas(
+    before: &[(String, u64)],
+    after: &[(String, u64)],
+) -> Vec<(String, u64)> {
     after
         .iter()
         .map(|(name, after_count)| {
@@ -127,4 +130,44 @@ fn compute_deltas(before: &[(String, u64)], after: &[(String, u64)]) -> Vec<(Str
             (name.clone(), after_count.saturating_sub(before_count))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_deltas_empty() {
+        let result = compute_deltas(&[], &[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn compute_deltas_basic() {
+        let before = vec![("a".to_string(), 5), ("b".to_string(), 10)];
+        let after = vec![("a".to_string(), 8), ("b".to_string(), 15)];
+        let deltas = compute_deltas(&before, &after);
+        assert_eq!(deltas.len(), 2);
+        let a = deltas.iter().find(|(n, _)| n == "a").unwrap();
+        let b = deltas.iter().find(|(n, _)| n == "b").unwrap();
+        assert_eq!(a.1, 3);
+        assert_eq!(b.1, 5);
+    }
+
+    #[test]
+    fn compute_deltas_new_key_in_after() {
+        let before: Vec<(String, u64)> = vec![];
+        let after = vec![("new_key".to_string(), 42)];
+        let deltas = compute_deltas(&before, &after);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].1, 42);
+    }
+
+    #[test]
+    fn compute_deltas_saturating_sub() {
+        let before = vec![("counter".to_string(), 100)];
+        let after = vec![("counter".to_string(), 50)]; // counter went backwards
+        let deltas = compute_deltas(&before, &after);
+        assert_eq!(deltas[0].1, 0); // saturating_sub
+    }
 }
