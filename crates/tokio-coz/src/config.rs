@@ -90,3 +90,52 @@ impl ProfilerConfig {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_values() {
+        let config = ProfilerConfig::default();
+        assert_eq!(config.experiment_duration, Duration::from_secs(2));
+        assert_eq!(
+            config.speedup_steps,
+            (0u8..=10).map(|i| i * 10).collect::<Vec<u8>>()
+        );
+        assert_eq!(config.min_delay, Duration::from_micros(1));
+        assert_eq!(config.max_delay, Duration::from_millis(100));
+        assert_eq!(
+            config.output_path,
+            Some("tokio-coz-profile.json".to_string())
+        );
+        assert_eq!(config.rounds_per_experiment, 3);
+        assert!(matches!(
+            config.selection_strategy,
+            SelectionStrategy::Random
+        ));
+    }
+
+    #[test]
+    fn builder_chaining() {
+        let config = ProfilerConfig::new()
+            .experiment_duration(Duration::from_secs(5))
+            .speedup_steps(vec![0, 50, 100])
+            .min_delay(Duration::from_micros(10))
+            .max_delay(Duration::from_millis(50))
+            .output_path("my-output.json")
+            .rounds_per_experiment(5)
+            .selection_strategy(SelectionStrategy::RoundRobin);
+
+        assert_eq!(config.experiment_duration, Duration::from_secs(5));
+        assert_eq!(config.speedup_steps, vec![0, 50, 100]);
+        assert_eq!(config.min_delay, Duration::from_micros(10));
+        assert_eq!(config.max_delay, Duration::from_millis(50));
+        assert_eq!(config.output_path, Some("my-output.json".to_string()));
+        assert_eq!(config.rounds_per_experiment, 5);
+        assert!(matches!(
+            config.selection_strategy,
+            SelectionStrategy::RoundRobin
+        ));
+    }
+}

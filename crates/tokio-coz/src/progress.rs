@@ -120,6 +120,87 @@ macro_rules! begin {
     };
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn throughput_increment_and_snapshot() {
+        let registry = ProgressPointRegistry::new();
+        for _ in 0..5 {
+            registry.record_throughput("a");
+        }
+        let snapshot = registry.snapshot_throughput();
+        let count = snapshot.iter().find(|(n, _)| n == "a").unwrap().1;
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn multiple_progress_points() {
+        let registry = ProgressPointRegistry::new();
+        registry.record_throughput("foo");
+        registry.record_throughput("foo");
+        registry.record_throughput("bar");
+
+        let snapshot = registry.snapshot_throughput();
+        let foo = snapshot.iter().find(|(n, _)| n == "foo").unwrap().1;
+        let bar = snapshot.iter().find(|(n, _)| n == "bar").unwrap().1;
+        assert_eq!(foo, 2);
+        assert_eq!(bar, 1);
+    }
+
+    #[test]
+    fn latency_begin_end_independent() {
+        let registry = ProgressPointRegistry::new();
+        for _ in 0..3 {
+            registry.record_begin("op");
+        }
+        for _ in 0..2 {
+            registry.record_end("op");
+        }
+
+        let begin_count = registry
+            .snapshot_latency_begin()
+            .iter()
+            .find(|(n, _)| n == "op")
+            .unwrap()
+            .1;
+        let end_count = registry
+            .snapshot_latency_end()
+            .iter()
+            .find(|(n, _)| n == "op")
+            .unwrap()
+            .1;
+        assert_eq!(begin_count, 3);
+        assert_eq!(end_count, 2);
+    }
+
+    #[test]
+    fn snapshot_is_point_in_time() {
+        let registry = ProgressPointRegistry::new();
+        registry.record_throughput("x");
+        let count1 = registry
+            .snapshot_throughput()
+            .iter()
+            .find(|(n, _)| n == "x")
+            .unwrap()
+            .1;
+
+        registry.record_throughput("x");
+        registry.record_throughput("x");
+        let count2 = registry
+            .snapshot_throughput()
+            .iter()
+            .find(|(n, _)| n == "x")
+            .unwrap()
+            .1;
+
+        assert_eq!(count1, 1);
+        assert_eq!(count2, 3);
+        assert!(count2 > count1);
+    }
+}
+
 /// Record the end of a latency measurement.
 #[macro_export]
 macro_rules! end {

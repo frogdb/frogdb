@@ -78,3 +78,48 @@ pub fn print_summary(profiles: &[SpanProfile]) {
     println!();
     println!("{}", "=".repeat(72));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::results::{SpanProfile, SpeedupDataPoint};
+    use std::collections::HashMap;
+
+    #[test]
+    fn write_json_report_roundtrip() {
+        let mut curves = HashMap::new();
+        curves.insert(
+            "requests".to_string(),
+            vec![
+                SpeedupDataPoint {
+                    speedup_pct: 0,
+                    avg_throughput_rate: 100.0,
+                    sample_count: 2,
+                },
+                SpeedupDataPoint {
+                    speedup_pct: 100,
+                    avg_throughput_rate: 150.0,
+                    sample_count: 2,
+                },
+            ],
+        );
+        let profiles = vec![SpanProfile {
+            span_name: "my_span".to_string(),
+            curves,
+        }];
+
+        let tmp_path = std::env::temp_dir().join("tokio_coz_test_report.json");
+        let tmp_str = tmp_path.to_str().unwrap();
+
+        write_json_report(&profiles, tmp_str).expect("write should succeed");
+
+        let content = std::fs::read_to_string(&tmp_path).expect("read should succeed");
+        let _ = std::fs::remove_file(&tmp_path);
+
+        let json: serde_json::Value = serde_json::from_str(&content).expect("valid JSON");
+        let spans = json["spans"].as_array().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0]["span_name"].as_str().unwrap(), "my_span");
+        assert!(spans[0]["curves"]["requests"].is_array());
+    }
+}

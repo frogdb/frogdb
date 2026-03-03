@@ -106,6 +106,95 @@ impl SharedState {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::thread;
+
+    #[test]
+    fn activate_deactivate_experiment() {
+        let state = SharedState::new();
+        let key = state.intern_span("my_span");
+
+        state.activate_experiment(key, 50);
+        assert!(state.experiment_active.load(Ordering::Relaxed));
+        assert_eq!(state.target_span.load(Ordering::Relaxed), key.0);
+        assert_eq!(state.speedup_pct.load(Ordering::Relaxed), 50);
+        let gen_after_activate = state.generation.load(Ordering::Relaxed);
+        assert!(gen_after_activate > 0);
+
+        state.deactivate_experiment();
+        assert!(!state.experiment_active.load(Ordering::Relaxed));
+        assert_eq!(state.global_delay_ns.load(Ordering::Relaxed), 0);
+        let gen_after_deactivate = state.generation.load(Ordering::Relaxed);
+        assert!(gen_after_deactivate > gen_after_activate);
+    }
+
+    #[test]
+    fn deactivate_clears_delay_credit() {
+        let state = SharedState::new();
+        state.global_delay_ns.store(12345, Ordering::Relaxed);
+        state.deactivate_experiment();
+        assert_eq!(state.global_delay_ns.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn generation_increments_on_transitions() {
+        let state = SharedState::new();
+        let key = state.intern_span("span");
+
+        let g0 = state.generation.load(Ordering::Relaxed);
+        state.activate_experiment(key, 10);
+        let g1 = state.generation.load(Ordering::Relaxed);
+        assert!(g1 > g0);
+
+        state.deactivate_experiment();
+        let g2 = state.generation.load(Ordering::Relaxed);
+        assert!(g2 > g1);
+
+        state.activate_experiment(key, 20);
+        let g3 = state.generation.load(Ordering::Relaxed);
+        assert!(g3 > g2);
+    }
+
+    #[test]
+    fn intern_span_concurrent_same_name() {
+        let state = Arc::new(SharedState::new());
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let s = Arc::clone(&state);
+                thread::spawn(move || s.intern_span("shared_span"))
+            })
+            .collect();
+        let keys: Vec<SpanKey> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert!(keys.windows(2).all(|w| w[0] == w[1]));
+    }
+
+    #[test]
+    fn all_span_keys_returns_all_interned() {
+        let state = SharedState::new();
+        let k1 = state.intern_span("span_a");
+        let k2 = state.intern_span("span_b");
+        let k3 = state.intern_span("span_c");
+
+        let keys = state.all_span_keys();
+        assert!(keys.contains(&k1));
+        assert!(keys.contains(&k2));
+        assert!(keys.contains(&k3));
+        assert_eq!(keys.len(), 3);
+    }
+
+    #[test]
+    fn span_name_reverse_lookup() {
+        let state = SharedState::new();
+        let key = state.intern_span("my_span");
+        assert_eq!(state.span_name(key), Some("my_span".to_string()));
+        assert_eq!(state.span_name(SpanKey::NONE), None);
+    }
+}
+
 // ── Thread-local state ──────────────────────────────────────────────────────
 
 thread_local! {
