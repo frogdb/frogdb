@@ -68,6 +68,7 @@ tempfile.workspace = true
 reqwest = { version = "0.12", features = ["json"] }
 proptest.workspace = true
 frogdb-testing.workspace = true
+frogdb-test-harness.workspace = true
 rstest = "0.23"
 frogdb-telemetry = { workspace = true, features = ["testing"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
