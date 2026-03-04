@@ -14,6 +14,12 @@ pub struct LoggingConfig {
     /// Log format (pretty, json).
     #[serde(default = "default_log_format")]
     pub format: String,
+
+    /// Enable per-request tracing spans (cmd_read, cmd_execute, cmd_route, etc.).
+    /// Disabled by default for production performance (~7% CPU savings).
+    /// Enable for debugging or when distributed tracing is needed.
+    #[serde(default)]
+    pub per_request_spans: bool,
 }
 
 fn default_log_level() -> String {
@@ -29,6 +35,7 @@ impl Default for LoggingConfig {
         Self {
             level: default_log_level(),
             format: default_log_format(),
+            per_request_spans: false,
         }
     }
 }

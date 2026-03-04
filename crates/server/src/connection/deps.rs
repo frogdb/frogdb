@@ -4,6 +4,7 @@
 //! logical groups, making the handler easier to construct and understand.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use frogdb_core::{
@@ -152,6 +153,9 @@ pub struct ConnectionConfig {
 
     /// Memory diagnostics configuration.
     pub memory_diag_config: MemoryDiagConfig,
+
+    /// Whether per-request tracing spans are enabled (shared with ConfigManager).
+    pub per_request_spans: Arc<AtomicBool>,
 }
 
 impl ConnectionConfig {
@@ -166,6 +170,7 @@ impl ConnectionConfig {
             admin_enabled: false,
             hotshards_config: HotShardConfig::default(),
             memory_diag_config: MemoryDiagConfig::default(),
+            per_request_spans: Arc::new(AtomicBool::new(false)),
         }
     }
 }

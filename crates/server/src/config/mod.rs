@@ -54,7 +54,7 @@ use figment::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*, reload};
 
 /// Main configuration struct.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -408,54 +408,147 @@ impl Config {
     }
 
     /// Initialize logging based on configuration.
-    pub fn init_logging(&self) -> Result<()> {
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(&self.logging.level));
+    ///
+    /// When `RUST_LOG` is set, uses `EnvFilter` for granular directive-based
+    /// filtering (developer/debug mode). Otherwise uses `LevelFilter` which is
+    /// a simple integer comparison — eliminating ~5% CPU overhead from
+    /// `EnvFilter::cares_about_span` regex matching on the hot path.
+    ///
+    /// Returns a reload handle so `CONFIG SET loglevel` can change the level
+    /// at runtime.
+    pub fn init_logging(&self) -> Result<crate::runtime_config::LogReloadHandle> {
+        use crate::runtime_config::LogReloadHandle;
 
-        match self.logging.format.to_lowercase().as_str() {
-            "json" => {
-                tracing_subscriber::registry()
-                    .with(filter)
-                    .with(fmt::layer().json())
-                    .init();
+        if std::env::var("RUST_LOG").is_ok() {
+            // Developer/debug mode: use EnvFilter for granular per-module filtering
+            let env_filter = EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(&self.logging.level));
+            let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
+
+            match self.logging.format.to_lowercase().as_str() {
+                "json" => {
+                    tracing_subscriber::registry()
+                        .with(filter_layer)
+                        .with(fmt::layer().json())
+                        .init();
+                }
+                _ => {
+                    tracing_subscriber::registry()
+                        .with(filter_layer)
+                        .with(fmt::layer())
+                        .init();
+                }
             }
-            _ => {
-                tracing_subscriber::registry()
-                    .with(filter)
-                    .with(fmt::layer())
-                    .init();
+
+            Ok(LogReloadHandle::new(Box::new(move |level: &str| {
+                let filter =
+                    EnvFilter::try_new(level).map_err(|e| format!("invalid EnvFilter: {e}"))?;
+                reload_handle
+                    .reload(filter)
+                    .map_err(|e| format!("reload failed: {e}"))
+            })))
+        } else {
+            // Production mode: use LevelFilter (fast integer comparison)
+            let level: LevelFilter = self.logging.level.parse().unwrap_or(LevelFilter::INFO);
+            let (filter_layer, reload_handle) = reload::Layer::new(level);
+
+            match self.logging.format.to_lowercase().as_str() {
+                "json" => {
+                    tracing_subscriber::registry()
+                        .with(filter_layer)
+                        .with(fmt::layer().json())
+                        .init();
+                }
+                _ => {
+                    tracing_subscriber::registry()
+                        .with(filter_layer)
+                        .with(fmt::layer())
+                        .init();
+                }
             }
+
+            Ok(LogReloadHandle::new(Box::new(move |level: &str| {
+                let filter: LevelFilter = level
+                    .parse()
+                    .map_err(|e| format!("invalid LevelFilter: {e}"))?;
+                reload_handle
+                    .reload(filter)
+                    .map_err(|e| format!("reload failed: {e}"))
+            })))
         }
-
-        Ok(())
     }
 
     /// Initialize logging with an additional tracing layer (e.g. for causal profiling).
-    pub fn init_logging_with_layer<L>(&self, extra_layer: L) -> Result<()>
+    ///
+    /// Same EnvFilter/LevelFilter two-tier logic as [`init_logging`](Self::init_logging).
+    pub fn init_logging_with_layer<L>(
+        &self,
+        extra_layer: L,
+    ) -> Result<crate::runtime_config::LogReloadHandle>
     where
         L: tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
     {
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(&self.logging.level));
+        use crate::runtime_config::LogReloadHandle;
 
-        match self.logging.format.to_lowercase().as_str() {
-            "json" => {
-                tracing_subscriber::registry()
-                    .with(extra_layer)
-                    .with(filter)
-                    .with(fmt::layer().json())
-                    .init();
+        if std::env::var("RUST_LOG").is_ok() {
+            let env_filter = EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(&self.logging.level));
+            let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
+
+            match self.logging.format.to_lowercase().as_str() {
+                "json" => {
+                    tracing_subscriber::registry()
+                        .with(extra_layer)
+                        .with(filter_layer)
+                        .with(fmt::layer().json())
+                        .init();
+                }
+                _ => {
+                    tracing_subscriber::registry()
+                        .with(extra_layer)
+                        .with(filter_layer)
+                        .with(fmt::layer())
+                        .init();
+                }
             }
-            _ => {
-                tracing_subscriber::registry()
-                    .with(extra_layer)
-                    .with(filter)
-                    .with(fmt::layer())
-                    .init();
+
+            Ok(LogReloadHandle::new(Box::new(move |level: &str| {
+                let filter =
+                    EnvFilter::try_new(level).map_err(|e| format!("invalid EnvFilter: {e}"))?;
+                reload_handle
+                    .reload(filter)
+                    .map_err(|e| format!("reload failed: {e}"))
+            })))
+        } else {
+            let level: LevelFilter = self.logging.level.parse().unwrap_or(LevelFilter::INFO);
+            let (filter_layer, reload_handle) = reload::Layer::new(level);
+
+            match self.logging.format.to_lowercase().as_str() {
+                "json" => {
+                    tracing_subscriber::registry()
+                        .with(extra_layer)
+                        .with(filter_layer)
+                        .with(fmt::layer().json())
+                        .init();
+                }
+                _ => {
+                    tracing_subscriber::registry()
+                        .with(extra_layer)
+                        .with(filter_layer)
+                        .with(fmt::layer())
+                        .init();
+                }
             }
+
+            Ok(LogReloadHandle::new(Box::new(move |level: &str| {
+                let filter: LevelFilter = level
+                    .parse()
+                    .map_err(|e| format!("invalid LevelFilter: {e}"))?;
+                reload_handle
+                    .reload(filter)
+                    .map_err(|e| format!("reload failed: {e}"))
+            })))
         }
-
-        Ok(())
     }
 
     /// Generate default TOML configuration.
@@ -486,6 +579,11 @@ level = "info"
 
 # Log format (pretty, json)
 format = "pretty"
+
+# Enable per-request tracing spans (cmd_read, cmd_execute, cmd_route, etc.)
+# Disabled by default for production performance (~7% CPU savings).
+# Enable for debugging or when distributed tracing is needed.
+per_request_spans = false
 
 [persistence]
 # Whether persistence is enabled

@@ -157,7 +157,11 @@ pub async fn real_frogdb_server(num_shards: usize) -> Result<(), BoxError> {
         ..Default::default()
     };
 
-    let server = Server::new(config).await?;
+    let server = Server::new(
+        config,
+        frogdb_server::runtime_config::LogReloadHandle::noop(),
+    )
+    .await?;
     server.run_until(std::future::pending::<()>()).await?;
 
     Ok(())

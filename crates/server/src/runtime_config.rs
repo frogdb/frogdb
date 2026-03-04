@@ -7,14 +7,46 @@
 //! - Parameter registry with metadata for each configurable parameter
 
 use std::fmt;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use frogdb_core::{EvictionConfig, EvictionPolicy, ShardMessage, glob_match};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
-use tracing_subscriber::{EnvFilter, reload};
 
 use crate::config::Config;
+
+/// Type-erased closure for reloading the log filter.
+type ReloadFn = Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
+/// Handle for reloading the log filter at runtime.
+///
+/// Uses a type-erased closure internally so it works with both `LevelFilter`
+/// (production fast-path) and `EnvFilter` (RUST_LOG developer mode) regardless
+/// of the subscriber layer stack.
+pub struct LogReloadHandle {
+    reload_fn: ReloadFn,
+}
+
+impl LogReloadHandle {
+    /// Create a new reload handle wrapping a closure.
+    pub fn new(reload_fn: ReloadFn) -> Self {
+        Self { reload_fn }
+    }
+
+    /// Create a no-op handle (for tests or when logging isn't reloadable).
+    pub fn noop() -> Self {
+        Self {
+            reload_fn: Box::new(|_| Ok(())),
+        }
+    }
+
+    /// Reload the log filter with a new level string (e.g. "info", "debug").
+    pub fn reload_level(&self, level: &str) -> Result<(), String> {
+        (self.reload_fn)(level)
+    }
+}
 
 /// Error type for CONFIG operations.
 #[derive(Debug, Clone)]
@@ -140,9 +172,6 @@ pub struct ParamMeta {
     pub setter: Option<ParamSetter>,
 }
 
-/// Type alias for the log reload handle.
-pub type LogReloadHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
-
 /// Configuration manager for CONFIG GET/SET commands.
 pub struct ConfigManager {
     /// Mutable runtime configuration.
@@ -150,7 +179,10 @@ pub struct ConfigManager {
     /// Immutable static configuration.
     static_config: StaticConfig,
     /// Log level reload handle (optional, not available in tests).
-    log_reload_handle: Option<Arc<RwLock<Option<LogReloadHandle>>>>,
+    log_reload_handle: Option<LogReloadHandle>,
+    /// Whether per-request tracing spans are enabled.
+    /// Shared with all connections and shard workers via Arc.
+    per_request_spans: Arc<AtomicBool>,
     /// Parameter metadata registry.
     params: Vec<ParamMeta>,
     /// Optional notifier for shard config updates.
@@ -167,14 +199,20 @@ impl ConfigManager {
             runtime: Arc::new(RwLock::new(runtime)),
             static_config,
             log_reload_handle: None,
+            per_request_spans: Arc::new(AtomicBool::new(config.logging.per_request_spans)),
             params: Self::build_param_registry(),
             shard_notifier: RwLock::new(None),
         }
     }
 
+    /// Get the shared per_request_spans flag for connections and shard workers.
+    pub fn per_request_spans_flag(&self) -> Arc<AtomicBool> {
+        self.per_request_spans.clone()
+    }
+
     /// Set the log reload handle for dynamic log level changes.
     pub fn set_log_reload_handle(&mut self, handle: LogReloadHandle) {
-        self.log_reload_handle = Some(Arc::new(RwLock::new(Some(handle))));
+        self.log_reload_handle = Some(handle);
     }
 
     /// Get the data directory path.
@@ -297,13 +335,10 @@ impl ConfigManager {
                     mgr.runtime.write().unwrap().loglevel = lower.clone();
 
                     // Apply log level change if handle is available
-                    if let Some(ref handle_lock) = mgr.log_reload_handle {
-                        let guard = handle_lock.read().unwrap();
-                        if let Some(ref handle) = *guard {
-                            let filter = EnvFilter::try_new(&lower)
-                                .unwrap_or_else(|_| EnvFilter::new("info"));
-                            let _ = handle.reload(filter);
-                        }
+                    if let Some(ref handle) = mgr.log_reload_handle
+                        && let Err(e) = handle.reload_level(&lower)
+                    {
+                        warn!(error = %e, "Failed to reload log level");
                     }
 
                     Ok(())
@@ -421,6 +456,34 @@ impl ConfigManager {
                         message: "must be a non-negative integer".to_string(),
                     })?;
                     mgr.runtime.write().unwrap().slowlog_max_arg_len = parsed;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "per-request-spans",
+                mutable: true,
+                noop: false,
+                getter: |mgr| {
+                    if mgr.per_request_spans.load(Ordering::Relaxed) {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    }
+                },
+                setter: Some(|mgr, val| {
+                    let lower = val.to_lowercase();
+                    let enabled = match lower.as_str() {
+                        "yes" | "true" | "1" | "on" => true,
+                        "no" | "false" | "0" | "off" => false,
+                        _ => {
+                            return Err(ConfigError::InvalidValue {
+                                param: "per-request-spans".to_string(),
+                                message: "must be yes/no".to_string(),
+                            });
+                        }
+                    };
+                    mgr.per_request_spans.store(enabled, Ordering::Relaxed);
+                    info!(enabled, "Per-request tracing spans toggled");
                     Ok(())
                 }),
             },

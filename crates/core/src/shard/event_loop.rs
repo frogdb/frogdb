@@ -41,10 +41,14 @@ impl ShardWorker {
                                 continue;
                             }
                             let shard_id = self.shard_id();
-                            let response = self
-                                .execute_command(command.as_ref(), conn_id, protocol_version)
-                                .instrument(tracing::info_span!("shard_execute", shard_id))
-                                .await;
+                            let response = if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
+                                self.execute_command(command.as_ref(), conn_id, protocol_version)
+                                    .instrument(tracing::info_span!("shard_execute", shard_id))
+                                    .await
+                            } else {
+                                self.execute_command(command.as_ref(), conn_id, protocol_version)
+                                    .await
+                            };
                             let _ = response_tx.send(response);
                         }
                         ShardMessage::ScatterRequest { request_id: _, keys, operation, conn_id, response_tx } => {

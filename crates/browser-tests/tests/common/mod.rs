@@ -37,7 +37,12 @@ impl TestServer {
         config.metrics.port = 0;
 
         // Construct server before spawning to read actual bound addresses (no TOCTOU)
-        let server = Server::new(config).await.unwrap();
+        let server = Server::new(
+            config,
+            frogdb_server::runtime_config::LogReloadHandle::noop(),
+        )
+        .await
+        .unwrap();
         let addr = server.local_addr().unwrap();
         let metrics_addr = server.metrics_addr().unwrap().unwrap();
 

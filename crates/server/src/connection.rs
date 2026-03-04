@@ -169,6 +169,9 @@ pub struct ConnectionHandler {
 
     /// Reusable buffer for RESP3 encoding to avoid per-response allocation.
     resp3_buf: BytesMut,
+
+    /// Whether per-request tracing spans are enabled (shared AtomicBool).
+    per_request_spans: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Result of processing a single command frame.
@@ -258,6 +261,7 @@ impl ConnectionHandler {
             primary_replication_handler: cluster.primary_replication_handler,
             pending_psync_handoff: None,
             resp3_buf: BytesMut::new(),
+            per_request_spans: config.per_request_spans,
         }
     }
 
@@ -332,6 +336,7 @@ impl ConnectionHandler {
             admin_enabled,
             hotshards_config,
             memory_diag_config,
+            per_request_spans: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let observability = ObservabilityDeps {
             shared_tracer,
@@ -579,10 +584,17 @@ impl ConnectionHandler {
             .map(|t| t.start_request_span(&cmd_name, self.state.id));
 
         // Route and execute (with transaction and pub/sub handling)
-        let responses = self
-            .route_and_execute_with_transaction(&cmd, &cmd_name)
-            .instrument(tracing::info_span!("cmd_execute", cmd = %cmd_name))
-            .await;
+        let responses = if self
+            .per_request_spans
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.route_and_execute_with_transaction(&cmd, &cmd_name)
+                .instrument(tracing::info_span!("cmd_execute", cmd = %cmd_name))
+                .await
+        } else {
+            self.route_and_execute_with_transaction(&cmd, &cmd_name)
+                .await
+        };
 
         // Check for PSYNC_HANDOFF signal
         if let Some(handoff_params) = Self::extract_psync_handoff(&responses) {
@@ -689,7 +701,13 @@ impl ConnectionHandler {
                 }
 
                 // Handle client commands
-                frame_result = self.framed.next().instrument(tracing::info_span!("cmd_read")) => {
+                frame_result = async {
+                    if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
+                        self.framed.next().instrument(tracing::info_span!("cmd_read")).await
+                    } else {
+                        self.framed.next().await
+                    }
+                } => {
                     let frame = match frame_result {
                         Some(Ok(frame)) => frame,
                         Some(Err(e)) => {

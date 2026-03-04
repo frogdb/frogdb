@@ -1985,14 +1985,13 @@ impl ListValue {
         false
     }
 
-    /// Get a range of elements (inclusive, supports negative indices).
-    pub fn range(&self, start: i64, end: i64) -> Vec<Bytes> {
+    /// Resolve start/end into (skip, take) counts. Returns (0, 0) for empty ranges.
+    fn resolve_range(&self, start: i64, end: i64) -> (usize, usize) {
         let len = self.len() as i64;
         if len == 0 {
-            return vec![];
+            return (0, 0);
         }
 
-        // Convert negative indices
         let start = if start < 0 {
             (len + start).max(0) as usize
         } else {
@@ -2006,17 +2005,22 @@ impl ListValue {
         };
 
         if end < 0 || start > end as usize {
-            return vec![];
+            return (0, 0);
         }
 
-        let end = end as usize;
+        (start, end as usize - start + 1)
+    }
 
-        self.data
-            .iter()
-            .skip(start)
-            .take(end - start + 1)
-            .cloned()
-            .collect()
+    /// Get a range of elements (inclusive, supports negative indices).
+    pub fn range(&self, start: i64, end: i64) -> Vec<Bytes> {
+        let (skip, take) = self.resolve_range(start, end);
+        self.data.iter().skip(skip).take(take).cloned().collect()
+    }
+
+    /// Iterate over a range of elements without intermediate allocation.
+    pub fn range_iter(&self, start: i64, end: i64) -> impl Iterator<Item = &Bytes> {
+        let (skip, take) = self.resolve_range(start, end);
+        self.data.iter().skip(skip).take(take)
     }
 
     /// Trim the list to only contain elements in the specified range.
