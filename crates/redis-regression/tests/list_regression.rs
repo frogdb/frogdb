@@ -7,9 +7,15 @@ async fn lpush_rpush_lpop_rpop_basics() {
     let mut client = server.connect().await;
 
     // RPUSH returns list length
-    assert_eq!(unwrap_integer(&client.command(&["RPUSH", "mylist", "a", "b", "c"]).await), 3);
+    assert_eq!(
+        unwrap_integer(&client.command(&["RPUSH", "mylist", "a", "b", "c"]).await),
+        3
+    );
     // LPUSH prepends
-    assert_eq!(unwrap_integer(&client.command(&["LPUSH", "mylist", "z"]).await), 4);
+    assert_eq!(
+        unwrap_integer(&client.command(&["LPUSH", "mylist", "z"]).await),
+        4
+    );
 
     // LPOP removes from head
     assert_bulk_eq(&client.command(&["LPOP", "mylist"]).await, b"z");
@@ -17,7 +23,10 @@ async fn lpush_rpush_lpop_rpop_basics() {
     assert_bulk_eq(&client.command(&["RPOP", "mylist"]).await, b"c");
 
     // LLEN
-    assert_eq!(unwrap_integer(&client.command(&["LLEN", "mylist"]).await), 2);
+    assert_eq!(
+        unwrap_integer(&client.command(&["LLEN", "mylist"]).await),
+        2
+    );
 }
 
 #[tokio::test]
@@ -25,7 +34,9 @@ async fn lpop_rpop_with_count() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["RPUSH", "mylist", "a", "b", "c", "d"]).await;
+    client
+        .command(&["RPUSH", "mylist", "a", "b", "c", "d"])
+        .await;
 
     let resp = client.command(&["LPOP", "mylist", "2"]).await;
     let items = unwrap_array(resp);
@@ -70,10 +81,15 @@ async fn lpos_finds_element_position() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["RPUSH", "mylist", "a", "b", "a", "c"]).await;
+    client
+        .command(&["RPUSH", "mylist", "a", "b", "a", "c"])
+        .await;
 
     // First occurrence
-    assert_eq!(unwrap_integer(&client.command(&["LPOS", "mylist", "a"]).await), 0);
+    assert_eq!(
+        unwrap_integer(&client.command(&["LPOS", "mylist", "a"]).await),
+        0
+    );
     // RANK 2 → second occurrence
     assert_eq!(
         unwrap_integer(&client.command(&["LPOS", "mylist", "a", "RANK", "2"]).await),
@@ -92,7 +108,9 @@ async fn linsert_before_and_after() {
 
     client.command(&["RPUSH", "mylist", "a", "c"]).await;
 
-    let resp = client.command(&["LINSERT", "mylist", "BEFORE", "c", "b"]).await;
+    let resp = client
+        .command(&["LINSERT", "mylist", "BEFORE", "c", "b"])
+        .await;
     assert_eq!(unwrap_integer(&resp), 3);
 
     let resp = client.command(&["LRANGE", "mylist", "0", "-1"]).await;
@@ -102,7 +120,9 @@ async fn linsert_before_and_after() {
     assert_bulk_eq(&items[2], b"c");
 
     // AFTER
-    client.command(&["LINSERT", "mylist", "AFTER", "b", "b2"]).await;
+    client
+        .command(&["LINSERT", "mylist", "AFTER", "b", "b2"])
+        .await;
     let resp = client.command(&["LRANGE", "mylist", "0", "-1"]).await;
     let items = unwrap_array(resp);
     assert_bulk_eq(&items[2], b"b2");
@@ -127,7 +147,9 @@ async fn ltrim_range() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["RPUSH", "mylist", "a", "b", "c", "d", "e"]).await;
+    client
+        .command(&["RPUSH", "mylist", "a", "b", "c", "d", "e"])
+        .await;
     assert_ok(&client.command(&["LTRIM", "mylist", "1", "3"]).await);
 
     let resp = client.command(&["LRANGE", "mylist", "0", "-1"]).await;
@@ -142,15 +164,23 @@ async fn lrem_by_value() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["RPUSH", "mylist", "a", "b", "a", "c", "a"]).await;
+    client
+        .command(&["RPUSH", "mylist", "a", "b", "a", "c", "a"])
+        .await;
 
     // Remove 2 occurrences from head
     let resp = client.command(&["LREM", "mylist", "2", "a"]).await;
     assert_eq!(unwrap_integer(&resp), 2);
-    assert_eq!(unwrap_integer(&client.command(&["LLEN", "mylist"]).await), 3);
+    assert_eq!(
+        unwrap_integer(&client.command(&["LLEN", "mylist"]).await),
+        3
+    );
 
     // One "a" remains
-    assert_eq!(unwrap_integer(&client.command(&["LPOS", "mylist", "a"]).await), 2);
+    assert_eq!(
+        unwrap_integer(&client.command(&["LPOS", "mylist", "a"]).await),
+        2
+    );
 }
 
 #[tokio::test]
@@ -161,12 +191,16 @@ async fn lmove_between_lists() {
     client.command(&["RPUSH", "{l}src", "a", "b", "c"]).await;
 
     // Move left→left
-    let resp = client.command(&["LMOVE", "{l}src", "{l}dst", "LEFT", "LEFT"]).await;
+    let resp = client
+        .command(&["LMOVE", "{l}src", "{l}dst", "LEFT", "LEFT"])
+        .await;
     assert_bulk_eq(&resp, b"a");
     assert_bulk_eq(&client.command(&["LINDEX", "{l}dst", "0"]).await, b"a");
 
     // Move right→right
-    let resp = client.command(&["LMOVE", "{l}src", "{l}dst", "RIGHT", "RIGHT"]).await;
+    let resp = client
+        .command(&["LMOVE", "{l}src", "{l}dst", "RIGHT", "RIGHT"])
+        .await;
     assert_bulk_eq(&resp, b"c");
 }
 
@@ -178,7 +212,9 @@ async fn lmpop_from_multiple_lists() {
     client.command(&["RPUSH", "{l}a", "1", "2"]).await;
     client.command(&["RPUSH", "{l}b", "3", "4"]).await;
 
-    let resp = client.command(&["LMPOP", "2", "{l}a", "{l}b", "LEFT"]).await;
+    let resp = client
+        .command(&["LMPOP", "2", "{l}a", "{l}b", "LEFT"])
+        .await;
     let parts = unwrap_array(resp);
     // Returns [key, [elements]]
     assert_eq!(parts.len(), 2);

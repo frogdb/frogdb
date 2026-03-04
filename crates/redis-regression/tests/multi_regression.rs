@@ -1,6 +1,6 @@
+use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
-use frogdb_protocol::Response;
 
 // ---------------------------------------------------------------------------
 // Basic MULTI / EXEC / DISCARD
@@ -188,12 +188,7 @@ async fn exec_fails_on_watched_key_modified_one_of_five() {
     // Watch all 5 keys (use hash tag so all land on same slot)
     assert_ok(
         &c1.command(&[
-            "WATCH",
-            "{k}key1",
-            "{k}key2",
-            "{k}key3",
-            "{k}key4",
-            "{k}key5",
+            "WATCH", "{k}key1", "{k}key2", "{k}key3", "{k}key4", "{k}key5",
         ])
         .await,
     );
@@ -482,7 +477,10 @@ async fn flushdb_does_not_touch_unaffected_watched_keys() {
     let _resp = c1.command(&["EXEC"]).await;
     // We just verify the connection is still usable
     let r = c1.command(&["PING"]).await;
-    assert!(matches!(&r, Response::Simple(s) if s == "PONG"), "got {r:?}");
+    assert!(
+        matches!(&r, Response::Simple(s) if s == "PONG"),
+        "got {r:?}"
+    );
 }
 
 #[tokio::test]
@@ -496,7 +494,10 @@ async fn flushall_watching_several_keys() {
         c1.command(&["SET", &format!("key{i}"), &i.to_string()])
             .await;
     }
-    assert_ok(&c1.command(&["WATCH", "key1", "key2", "key3", "key4", "key5"]).await);
+    assert_ok(
+        &c1.command(&["WATCH", "key1", "key2", "key3", "key4", "key5"])
+            .await,
+    );
 
     c2.command(&["FLUSHALL"]).await;
 

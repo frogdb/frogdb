@@ -15,11 +15,25 @@ async fn xgroup_create_and_xreadgroup_basics() {
     client.command(&["XADD", "stream", "*", "k", "v2"]).await;
 
     // Create consumer group
-    assert_ok(&client.command(&["XGROUP", "CREATE", "stream", "grp", "0"]).await);
+    assert_ok(
+        &client
+            .command(&["XGROUP", "CREATE", "stream", "grp", "0"])
+            .await,
+    );
 
     // Read via consumer group
     let resp = client
-        .command(&["XREADGROUP", "GROUP", "grp", "consumer1", "COUNT", "10", "STREAMS", "stream", ">"])
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "grp",
+            "consumer1",
+            "COUNT",
+            "10",
+            "STREAMS",
+            "stream",
+            ">",
+        ])
         .await;
     let streams = unwrap_array(resp);
     assert_eq!(streams.len(), 1);
@@ -40,11 +54,23 @@ async fn multiple_consumers_track_independently() {
 
     client.command(&["XADD", "stream", "*", "k", "v1"]).await;
     client.command(&["XADD", "stream", "*", "k", "v2"]).await;
-    client.command(&["XGROUP", "CREATE", "stream", "grp", "0"]).await;
+    client
+        .command(&["XGROUP", "CREATE", "stream", "grp", "0"])
+        .await;
 
     // Consumer 1 reads 1 entry
     let resp = client
-        .command(&["XREADGROUP", "GROUP", "grp", "c1", "COUNT", "1", "STREAMS", "stream", ">"])
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "grp",
+            "c1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "stream",
+            ">",
+        ])
         .await;
     let streams = unwrap_array(resp);
     let stream_entry = unwrap_array(streams[0].clone());
@@ -53,7 +79,17 @@ async fn multiple_consumers_track_independently() {
 
     // Consumer 2 reads remaining entry
     let resp = client
-        .command(&["XREADGROUP", "GROUP", "grp", "c2", "COUNT", "10", "STREAMS", "stream", ">"])
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "grp",
+            "c2",
+            "COUNT",
+            "10",
+            "STREAMS",
+            "stream",
+            ">",
+        ])
         .await;
     let streams = unwrap_array(resp);
     let stream_entry = unwrap_array(streams[0].clone());
@@ -67,8 +103,22 @@ async fn xack_acknowledges_entries() {
     let mut client = server.connect().await;
 
     let id1 = parse_id(&client.command(&["XADD", "stream", "*", "k", "v"]).await);
-    client.command(&["XGROUP", "CREATE", "stream", "grp", "0"]).await;
-    client.command(&["XREADGROUP", "GROUP", "grp", "consumer1", "COUNT", "10", "STREAMS", "stream", ">"]).await;
+    client
+        .command(&["XGROUP", "CREATE", "stream", "grp", "0"])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "grp",
+            "consumer1",
+            "COUNT",
+            "10",
+            "STREAMS",
+            "stream",
+            ">",
+        ])
+        .await;
 
     // ACK
     let resp = client.command(&["XACK", "stream", "grp", &id1]).await;
@@ -82,8 +132,22 @@ async fn xpending_shows_unacknowledged_entries() {
 
     client.command(&["XADD", "stream", "*", "k", "v1"]).await;
     client.command(&["XADD", "stream", "*", "k", "v2"]).await;
-    client.command(&["XGROUP", "CREATE", "stream", "grp", "0"]).await;
-    client.command(&["XREADGROUP", "GROUP", "grp", "c1", "COUNT", "10", "STREAMS", "stream", ">"]).await;
+    client
+        .command(&["XGROUP", "CREATE", "stream", "grp", "0"])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "grp",
+            "c1",
+            "COUNT",
+            "10",
+            "STREAMS",
+            "stream",
+            ">",
+        ])
+        .await;
 
     // XPENDING summary: [count, min_id, max_id, consumers]
     let resp = client.command(&["XPENDING", "stream", "grp"]).await;
@@ -98,11 +162,23 @@ async fn xgroup_setid_resets_position() {
 
     client.command(&["XADD", "stream", "1-0", "k", "v"]).await;
     client.command(&["XADD", "stream", "2-0", "k", "v"]).await;
-    client.command(&["XGROUP", "CREATE", "stream", "grp", "$"]).await;
+    client
+        .command(&["XGROUP", "CREATE", "stream", "grp", "$"])
+        .await;
 
     // Nothing to read at $
     let resp = client
-        .command(&["XREADGROUP", "GROUP", "grp", "c1", "COUNT", "10", "STREAMS", "stream", ">"])
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "grp",
+            "c1",
+            "COUNT",
+            "10",
+            "STREAMS",
+            "stream",
+            ">",
+        ])
         .await;
     // Should be nil or empty array
     let is_empty = match &resp {
@@ -110,19 +186,35 @@ async fn xgroup_setid_resets_position() {
         frogdb_protocol::Response::Array(v) => v.is_empty(),
         _ => false,
     };
-    assert!(is_empty || {
-        let streams = unwrap_array(resp);
-        let se = unwrap_array(streams[0].clone());
-        let entries = unwrap_array(se[1].clone());
-        entries.is_empty()
-    });
+    assert!(
+        is_empty || {
+            let streams = unwrap_array(resp);
+            let se = unwrap_array(streams[0].clone());
+            let entries = unwrap_array(se[1].clone());
+            entries.is_empty()
+        }
+    );
 
     // Reset to 0
-    assert_ok(&client.command(&["XGROUP", "SETID", "stream", "grp", "0"]).await);
+    assert_ok(
+        &client
+            .command(&["XGROUP", "SETID", "stream", "grp", "0"])
+            .await,
+    );
 
     // Now both entries visible
     let resp = client
-        .command(&["XREADGROUP", "GROUP", "grp", "c1", "COUNT", "10", "STREAMS", "stream", ">"])
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "grp",
+            "c1",
+            "COUNT",
+            "10",
+            "STREAMS",
+            "stream",
+            ">",
+        ])
         .await;
     let streams = unwrap_array(resp);
     let se = unwrap_array(streams[0].clone());
@@ -136,8 +228,22 @@ async fn xclaim_transfers_ownership() {
     let mut client = server.connect().await;
 
     let id = parse_id(&client.command(&["XADD", "stream", "*", "k", "v"]).await);
-    client.command(&["XGROUP", "CREATE", "stream", "grp", "0"]).await;
-    client.command(&["XREADGROUP", "GROUP", "grp", "c1", "COUNT", "1", "STREAMS", "stream", ">"]).await;
+    client
+        .command(&["XGROUP", "CREATE", "stream", "grp", "0"])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "grp",
+            "c1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "stream",
+            ">",
+        ])
+        .await;
 
     // Claim with 0 min-idle-time (always succeeds)
     let resp = client

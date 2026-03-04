@@ -67,7 +67,9 @@ async fn pubsub_shardnumsub_returns_subscriber_counts() {
 
     subscriber.command(&["SSUBSCRIBE", "mychan"]).await;
 
-    let resp = client.command(&["PUBSUB", "SHARDNUMSUB", "mychan", "otherchan"]).await;
+    let resp = client
+        .command(&["PUBSUB", "SHARDNUMSUB", "mychan", "otherchan"])
+        .await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 4); // [chan, count, chan, count]
     assert_bulk_eq(&items[0], b"mychan");
@@ -82,7 +84,9 @@ async fn pubsub_shardchannels_lists_active_channels() {
     let mut subscriber = server.connect().await;
     let mut client = server.connect().await;
 
-    subscriber.command(&["SSUBSCRIBE", "active1", "active2"]).await;
+    subscriber
+        .command(&["SSUBSCRIBE", "active1", "active2"])
+        .await;
 
     let resp = client.command(&["PUBSUB", "SHARDCHANNELS"]).await;
     let channels = extract_bulk_strings(&resp);
@@ -100,12 +104,20 @@ async fn multiple_subscribers_receive_same_sharded_message() {
     sub1.command(&["SSUBSCRIBE", "shared"]).await;
     sub2.command(&["SSUBSCRIBE", "shared"]).await;
 
-    let pub_resp = publisher.command(&["SPUBLISH", "shared", "broadcast"]).await;
+    let pub_resp = publisher
+        .command(&["SPUBLISH", "shared", "broadcast"])
+        .await;
     assert_eq!(unwrap_integer(&pub_resp), 2);
 
     // Both subscribers receive the message
-    let msg1 = sub1.read_message(Duration::from_secs(5)).await.expect("sub1 msg");
-    let msg2 = sub2.read_message(Duration::from_secs(5)).await.expect("sub2 msg");
+    let msg1 = sub1
+        .read_message(Duration::from_secs(5))
+        .await
+        .expect("sub1 msg");
+    let msg2 = sub2
+        .read_message(Duration::from_secs(5))
+        .await
+        .expect("sub2 msg");
 
     let p1 = unwrap_array(msg1);
     let p2 = unwrap_array(msg2);

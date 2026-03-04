@@ -1,6 +1,6 @@
+use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
-use frogdb_protocol::Response;
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,10 @@ async fn read_commands_not_blocked_by_pause_write() {
 
     // PING should also go through
     let r = reader.command(&["PING"]).await;
-    assert!(matches!(&r, Response::Simple(s) if s == "PONG"), "got {r:?}");
+    assert!(
+        matches!(&r, Response::Simple(s) if s == "PONG"),
+        "got {r:?}"
+    );
 
     // INFO should go through
     let r = reader.command(&["INFO", "server"]).await;
@@ -186,7 +189,10 @@ async fn scripts_blocked_by_pause_write() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(
-        client.read_response(Duration::from_millis(50)).await.is_none(),
+        client
+            .read_response(Duration::from_millis(50))
+            .await
+            .is_none(),
         "EVAL with write should be blocked"
     );
 
@@ -202,16 +208,10 @@ async fn ro_scripts_not_blocked_by_pause_write() {
     let mut control = server.connect().await;
     let mut client = server.connect().await;
 
-    assert_ok(
-        &control
-            .command(&["CLIENT", "PAUSE", "200", "WRITE"])
-            .await,
-    );
+    assert_ok(&control.command(&["CLIENT", "PAUSE", "200", "WRITE"]).await);
 
     // EVAL_RO with no writes should not be blocked
-    let resp = client
-        .command(&["EVAL_RO", "return 'hello'", "0"])
-        .await;
+    let resp = client.command(&["EVAL_RO", "return 'hello'", "0"]).await;
     assert_bulk_eq(&resp, b"hello");
 
     assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
@@ -224,11 +224,7 @@ async fn may_replicate_commands_rejected_in_ro_scripts() {
 
     // PUBLISH from EVAL_RO should return an error (not allowed in read-only scripts)
     let resp = client
-        .command(&[
-            "EVAL_RO",
-            "return redis.call('publish','ch','msg')",
-            "0",
-        ])
+        .command(&["EVAL_RO", "return redis.call('publish','ch','msg')", "0"])
         .await;
     assert_error_prefix(&resp, "ERR");
 }
@@ -257,7 +253,10 @@ async fn old_pause_all_over_new_pause_write() {
     reader.send_only(&["GET", "somekey"]).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(
-        reader.read_response(Duration::from_millis(50)).await.is_none(),
+        reader
+            .read_response(Duration::from_millis(50))
+            .await
+            .is_none(),
         "GET should be blocked by PAUSE ALL"
     );
 
@@ -273,7 +272,11 @@ async fn new_pause_time_preserved_over_smaller() {
     let mut control = server.connect().await;
     let mut writer = server.connect().await;
 
-    assert_ok(&control.command(&["CLIENT", "PAUSE", "60000", "WRITE"]).await);
+    assert_ok(
+        &control
+            .command(&["CLIENT", "PAUSE", "60000", "WRITE"])
+            .await,
+    );
 
     // Issue a shorter pause — should NOT shorten the existing pause
     assert_ok(&control.command(&["CLIENT", "PAUSE", "100", "WRITE"]).await);
@@ -282,7 +285,10 @@ async fn new_pause_time_preserved_over_smaller() {
     writer.send_only(&["SET", "foo", "bar"]).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
-        writer.read_response(Duration::from_millis(50)).await.is_none(),
+        writer
+            .read_response(Duration::from_millis(50))
+            .await
+            .is_none(),
         "SET should still be blocked"
     );
 
@@ -307,7 +313,10 @@ async fn write_commands_paused_by_write_mode() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     assert!(
-        writer.read_response(Duration::from_millis(50)).await.is_none(),
+        writer
+            .read_response(Duration::from_millis(50))
+            .await
+            .is_none(),
         "SET should be blocked by PAUSE WRITE"
     );
 
@@ -325,9 +334,7 @@ async fn special_commands_paused_by_write_pfcount_publish() {
 
     // PFCOUNT may write (merges HLL on first call) and PUBLISH is considered
     // a write-replicating command. Both should be blocked by PAUSE WRITE.
-    client
-        .command(&["PFADD", "myhll", "a", "b", "c"])
-        .await;
+    client.command(&["PFADD", "myhll", "a", "b", "c"]).await;
 
     assert_ok(
         &control
@@ -338,7 +345,10 @@ async fn special_commands_paused_by_write_pfcount_publish() {
     client.send_only(&["PFCOUNT", "myhll"]).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(
-        client.read_response(Duration::from_millis(50)).await.is_none(),
+        client
+            .read_response(Duration::from_millis(50))
+            .await
+            .is_none(),
         "PFCOUNT should be blocked by PAUSE WRITE"
     );
 

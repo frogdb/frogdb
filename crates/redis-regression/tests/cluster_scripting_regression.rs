@@ -133,10 +133,7 @@ async fn allow_cross_slot_keys_flag() {
     assert_ok(&client.command(&["SET", "key2", "b"]).await);
 
     // Shebang script with allow-cross-slot-keys should allow cross-slot access
-    let script =
-        "#!lua flags=allow-cross-slot-keys\nreturn redis.call('GET', KEYS[1]) .. redis.call('GET', KEYS[2])";
-    let resp = client
-        .command(&["EVAL", script, "2", "key1", "key2"])
-        .await;
+    let script = "#!lua flags=allow-cross-slot-keys\nreturn redis.call('GET', KEYS[1]) .. redis.call('GET', KEYS[2])";
+    let resp = client.command(&["EVAL", script, "2", "key1", "key2"]).await;
     assert_bulk_eq(&resp, b"ab");
 }

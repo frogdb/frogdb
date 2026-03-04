@@ -66,9 +66,7 @@ async fn config_set_maxmemory_and_policy() {
             .command(&["CONFIG", "SET", "maxmemory-policy", "allkeys-lru"])
             .await,
     );
-    let resp = client
-        .command(&["CONFIG", "GET", "maxmemory-policy"])
-        .await;
+    let resp = client.command(&["CONFIG", "GET", "maxmemory-policy"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 2);
     assert_bulk_eq(&items[1], b"allkeys-lru");
@@ -267,13 +265,7 @@ async fn volatile_lru_honors_memory_limit() {
     // Write keys WITH TTL so volatile policies can evict them
     for i in 0..1000 {
         client
-            .command(&[
-                "SET",
-                &format!("key:{i}"),
-                &"x".repeat(1000),
-                "EX",
-                "3600",
-            ])
+            .command(&["SET", &format!("key:{i}"), &"x".repeat(1000), "EX", "3600"])
             .await;
     }
 
@@ -306,13 +298,7 @@ async fn volatile_random_honors_memory_limit() {
 
     for i in 0..1000 {
         client
-            .command(&[
-                "SET",
-                &format!("key:{i}"),
-                &"x".repeat(1000),
-                "EX",
-                "3600",
-            ])
+            .command(&["SET", &format!("key:{i}"), &"x".repeat(1000), "EX", "3600"])
             .await;
     }
 
@@ -470,11 +456,7 @@ async fn maxmemory_zero_means_unlimited() {
     let mut client = server.connect().await;
 
     // Set maxmemory to 0 (unlimited)
-    assert_ok(
-        &client
-            .command(&["CONFIG", "SET", "maxmemory", "0"])
-            .await,
-    );
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "0"]).await);
     assert_ok(
         &client
             .command(&["CONFIG", "SET", "maxmemory-policy", "allkeys-lru"])
@@ -491,10 +473,7 @@ async fn maxmemory_zero_means_unlimited() {
     }
 
     let dbsize = unwrap_integer(&client.command(&["DBSIZE"]).await);
-    assert_eq!(
-        dbsize, 200,
-        "with maxmemory 0, no keys should be evicted"
-    );
+    assert_eq!(dbsize, 200, "with maxmemory 0, no keys should be evicted");
 }
 
 // ---------------------------------------------------------------------------

@@ -26,7 +26,10 @@ async fn xadd_auto_ids_monotonic_ordering() {
     assert!(id1 < id2 || (id_ms(&id1) == id_ms(&id2) && id_seq(&id1) < id_seq(&id2)));
     assert!(id2 < id3 || (id_ms(&id2) == id_ms(&id3) && id_seq(&id2) < id_seq(&id3)));
 
-    assert_eq!(unwrap_integer(&client.command(&["XLEN", "stream"]).await), 3);
+    assert_eq!(
+        unwrap_integer(&client.command(&["XLEN", "stream"]).await),
+        3
+    );
 }
 
 #[tokio::test]
@@ -34,10 +37,17 @@ async fn xadd_explicit_ids_and_xrange() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["XADD", "stream", "1-1", "item", "1", "value", "a"]).await;
-    client.command(&["XADD", "stream", "2-1", "item", "2", "value", "b"]).await;
+    client
+        .command(&["XADD", "stream", "1-1", "item", "1", "value", "a"])
+        .await;
+    client
+        .command(&["XADD", "stream", "2-1", "item", "2", "value", "b"])
+        .await;
 
-    assert_eq!(unwrap_integer(&client.command(&["XLEN", "stream"]).await), 2);
+    assert_eq!(
+        unwrap_integer(&client.command(&["XLEN", "stream"]).await),
+        2
+    );
 
     let resp = client.command(&["XRANGE", "stream", "-", "+"]).await;
     let entries = unwrap_array(resp);
@@ -81,7 +91,9 @@ async fn xrange_and_xrevrange_bounds() {
     assert_bulk_eq(&first[0], b"3-0");
 
     // XREVRANGE with COUNT
-    let resp = client.command(&["XREVRANGE", "stream", "+", "-", "COUNT", "2"]).await;
+    let resp = client
+        .command(&["XREVRANGE", "stream", "+", "-", "COUNT", "2"])
+        .await;
     let entries = unwrap_array(resp);
     assert_eq!(entries.len(), 2);
 }
@@ -91,9 +103,15 @@ async fn xlen_tracks_count() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    assert_eq!(unwrap_integer(&client.command(&["XLEN", "stream"]).await), 0);
+    assert_eq!(
+        unwrap_integer(&client.command(&["XLEN", "stream"]).await),
+        0
+    );
     client.command(&["XADD", "stream", "*", "k", "v"]).await;
-    assert_eq!(unwrap_integer(&client.command(&["XLEN", "stream"]).await), 1);
+    assert_eq!(
+        unwrap_integer(&client.command(&["XLEN", "stream"]).await),
+        1
+    );
 }
 
 #[tokio::test]
@@ -106,7 +124,10 @@ async fn xdel_removes_entries() {
 
     let resp = client.command(&["XDEL", "stream", &id]).await;
     assert_eq!(unwrap_integer(&resp), 1);
-    assert_eq!(unwrap_integer(&client.command(&["XLEN", "stream"]).await), 1);
+    assert_eq!(
+        unwrap_integer(&client.command(&["XLEN", "stream"]).await),
+        1
+    );
 }
 
 #[tokio::test]
@@ -115,12 +136,17 @@ async fn xtrim_maxlen() {
     let mut client = server.connect().await;
 
     for i in 0..10 {
-        client.command(&["XADD", "stream", "*", "i", &i.to_string()]).await;
+        client
+            .command(&["XADD", "stream", "*", "i", &i.to_string()])
+            .await;
     }
 
     let resp = client.command(&["XTRIM", "stream", "MAXLEN", "5"]).await;
     assert_eq!(unwrap_integer(&resp), 5);
-    assert_eq!(unwrap_integer(&client.command(&["XLEN", "stream"]).await), 5);
+    assert_eq!(
+        unwrap_integer(&client.command(&["XLEN", "stream"]).await),
+        5
+    );
 }
 
 #[tokio::test]
@@ -128,10 +154,15 @@ async fn xadd_nomkstream_does_not_create_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client.command(&["XADD", "stream", "NOMKSTREAM", "*", "k", "v"]).await;
+    let resp = client
+        .command(&["XADD", "stream", "NOMKSTREAM", "*", "k", "v"])
+        .await;
     // Returns nil when stream does not exist
     assert!(matches!(resp, frogdb_protocol::Response::Bulk(None)));
-    assert_eq!(unwrap_integer(&client.command(&["EXISTS", "stream"]).await), 0);
+    assert_eq!(
+        unwrap_integer(&client.command(&["EXISTS", "stream"]).await),
+        0
+    );
 }
 
 #[tokio::test]

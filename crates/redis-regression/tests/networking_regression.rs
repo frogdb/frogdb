@@ -26,7 +26,10 @@ async fn client_getname_before_setname_returns_empty() {
         frogdb_protocol::Response::Bulk(Some(b)) => b.is_empty(),
         _ => false,
     };
-    assert!(is_empty, "unnamed client GETNAME should return nil or empty");
+    assert!(
+        is_empty,
+        "unnamed client GETNAME should return nil or empty"
+    );
 }
 
 #[tokio::test]
@@ -37,8 +40,10 @@ async fn client_list_returns_expected_fields() {
     let resp = client.command(&["CLIENT", "LIST"]).await;
     let text = String::from_utf8(unwrap_bulk(&resp).to_vec()).unwrap();
     // CLIENT LIST returns lines with key=value pairs
-    assert!(text.contains("id=") || text.contains("addr="),
-        "CLIENT LIST should contain client info: {text}");
+    assert!(
+        text.contains("id=") || text.contains("addr="),
+        "CLIENT LIST should contain client info: {text}"
+    );
 }
 
 #[tokio::test]
@@ -48,7 +53,10 @@ async fn client_id_returns_non_negative_integer() {
 
     let resp = client.command(&["CLIENT", "ID"]).await;
     let id = unwrap_integer(&resp);
-    assert!(id >= 0, "CLIENT ID should return a non-negative integer, got {id}");
+    assert!(
+        id >= 0,
+        "CLIENT ID should return a non-negative integer, got {id}"
+    );
 }
 
 #[tokio::test]

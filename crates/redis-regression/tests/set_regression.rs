@@ -6,13 +6,28 @@ async fn sadd_scard_sismember_smembers_basics() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    assert_eq!(unwrap_integer(&client.command(&["SADD", "myset", "a", "b", "c"]).await), 3);
+    assert_eq!(
+        unwrap_integer(&client.command(&["SADD", "myset", "a", "b", "c"]).await),
+        3
+    );
     // Adding existing element returns 0
-    assert_eq!(unwrap_integer(&client.command(&["SADD", "myset", "a"]).await), 0);
+    assert_eq!(
+        unwrap_integer(&client.command(&["SADD", "myset", "a"]).await),
+        0
+    );
 
-    assert_eq!(unwrap_integer(&client.command(&["SCARD", "myset"]).await), 3);
-    assert_eq!(unwrap_integer(&client.command(&["SISMEMBER", "myset", "a"]).await), 1);
-    assert_eq!(unwrap_integer(&client.command(&["SISMEMBER", "myset", "missing"]).await), 0);
+    assert_eq!(
+        unwrap_integer(&client.command(&["SCARD", "myset"]).await),
+        3
+    );
+    assert_eq!(
+        unwrap_integer(&client.command(&["SISMEMBER", "myset", "a"]).await),
+        1
+    );
+    assert_eq!(
+        unwrap_integer(&client.command(&["SISMEMBER", "myset", "missing"]).await),
+        0
+    );
 
     let members = extract_bulk_strings(&client.command(&["SMEMBERS", "myset"]).await);
     let mut sorted = members.clone();
@@ -27,7 +42,9 @@ async fn smismember_batch_membership() {
 
     client.command(&["SADD", "myset", "foo", "bar"]).await;
 
-    let resp = client.command(&["SMISMEMBER", "myset", "foo", "baz", "bar"]).await;
+    let resp = client
+        .command(&["SMISMEMBER", "myset", "foo", "baz", "bar"])
+        .await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 3);
     assert_eq!(unwrap_integer(&items[0]), 1);
@@ -70,7 +87,9 @@ async fn sintercard_with_limit() {
     assert_eq!(unwrap_integer(&resp), 3);
 
     // With LIMIT 2
-    let resp = client.command(&["SINTERCARD", "2", "{s}a", "{s}b", "LIMIT", "2"]).await;
+    let resp = client
+        .command(&["SINTERCARD", "2", "{s}a", "{s}b", "LIMIT", "2"])
+        .await;
     assert_eq!(unwrap_integer(&resp), 2);
 }
 
@@ -82,13 +101,19 @@ async fn sinterstore_sunionstore_sdiffstore() {
     client.command(&["SADD", "{s}a", "1", "2", "3"]).await;
     client.command(&["SADD", "{s}b", "2", "3", "4"]).await;
 
-    let resp = client.command(&["SINTERSTORE", "{s}dest", "{s}a", "{s}b"]).await;
+    let resp = client
+        .command(&["SINTERSTORE", "{s}dest", "{s}a", "{s}b"])
+        .await;
     assert_eq!(unwrap_integer(&resp), 2);
 
-    let resp = client.command(&["SUNIONSTORE", "{s}udest", "{s}a", "{s}b"]).await;
+    let resp = client
+        .command(&["SUNIONSTORE", "{s}udest", "{s}a", "{s}b"])
+        .await;
     assert_eq!(unwrap_integer(&resp), 4);
 
-    let resp = client.command(&["SDIFFSTORE", "{s}ddest", "{s}a", "{s}b"]).await;
+    let resp = client
+        .command(&["SDIFFSTORE", "{s}ddest", "{s}a", "{s}b"])
+        .await;
     assert_eq!(unwrap_integer(&resp), 1);
 }
 
@@ -103,7 +128,10 @@ async fn spop_returns_and_removes_member() {
     assert_bulk_eq(&resp, b"only");
 
     // Set should be empty
-    assert_eq!(unwrap_integer(&client.command(&["SCARD", "myset"]).await), 0);
+    assert_eq!(
+        unwrap_integer(&client.command(&["SCARD", "myset"]).await),
+        0
+    );
 
     // SPOP on empty set returns nil
     let resp = client.command(&["SPOP", "myset"]).await;
@@ -148,11 +176,19 @@ async fn smove_between_sets() {
     let resp = client.command(&["SMOVE", "{s}src", "{s}dst", "a"]).await;
     assert_eq!(unwrap_integer(&resp), 1);
 
-    assert_eq!(unwrap_integer(&client.command(&["SISMEMBER", "{s}src", "a"]).await), 0);
-    assert_eq!(unwrap_integer(&client.command(&["SISMEMBER", "{s}dst", "a"]).await), 1);
+    assert_eq!(
+        unwrap_integer(&client.command(&["SISMEMBER", "{s}src", "a"]).await),
+        0
+    );
+    assert_eq!(
+        unwrap_integer(&client.command(&["SISMEMBER", "{s}dst", "a"]).await),
+        1
+    );
 
     // Move non-existing member returns 0
-    let resp = client.command(&["SMOVE", "{s}src", "{s}dst", "missing"]).await;
+    let resp = client
+        .command(&["SMOVE", "{s}src", "{s}dst", "missing"])
+        .await;
     assert_eq!(unwrap_integer(&resp), 0);
 }
 

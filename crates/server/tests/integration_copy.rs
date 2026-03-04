@@ -37,11 +37,11 @@ async fn test_copy_source_not_exists() {
     let mut client = server.connect().await;
 
     // COPY nonexistent source
-    let response = client.command(&["COPY", "nonexistent", "dst"]).await;
+    let response = client.command(&["COPY", "{k}nonexistent", "{k}dst"]).await;
     assert_eq!(response, Response::Integer(0));
 
     // Verify destination was not created
-    let dst_val = client.command(&["GET", "dst"]).await;
+    let dst_val = client.command(&["GET", "{k}dst"]).await;
     assert_eq!(dst_val, Response::Bulk(None));
 
     server.shutdown().await;
