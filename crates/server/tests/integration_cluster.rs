@@ -5456,3 +5456,617 @@ async fn test_e2e_migration_concurrent_writes() {
 
     harness.shutdown_all().await;
 }
+
+// ============================================================================
+// Tier 11: Cluster Command Behavior Tests
+// ============================================================================
+
+/// Tests that CLUSTER RESET SOFT returns OK.
+#[tokio::test]
+async fn test_cluster_reset_soft_returns_ok() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(1).await.unwrap();
+
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let response = node.send("CLUSTER", &["RESET", "SOFT"]).await;
+    assert!(
+        !is_error(&response),
+        "CLUSTER RESET SOFT should return OK, got: {:?}",
+        response
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that CLUSTER RESET HARD returns OK.
+#[tokio::test]
+async fn test_cluster_reset_hard_returns_ok() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(1).await.unwrap();
+
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let response = node.send("CLUSTER", &["RESET", "HARD"]).await;
+    assert!(
+        !is_error(&response),
+        "CLUSTER RESET HARD should return OK, got: {:?}",
+        response
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that CLUSTER SET-CONFIG-EPOCH <n> is accepted and epoch incremented.
+#[tokio::test]
+async fn test_cluster_set_config_epoch_returns_ok() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let leader = harness.get_leader().await.unwrap();
+    let node = harness.node(leader).unwrap();
+
+    // Get current epoch
+    let info_before = harness.get_cluster_info(leader).unwrap();
+    let epoch_before = info_before.cluster_current_epoch;
+
+    // SET-CONFIG-EPOCH should succeed (goes through Raft)
+    let response = node.send("CLUSTER", &["SET-CONFIG-EPOCH", "100"]).await;
+    assert!(
+        !is_error(&response),
+        "CLUSTER SET-CONFIG-EPOCH should succeed, got: {:?}",
+        response
+    );
+
+    // Wait for Raft propagation
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Epoch should have changed
+    let info_after = harness.get_cluster_info(leader).unwrap();
+    assert!(
+        info_after.cluster_current_epoch > epoch_before,
+        "Epoch should have increased from {}, got {}",
+        epoch_before,
+        info_after.cluster_current_epoch
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that CLUSTER SET-CONFIG-EPOCH rejects non-numeric values.
+#[tokio::test]
+async fn test_cluster_set_config_epoch_rejects_invalid() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(1).await.unwrap();
+
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let response = node
+        .send("CLUSTER", &["SET-CONFIG-EPOCH", "not_a_number"])
+        .await;
+    assert!(
+        is_error(&response),
+        "CLUSTER SET-CONFIG-EPOCH with non-numeric should error, got: {:?}",
+        response
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that CLUSTER SAVECONFIG returns OK.
+#[tokio::test]
+async fn test_cluster_saveconfig_returns_ok() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(1).await.unwrap();
+
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let response = node.send("CLUSTER", &["SAVECONFIG"]).await;
+    assert!(
+        !is_error(&response),
+        "CLUSTER SAVECONFIG should return OK, got: {:?}",
+        response
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 12: Cluster Info Accuracy — Known-Gap Documentation
+// ============================================================================
+
+/// Documents that replication-offset in CLUSTER SHARDS should be non-zero after writes.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: replication-offset in CLUSTER SHARDS is hardcoded to 0 (mod.rs:476)"]
+async fn test_cluster_shards_replication_offset_nonzero() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let node_ids = harness.node_ids();
+    let node = harness.node(node_ids[0]).unwrap();
+
+    // Write some data
+    let key = key_for_slot(100);
+    for i in 0..10 {
+        let k = format!("{{{}}}_offset_{}", key, i);
+        node.send("SET", &[&k, "value"]).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // CLUSTER SHARDS should show non-zero replication-offset
+    let response = node.send("CLUSTER", &["SHARDS"]).await;
+    assert!(
+        !is_error(&response),
+        "CLUSTER SHARDS should succeed, got: {:?}",
+        response
+    );
+    // When implemented: parse response and assert replication-offset > 0
+
+    harness.shutdown_all().await;
+}
+
+/// Documents that offset in CLUSTER SLOTS should be non-zero after writes.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: offset in CLUSTER SLOTS is hardcoded to 0 (mod.rs:502)"]
+async fn test_cluster_slots_replication_offset_nonzero() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let node_ids = harness.node_ids();
+    let node = harness.node(node_ids[0]).unwrap();
+
+    // Write data
+    let key = key_for_slot(200);
+    for i in 0..10 {
+        let k = format!("{{{}}}_slots_{}", key, i);
+        node.send("SET", &[&k, "value"]).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let response = node.send("CLUSTER", &["SLOTS"]).await;
+    assert!(
+        !is_error(&response),
+        "CLUSTER SLOTS should succeed, got: {:?}",
+        response
+    );
+    // When implemented: parse response and assert offset > 0
+
+    harness.shutdown_all().await;
+}
+
+/// Documents that link-state in CLUSTER NODES should track failures.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: link-state is hardcoded to connected (mod.rs:330)"]
+async fn test_cluster_nodes_link_state_tracks_failures() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let node_ids = harness.node_ids();
+
+    // Kill one node (not the leader)
+    let leader = harness.get_leader().await.unwrap();
+    let killed_id = *node_ids.iter().find(|&&id| id != leader).unwrap();
+    harness.kill_node(killed_id).await;
+
+    // Wait for failure detection
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Surviving node should show killed node as disconnected
+    let surviving_id = *node_ids
+        .iter()
+        .find(|&&id| id != killed_id && harness.node(id).map(|n| n.is_running()).unwrap_or(false))
+        .unwrap();
+    let node = harness.node(surviving_id).unwrap();
+    let response = node.send("CLUSTER", &["NODES"]).await;
+    let nodes = parse_cluster_nodes(&response).unwrap();
+
+    let killed_cluster_id = harness.get_node_id_str(killed_id).unwrap();
+    let killed_node_info = nodes.iter().find(|n| n.id == killed_cluster_id);
+    assert!(
+        killed_node_info.is_some(),
+        "Should find killed node in CLUSTER NODES"
+    );
+    // When implemented: assert link-state is "disconnected"
+
+    harness.shutdown_all().await;
+}
+
+/// Documents that ping-sent and pong-recv in CLUSTER NODES should be non-zero.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: ping-sent/pong-recv are hardcoded to 0 (mod.rs:330)"]
+async fn test_cluster_nodes_ping_pong_nonzero() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Let some gossip happen
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let response = node.send("CLUSTER", &["NODES"]).await;
+    let nodes = parse_cluster_nodes(&response).unwrap();
+
+    // When implemented: assert ping_sent > 0 and pong_recv > 0 for at least one other node
+    assert!(nodes.len() >= 3, "Should see all cluster nodes");
+
+    harness.shutdown_all().await;
+}
+
+/// Documents that cluster_stats_messages_* in CLUSTER INFO should be non-zero.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: cluster_stats_messages_* are always 0 (mod.rs:222)"]
+async fn test_cluster_info_gossip_stats_nonzero() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Let cluster activity happen
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let info = harness.get_cluster_info(harness.node_ids()[0]).unwrap();
+
+    // When implemented: assert cluster_stats_messages_sent > 0
+    // For now just verify the info is parseable
+    assert_eq!(info.cluster_state, "ok");
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 13: READONLY / READWRITE State Verification
+// ============================================================================
+
+/// Tests that READONLY allows reads on a non-owner node instead of MOVED.
+///
+/// Currently the readonly flag is stored in connection state (dispatch.rs:335)
+/// but validate_cluster_slots() in guards.rs doesn't consult it — it always
+/// returns MOVED for non-owned slots regardless of the READONLY flag.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: readonly flag not consulted in validate_cluster_slots (guards.rs:234)"]
+async fn test_readonly_allows_reads_on_non_owner_node() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let _ = harness
+        .wait_for_address_convergence(Duration::from_secs(5))
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let test_slot = 100u16;
+    let (owner_id, non_owner_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    // Write a key on the owner
+    let owner = harness.node(owner_id).unwrap();
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_ro", tag);
+    let resp = owner.send("SET", &[&key, "readonly_test"]).await;
+    assert!(!is_error(&resp), "SET failed: {:?}", resp);
+
+    // Without READONLY, non-owner returns MOVED
+    let non_owner = harness.node(non_owner_id).unwrap();
+    let resp = non_owner.send("GET", &[&key]).await;
+    assert!(
+        is_moved_redirect(&resp).is_some(),
+        "Non-owner should return MOVED without READONLY, got: {:?}",
+        resp
+    );
+
+    // Enable READONLY on a dedicated connection
+    let mut client = non_owner.connect().await;
+    let ro_resp = client.command(&["READONLY"]).await;
+    assert!(!is_error(&ro_resp), "READONLY should succeed");
+
+    // After READONLY, reads should NOT return MOVED
+    let resp = client.command(&["GET", &key]).await;
+    assert!(
+        is_moved_redirect(&resp).is_none(),
+        "After READONLY, non-owner should not return MOVED, got: {:?}",
+        resp
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that READWRITE restores MOVED redirects after READONLY.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: readonly flag not consulted in validate_cluster_slots (guards.rs:234)"]
+async fn test_readwrite_restores_moved_redirects() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let _ = harness
+        .wait_for_address_convergence(Duration::from_secs(5))
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let test_slot = 100u16;
+    let pair = find_owner_of_slot(&harness, test_slot).await;
+    if pair.is_none() {
+        eprintln!(
+            "Slot {} not served yet — skipping READWRITE test",
+            test_slot
+        );
+        harness.shutdown_all().await;
+        return;
+    }
+    let (_owner_id, non_owner_id) = pair.unwrap();
+
+    let non_owner = harness.node(non_owner_id).unwrap();
+    let mut client = non_owner.connect().await;
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_rw", tag);
+
+    // Enable READONLY — should suppress MOVED
+    client.command(&["READONLY"]).await;
+    let resp = client.command(&["GET", &key]).await;
+    assert!(
+        is_moved_redirect(&resp).is_none(),
+        "After READONLY, should not get MOVED"
+    );
+
+    // Disable with READWRITE
+    let rw_resp = client.command(&["READWRITE"]).await;
+    assert!(!is_error(&rw_resp), "READWRITE should succeed");
+
+    // Should get MOVED again
+    let resp = client.command(&["GET", &key]).await;
+    assert!(
+        is_moved_redirect(&resp).is_some(),
+        "After READWRITE, should get MOVED again, got: {:?}",
+        resp
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 14: Migration Type Coverage — Known-Gap Documentation
+// ============================================================================
+
+/// Documents that stream data is lost during migration (DUMP returns empty bytes).
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: DUMP serialization for streams returns empty bytes (types.rs:219)"]
+async fn test_e2e_migration_stream() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 900u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_stream", tag);
+
+    // Create stream with entries
+    let resp = source.send("XADD", &[&key, "*", "field1", "value1"]).await;
+    assert!(!is_error(&resp), "XADD failed: {:?}", resp);
+    let resp = source.send("XADD", &[&key, "*", "field2", "value2"]).await;
+    assert!(!is_error(&resp), "XADD failed: {:?}", resp);
+
+    // Run migration
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    // After proper implementation, stream should have 2 entries on target
+    let target = harness.node(target_id).unwrap();
+    let resp = target.send("XLEN", &[&key]).await;
+    match resp {
+        frogdb_protocol::Response::Integer(len) => {
+            assert_eq!(len, 2, "Stream should have 2 entries after migration");
+        }
+        other => panic!("expected integer XLEN, got: {:?}", other),
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Documents that bloom filter data is lost during migration.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: DUMP serialization for bloom filters returns empty bytes (types.rs:224)"]
+async fn test_e2e_migration_bloom_filter() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 910u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_bloom", tag);
+
+    let resp = source.send("BF.ADD", &[&key, "item1"]).await;
+    assert!(!is_error(&resp), "BF.ADD failed: {:?}", resp);
+
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    let target = harness.node(target_id).unwrap();
+    let resp = target.send("BF.EXISTS", &[&key, "item1"]).await;
+    match resp {
+        frogdb_protocol::Response::Integer(1) => {}
+        other => panic!(
+            "BF.EXISTS should return 1 after migration, got: {:?}",
+            other
+        ),
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Documents that timeseries data is lost during migration.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: DUMP serialization for timeseries returns empty bytes (types.rs:233)"]
+async fn test_e2e_migration_timeseries() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 920u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_ts", tag);
+
+    let resp = source.send("TS.ADD", &[&key, "1000", "42.0"]).await;
+    assert!(!is_error(&resp), "TS.ADD failed: {:?}", resp);
+
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    let target = harness.node(target_id).unwrap();
+    let resp = target.send("TS.GET", &[&key]).await;
+    assert!(
+        !is_error(&resp),
+        "TS.GET should succeed after migration, got: {:?}",
+        resp
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 15: Blocking Commands During Migration — Known-Gap Documentation
+// ============================================================================
+
+/// Documents that blocking commands during migration should receive MOVED after completion.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: ShardWaitQueue has no migration awareness for blocked clients"]
+async fn test_blocking_command_during_migration_gets_moved() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 950u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_blpop", tag);
+
+    // Start BLPOP on source (blocks waiting for data)
+    let mut blocker = source.connect().await;
+    blocker.send_only(&["BLPOP", &key, "10"]).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Run migration
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    // Blocked client should receive -MOVED after slot migrates
+    let resp = blocker.read_response(Duration::from_secs(5)).await;
+    assert!(
+        resp.is_some(),
+        "Blocked client should receive a response after migration"
+    );
+    if let Some(r) = resp {
+        assert!(
+            is_moved_redirect(&r).is_some(),
+            "Blocked client should receive MOVED after slot migration, got: {:?}",
+            r
+        );
+    }
+
+    harness.shutdown_all().await;
+}

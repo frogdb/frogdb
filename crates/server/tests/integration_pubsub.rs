@@ -381,3 +381,119 @@ async fn test_publish_returns_zero_no_subscribers() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Cluster Pub/Sub Tests
+// ============================================================================
+
+/// Tests that pub/sub works within a single cluster node.
+#[tokio::test]
+async fn test_pubsub_works_within_single_cluster_node() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+
+    // Create two connections on the same node
+    let mut subscriber = node.connect().await;
+    let mut publisher = node.connect().await;
+
+    // Subscribe
+    let response = subscriber.command(&["SUBSCRIBE", "cluster_chan"]).await;
+    assert!(matches!(response, Response::Array(ref arr) if arr.len() == 3));
+    if let Response::Array(arr) = &response {
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("subscribe"))));
+        assert_eq!(arr[1], Response::Bulk(Some(Bytes::from("cluster_chan"))));
+        assert_eq!(arr[2], Response::Integer(1));
+    }
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Publish on the same node
+    let response = publisher
+        .command(&["PUBLISH", "cluster_chan", "cluster_msg"])
+        .await;
+    assert!(
+        matches!(response, Response::Integer(n) if n >= 1),
+        "PUBLISH should return >= 1, got: {:?}",
+        response
+    );
+
+    // Subscriber should receive the message
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(msg.is_some(), "Subscriber should receive message");
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(arr[1], Response::Bulk(Some(Bytes::from("cluster_chan"))));
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("cluster_msg"))));
+    } else {
+        panic!("Expected array message response");
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Documents that cross-node pub/sub forwarding is not yet implemented.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: ClusterPubSubForwarder not built — messages not forwarded between cluster nodes"]
+async fn test_pubsub_cross_node_forwarded() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let node_ids = harness.node_ids();
+
+    // Subscribe on node A
+    let node_a = harness.node(node_ids[0]).unwrap();
+    let mut subscriber = node_a.connect().await;
+    subscriber.command(&["SUBSCRIBE", "cross_chan"]).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Publish on node B
+    let node_b = harness.node(node_ids[1]).unwrap();
+    let mut publisher = node_b.connect().await;
+    let response = publisher
+        .command(&["PUBLISH", "cross_chan", "cross_msg"])
+        .await;
+
+    // When cross-node forwarding is implemented, PUBLISH should return >= 1
+    assert!(
+        matches!(response, Response::Integer(n) if n >= 1),
+        "PUBLISH on node B should reach subscriber on node A, got: {:?}",
+        response
+    );
+
+    // Subscriber on node A should receive the message
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "Subscriber on node A should receive message published on node B"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(arr[1], Response::Bulk(Some(Bytes::from("cross_chan"))));
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("cross_msg"))));
+    }
+
+    harness.shutdown_all().await;
+}
