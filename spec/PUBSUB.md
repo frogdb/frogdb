@@ -114,6 +114,8 @@ $<message_len>\r\n<message>\r\n
 
 ## Cluster Mode
 
+> **[Not Yet Implemented]** The entire Cluster Mode section below describes a future design for cross-node pub/sub forwarding. None of the types or functions described (ClusterPubSubForwarder, LocalOnlyForwarder, broadcast_to_cluster, forward_to_slot_owner) are currently implemented. Current pub/sub operates within a single node only.
+
 In cluster mode, pub/sub behavior extends beyond internal shards to coordinate across cluster nodes.
 
 ### Cluster Pub/Sub Abstraction
@@ -737,7 +739,7 @@ channel2
 :25        # 25 subscribers
 ```
 
-**DEBUG Command for Limits:**
+**DEBUG Command for Limits:** **[Not Yet Implemented]**
 
 ```
 DEBUG PUBSUB LIMITS
@@ -760,7 +762,7 @@ shard_unique_patterns: 234/10000
 | `frogdb_pubsub_subscription_limit_errors_total` | Times limit was hit |
 | `frogdb_pubsub_unique_channels_total` | Unique channel names with subscribers |
 
-**Graceful Degradation:**
+**Graceful Degradation:** **[Not Yet Implemented]** (80%/90% warning thresholds are not yet implemented; 100% limit enforcement is implemented)
 
 When approaching limits:
 

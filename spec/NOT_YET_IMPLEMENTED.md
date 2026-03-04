@@ -12,7 +12,7 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 | DUMP/RESTORE serialization: BloomFilter | `crates/types/src/types.rs:224-228` | Same: empty bytes for bloom filters | [PERSISTENCE.md](PERSISTENCE.md) |
 | DUMP/RESTORE serialization: TimeSeries | `crates/types/src/types.rs:233-237` | Same: empty bytes for time series | [PERSISTENCE.md](PERSISTENCE.md) |
 | Slot migration doesn't move keys | `crates/server/src/commands/cluster/` | CLUSTER SETSLOT updates metadata but actual key movement is not implemented | [ROADMAP.md](ROADMAP.md), [CLUSTER_PLAN.md](CLUSTER_PLAN.md) |
-| Auto full-resync trigger | `crates/replication/src/`, `crates/server/src/replication/primary.rs:451` | When replica lag exceeds threshold, only a warning is logged — no automatic FULLRESYNC is triggered | [ROADMAP.md](ROADMAP.md) |
+| Proactive lag-threshold full-resync | `crates/replication/src/`, `crates/server/src/replication/primary.rs` | A FULLRESYNC does occur reactively when the broadcast buffer overflows (disconnect → reconnect → PSYNC). What's missing is a configurable lag threshold that triggers proactive FULLRESYNC before buffer overflow. | [ROADMAP.md](ROADMAP.md) |
 
 ---
 
@@ -47,7 +47,6 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 | Item | Description | Spec |
 |------|-------------|------|
 | Client tracking / client-side caching | CLIENT TRACKING — complex feature with high memory overhead | [COMPATIBILITY.md](COMPATIBILITY.md#not-yet-implemented) |
-| ACL selectors (Redis 7.0) | ACL selector support | [AUTH.md](AUTH.md) |
 | File log output with rotation | `tracing-appender` integration for non-blocking file writes — stdout/stderr only today | [OBSERVABILITY.md](OBSERVABILITY.md) |
 | TLS certificate hot-reload | Certificate hot-reloading via file watching | [CONFIGURATION.md](CONFIGURATION.md) |
 | Diagnostic bundles | Automated collection of debug info into a single archive | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |

@@ -28,6 +28,11 @@ N/A - Generic commands operate on keys of any type.
 | SCAN | O(1)/call | Cursor-based key iteration |
 | TOUCH | O(N) | Update access time |
 | UNLINK | O(1) | Async delete |
+| EXPIRETIME | O(1) | Get expiration as Unix timestamp (seconds) |
+| PEXPIRETIME | O(1) | Get expiration as Unix timestamp (milliseconds) |
+| COPY | O(N) | Copy a key to a new key |
+| RANDOMKEY | O(1) | Return a random key |
+| OBJECT | O(1) | Inspect key internals (ENCODING, IDLETIME, FREQ, REFCOUNT) |
 | DUMP | O(1) to O(N) | Serialize key value |
 | RESTORE | O(1) to O(N) | Deserialize and store key |
 
@@ -210,6 +215,8 @@ DUMP key
 | Includes | Type, value, TTL, LFU counter |
 
 The serialized format is opaque and intended only for use with RESTORE.
+
+**Known Limitation:** DUMP/RESTORE serialization for Stream, BloomFilter, and TimeSeries values currently returns empty bytes — data is silently lost. See [NOT_YET_IMPLEMENTED.md](../NOT_YET_IMPLEMENTED.md) for details.
 
 **Example:**
 ```

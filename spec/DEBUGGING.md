@@ -549,7 +549,9 @@ info threads               # See all thread states
 thread apply all bt        # Backtrace for all threads
 ```
 
-### DTrace/USDT Probes `[FrogDB]`
+### DTrace/USDT Probes `[FrogDB]` **[Not Yet Implemented]**
+
+> The USDT probe infrastructure described below is an aspirational design. The `usdt` Cargo feature does not yet exist in the codebase.
 
 FrogDB can be compiled with USDT (User Statically Defined Tracing) probes for zero-overhead-when-disabled tracing.
 

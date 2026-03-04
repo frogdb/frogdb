@@ -6,20 +6,20 @@ Members ordered by score with O(log N) operations. Sorted sets combine the uniqu
 
 ```rust
 pub struct SortedSetValue {
-    /// Member -> Score for O(1) score lookup
+    /// O(1) lookup: member -> score
     members: HashMap<Bytes, f64>,
-    /// (Score, Member) for range queries - ordered by score, then lexicographically
-    scores: BTreeMap<(OrderedFloat<f64>, Bytes), ()>,
+    /// Ordered index for range queries (BTreeMap or SkipList)
+    index: ScoreIndex,
 }
 ```
 
 **Dual Index Design:**
 - `members` HashMap provides O(1) score lookup by member
-- `scores` BTreeMap provides O(log N) range queries by score
+- `index` ScoreIndex provides O(log N) range queries by score (configurable backend)
 - Both structures must be kept in sync on mutations
 
-**Alternative Implementation:**
-Skip list could provide better cache locality during traversal, matching Redis's internal implementation.
+**Backend Selection:**
+The `ScoreIndex` enum dispatches to either `BTreeMap` or a custom `SkipList` implementation. The default backend is SkipList, configurable via `sorted_set_backend` server config. The skip list provides O(log N) rank queries and better cache locality during traversal.
 
 ---
 
@@ -57,6 +57,9 @@ Skip list could provide better cache locality during traversal, matching Redis's
 | ZDIFF | O(L + (N-K) log N) | Difference of sorted sets |
 | ZDIFFSTORE | O(L + (N-K) log N) | Difference and store |
 | ZRANGESTORE | O(log N + M) | Store range result |
+| ZREMRANGEBYRANK | O(log N + M) | Remove members by rank range |
+| ZREMRANGEBYSCORE | O(log N + M) | Remove members by score range |
+| ZREMRANGEBYLEX | O(log N + M) | Remove members by lex range |
 | ZSCAN | O(1)/call | Iterate members |
 | ZRANDMEMBER | O(N) | Get random member(s) |
 

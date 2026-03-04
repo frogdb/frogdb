@@ -61,15 +61,15 @@ pub enum Aggregation {
 | TS.DECRBY | O(1) | Decrement last value |
 | TS.DEL | O(N) | Delete samples in range |
 | TS.GET | O(1) | Get last sample |
-| TS.MGET | O(N) | Multi-key get |
+| TS.MGET | O(N) | Multi-key get **[Not Yet Implemented]** |
 | TS.RANGE | O(N) | Query range |
 | TS.REVRANGE | O(N) | Query range (reverse) |
-| TS.MRANGE | O(N*M) | Multi-key range |
-| TS.MREVRANGE | O(N*M) | Multi-key range (reverse) |
-| TS.QUERYINDEX | O(N) | Find keys by labels |
+| TS.MRANGE | O(N*M) | Multi-key range **[Not Yet Implemented]** |
+| TS.MREVRANGE | O(N*M) | Multi-key range (reverse) **[Not Yet Implemented]** |
+| TS.QUERYINDEX | O(N) | Find keys by labels **[Not Yet Implemented]** |
 | TS.INFO | O(1) | Get series info |
-| TS.CREATERULE | O(1) | Create downsample rule |
-| TS.DELETERULE | O(1) | Delete downsample rule |
+| TS.CREATERULE | O(1) | Create downsample rule **[Not Yet Implemented]** |
+| TS.DELETERULE | O(1) | Delete downsample rule **[Not Yet Implemented]** |
 
 ---
 

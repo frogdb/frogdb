@@ -32,6 +32,8 @@ pub struct HashValue {
 | HINCRBY | Increment field by integer |
 | HINCRBYFLOAT | Increment field by float |
 | HSETNX | Set field only if not exists |
+| HMSET | Set multiple fields (deprecated, use HSET) |
+| HRANDFIELD | Return random field(s) |
 | HSCAN | Incrementally iterate fields |
 | HSTRLEN | Return length of field value |
 

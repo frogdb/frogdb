@@ -15,11 +15,14 @@ N/A - Server commands do not operate on data types.
 | CONFIG GET | O(N) | Get configuration parameters |
 | CONFIG SET | O(1) | Set configuration parameter |
 | CONFIG RESETSTAT | O(1) | Reset server statistics |
+| CONFIG HELP | O(1) | Show CONFIG subcommands |
 | INFO | O(1) | Get server information |
+| BGSAVE | O(1) | Trigger background snapshot |
+| LASTSAVE | O(1) | Get timestamp of last successful save |
 | DEBUG SLEEP | O(1) | Sleep for duration |
 | DEBUG OBJECT | O(1) | Inspect key internals |
-| DEBUG STRUCTSIZE | O(1) | Show struct sizes |
-| DEBUG RELOAD | O(N) | Reload server |
+| DEBUG STRUCTSIZE | O(1) | Show struct sizes **[Not Yet Implemented]** |
+| DEBUG RELOAD | O(N) | Reload server **[Not Planned]** (intentionally omitted) |
 
 ---
 
@@ -34,7 +37,7 @@ The CONFIG command manages server configuration at runtime.
 | `CONFIG GET pattern` | Get parameters matching glob pattern |
 | `CONFIG SET param value` | Set parameter at runtime (mutable only) |
 | `CONFIG RESETSTAT` | Reset server statistics |
-| `CONFIG HELP` | Show CONFIG subcommands (future) |
+| `CONFIG HELP` | Show CONFIG subcommands |
 
 **Note:** `CONFIG REWRITE` is not supported. Runtime changes are transient and lost on restart.
 
@@ -141,8 +144,8 @@ Administrative commands for debugging. **Warning:** DEBUG commands are for devel
 |---------|-------------|
 | `DEBUG SLEEP <seconds>` | Sleep for duration (blocks the connection) |
 | `DEBUG OBJECT <key>` | Inspect key internals |
-| `DEBUG STRUCTSIZE` | Show struct sizes |
-| `DEBUG RELOAD` | Reload server |
+| `DEBUG STRUCTSIZE` | Show struct sizes **[Not Yet Implemented]** |
+| `DEBUG RELOAD` | Reload server **[Not Planned]** (intentionally omitted) |
 
 #### DEBUG SLEEP
 

@@ -102,7 +102,7 @@ See individual type documentation in [types/](types/) for data structure impleme
 | Type | Implementation |
 |------|---------------|
 | String | `Bytes` |
-| Sorted Set | `HashMap` + `BTreeMap` |
+| Sorted Set | `HashMap` + `BTreeMap`/`SkipList` (configurable, default: SkipList) |
 | Hash | `HashMap<Bytes, Bytes>` |
 | List | `VecDeque<Bytes>` |
 | Set | `HashSet<Bytes>` |
@@ -318,9 +318,9 @@ impl Value {
             Value::Set(s) => s.iter().map(|b| b.len()).sum(),
             Value::Hash(h) => h.iter().map(|(k, v)| k.len() + v.len()).sum(),
             Value::SortedSet(z) => {
-                // HashMap + BTreeMap entries
-                z.scores.iter().map(|(k, _)| k.len() + 8).sum::<usize>()
-                    + z.by_score.len() * 16  // BTreeMap overhead
+                // HashMap + ScoreIndex (BTreeMap or SkipList) entries
+                z.members.iter().map(|(k, _)| k.len() + 8).sum::<usize>()
+                    + z.index.len() * 16  // index overhead
             }
         }
     }
