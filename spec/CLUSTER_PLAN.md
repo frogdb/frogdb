@@ -6,36 +6,41 @@ This plan covers the implementation of FrogDB clustering as specified in the ROA
 
 ## Decisions Made
 
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| **Phasing** | Replication first | Lower risk, incremental delivery. Phase 1 = standalone replication |
-| **Orchestrator** | Build reference implementation | Simple orchestrator for testing. Not production-grade |
-| **Testing** | Unit tests first | Write unit tests as each component is built |
-| **Blocking Cmds** | Client timeouts | Matches Redis/Valkey behavior. Document known edge cases |
+| Decision | Choice | Rationale | Status |
+|----------|--------|-----------|--------|
+| **Phasing** | Replication first | Lower risk, incremental delivery. Phase 1 = standalone replication | Followed — Phase 1 complete |
+| **Orchestrator** | Raft consensus (replaced reference orchestrator) | Raft provides built-in leader election, log replication, and consistency — eliminates need for external orchestrator | Implemented via `crates/cluster/` |
+| **Testing** | Unit tests first | Write unit tests as each component is built | 136 cluster + 76 replication integration tests |
+| **Blocking Cmds** | Client timeouts | Matches Redis/Valkey behavior. Document known edge cases | Adopted |
 
 ## Current State Analysis
 
 ### What Exists
-- **Stub Commands**: All cluster/replication commands exist as stubs (CLUSTER, PSYNC, REPLCONF, WAIT, REPLICAOF, READONLY, ASKING, etc.) in `crates/server/src/commands/stub.rs`
-- **Replication Abstractions**: `ReplicationConfig` enum and `ReplicationTracker` trait defined in `crates/core/src/noop.rs`
-- **HTTP Infrastructure**: Metrics server exists using hyper with `/metrics`, `/health/live`, `/health/ready` endpoints
+- **Replication Crate** (`crates/replication/`): Full replication system — `ReplicationState` (primary/secondary IDs, offset), `ReplicationTrackerImpl` (atomic offset, per-replica ACK), `ReplicationFrame`/`ReplicationFrameCodec` (binary WAL framing), `PrimaryReplicationHandler` (PSYNC, FULLRESYNC, WAL broadcast), `ReplicaReplicationHandler` (REPLCONF handshake, PSYNC, checkpoint loading), `FullSyncState` (RocksDB checkpoint streaming, SHA-256)
+- **Cluster Crate** (`crates/cluster/`): Raft-based cluster state machine — `ClusterState` (RwLock-protected topology), `ClusterStateMachine` (implements `RaftStateMachine`), `ClusterStorage` (RocksDB-backed Raft log with two column families), `ClusterNetworkFactory`/`ClusterNetwork` (length-prefixed TCP JSON RPCs for AppendEntries, Vote, InstallSnapshot)
+- **Cluster Commands** (`crates/server/src/commands/cluster/`): CLUSTER INFO, MYID, NODES, SLOTS, SHARDS, KEYSLOT, COUNTKEYSINSLOT, GETKEYSINSLOT, MEET, FORGET, ADDSLOTS, DELSLOTS, FAILOVER (graceful/FORCE/TAKEOVER), REPLICATE, SETSLOT (IMPORTING/MIGRATING/NODE/STABLE), SET-CONFIG-EPOCH, SAVECONFIG, HELP, ASKING, READONLY, READWRITE
+- **Replication Commands** (`crates/server/src/commands/`): REPLICAOF/SLAVEOF, PSYNC, REPLCONF, WAIT, ROLE, INFO replication section
+- **Admin HTTP API** (`crates/server/src/admin/`): Axum-based server — `GET /admin/health`, `GET /admin/cluster`, `GET /admin/role`, `GET /admin/nodes`
+- **Failure Detector** (`crates/server/src/failure_detector.rs`): Leader-only TCP health checks, `MarkNodeFailed`/`MarkNodeRecovered` via Raft, quorum checking, auto-failover (defaults off)
+- **Client Protocol**: MOVED/ASK redirects, CROSSSLOT validation, slot calculation with hash tags
+- **Standard MIGRATE**: Key-by-key DUMP/RESTORE transfer (`crates/server/src/migrate.rs`), multi-key and AUTH variants
+- **Slot Migration Metadata**: `BeginSlotMigration`, `CompleteSlotMigration`, `CancelSlotMigration` Raft commands; `CLUSTER SETSLOT` wired to Raft
+- **HTTP Infrastructure**: Metrics server (hyper) with `/metrics`, `/health/live`, `/health/ready` endpoints
 - **Blocking Infrastructure**: `ShardWaitQueue` and `WaitEntry` for blocking operations
-- **Slot Constant**: `REDIS_CLUSTER_SLOTS = 16384` defined
+- **Test Suite**: 136 cluster integration tests + 76 replication integration tests
 
 ### What Needs to Be Built
-1. Primary-Replica Replication Protocol (PSYNC, WAL streaming)
-2. Admin HTTP API (orchestrator communication)
-3. Cluster Commands Implementation
-4. Cluster Topology & State Management
-5. Slot Migration Protocol
-6. Failover Support
-7. Testing Infrastructure (including reference orchestrator)
+1. **DFLYMIGRATE Protocol** — High-throughput streaming slot migration (current migration uses key-by-key MIGRATE only)
+2. **Self-Fencing** — Active write rejection on quorum loss (Raft provides implicit fencing but no explicit self-fence mechanism)
+3. **Automated Failover Refinement** — Replica-lag scoring for promotion (current auto-failover picks first available replica arbitrarily)
+4. **Split-Brain Recovery** — Divergent-write logging and rollback (partial: Raft leader validation exists, but no `split_brain_discarded.log`)
+5. **Chaos Testing** — Jepsen/Turmoil-based distributed correctness testing for cluster scenarios
 
 ---
 
 ## Implementation Phases
 
-### Phase 1: Primary-Replica Replication (First Milestone)
+### Phase 1: Primary-Replica Replication (First Milestone) — ✅ COMPLETE
 **Goal**: Enable standalone primary-replica replication without cluster topology
 
 This phase delivers a working replication system where one FrogDB node can replicate to another.
@@ -212,8 +217,10 @@ redis-cli -p 6379 WAIT 1 5000  # Wait for 1 replica to ACK within 5s
 
 ---
 
-### Phase 2: Admin API & Cluster Topology
+### Phase 2: Admin API & Cluster Topology — ⚠️ PARTIAL
 **Goal**: Enable orchestrator communication and topology management
+
+> **Status**: Raft state machine + CLUSTER commands + admin read endpoints all implemented. The original reference orchestrator was superseded by Raft consensus. Admin write endpoints (`POST /admin/cluster`, `POST /admin/role`) not implemented — topology changes go through Raft commands instead.
 
 #### 2.1 Admin HTTP Server
 **Files:** `crates/server/src/admin_api.rs`
@@ -328,7 +335,7 @@ redis-cli -p 6379 CLUSTER INFO
 
 ---
 
-### Phase 3: Client Protocol & Redirects
+### Phase 3: Client Protocol & Redirects — ✅ COMPLETE
 **Goal**: Enable Redis Cluster client compatibility
 
 #### 3.1 Slot Calculation & Hash Tags
@@ -431,8 +438,10 @@ redis-cli -p 6379 MSET {user}:a val1 {user}:b val2
 
 ---
 
-### Phase 4: Failover Support
+### Phase 4: Failover Support — ⚠️ PARTIAL
 **Goal**: Enable automatic and manual failover
+
+> **Status**: CLUSTER FAILOVER (graceful/FORCE/TAKEOVER) + Raft leader election + failure detector + quorum checking all implemented. Auto-failover exists but defaults off and lacks replica-lag scoring. Self-fencing not explicitly implemented (Raft provides implicit fencing). Split-brain discarded-writes log not implemented.
 
 #### 4.1 Internal Role Commands (Admin API)
 **Files:** `crates/server/src/admin_api.rs`
@@ -534,8 +543,10 @@ cat data/split_brain_discarded.log
 
 ---
 
-### Phase 5: Slot Migration
+### Phase 5: Slot Migration — ⚠️ PARTIAL
 **Goal**: Enable live slot migration between nodes
+
+> **Status**: Migration metadata layer fully implemented via Raft (BeginSlotMigration/CompleteSlotMigration/CancelSlotMigration). CLUSTER SETSLOT IMPORTING/MIGRATING/NODE/STABLE wired up. Standard MIGRATE (key-by-key DUMP/RESTORE) implemented. The DFLYMIGRATE high-throughput streaming protocol described below is not implemented.
 
 #### 5.1 Migration State Machine
 **Files:** `crates/core/src/cluster/migration.rs`
@@ -618,10 +629,12 @@ redis-cli -p 6379 GET migrated_key
 
 ---
 
-### Phase 6: Testing & Validation
+### Phase 6: Testing & Validation — ⚠️ PARTIAL
 **Goal**: Comprehensive testing for correctness
 
 Per decision: **Unit tests first**, integration tests after each phase.
+
+> **Status**: 136 cluster integration tests + 76 replication integration tests exist covering formation, failover, migration, redirects, partitions, and rolling restarts. Chaos testing (Jepsen/Turmoil for cluster) not done.
 
 #### 6.1 Unit Tests (Per Phase)
 
@@ -669,36 +682,38 @@ Per ROADMAP, Jepsen/Turmoil tests for linearizability are a future enhancement.
 ## Implementation Order Summary
 
 ```
-Phase 1: Replication (FIRST MILESTONE)
-   └── REPLICAOF, PSYNC, REPLCONF, WAIT, WAL streaming
+Phase 1: Replication ✅ COMPLETE
+   └── REPLICAOF, PSYNC, REPLCONF, WAIT, WAL streaming, full sync
          ↓
-Phase 2: Admin API & Topology
-   └── Admin HTTP server, CLUSTER commands, reference orchestrator
+Phase 2: Admin API & Topology ⚠️ PARTIAL
+   └── ✅ Raft state machine, CLUSTER commands, admin read API
+   └── ❌ Admin write endpoints (superseded by Raft), reference orchestrator (superseded by Raft)
          ↓
-Phase 3: Client Protocol
+Phase 3: Client Protocol ✅ COMPLETE
    └── MOVED, ASK, ASKING, READONLY, CROSSSLOT
          ↓
-Phase 4: Failover
-   └── CLUSTER FAILOVER, self-fencing, split-brain handling
+Phase 4: Failover ⚠️ PARTIAL
+   └── ✅ CLUSTER FAILOVER, Raft leader election, failure detector, quorum checking
+   └── ❌ Self-fencing, split-brain discarded-writes log, replica-lag scoring
          ↓
-Phase 5: Migration
-   └── DFLYMIGRATE protocol, live slot migration
+Phase 5: Migration ⚠️ PARTIAL
+   └── ✅ Raft migration metadata, CLUSTER SETSLOT, standard MIGRATE (DUMP/RESTORE)
+   └── ❌ DFLYMIGRATE high-throughput streaming protocol
          ↓
-Phase 6: Testing
-   └── Integration tests, chaos testing
+Phase 6: Testing ⚠️ PARTIAL
+   └── ✅ 136 cluster + 76 replication integration tests
+   └── ❌ Chaos testing (Jepsen/Turmoil for cluster)
 ```
 
 ---
 
 ## Estimated Scope
 
-| Phase | Complexity | Key Deliverables |
-|-------|------------|------------------|
-| 1 | **High** | Working primary-replica replication |
-| 2 | **Medium** | Admin API, topology management, reference orchestrator |
-| 3 | **Medium** | Redis Cluster client compatibility |
-| 4 | **High** | Automatic/manual failover |
-| 5 | **High** | Live slot migration |
-| 6 | **Medium** | Comprehensive test suite |
-
-**Recommendation**: Deliver Phase 1 as first milestone. Each subsequent phase delivers incremental value.
+| Phase | Status | Complexity | Key Deliverables | Remaining Work |
+|-------|--------|------------|------------------|----------------|
+| 1 | ✅ | **High** | Working primary-replica replication | — |
+| 2 | ⚠️ | **Medium** | Raft topology, CLUSTER commands, admin API | Admin write endpoints (low priority — Raft commands suffice) |
+| 3 | ✅ | **Medium** | Redis Cluster client compatibility | — |
+| 4 | ⚠️ | **High** | Manual/automatic failover | Self-fencing, split-brain log, replica-lag scoring |
+| 5 | ⚠️ | **High** | Slot migration (metadata + standard MIGRATE) | DFLYMIGRATE streaming protocol |
+| 6 | ⚠️ | **Medium** | 212 integration tests | Chaos/Jepsen testing |
