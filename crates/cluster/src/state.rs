@@ -279,11 +279,11 @@ impl ClusterState {
                     return Err(ClusterError::NodeNotFound(target_node));
                 }
 
-                let owner = inner
-                    .slot_assignment
-                    .get(&slot)
-                    .ok_or(ClusterError::SlotNotAssigned(slot))?;
-                if *owner != source_node {
+                // Slot assignment may be empty on follower nodes (assigned locally
+                // on bootstrap, not via Raft), so only validate if present.
+                if let Some(&owner) = inner.slot_assignment.get(&slot)
+                    && owner != source_node
+                {
                     return Err(ClusterError::InvalidOperation(format!(
                         "slot {} is owned by {}, not {}",
                         slot, owner, source_node

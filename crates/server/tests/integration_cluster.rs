@@ -4488,3 +4488,942 @@ async fn test_raft_snapshot_during_migration() {
 
     harness.shutdown_all().await;
 }
+
+// ============================================================================
+// Tier 10: End-to-End Slot Migration Tests
+// ============================================================================
+
+/// Split "host:port" into ("host", "port").
+fn split_addr(addr: &str) -> (&str, &str) {
+    addr.rsplit_once(':').expect("address must be host:port")
+}
+
+/// Find the harness node ID that owns the given slot by probing nodes.
+/// Sends a GET for a key in the slot: the node that handles it is the owner;
+/// a MOVED redirect tells us who the real owner is.
+/// Returns (owner_harness_id, non_owner_harness_id).
+async fn find_owner_of_slot(harness: &ClusterTestHarness, slot: u16) -> Option<(u64, u64)> {
+    let node_ids = harness.node_ids();
+    let probe_key = key_for_slot(slot);
+
+    for &nid in &node_ids {
+        let node = harness.node(nid)?;
+        let resp = node.send("GET", &[&probe_key]).await;
+
+        if let Some((_moved_slot, target_addr)) = is_moved_redirect(&resp) {
+            // This node doesn't own the slot; target_addr does
+            for &owner_nid in &node_ids {
+                if harness.node(owner_nid)?.client_addr() == target_addr {
+                    return Some((owner_nid, nid));
+                }
+            }
+        } else if !is_error(&resp) {
+            // This node accepted the command — it owns the slot
+            for &other_nid in &node_ids {
+                if other_nid != nid {
+                    return Some((nid, other_nid));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Send a CLUSTER subcommand via the Raft leader, falling back to REDIRECT chasing.
+async fn send_cluster_cmd(
+    harness: &ClusterTestHarness,
+    _preferred_node_id: u64,
+    args: &[&str],
+) -> frogdb_protocol::Response {
+    // Always send to the known Raft leader first
+    let leader_id = harness.get_leader().await.unwrap_or(_preferred_node_id);
+    let node = harness.node(leader_id).unwrap();
+    let resp = node.send("CLUSTER", args).await;
+
+    // If still redirected, follow it
+    if let Some(msg) = get_error_message(&resp) {
+        if msg.starts_with("REDIRECT ") {
+            let parts: Vec<&str> = msg.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let leader_addr = parts[2];
+                for &nid in &harness.node_ids() {
+                    if let Some(n) = harness.node(nid) {
+                        if n.client_addr() == leader_addr {
+                            return n.send("CLUSTER", args).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    resp
+}
+
+/// Run the full Redis-style slot migration workflow:
+/// 1. SETSLOT IMPORTING on target (via Raft leader)
+/// 2. SETSLOT MIGRATING on source (via Raft leader)
+/// 3. Loop: GETKEYSINSLOT + MIGRATE
+/// 4. SETSLOT NODE on both (via Raft leader)
+async fn run_full_slot_migration(
+    harness: &ClusterTestHarness,
+    source_id: u64,
+    target_id: u64,
+    slot: u16,
+    batch_size: usize,
+) -> Result<(), String> {
+    let source = harness.node(source_id).ok_or("source node not found")?;
+    let target = harness.node(target_id).ok_or("target node not found")?;
+
+    let source_cluster_id = harness
+        .get_node_id_str(source_id)
+        .ok_or("source cluster ID not found")?;
+    let target_cluster_id = harness
+        .get_node_id_str(target_id)
+        .ok_or("target cluster ID not found")?;
+
+    let slot_str = slot.to_string();
+    let batch_str = batch_size.to_string();
+
+    // Step 1: SETSLOT IMPORTING <source-id> <target-id> (via Raft leader)
+    // Pass both node IDs explicitly since the command is Raft-forwarded to the
+    // leader, which has a different my_node_id than the intended target.
+    let import_resp = send_cluster_cmd(
+        harness,
+        target_id,
+        &[
+            "SETSLOT",
+            &slot_str,
+            "IMPORTING",
+            &source_cluster_id,
+            &target_cluster_id,
+        ],
+    )
+    .await;
+    if is_error(&import_resp) {
+        return Err(format!(
+            "SETSLOT IMPORTING failed: {:?}",
+            get_error_message(&import_resp)
+        ));
+    }
+
+    // Step 2: SETSLOT MIGRATING <target-id> <source-id> (via Raft leader)
+    // Note: In FrogDB, both IMPORTING and MIGRATING go through Raft as the same
+    // BeginSlotMigration command. The second call may fail with "migration in
+    // progress" which is expected — the migration was already started by IMPORTING.
+    let migrate_resp = send_cluster_cmd(
+        harness,
+        source_id,
+        &[
+            "SETSLOT",
+            &slot_str,
+            "MIGRATING",
+            &target_cluster_id,
+            &source_cluster_id,
+        ],
+    )
+    .await;
+    if is_error(&migrate_resp) {
+        let msg = get_error_message(&migrate_resp).unwrap_or_default();
+        if !msg.contains("migration in progress") {
+            return Err(format!("SETSLOT MIGRATING failed: {:?}", msg));
+        }
+    }
+
+    // Allow Raft propagation
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Step 3: Loop GETKEYSINSLOT + MIGRATE
+    let target_addr = target.client_addr();
+    let (host, port) = split_addr(&target_addr);
+
+    loop {
+        let keys_resp = source
+            .send("CLUSTER", &["GETKEYSINSLOT", &slot_str, &batch_str])
+            .await;
+
+        let keys = match keys_resp {
+            frogdb_protocol::Response::Array(ref arr) => {
+                let mut ks = Vec::new();
+                for item in arr {
+                    if let frogdb_protocol::Response::Bulk(Some(b)) = item {
+                        ks.push(String::from_utf8_lossy(b).to_string());
+                    }
+                }
+                ks
+            }
+            _ => {
+                return Err(format!(
+                    "GETKEYSINSLOT unexpected response: {:?}",
+                    keys_resp
+                ));
+            }
+        };
+
+        if keys.is_empty() {
+            break;
+        }
+
+        // Build MIGRATE command: MIGRATE host port "" 0 5000 REPLACE KEYS key1 key2 ...
+        let mut migrate_args: Vec<&str> = vec![host, port, "", "0", "5000", "REPLACE", "KEYS"];
+        for k in &keys {
+            migrate_args.push(k.as_str());
+        }
+
+        let migrate_result = source.send("MIGRATE", &migrate_args).await;
+        if is_error(&migrate_result) {
+            return Err(format!(
+                "MIGRATE failed: {:?}",
+                get_error_message(&migrate_result)
+            ));
+        }
+    }
+
+    // Step 4: SETSLOT NODE (via Raft leader)
+    let node_resp = send_cluster_cmd(
+        harness,
+        target_id,
+        &["SETSLOT", &slot_str, "NODE", &target_cluster_id],
+    )
+    .await;
+    if is_error(&node_resp) {
+        return Err(format!(
+            "SETSLOT NODE failed: {:?}",
+            get_error_message(&node_resp)
+        ));
+    }
+
+    // Allow Raft propagation
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    Ok(())
+}
+
+/// Test 1: Basic string key migration end-to-end.
+///
+/// Writes 5 string keys with hash tags to a slot, runs the full migration workflow,
+/// then verifies keys exist on target, are gone from source, and source returns MOVED.
+#[tokio::test]
+async fn test_e2e_migration_basic_string_keys() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 100u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+
+    // Write 5 keys with hash tags targeting the same slot
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let mut keys = Vec::new();
+    for i in 0..5 {
+        let key = format!("{}_k{}", tag, i);
+        let value = format!("value_{}", i);
+        let resp = source.send("SET", &[&key, &value]).await;
+        assert!(!is_error(&resp), "SET failed: {:?}", resp);
+        keys.push((key, value));
+    }
+
+    // Run full migration
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    // Verify keys on target
+    let target = harness.node(target_id).unwrap();
+    for (key, expected_value) in &keys {
+        let resp = target.send("GET", &[key]).await;
+        match resp {
+            frogdb_protocol::Response::Bulk(Some(v)) => {
+                assert_eq!(
+                    std::str::from_utf8(&v).unwrap(),
+                    expected_value,
+                    "value mismatch for key {}",
+                    key
+                );
+            }
+            other => panic!("expected value for key {} on target, got: {:?}", key, other),
+        }
+    }
+
+    // Verify source returns MOVED for these keys
+    let source = harness.node(source_id).unwrap();
+    for (key, _) in &keys {
+        let resp = source.send("GET", &[key]).await;
+        assert!(
+            is_moved_redirect(&resp).is_some(),
+            "expected MOVED redirect from source for key {}, got: {:?}",
+            key,
+            resp
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Test 2: Migration preserves TTL.
+///
+/// Writes a key with PEXPIRE, migrates it, verifies PTTL on target is positive
+/// and less than or equal to the original TTL.
+#[tokio::test]
+async fn test_e2e_migration_preserves_ttl() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 200u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+
+    let key = format!("{{{}}}_k0", key_for_slot(test_slot));
+    let ttl_ms: i64 = 30000;
+
+    // SET + PEXPIRE
+    let set_resp = source.send("SET", &[&key, "ttl_value"]).await;
+    assert!(!is_error(&set_resp), "SET failed: {:?}", set_resp);
+
+    let expire_resp = source.send("PEXPIRE", &[&key, &ttl_ms.to_string()]).await;
+    assert!(!is_error(&expire_resp), "PEXPIRE failed: {:?}", expire_resp);
+
+    // Verify TTL is set on source
+    let pttl_resp = source.send("PTTL", &[&key]).await;
+    let source_pttl = match pttl_resp {
+        frogdb_protocol::Response::Integer(t) => t,
+        other => panic!("expected integer PTTL, got: {:?}", other),
+    };
+    assert!(source_pttl > 0, "PTTL should be positive before migration");
+
+    // Run full migration
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    // Verify TTL on target
+    let target = harness.node(target_id).unwrap();
+    let target_pttl_resp = target.send("PTTL", &[&key]).await;
+    let target_pttl = match target_pttl_resp {
+        frogdb_protocol::Response::Integer(t) => t,
+        other => panic!("expected integer PTTL on target, got: {:?}", other),
+    };
+
+    assert!(target_pttl > 0, "PTTL on target should be positive");
+    assert!(
+        target_pttl <= ttl_ms,
+        "PTTL on target ({}) should be <= original ({})",
+        target_pttl,
+        ttl_ms
+    );
+
+    // Verify value is correct
+    let get_resp = target.send("GET", &[&key]).await;
+    match get_resp {
+        frogdb_protocol::Response::Bulk(Some(v)) => {
+            assert_eq!(std::str::from_utf8(&v).unwrap(), "ttl_value");
+        }
+        other => panic!("expected value on target, got: {:?}", other),
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Test 3: Migration preserves multiple data types.
+///
+/// Writes String, Hash, List, Set, and SortedSet to the same slot, migrates,
+/// then verifies all types are correctly reconstructed on the target.
+#[tokio::test]
+async fn test_e2e_migration_multiple_data_types() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 300u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+
+    // String
+    let str_key = format!("{}_str", tag);
+    let resp = source.send("SET", &[&str_key, "hello"]).await;
+    assert!(!is_error(&resp), "SET failed: {:?}", resp);
+
+    // Hash
+    let hash_key = format!("{}_hash", tag);
+    let resp = source
+        .send("HSET", &[&hash_key, "field1", "val1", "field2", "val2"])
+        .await;
+    assert!(!is_error(&resp), "HSET failed: {:?}", resp);
+
+    // List
+    let list_key = format!("{}_list", tag);
+    let resp = source.send("RPUSH", &[&list_key, "a", "b", "c"]).await;
+    assert!(!is_error(&resp), "RPUSH failed: {:?}", resp);
+
+    // Set
+    let set_key = format!("{}_set", tag);
+    let resp = source.send("SADD", &[&set_key, "x", "y", "z"]).await;
+    assert!(!is_error(&resp), "SADD failed: {:?}", resp);
+
+    // SortedSet
+    let zset_key = format!("{}_zset", tag);
+    let resp = source
+        .send("ZADD", &[&zset_key, "1", "one", "2", "two", "3", "three"])
+        .await;
+    assert!(!is_error(&resp), "ZADD failed: {:?}", resp);
+
+    // Run full migration
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    let target = harness.node(target_id).unwrap();
+
+    // Verify String
+    let resp = target.send("GET", &[&str_key]).await;
+    match resp {
+        frogdb_protocol::Response::Bulk(Some(v)) => {
+            assert_eq!(std::str::from_utf8(&v).unwrap(), "hello");
+        }
+        other => panic!("expected string value, got: {:?}", other),
+    }
+
+    // Verify Hash
+    let resp = target.send("HGETALL", &[&hash_key]).await;
+    if let frogdb_protocol::Response::Array(arr) = resp {
+        // HGETALL returns flat [field, value, field, value, ...]
+        assert_eq!(arr.len(), 4, "expected 2 field-value pairs");
+    } else {
+        panic!("expected array from HGETALL, got: {:?}", resp);
+    }
+
+    // Verify List
+    let resp = target.send("LRANGE", &[&list_key, "0", "-1"]).await;
+    if let frogdb_protocol::Response::Array(arr) = resp {
+        let vals: Vec<String> = arr
+            .iter()
+            .filter_map(|r| {
+                if let frogdb_protocol::Response::Bulk(Some(b)) = r {
+                    Some(String::from_utf8_lossy(b).to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(vals, vec!["a", "b", "c"]);
+    } else {
+        panic!("expected array from LRANGE, got: {:?}", resp);
+    }
+
+    // Verify Set
+    let resp = target.send("SMEMBERS", &[&set_key]).await;
+    if let frogdb_protocol::Response::Array(arr) = resp {
+        let mut vals: Vec<String> = arr
+            .iter()
+            .filter_map(|r| {
+                if let frogdb_protocol::Response::Bulk(Some(b)) = r {
+                    Some(String::from_utf8_lossy(b).to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        vals.sort();
+        assert_eq!(vals, vec!["x", "y", "z"]);
+    } else {
+        panic!("expected array from SMEMBERS, got: {:?}", resp);
+    }
+
+    // Verify SortedSet
+    let resp = target
+        .send("ZRANGE", &[&zset_key, "0", "-1", "WITHSCORES"])
+        .await;
+    if let frogdb_protocol::Response::Array(arr) = resp {
+        // ZRANGE WITHSCORES returns [member, score, member, score, ...]
+        assert_eq!(arr.len(), 6, "expected 3 member-score pairs");
+    } else {
+        panic!("expected array from ZRANGE, got: {:?}", resp);
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Test 4: Batched key migration.
+///
+/// Writes 25 keys, migrates with batch_size=10, verifies GETKEYSINSLOT returns
+/// batches and all 25 keys land on target.
+#[tokio::test]
+async fn test_e2e_migration_batched_keys() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 400u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+
+    // Write 25 keys
+    let num_keys = 25;
+    let mut keys = Vec::new();
+    for i in 0..num_keys {
+        let key = format!("{}_k{}", tag, i);
+        let value = format!("batch_value_{}", i);
+        let resp = source.send("SET", &[&key, &value]).await;
+        assert!(!is_error(&resp), "SET failed for key {}: {:?}", key, resp);
+        keys.push((key, value));
+    }
+
+    // Run migration with batch_size=10 (should take 3 rounds: 10+10+5)
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 10)
+        .await
+        .expect("batched migration failed");
+
+    // Verify all 25 keys on target
+    let target = harness.node(target_id).unwrap();
+    for (key, expected_value) in &keys {
+        let resp = target.send("GET", &[key]).await;
+        match resp {
+            frogdb_protocol::Response::Bulk(Some(v)) => {
+                assert_eq!(
+                    std::str::from_utf8(&v).unwrap(),
+                    expected_value,
+                    "value mismatch for key {}",
+                    key
+                );
+            }
+            other => panic!("expected value for key {} on target, got: {:?}", key, other),
+        }
+    }
+
+    // Verify source has 0 keys in this slot
+    let source = harness.node(source_id).unwrap();
+    let keys_resp = source
+        .send("CLUSTER", &["GETKEYSINSLOT", &test_slot.to_string(), "100"])
+        .await;
+    if let frogdb_protocol::Response::Array(arr) = keys_resp {
+        assert_eq!(
+            arr.len(),
+            0,
+            "source should have 0 keys in slot {} after migration",
+            test_slot
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Test 5: ASK redirect during partial migration.
+///
+/// Sets MIGRATING state, migrates only 1 of 2 keys, verifies:
+/// - Non-migrated key is served directly from source
+/// - Migrated key gets ASK redirect from source
+/// - ASKING+GET on target works for the migrated key
+#[tokio::test]
+async fn test_e2e_migration_ask_redirect() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 500u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+    let target = harness.node(target_id).unwrap();
+
+    let source_cluster_id = harness.get_node_id_str(source_id).unwrap();
+    let target_cluster_id = harness.get_node_id_str(target_id).unwrap();
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key_stay = format!("{}_stay", tag);
+    let key_move = format!("{}_move", tag);
+
+    // Write two keys
+    let resp = source.send("SET", &[&key_stay, "stay_value"]).await;
+    assert!(!is_error(&resp), "SET stay failed: {:?}", resp);
+    let resp = source.send("SET", &[&key_move, "move_value"]).await;
+    assert!(!is_error(&resp), "SET move failed: {:?}", resp);
+
+    let slot_str = test_slot.to_string();
+
+    // Set IMPORTING on target (via Raft leader)
+    let resp = send_cluster_cmd(
+        &harness,
+        target_id,
+        &["SETSLOT", &slot_str, "IMPORTING", &source_cluster_id],
+    )
+    .await;
+    assert!(!is_error(&resp), "SETSLOT IMPORTING failed: {:?}", resp);
+
+    // Set MIGRATING on source (via Raft leader)
+    let resp = send_cluster_cmd(
+        &harness,
+        source_id,
+        &["SETSLOT", &slot_str, "MIGRATING", &target_cluster_id],
+    )
+    .await;
+    assert!(!is_error(&resp), "SETSLOT MIGRATING failed: {:?}", resp);
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Migrate only key_move (not key_stay)
+    let target_addr = target.client_addr();
+    let (host, port) = split_addr(&target_addr);
+    let migrate_resp = source
+        .send(
+            "MIGRATE",
+            &[host, port, "", "0", "5000", "REPLACE", "KEYS", &key_move],
+        )
+        .await;
+    assert!(
+        !is_error(&migrate_resp),
+        "MIGRATE failed: {:?}",
+        migrate_resp
+    );
+
+    // key_stay should still be served from source (it's still there)
+    let resp = source.send("GET", &[&key_stay]).await;
+    match &resp {
+        frogdb_protocol::Response::Bulk(Some(v)) => {
+            assert_eq!(std::str::from_utf8(v).unwrap(), "stay_value");
+        }
+        other => panic!("expected key_stay value from source, got: {:?}", other),
+    }
+
+    // key_move should get ASK redirect from source (it was deleted by MIGRATE)
+    let resp = source.send("GET", &[&key_move]).await;
+    assert!(
+        is_ask_redirect(&resp).is_some(),
+        "expected ASK redirect for migrated key from source, got: {:?}",
+        resp
+    );
+
+    // ASKING + GET on target should return the value
+    let mut target_client = target.connect().await;
+    let asking_resp = target_client.command(&["ASKING"]).await;
+    assert!(!is_error(&asking_resp), "ASKING failed: {:?}", asking_resp);
+    let get_resp = target_client.command(&["GET", &key_move]).await;
+    match get_resp {
+        frogdb_protocol::Response::Bulk(Some(v)) => {
+            assert_eq!(std::str::from_utf8(&v).unwrap(), "move_value");
+        }
+        other => panic!(
+            "expected move_value via ASKING+GET on target, got: {:?}",
+            other
+        ),
+    }
+
+    // Clean up: complete migration (via Raft leader)
+    let _ = send_cluster_cmd(
+        &harness,
+        target_id,
+        &["SETSLOT", &slot_str, "NODE", &target_cluster_id],
+    )
+    .await;
+
+    harness.shutdown_all().await;
+}
+
+/// Test 6: MOVED redirect after migration completes.
+///
+/// Runs full migration, then verifies source returns MOVED for both reads and writes.
+#[tokio::test]
+async fn test_e2e_migration_moved_after_complete() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 600u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_k0", tag);
+
+    // Write a key
+    let resp = source.send("SET", &[&key, "moved_test"]).await;
+    assert!(!is_error(&resp), "SET failed: {:?}", resp);
+
+    // Run full migration
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    // Verify MOVED for GET (read)
+    let source = harness.node(source_id).unwrap();
+    let resp = source.send("GET", &[&key]).await;
+    let moved = is_moved_redirect(&resp);
+    assert!(
+        moved.is_some(),
+        "expected MOVED for GET after migration, got: {:?}",
+        resp
+    );
+    let (moved_slot, moved_addr) = moved.unwrap();
+    assert_eq!(moved_slot, test_slot, "MOVED slot mismatch");
+    let target = harness.node(target_id).unwrap();
+    assert_eq!(
+        moved_addr,
+        target.client_addr(),
+        "MOVED should point to target"
+    );
+
+    // Verify MOVED for SET (write)
+    let resp = source.send("SET", &[&key, "new_value"]).await;
+    assert!(
+        is_moved_redirect(&resp).is_some(),
+        "expected MOVED for SET after migration, got: {:?}",
+        resp
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Test 7: Migration of an empty slot.
+///
+/// Migrates a slot with 0 keys. GETKEYSINSLOT returns empty, no MIGRATE needed.
+/// After SETSLOT NODE, new writes to the slot go to the target.
+#[tokio::test]
+async fn test_e2e_migration_empty_slot() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 700u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+
+    // Verify slot is empty
+    let keys_resp = source
+        .send("CLUSTER", &["GETKEYSINSLOT", &test_slot.to_string(), "100"])
+        .await;
+    if let frogdb_protocol::Response::Array(ref arr) = keys_resp {
+        assert_eq!(arr.len(), 0, "slot should be empty before migration");
+    }
+
+    // Run full migration (should succeed immediately since no keys to move)
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("empty slot migration failed");
+
+    // New writes should go to target (source returns MOVED)
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key = format!("{}_new", tag);
+
+    let source = harness.node(source_id).unwrap();
+    let resp = source.send("SET", &[&key, "new_value"]).await;
+    assert!(
+        is_moved_redirect(&resp).is_some(),
+        "expected MOVED for write to migrated empty slot, got: {:?}",
+        resp
+    );
+
+    // Write directly on target should succeed
+    let target = harness.node(target_id).unwrap();
+    let resp = target.send("SET", &[&key, "new_value"]).await;
+    assert!(
+        !is_error(&resp),
+        "SET on target for migrated slot should succeed: {:?}",
+        resp
+    );
+
+    // Verify value is readable from target
+    let resp = target.send("GET", &[&key]).await;
+    match resp {
+        frogdb_protocol::Response::Bulk(Some(v)) => {
+            assert_eq!(std::str::from_utf8(&v).unwrap(), "new_value");
+        }
+        other => panic!("expected value from target, got: {:?}", other),
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Test 8: Concurrent writes during migration.
+///
+/// Begins migration, migrates 1 of 2 keys, updates the remaining key on source,
+/// completes migration, then verifies the updated value is present on target.
+#[tokio::test]
+async fn test_e2e_migration_concurrent_writes() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 800u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+    let target = harness.node(target_id).unwrap();
+
+    let source_cluster_id = harness.get_node_id_str(source_id).unwrap();
+    let target_cluster_id = harness.get_node_id_str(target_id).unwrap();
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key1 = format!("{}_k1", tag);
+    let key2 = format!("{}_k2", tag);
+
+    // Write initial keys
+    let resp = source.send("SET", &[&key1, "original_k1"]).await;
+    assert!(!is_error(&resp), "SET k1 failed: {:?}", resp);
+    let resp = source.send("SET", &[&key2, "original_k2"]).await;
+    assert!(!is_error(&resp), "SET k2 failed: {:?}", resp);
+
+    let slot_str = test_slot.to_string();
+
+    // Begin migration (via Raft leader)
+    let resp = send_cluster_cmd(
+        &harness,
+        target_id,
+        &["SETSLOT", &slot_str, "IMPORTING", &source_cluster_id],
+    )
+    .await;
+    assert!(!is_error(&resp), "SETSLOT IMPORTING failed: {:?}", resp);
+
+    let resp = send_cluster_cmd(
+        &harness,
+        source_id,
+        &["SETSLOT", &slot_str, "MIGRATING", &target_cluster_id],
+    )
+    .await;
+    assert!(!is_error(&resp), "SETSLOT MIGRATING failed: {:?}", resp);
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Migrate only key1
+    let target_addr = target.client_addr();
+    let (host, port) = split_addr(&target_addr);
+    let resp = source
+        .send(
+            "MIGRATE",
+            &[host, port, "", "0", "5000", "REPLACE", "KEYS", &key1],
+        )
+        .await;
+    assert!(!is_error(&resp), "MIGRATE k1 failed: {:?}", resp);
+
+    // Update key2 on source (still there, not yet migrated)
+    let resp = source.send("SET", &[&key2, "updated_k2"]).await;
+    assert!(
+        !is_error(&resp),
+        "SET updated k2 during migration failed: {:?}",
+        resp
+    );
+
+    // Migrate key2
+    let resp = source
+        .send(
+            "MIGRATE",
+            &[host, port, "", "0", "5000", "REPLACE", "KEYS", &key2],
+        )
+        .await;
+    assert!(!is_error(&resp), "MIGRATE k2 failed: {:?}", resp);
+
+    // Complete migration (via Raft leader)
+    let resp = send_cluster_cmd(
+        &harness,
+        target_id,
+        &["SETSLOT", &slot_str, "NODE", &target_cluster_id],
+    )
+    .await;
+    assert!(!is_error(&resp), "SETSLOT NODE failed: {:?}", resp);
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Verify key1 has original value on target
+    let target = harness.node(target_id).unwrap();
+    let resp = target.send("GET", &[&key1]).await;
+    match resp {
+        frogdb_protocol::Response::Bulk(Some(v)) => {
+            assert_eq!(std::str::from_utf8(&v).unwrap(), "original_k1");
+        }
+        other => panic!("expected original_k1 on target, got: {:?}", other),
+    }
+
+    // Verify key2 has UPDATED value on target
+    let resp = target.send("GET", &[&key2]).await;
+    match resp {
+        frogdb_protocol::Response::Bulk(Some(v)) => {
+            assert_eq!(
+                std::str::from_utf8(&v).unwrap(),
+                "updated_k2",
+                "key2 should have the updated value after migration"
+            );
+        }
+        other => panic!("expected updated_k2 on target, got: {:?}", other),
+    }
+
+    harness.shutdown_all().await;
+}

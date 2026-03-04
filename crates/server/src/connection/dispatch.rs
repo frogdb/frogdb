@@ -446,6 +446,23 @@ impl ConnectionHandler {
             return self.dispatch_server_wide(op, &cmd.args).await;
         }
 
+        // Route CLUSTER GETKEYSINSLOT / COUNTKEYSINSLOT to the correct shard.
+        // These subcommands query a specific slot's keys, but the CLUSTER command
+        // is keyless and would otherwise execute on the connection's assigned shard.
+        // Since all keys for a given slot live on shard (slot % num_shards), we
+        // must forward to that shard.
+        if cmd_name == "CLUSTER" && !cmd.args.is_empty() {
+            let sub = cmd.args[0].to_ascii_uppercase();
+            if (sub.as_slice() == b"GETKEYSINSLOT" || sub.as_slice() == b"COUNTKEYSINSLOT")
+                && cmd.args.len() >= 2
+                && let Ok(slot_str) = std::str::from_utf8(&cmd.args[1])
+                && let Ok(slot) = slot_str.parse::<u16>()
+            {
+                let target_shard = slot as usize % self.num_shards;
+                return vec![self.execute_on_shard(target_shard, Arc::clone(cmd)).await];
+            }
+        }
+
         // Validate cluster slot ownership (returns CROSSSLOT/MOVED/ASK errors)
         if let Some(cluster_error) = self.validate_cluster_slots(cmd) {
             return vec![cluster_error];
