@@ -94,7 +94,13 @@
               state (cluster-db/get-cluster-state conn)]
           (if (= "ok" state)
             (assoc op :type :ok :value :quorum-ok)
-            (assoc op :type :ok :value :quorum-lost))))
+            (assoc op :type :ok :value :quorum-lost)))
+
+        ;; Generic read (used by final-reads phase) — delegates to read-cluster-state
+        :read
+        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)
+              state (cluster-db/get-cluster-state conn)]
+          (assoc op :type :ok :value state)))
 
       (catch java.net.ConnectException e
         (assoc op :type :fail :error :connection-refused))

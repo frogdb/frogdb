@@ -225,6 +225,14 @@
               value (cluster-client/cluster-get slot-mapping key docker-host? nodes)]
           (assoc op :type :ok :value {:key key
                                        :value (frogdb/parse-value value)
+                                       :slot (cluster-client/slot-for-key key)}))
+
+        ;; Generic read (used by final-reads phase) — delegates to single-read
+        :read
+        (let [key (or (:value op) (str "{jepsen-xslot}:a"))
+              value (cluster-client/cluster-get slot-mapping key docker-host? nodes)]
+          (assoc op :type :ok :value {:key key
+                                       :value (frogdb/parse-value value)
                                        :slot (cluster-client/slot-for-key key)})))
 
       (catch java.net.ConnectException e
