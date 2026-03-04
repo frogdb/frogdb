@@ -204,9 +204,7 @@ async fn incrbyfloat_decrement() {
 
     client.command(&["SET", "foo", "1"]).await;
     let resp = client.command(&["INCRBYFLOAT", "foo", "-1.1"]).await;
-    let val: f64 = String::from_utf8_lossy(unwrap_bulk(&resp))
-        .parse()
-        .unwrap();
+    let val: f64 = String::from_utf8_lossy(unwrap_bulk(&resp)).parse().unwrap();
     assert!((val - (-0.1)).abs() < 1e-10);
 }
 

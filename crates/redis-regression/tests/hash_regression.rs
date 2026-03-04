@@ -55,9 +55,15 @@ async fn hmset_hmget_multiple_fields() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    assert_ok(&client.command(&["HMSET", "myhash", "a", "1", "b", "2", "c", "3"]).await);
+    assert_ok(
+        &client
+            .command(&["HMSET", "myhash", "a", "1", "b", "2", "c", "3"])
+            .await,
+    );
 
-    let resp = client.command(&["HMGET", "myhash", "a", "b", "c", "missing"]).await;
+    let resp = client
+        .command(&["HMGET", "myhash", "a", "b", "c", "missing"])
+        .await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 4);
     assert_bulk_eq(&items[0], b"1");
@@ -71,7 +77,9 @@ async fn hgetall_returns_all_field_value_pairs() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "myhash", "f1", "v1", "f2", "v2"]).await;
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2"])
+        .await;
     let resp = client.command(&["HGETALL", "myhash"]).await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items.len(), 4);
@@ -89,9 +97,17 @@ async fn hlen_tracks_field_count() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    assert_eq!(unwrap_integer(&client.command(&["HLEN", "myhash"]).await), 0);
-    client.command(&["HSET", "myhash", "a", "1", "b", "2"]).await;
-    assert_eq!(unwrap_integer(&client.command(&["HLEN", "myhash"]).await), 2);
+    assert_eq!(
+        unwrap_integer(&client.command(&["HLEN", "myhash"]).await),
+        0
+    );
+    client
+        .command(&["HSET", "myhash", "a", "1", "b", "2"])
+        .await;
+    assert_eq!(
+        unwrap_integer(&client.command(&["HLEN", "myhash"]).await),
+        2
+    );
 }
 
 #[tokio::test]
@@ -99,7 +115,9 @@ async fn hkeys_and_hvals() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "myhash", "x", "10", "y", "20"]).await;
+    client
+        .command(&["HSET", "myhash", "x", "10", "y", "20"])
+        .await;
 
     let keys = extract_bulk_strings(&client.command(&["HKEYS", "myhash"]).await);
     let mut keys_sorted = keys.clone();
@@ -118,8 +136,14 @@ async fn hexists_reports_field_presence() {
     let mut client = server.connect().await;
 
     client.command(&["HSET", "myhash", "f1", "v1"]).await;
-    assert_eq!(unwrap_integer(&client.command(&["HEXISTS", "myhash", "f1"]).await), 1);
-    assert_eq!(unwrap_integer(&client.command(&["HEXISTS", "myhash", "missing"]).await), 0);
+    assert_eq!(
+        unwrap_integer(&client.command(&["HEXISTS", "myhash", "f1"]).await),
+        1
+    );
+    assert_eq!(
+        unwrap_integer(&client.command(&["HEXISTS", "myhash", "missing"]).await),
+        0
+    );
 }
 
 #[tokio::test]
@@ -133,10 +157,14 @@ async fn hincrby_and_hincrbyfloat() {
     let resp = client.command(&["HINCRBY", "myhash", "counter", "3"]).await;
     assert_eq!(unwrap_integer(&resp), 8);
 
-    let resp = client.command(&["HINCRBYFLOAT", "myhash", "score", "1.5"]).await;
+    let resp = client
+        .command(&["HINCRBYFLOAT", "myhash", "score", "1.5"])
+        .await;
     assert_bulk_eq(&resp, b"1.5");
 
-    let resp = client.command(&["HINCRBYFLOAT", "myhash", "score", "0.5"]).await;
+    let resp = client
+        .command(&["HINCRBYFLOAT", "myhash", "score", "0.5"])
+        .await;
     assert_bulk_eq(&resp, b"2");
 }
 
@@ -145,7 +173,9 @@ async fn hrandfield_negative_count_allows_duplicates() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "myhash", "a", "1", "b", "2"]).await;
+    client
+        .command(&["HSET", "myhash", "a", "1", "b", "2"])
+        .await;
 
     // Negative count allows duplicates and always returns exactly |count| items
     let resp = client.command(&["HRANDFIELD", "myhash", "-5"]).await;
@@ -158,7 +188,9 @@ async fn hrandfield_positive_count_no_duplicates() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "myhash", "a", "1", "b", "2", "c", "3"]).await;
+    client
+        .command(&["HSET", "myhash", "a", "1", "b", "2", "c", "3"])
+        .await;
 
     // Positive count returns unique fields, capped at hash size
     let resp = client.command(&["HRANDFIELD", "myhash", "10"]).await;

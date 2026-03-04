@@ -120,6 +120,16 @@ macro_rules! begin {
     };
 }
 
+/// Record the end of a latency measurement.
+#[macro_export]
+macro_rules! end {
+    ($name:expr) => {
+        if let Some(registry) = $crate::progress::ProgressPointRegistry::global() {
+            registry.record_end($name);
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,14 +209,4 @@ mod tests {
         assert_eq!(count2, 3);
         assert!(count2 > count1);
     }
-}
-
-/// Record the end of a latency measurement.
-#[macro_export]
-macro_rules! end {
-    ($name:expr) => {
-        if let Some(registry) = $crate::progress::ProgressPointRegistry::global() {
-            registry.record_end($name);
-        }
-    };
 }

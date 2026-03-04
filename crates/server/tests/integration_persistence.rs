@@ -92,7 +92,11 @@ async fn test_expiry_persists_across_restart() {
     let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
     let mut client = server.connect().await;
 
-    assert_ok(&client.command(&["SET", "key1", "value1", "EX", "3600"]).await);
+    assert_ok(
+        &client
+            .command(&["SET", "key1", "value1", "EX", "3600"])
+            .await,
+    );
     let ttl = unwrap_integer(&client.command(&["TTL", "key1"]).await);
     assert!(ttl > 3500, "TTL should be ~3600, got {ttl}");
 
@@ -108,7 +112,10 @@ async fn test_expiry_persists_across_restart() {
         Response::Bulk(Some(Bytes::from("value1")))
     );
     let ttl = unwrap_integer(&client.command(&["TTL", "key1"]).await);
-    assert!(ttl > 0, "TTL should still be positive after restart, got {ttl}");
+    assert!(
+        ttl > 0,
+        "TTL should still be positive after restart, got {ttl}"
+    );
     assert!(ttl <= 3600, "TTL should not exceed original, got {ttl}");
 
     server.shutdown().await;
@@ -128,10 +135,7 @@ async fn test_deleted_keys_stay_deleted_after_restart() {
     assert_ok(&client.command(&["SET", "key1", "val1"]).await);
     assert_ok(&client.command(&["SET", "key2", "val2"]).await);
     assert_ok(&client.command(&["SET", "key3", "val3"]).await);
-    assert_eq!(
-        client.command(&["DEL", "key2"]).await,
-        Response::Integer(1)
-    );
+    assert_eq!(client.command(&["DEL", "key2"]).await, Response::Integer(1));
 
     drop(client);
     server.shutdown().await;
@@ -174,7 +178,8 @@ async fn test_bgsave_snapshot_survives_restart() {
         Response::Simple(msg) => {
             let msg_str = String::from_utf8_lossy(msg);
             assert!(
-                msg_str.contains("Background saving started") || msg_str.contains("already in progress"),
+                msg_str.contains("Background saving started")
+                    || msg_str.contains("already in progress"),
                 "Unexpected BGSAVE response: {msg_str}"
             );
         }

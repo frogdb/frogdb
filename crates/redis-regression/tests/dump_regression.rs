@@ -56,7 +56,10 @@ async fn dump_restore_with_ttl() {
     assert_ok(&resp);
 
     let pttl = unwrap_integer(&client.command(&["PTTL", "foo"]).await);
-    assert!(pttl > 3000 && pttl <= 5000, "PTTL {pttl} out of expected range");
+    assert!(
+        pttl > 3000 && pttl <= 5000,
+        "PTTL {pttl} out of expected range"
+    );
     assert_bulk_eq(&client.command(&["GET", "foo"]).await, b"bar");
 }
 
@@ -109,7 +112,9 @@ async fn dump_restore_hash_roundtrip() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "myhash", "f1", "v1", "f2", "v2"]).await;
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2"])
+        .await;
     let dumped = client.command(&["DUMP", "myhash"]).await;
     let serialized = unwrap_bulk(&dumped).to_vec();
 

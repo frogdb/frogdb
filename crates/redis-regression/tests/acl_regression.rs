@@ -15,7 +15,11 @@ async fn acl_setuser_creates_user() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    assert_ok(&client.command(&["ACL", "SETUSER", "limited", "on", ">pass"]).await);
+    assert_ok(
+        &client
+            .command(&["ACL", "SETUSER", "limited", "on", ">pass"])
+            .await,
+    );
 
     let resp = client.command(&["ACL", "USERS"]).await;
     let users = extract_bulk_strings(&resp);
@@ -28,14 +32,21 @@ async fn acl_user_command_restriction() {
     let mut client = server.connect().await;
 
     // Create user that can only GET, not SET (with full key access)
-    client.command(&["ACL", "SETUSER", "readonly", "on", ">pass", "~*", "-@all", "+get"]).await;
+    client
+        .command(&[
+            "ACL", "SETUSER", "readonly", "on", ">pass", "~*", "-@all", "+get",
+        ])
+        .await;
 
     let mut user_client = server.connect().await;
     assert_ok(&user_client.command(&["AUTH", "readonly", "pass"]).await);
 
     // GET should work (empty key returns nil, not error)
     let resp = user_client.command(&["GET", "foo"]).await;
-    assert!(!matches!(resp, frogdb_protocol::Response::Error(_)), "GET should not error");
+    assert!(
+        !matches!(resp, frogdb_protocol::Response::Error(_)),
+        "GET should not error"
+    );
 
     // SET should be denied
     let resp = user_client.command(&["SET", "foo", "bar"]).await;
@@ -48,7 +59,15 @@ async fn acl_user_key_pattern_restriction() {
     let mut client = server.connect().await;
 
     client
-        .command(&["ACL", "SETUSER", "limited", "on", ">pass", "~prefix:*", "+@all"])
+        .command(&[
+            "ACL",
+            "SETUSER",
+            "limited",
+            "on",
+            ">pass",
+            "~prefix:*",
+            "+@all",
+        ])
         .await;
 
     let mut user_client = server.connect().await;
@@ -68,7 +87,9 @@ async fn acl_list_returns_correct_info() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["ACL", "SETUSER", "myuser", "on", ">mypass"]).await;
+    client
+        .command(&["ACL", "SETUSER", "myuser", "on", ">mypass"])
+        .await;
 
     let resp = client.command(&["ACL", "LIST"]).await;
     let rules = extract_bulk_strings(&resp);
@@ -82,7 +103,9 @@ async fn acl_getuser_returns_info() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["ACL", "SETUSER", "infouser", "on", ">pass", "+@read"]).await;
+    client
+        .command(&["ACL", "SETUSER", "infouser", "on", ">pass", "+@read"])
+        .await;
 
     let resp = client.command(&["ACL", "GETUSER", "infouser"]).await;
     let items = unwrap_array(resp);
@@ -105,7 +128,9 @@ async fn acl_deluser_removes_user() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["ACL", "SETUSER", "tempuser", "on", ">pass"]).await;
+    client
+        .command(&["ACL", "SETUSER", "tempuser", "on", ">pass"])
+        .await;
     let resp = client.command(&["ACL", "DELUSER", "tempuser"]).await;
     assert_eq!(unwrap_integer(&resp), 1);
 

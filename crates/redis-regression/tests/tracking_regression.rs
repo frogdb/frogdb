@@ -11,7 +11,10 @@ async fn client_id_returns_non_negative_integer() {
 
     let resp = client.command(&["CLIENT", "ID"]).await;
     let id = unwrap_integer(&resp);
-    assert!(id >= 0, "CLIENT ID should return a non-negative integer, got {id}");
+    assert!(
+        id >= 0,
+        "CLIENT ID should return a non-negative integer, got {id}"
+    );
 }
 
 #[tokio::test]

@@ -171,10 +171,7 @@ impl ClusterTestNode {
 
     /// Get the client address.
     pub fn client_addr(&self) -> String {
-        self.server
-            .as_ref()
-            .map(|s| s.addr())
-            .unwrap_or_default()
+        self.server.as_ref().map(|s| s.addr()).unwrap_or_default()
     }
 
     /// Get the cluster bus address.
@@ -194,9 +191,7 @@ impl ClusterTestNode {
 
     /// Check if the node is running.
     pub fn is_running(&self) -> bool {
-        self.server
-            .as_ref()
-            .is_some_and(|s| !s.is_finished())
+        self.server.as_ref().is_some_and(|s| !s.is_finished())
     }
 
     /// Get the Raft instance, if cluster mode is enabled.

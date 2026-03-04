@@ -73,9 +73,7 @@ async fn sort_with_limit() {
         client.command(&["RPUSH", "mylist", &i.to_string()]).await;
     }
     // LIMIT offset count: skip 1, take 3 → [2, 3, 4]
-    let resp = client
-        .command(&["SORT", "mylist", "LIMIT", "1", "3"])
-        .await;
+    let resp = client.command(&["SORT", "mylist", "LIMIT", "1", "3"]).await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items, vec!["2", "3", "4"]);
 }
@@ -89,7 +87,9 @@ async fn sort_by_nosort_retains_native_order() {
         client.command(&["RPUSH", "mylist", v]).await;
     }
     // BY nosort preserves insertion order
-    let resp = client.command(&["SORT", "mylist", "ALPHA", "BY", "nosort"]).await;
+    let resp = client
+        .command(&["SORT", "mylist", "ALPHA", "BY", "nosort"])
+        .await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items, vec!["c", "a", "b"]);
 }
@@ -203,25 +203,13 @@ async fn sort_by_external_key_with_limit() {
             .await;
         // weight is n+1 - i (reversed order)
         client
-            .command(&[
-                "SET",
-                &format!("{{t}}weight_{i}"),
-                &(6 - i).to_string(),
-            ])
+            .command(&["SET", &format!("{{t}}weight_{i}"), &(6 - i).to_string()])
             .await;
     }
 
     // Sort by weight LIMIT 0 3 → 3 smallest weights = items 5,4,3
     let resp = client
-        .command(&[
-            "SORT",
-            "{t}mylist",
-            "BY",
-            "{t}weight_*",
-            "LIMIT",
-            "0",
-            "3",
-        ])
+        .command(&["SORT", "{t}mylist", "BY", "{t}weight_*", "LIMIT", "0", "3"])
         .await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items.len(), 3);
@@ -237,15 +225,9 @@ async fn sort_by_hash_field() {
     let mut client = server.connect().await;
 
     client.command(&["RPUSH", "{t}mylist", "1", "2", "3"]).await;
-    client
-        .command(&["HSET", "{t}wobj_1", "weight", "30"])
-        .await;
-    client
-        .command(&["HSET", "{t}wobj_2", "weight", "20"])
-        .await;
-    client
-        .command(&["HSET", "{t}wobj_3", "weight", "10"])
-        .await;
+    client.command(&["HSET", "{t}wobj_1", "weight", "30"]).await;
+    client.command(&["HSET", "{t}wobj_2", "weight", "20"]).await;
+    client.command(&["HSET", "{t}wobj_3", "weight", "10"]).await;
 
     let resp = client
         .command(&["SORT", "{t}mylist", "BY", "{t}wobj_*->weight"])
@@ -281,14 +263,7 @@ async fn sort_get_hash_field_and_pound() {
 
     // GET # returns the element itself; GET obj_*->name returns the hash field
     let resp = client
-        .command(&[
-            "SORT",
-            "{t}mylist",
-            "GET",
-            "#",
-            "GET",
-            "{t}obj_*->name",
-        ])
+        .command(&["SORT", "{t}mylist", "GET", "#", "GET", "{t}obj_*->name"])
         .await;
     let items = extract_bulk_strings(&resp);
     // interleaved: id, name, id, name
@@ -303,9 +278,7 @@ async fn sort_get_const_value() {
     client.command(&["RPUSH", "mylist", "1", "2", "3"]).await;
 
     // GET with a constant (no wildcard) that doesn't exist → nil, but # works
-    let resp = client
-        .command(&["SORT", "mylist", "GET", "#"])
-        .await;
+    let resp = client.command(&["SORT", "mylist", "GET", "#"]).await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items, vec!["1", "2", "3"]);
 }
@@ -337,14 +310,7 @@ async fn sort_by_key_store() {
     client.command(&["SET", "{t}weight_3", "30"]).await;
 
     let resp = client
-        .command(&[
-            "SORT",
-            "{t}src",
-            "BY",
-            "{t}weight_*",
-            "STORE",
-            "{t}dst",
-        ])
+        .command(&["SORT", "{t}src", "BY", "{t}weight_*", "STORE", "{t}dst"])
         .await;
     assert_eq!(unwrap_integer(&resp), 3);
 
@@ -360,15 +326,9 @@ async fn sort_by_hash_field_store() {
     let mut client = server.connect().await;
 
     client.command(&["RPUSH", "{t}src", "1", "2", "3"]).await;
-    client
-        .command(&["HSET", "{t}wobj_1", "weight", "30"])
-        .await;
-    client
-        .command(&["HSET", "{t}wobj_2", "weight", "20"])
-        .await;
-    client
-        .command(&["HSET", "{t}wobj_3", "weight", "10"])
-        .await;
+    client.command(&["HSET", "{t}wobj_1", "weight", "30"]).await;
+    client.command(&["HSET", "{t}wobj_2", "weight", "20"]).await;
+    client.command(&["HSET", "{t}wobj_3", "weight", "10"]).await;
 
     let resp = client
         .command(&[
@@ -420,9 +380,7 @@ async fn sort_with_store_removes_key_if_sort_result_empty() {
     let mut client = server.connect().await;
 
     // Pre-create dst
-    client
-        .command(&["RPUSH", "{k}dst", "existing"])
-        .await;
+    client.command(&["RPUSH", "{k}dst", "existing"]).await;
 
     // SORT empty source → STORE → dst should be removed
     let resp = client
@@ -440,9 +398,7 @@ async fn sort_by_constant_plus_store_orders_output() {
     let mut client = server.connect().await;
 
     // BY a non-existing pattern (constant → all same weight) preserves order
-    client
-        .command(&["RPUSH", "{k}src", "c", "a", "b"])
-        .await;
+    client.command(&["RPUSH", "{k}src", "c", "a", "b"]).await;
     let resp = client
         .command(&["SORT", "{k}src", "BY", "nosort", "ALPHA", "STORE", "{k}dst"])
         .await;
@@ -506,13 +462,7 @@ async fn sort_by_sub_sorts_lexicographically_when_weights_equal() {
     client.command(&["SET", "{t}weight_gamma", "1"]).await;
 
     let resp = client
-        .command(&[
-            "SORT",
-            "{t}mylist",
-            "BY",
-            "{t}weight_*",
-            "ALPHA",
-        ])
+        .command(&["SORT", "{t}mylist", "BY", "{t}weight_*", "ALPHA"])
         .await;
     let items = extract_bulk_strings(&resp);
     // Equal weights → lexicographic: alpha, beta, gamma
@@ -561,12 +511,8 @@ async fn sort_sorted_set_inf_scores() {
     let server = start_sort_server().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["ZADD", "myzset", "+inf", "pos_inf"])
-        .await;
-    client
-        .command(&["ZADD", "myzset", "-inf", "neg_inf"])
-        .await;
+    client.command(&["ZADD", "myzset", "+inf", "pos_inf"]).await;
+    client.command(&["ZADD", "myzset", "-inf", "neg_inf"]).await;
     client.command(&["ZADD", "myzset", "0", "zero"]).await;
 
     // SORT ALPHA returns members in alphabetical order

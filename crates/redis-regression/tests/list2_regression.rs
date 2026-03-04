@@ -15,7 +15,10 @@ async fn lpush_rpush_with_large_values() {
     client.command(&["LPUSH", "mylist", &"y".repeat(500)]).await;
     client.command(&["RPUSH", "mylist", &"z".repeat(500)]).await;
 
-    assert_eq!(unwrap_integer(&client.command(&["LLEN", "mylist"]).await), 3);
+    assert_eq!(
+        unwrap_integer(&client.command(&["LLEN", "mylist"]).await),
+        3
+    );
 }
 
 #[tokio::test]
@@ -28,9 +31,18 @@ async fn lindex_on_large_values() {
     let c = "c".repeat(500);
     client.command(&["RPUSH", "mylist", &a, &b, &c]).await;
 
-    assert_bulk_eq(&client.command(&["LINDEX", "mylist", "0"]).await, a.as_bytes());
-    assert_bulk_eq(&client.command(&["LINDEX", "mylist", "2"]).await, c.as_bytes());
-    assert_bulk_eq(&client.command(&["LINDEX", "mylist", "-1"]).await, c.as_bytes());
+    assert_bulk_eq(
+        &client.command(&["LINDEX", "mylist", "0"]).await,
+        a.as_bytes(),
+    );
+    assert_bulk_eq(
+        &client.command(&["LINDEX", "mylist", "2"]).await,
+        c.as_bytes(),
+    );
+    assert_bulk_eq(
+        &client.command(&["LINDEX", "mylist", "-1"]).await,
+        c.as_bytes(),
+    );
 }
 
 #[tokio::test]
@@ -43,7 +55,9 @@ async fn linsert_in_large_list_maintains_ordering() {
     let b = "b".repeat(500);
 
     client.command(&["RPUSH", "mylist", &a, &c]).await;
-    client.command(&["LINSERT", "mylist", "BEFORE", &c, &b]).await;
+    client
+        .command(&["LINSERT", "mylist", "BEFORE", &c, &b])
+        .await;
 
     let resp = client.command(&["LRANGE", "mylist", "0", "-1"]).await;
     let items = unwrap_array(resp);
@@ -63,15 +77,24 @@ async fn ltrim_stress_with_various_ranges() {
         let val = format!("{}", char::from(b'a' + i)).repeat(500);
         client.command(&["RPUSH", "mylist", &val]).await;
     }
-    assert_eq!(unwrap_integer(&client.command(&["LLEN", "mylist"]).await), 10);
+    assert_eq!(
+        unwrap_integer(&client.command(&["LLEN", "mylist"]).await),
+        10
+    );
 
     // Trim to [2, 7]
     assert_ok(&client.command(&["LTRIM", "mylist", "2", "7"]).await);
-    assert_eq!(unwrap_integer(&client.command(&["LLEN", "mylist"]).await), 6);
+    assert_eq!(
+        unwrap_integer(&client.command(&["LLEN", "mylist"]).await),
+        6
+    );
 
     // Trim beyond end
     assert_ok(&client.command(&["LTRIM", "mylist", "0", "100"]).await);
-    assert_eq!(unwrap_integer(&client.command(&["LLEN", "mylist"]).await), 6);
+    assert_eq!(
+        unwrap_integer(&client.command(&["LLEN", "mylist"]).await),
+        6
+    );
 }
 
 #[tokio::test]
@@ -84,5 +107,8 @@ async fn lset_on_large_nodes() {
 
     client.command(&["RPUSH", "mylist", &orig]).await;
     assert_ok(&client.command(&["LSET", "mylist", "0", &new]).await);
-    assert_bulk_eq(&client.command(&["LINDEX", "mylist", "0"]).await, new.as_bytes());
+    assert_bulk_eq(
+        &client.command(&["LINDEX", "mylist", "0"]).await,
+        new.as_bytes(),
+    );
 }

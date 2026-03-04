@@ -10,7 +10,9 @@ async fn lrange_negative_indices_backward_traversal() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["RPUSH", "mylist", "a", "b", "c", "d", "e"]).await;
+    client
+        .command(&["RPUSH", "mylist", "a", "b", "c", "d", "e"])
+        .await;
 
     // Last 2 elements
     let resp = client.command(&["LRANGE", "mylist", "-2", "-1"]).await;
@@ -55,12 +57,12 @@ async fn integer_values_various_sizes() {
 
     let values = [
         "0",
-        "127",          // i8 max
-        "-128",         // i8 min
-        "32767",        // i16 max
-        "-32768",       // i16 min
-        "2147483647",   // i32 max
-        "-2147483648",  // i32 min
+        "127",                  // i8 max
+        "-128",                 // i8 min
+        "32767",                // i16 max
+        "-32768",               // i16 min
+        "2147483647",           // i32 max
+        "-2147483648",          // i32 min
         "9223372036854775807",  // i64 max
         "-9223372036854775808", // i64 min
     ];
@@ -87,8 +89,16 @@ async fn edge_case_integer_values_roundtrip() {
     let int64_max = "9223372036854775807";
     let int64_min = "-9223372036854775808";
 
-    client.command(&["RPUSH", "{l}list", int64_max, int64_min]).await;
+    client
+        .command(&["RPUSH", "{l}list", int64_max, int64_min])
+        .await;
 
-    assert_bulk_eq(&client.command(&["LINDEX", "{l}list", "0"]).await, int64_max.as_bytes());
-    assert_bulk_eq(&client.command(&["LINDEX", "{l}list", "1"]).await, int64_min.as_bytes());
+    assert_bulk_eq(
+        &client.command(&["LINDEX", "{l}list", "0"]).await,
+        int64_max.as_bytes(),
+    );
+    assert_bulk_eq(
+        &client.command(&["LINDEX", "{l}list", "1"]).await,
+        int64_min.as_bytes(),
+    );
 }
