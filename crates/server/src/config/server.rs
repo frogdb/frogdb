@@ -3,6 +3,14 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Sorted set index backend selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SortedSetIndexConfig {
+    Btreemap,
+    Skiplist,
+}
+
 /// Server-specific configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +36,12 @@ pub struct ServerConfig {
     /// Timeout for scatter-gather operations in milliseconds.
     #[serde(default = "default_scatter_gather_timeout_ms")]
     pub scatter_gather_timeout_ms: u64,
+
+    /// Sorted set index backend: "skiplist" (default) or "btreemap".
+    /// SkipList provides O(log n) rank queries; BTreeMap provides lower memory usage.
+    /// Requires server restart to change.
+    #[serde(default = "default_sorted_set_index")]
+    pub sorted_set_index: SortedSetIndexConfig,
 }
 
 fn default_bind() -> String {
@@ -50,6 +64,10 @@ fn default_scatter_gather_timeout_ms() -> u64 {
     5000
 }
 
+fn default_sorted_set_index() -> SortedSetIndexConfig {
+    SortedSetIndexConfig::Skiplist
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -58,6 +76,7 @@ impl Default for ServerConfig {
             num_shards: default_num_shards(),
             allow_cross_slot_standalone: default_allow_cross_slot_standalone(),
             scatter_gather_timeout_ms: default_scatter_gather_timeout_ms(),
+            sorted_set_index: default_sorted_set_index(),
         }
     }
 }
