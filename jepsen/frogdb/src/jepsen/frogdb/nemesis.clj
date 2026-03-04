@@ -1040,30 +1040,30 @@
       [(gen/sleep interval)
        (gen/once
          (rand-nth
-           ;; Kill leader
-           [{:type :info :f :kill :value ["n1"]}
-            (gen/sleep 5)
-            {:type :info :f :start :value ["n1"]}]
-           ;; Partition leader
-           [{:type :info :f :partition :value :leader-isolated}
-            (gen/sleep 10)
-            {:type :info :f :heal}]
-           ;; Slow down nodes
-           [{:type :info :f :add-latency :value {:node "n2" :delay-ms 200 :jitter-ms 50}}
-            (gen/sleep 10)
-            {:type :info :f :network-heal :value "n2"}]
-           ;; Disk failure on follower
-           [{:type :info :f :disk-readonly :value "n3"}
-            (gen/sleep 10)
-            {:type :info :f :disk-recover :value "n3"}]
-           ;; Asymmetric partition
-           [{:type :info :f :partition :value :asymmetric}
-            (gen/sleep 10)
-            {:type :info :f :heal}]
-           ;; Pause a node
-           [{:type :info :f :pause :value ["n2"]}
-            (gen/sleep 5)
-            {:type :info :f :resume :value ["n2"]}]))])))
+           [;; Kill leader
+            [{:type :info :f :kill :value ["n1"]}
+             (gen/sleep 5)
+             {:type :info :f :start :value ["n1"]}]
+            ;; Partition leader
+            [{:type :info :f :partition :value :leader-isolated}
+             (gen/sleep 10)
+             {:type :info :f :heal}]
+            ;; Slow down nodes
+            [{:type :info :f :add-latency :value {:node "n2" :delay-ms 200 :jitter-ms 50}}
+             (gen/sleep 10)
+             {:type :info :f :network-heal :value "n2"}]
+            ;; Disk failure on follower
+            [{:type :info :f :disk-readonly :value "n3"}
+             (gen/sleep 10)
+             {:type :info :f :disk-recover :value "n3"}]
+            ;; Asymmetric partition
+            [{:type :info :f :partition :value :asymmetric}
+             (gen/sleep 10)
+             {:type :info :f :heal}]
+            ;; Pause a node
+            [{:type :info :f :pause :value ["n2"]}
+             (gen/sleep 5)
+             {:type :info :f :resume :value ["n2"]}]]))])))
 
 ;; ===========================================================================
 ;; Replication Combined Nemesis
@@ -1092,22 +1092,22 @@
       [(gen/sleep interval)
        (gen/once
          (rand-nth
-           ;; Kill primary
-           [{:type :info :f :kill :value ["n1"]}
-            (gen/sleep 5)
-            {:type :info :f :start :value ["n1"]}]
-           ;; Partition primary
-           [{:type :info :f :partition :value :primary-isolated}
-            (gen/sleep 10)
-            {:type :info :f :heal}]
-           ;; Kill a replica
-           [{:type :info :f :kill :value ["n2"]}
-            (gen/sleep 5)
-            {:type :info :f :start :value ["n2"]}]
-           ;; Pause primary
-           [{:type :info :f :pause :value ["n1"]}
-            (gen/sleep 3)
-            {:type :info :f :resume :value ["n1"]}]))])))
+           [;; Kill primary
+            [{:type :info :f :kill :value ["n1"]}
+             (gen/sleep 5)
+             {:type :info :f :start :value ["n1"]}]
+            ;; Partition primary
+            [{:type :info :f :partition :value :primary-isolated}
+             (gen/sleep 10)
+             {:type :info :f :heal}]
+            ;; Kill a replica
+            [{:type :info :f :kill :value ["n2"]}
+             (gen/sleep 5)
+             {:type :info :f :start :value ["n2"]}]
+            ;; Pause primary
+            [{:type :info :f :pause :value ["n1"]}
+             (gen/sleep 3)
+             {:type :info :f :resume :value ["n1"]}]]))])))
 
 ;; ===========================================================================
 ;; Nemesis Packages
