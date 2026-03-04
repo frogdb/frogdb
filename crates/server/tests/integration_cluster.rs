@@ -10,8 +10,8 @@
 
 mod common;
 
-use common::cluster_harness::{ClusterNodeConfig, ClusterTestHarness};
-use common::cluster_helpers::{
+use frogdb_test_harness::cluster_harness::{ClusterNodeConfig, ClusterTestHarness};
+use frogdb_test_harness::cluster_helpers::{
     get_error_message, is_ask_redirect, is_error, is_moved_redirect, key_for_slot,
     parse_cluster_info, parse_cluster_nodes, slot_for_key,
 };
@@ -1456,7 +1456,7 @@ async fn test_concurrent_operations_during_migration() {
 /// leaving a minority of 2 nodes that should detect quorum loss and reject writes.
 #[tokio::test]
 async fn test_split_brain_writes_fail_on_minority() {
-    use common::cluster_helpers::is_cluster_down;
+    use frogdb_test_harness::cluster_helpers::is_cluster_down;
 
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(5).await.unwrap();
@@ -1595,7 +1595,7 @@ async fn test_split_brain_writes_fail_on_minority() {
 /// or through cluster failover).
 #[tokio::test]
 async fn test_failover_during_migration_preserves_data() {
-    use common::cluster_helpers::is_cluster_down;
+    use frogdb_test_harness::cluster_helpers::is_cluster_down;
 
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();

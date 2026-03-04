@@ -52,6 +52,10 @@ check:
 check-crate crate:
     {{dyld-env}} {{rocksdb-env}} cargo check -p {{crate}}
 
+# Type-check a specific crate including tests and integration tests
+check-crate-tests crate:
+    {{dyld-env}} {{rocksdb-env}} cargo check -p {{crate}} --all-targets
+
 # Alias: short form of check
 alias c := check
 
