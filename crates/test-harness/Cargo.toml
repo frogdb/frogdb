@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 frogdb-server = { path = "../server" }
+frogdb-core = { path = "../core" }
 frogdb-protocol = { path = "../protocol" }
 redis-protocol = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
