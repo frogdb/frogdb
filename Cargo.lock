@@ -1344,8 +1344,10 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "frogdb-protocol",
+ "frogdb-server",
  "frogdb-test-harness",
  "redis-protocol",
+ "rstest",
  "tokio",
 ]
 

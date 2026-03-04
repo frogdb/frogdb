@@ -92,6 +92,10 @@ pub struct TestServerConfig {
     /// derived from `listener.local_addr()`. When None and cluster_enabled=true,
     /// start_with_config auto-binds one on port 0.
     pub cluster_bus_listener: Option<frogdb_server::net::TcpListener>,
+
+    // --- Sorted set index ---
+    /// Sorted set index backend (default: server default).
+    pub sorted_set_index: Option<frogdb_server::config::server::SortedSetIndexConfig>,
 }
 
 impl Clone for TestServerConfig {
@@ -116,6 +120,7 @@ impl Clone for TestServerConfig {
             cluster_request_timeout_ms: self.cluster_request_timeout_ms,
             // TcpListener is not Clone; cloned configs always self-bind.
             cluster_bus_listener: None,
+            sorted_set_index: self.sorted_set_index,
         }
     }
 }
@@ -322,6 +327,11 @@ impl TestServer {
             config.cluster.cluster_bus_addr = bus_addr.to_string();
 
             listeners.cluster_bus = Some(bus_listener);
+        }
+
+        // Sorted set index backend
+        if let Some(idx) = test_config.sorted_set_index {
+            config.server.sorted_set_index = idx;
         }
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
