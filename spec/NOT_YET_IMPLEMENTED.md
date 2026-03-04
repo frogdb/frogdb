@@ -24,7 +24,6 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 | Replica-lag scoring | `crates/server/src/failure_detector.rs` | Auto-failover picks first available replica arbitrarily instead of scoring by replication lag | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#phase-4-failover-support--partial) |
 | Split-brain discarded-writes log | — | No `split_brain_discarded.log` for divergent writes after partition healing | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#45-split-brain-handling) |
 | DFLYMIGRATE streaming protocol | — | High-throughput streaming slot migration not implemented; only standard key-by-key MIGRATE exists | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#52-migration-protocol-commands-dflymigrate) |
-| Chaos / Jepsen / Turmoil cluster testing | — | No distributed correctness tests for cluster scenarios | [ROADMAP.md](ROADMAP.md), [TESTING.md](TESTING.md) |
 
 ---
 
@@ -69,7 +68,6 @@ Items described in spec documentation as if implemented, but not present in the 
 | Client tracking / client-side caching | CLIENT TRACKING — complex feature with high memory overhead | [COMPATIBILITY.md](COMPATIBILITY.md#not-yet-implemented) |
 | File log output with rotation | `tracing-appender` integration for non-blocking file writes — stdout/stderr only today | [OBSERVABILITY.md](OBSERVABILITY.md) |
 | TLS certificate hot-reload | Certificate hot-reloading via file watching | [CONFIGURATION.md](CONFIGURATION.md) |
-| Diagnostic bundles | Automated collection of debug info into a single archive | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
 | Rolling upgrade (cluster mode) | Only single-node upgrade documented | [DEPLOYMENT.md](DEPLOYMENT.md) |
 
 ---
@@ -78,7 +76,6 @@ Items described in spec documentation as if implemented, but not present in the 
 
 | Item | Description | Spec |
 |------|-------------|------|
-| Grafana dashboard templates | Overview, Performance, Shards, Persistence JSON dashboards | [ROADMAP.md](ROADMAP.md) |
 | Enhanced LATENCY DOCTOR | Correlation detection, SLOWLOG cross-reference, scatter-gather analysis | [ROADMAP.md](ROADMAP.md) |
 | Automated alert rule generation | `/alerts/prometheus` endpoint for generated alerting rules | [ROADMAP.md](ROADMAP.md) |
 
@@ -90,7 +87,6 @@ Items described in spec documentation as if implemented, but not present in the 
 |------|-------|-------------|------|
 | types.rs split (partial) | `crates/types/src/types.rs` | Core value types (String, List, Set, Hash, SortedSet, Stream) still in monolithic `types.rs` | [ROADMAP.md](ROADMAP.md#split-typesrs-partially-done) |
 | Config magic numbers | `crates/server/src/config.rs` | Timeout values and sizes use inline literals instead of named constants | [ROADMAP.md](ROADMAP.md#config-magic-numbers-low-effort) |
-| Sorted set parsing helpers | `crates/server/src/` | `parse_score_bound()`, `parse_lex_bound()`, `parse_set_op_options()` could be extracted to utils | [ROADMAP.md](ROADMAP.md#sorted-set-parsing-helpers-low-effort) |
 
 ---
 
@@ -102,7 +98,4 @@ These are documented design aspirations, not near-term work:
 |------|------|
 | Tiered storage backends (S3, DynamoDB, Azure, GCS) | [TIERED.md](TIERED.md) |
 | io_uring integration | [optimizations/IO_URING.md](optimizations/IO_URING.md) |
-| Deterministic simulation testing (DST / Turmoil / MadSim) | [TESTING.md](TESTING.md) |
-| Jepsen linearizability testing | [TESTING.md](TESTING.md) |
-| Tokio causal profiler | [TOKIO_CAUSAL_PROFILER.md](TOKIO_CAUSAL_PROFILER.md) |
 | Dashtable (DragonflyDB-style hash table) | [STORAGE.md](STORAGE.md) |
