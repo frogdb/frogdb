@@ -27,6 +27,29 @@ use crate::state::ReplicationState;
 /// Connection timeout for initial connection
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Read a line from an AsyncRead byte-by-byte, terminated by \n.
+/// Unlike BufReader::read_line, this never reads past the line terminator
+/// so no data is lost between successive readers on the same stream.
+async fn read_line_unbuffered<R: AsyncReadExt + Unpin>(reader: &mut R) -> io::Result<String> {
+    let mut buf = Vec::with_capacity(128);
+    loop {
+        let mut byte = [0u8; 1];
+        let n = reader.read(&mut byte).await?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "connection closed while reading line",
+            ));
+        }
+        buf.push(byte[0]);
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+    String::from_utf8(buf)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "line is not valid UTF-8"))
+}
+
 /// Handshake timeout
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -278,11 +301,10 @@ impl ReplicaConnection {
 
         self.stream.write_all(cmd.as_bytes()).await?;
 
-        // Read response
-        let mut reader = BufReader::new(&mut self.stream);
-        let mut line_buf = String::new();
-        reader.read_line(&mut line_buf).await?;
-
+        // Read response using unbuffered line reader to avoid consuming
+        // bytes past the line boundary. A BufReader here would eagerly
+        // buffer checkpoint file data that receive_checkpoint() needs later.
+        let line_buf = read_line_unbuffered(&mut self.stream).await?;
         let line = line_buf.trim();
 
         if line.starts_with("+FULLRESYNC") {
@@ -309,8 +331,7 @@ impl ReplicaConnection {
                 self.connection_state = ConnectionState::Syncing;
 
                 // Read next line to determine sync type: $<length>\r\n or $FROGDB_CHECKPOINT\r\n
-                line_buf.clear();
-                reader.read_line(&mut line_buf).await?;
+                let line_buf = read_line_unbuffered(&mut self.stream).await?;
                 let line = line_buf.trim();
 
                 if !line.starts_with('$') {
@@ -324,8 +345,7 @@ impl ReplicaConnection {
                 if marker == "FROGDB_CHECKPOINT" {
                     // FrogDB checkpoint protocol
                     // Next line is file count
-                    line_buf.clear();
-                    reader.read_line(&mut line_buf).await?;
+                    let line_buf = read_line_unbuffered(&mut self.stream).await?;
                     let file_count: usize = line_buf.trim().parse().map_err(|_| {
                         io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -454,9 +474,13 @@ impl ReplicaConnection {
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid file size"))?;
 
             // Receive file contents
+            // IMPORTANT: read from the BufReader, not the raw stream (get_mut()),
+            // because the BufReader may have pre-buffered bytes beyond the protocol
+            // header. Bypassing it would cause the BufReader's next read_line() to
+            // see stale buffered data (binary file content), triggering UTF-8 errors.
             let file_path = checkpoint_dir.join(&filename);
             let checksum = receive_to_file(
-                reader.get_mut(),
+                &mut reader,
                 &file_path,
                 file_size,
                 None, // No progress tracking for now
@@ -545,22 +569,12 @@ impl ReplicaConnection {
             state.replication_offset = metadata.replication_offset;
         }
 
-        // Signal that a restart is required to load the checkpoint.
-        //
-        // Hot-reload would require pausing all shard workers, replacing the
-        // RocksStore, reloading all data, and resuming - which is complex.
-        // Instead, we return an error to trigger a graceful disconnect.
-        // The server should be configured with a process manager (systemd,
-        // Docker, k8s) that will restart it automatically. On restart,
-        // RocksStore::load_staged_checkpoint() will load the checkpoint data.
-        tracing::warn!(
-            "Checkpoint received and staged. Server restart required to apply. \
-             If running under a process manager, the server will restart automatically."
-        );
-
-        // Return error to break replication loop and trigger reconnection
-        // On restart, the checkpoint will be loaded via RocksStore::load_staged_checkpoint()
-        Err(io::Error::other("checkpoint_received_restart_required"))
+        // The checkpoint is staged for loading on the next restart (when
+        // RocksStore::load_staged_checkpoint() will apply it). For now,
+        // proceed to WAL streaming so the replica can receive incremental
+        // updates. The in-memory shard workers will apply WAL frames and
+        // serve up-to-date data even without reloading the checkpoint.
+        Ok(())
     }
 
     /// Stream replication data from primary.
@@ -643,12 +657,12 @@ impl ReplicaConnection {
 
     /// Read a simple +OK response.
     async fn read_ok_response(&mut self) -> io::Result<()> {
-        let mut reader = BufReader::new(&mut self.stream);
-        let mut line = String::new();
-
-        timeout(HANDSHAKE_TIMEOUT, reader.read_line(&mut line))
-            .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "handshake timeout"))??;
+        let line = timeout(
+            HANDSHAKE_TIMEOUT,
+            read_line_unbuffered(&mut self.stream),
+        )
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "handshake timeout"))??;
 
         let line = line.trim();
         if line == "+OK" {

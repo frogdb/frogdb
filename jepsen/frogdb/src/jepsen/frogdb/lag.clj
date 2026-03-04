@@ -111,7 +111,14 @@
                    (frogdb/info-replication primary-conn)
                    (catch Exception e
                      {:error (.getMessage e)}))]
-        (assoc op :type :ok :value info))))
+        (assoc op :type :ok :value info))
+
+      ;; Generic read (used by final-reads phase)
+      :read
+      (let [results (for [[node conn] conns]
+                      [node (try+ (frogdb/read-register conn test-key-prefix)
+                                  (catch Exception _ nil))])]
+        (assoc op :type :ok :value (into {} results)))))
 
   (teardown! [this test]
     nil)

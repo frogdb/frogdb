@@ -97,6 +97,26 @@
                                     (sort-by val >)
                                     first
                                     key)]
+            (assoc op :type :ok :value majority-value :all-values values))))
+
+      ;; Generic read (used by final-reads phase) — delegates to read-quorum
+      :read
+      (let [results (for [[node conn] conns]
+                      (try+
+                        {:node node :value (frogdb/read-register conn test-key)}
+                        (catch java.net.ConnectException e
+                          {:node node :error :connection-refused})
+                        (catch Exception e
+                          {:node node :error [:unexpected (.getMessage e)]})))
+            successful (filter :value results)
+            values (map :value successful)]
+        (if (< (count successful) 2)
+          (assoc op :type :fail :error :no-quorum :results results)
+          (let [majority-value (->> values
+                                    frequencies
+                                    (sort-by val >)
+                                    first
+                                    key)]
             (assoc op :type :ok :value majority-value :all-values values))))))
 
   (teardown! [this test]
@@ -159,10 +179,10 @@
        (map :value)))
 
 (defn extract-quorum-reads
-  "Extract all successful quorum read operations."
+  "Extract all successful quorum read operations (including :read which delegates to read-quorum)."
   [history]
   (->> history
-       (filter #(and (= :read-quorum (:f %))
+       (filter #(and (#{:read-quorum :read} (:f %))
                      (= :ok (:type %))))
        (map :value)))
 
