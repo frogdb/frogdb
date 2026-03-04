@@ -96,16 +96,33 @@
 
 (defrecord SlotMapping [slots-to-nodes node-conns])
 
+;; Reverse map: Docker container IP -> "localhost:hostPort"
+;; CLUSTER SLOTS returns internal Docker IPs (e.g. 172.21.0.2:6379)
+;; but the Jepsen client runs on the Docker host and needs localhost:637x
+(def docker-ip-remap
+  (into {} (for [[node ip] cluster-db/raft-cluster-node-ips
+                 :let [{:keys [host port]} (get cluster-db/raft-cluster-host-ports node)]]
+             [ip (str host ":" port)])))
+
+(defn remap-addr
+  "Remap an internal Docker IP:port to a host-reachable address.
+   E.g. '172.21.0.2:6379' -> 'localhost:6379'"
+  [addr]
+  (let [[ip _port] (str/split addr #":")]
+    (or (get docker-ip-remap ip) addr)))
+
 (defn parse-cluster-slots
   "Parse CLUSTER SLOTS response into a slot->node map.
-   Response format: [[start end [ip port node-id] [replica-ip replica-port replica-id] ...] ...]"
+   Response format: [[start end [ip port node-id] [replica-ip replica-port replica-id] ...] ...]
+   Remaps internal Docker IPs to host-reachable addresses."
   [slots-response]
   (when (seq slots-response)
     (reduce (fn [acc slot-info]
               (let [start (long (nth slot-info 0))
                     end (long (nth slot-info 1))
                     master-info (nth slot-info 2)
-                    master-addr (str (nth master-info 0) ":" (nth master-info 1))]
+                    raw-addr (str (nth master-info 0) ":" (nth master-info 1))
+                    master-addr (remap-addr raw-addr)]
                 (reduce (fn [m slot]
                           (assoc m slot master-addr))
                         acc
@@ -241,21 +258,23 @@
                 (if-let [redirect (is-redirect-error? e)]
                   (case (:type redirect)
                     :moved
-                    (do
-                      (debug "MOVED redirect:" (:slot redirect) "->" (:host redirect) ":" (:port redirect))
-                      ;; Update slot mapping
+                    (let [raw-addr (str (:host redirect) ":" (:port redirect))
+                          remapped-addr (remap-addr raw-addr)]
+                      (debug "MOVED redirect:" (:slot redirect) "->" raw-addr "(remapped:" remapped-addr ")")
+                      ;; Update slot mapping with remapped address
                       (swap! slot-mapping-atom
                              (fn [m] (assoc-in m [:slots-to-nodes (:slot redirect)]
-                                               (str (:host redirect) ":" (:port redirect)))))
+                                               remapped-addr)))
                       {:type :redirect
-                       :addr (str (:host redirect) ":" (:port redirect))
+                       :addr remapped-addr
                        :asking? false})
 
                     :ask
-                    (do
-                      (debug "ASK redirect:" (:slot redirect) "->" (:host redirect) ":" (:port redirect))
+                    (let [raw-addr (str (:host redirect) ":" (:port redirect))
+                          remapped-addr (remap-addr raw-addr)]
+                      (debug "ASK redirect:" (:slot redirect) "->" raw-addr "(remapped:" remapped-addr ")")
                       {:type :redirect
-                       :addr (str (:host redirect) ":" (:port redirect))
+                       :addr remapped-addr
                        :asking? true})
 
                     :crossslot
