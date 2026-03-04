@@ -17,6 +17,7 @@ just concurrency                    # run Shuttle + Turmoil concurrency tests
 just proptest                       # run property-based tests
 ```
 
+- when running a single test, target the owning crate to avoid rebuilding the entire workspace: `just test-crate frogdb-server -- test_name --nocapture` or `cargo test -p frogdb-server test_name -- --nocapture`
 - this project uses multiple git worktrees; to clean stale artifacts across all worktrees run `just clean-worktrees`
 - if theres a script/tool, create a Justfile target for it
 

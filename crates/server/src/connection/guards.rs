@@ -241,7 +241,23 @@ impl ConnectionHandler {
                 None // We own it and no migration issues
             }
             Some(&owner) => {
-                // Another node owns this slot
+                // Another node owns this slot — but check if we're the
+                // IMPORTING target for an active migration. The importing
+                // node accepts commands when ASKING is set (regular clients)
+                // or unconditionally for RESTORE (used by MIGRATE internally).
+                if let Some(migration) = snapshot.migrations.get(&first_slot)
+                    && migration.target_node == node_id
+                {
+                    // We are importing this slot
+                    if self.state.asking || cmd_name.as_ref() == "RESTORE" {
+                        self.state.asking = false;
+                        return None; // Allow the command
+                    }
+                }
+                if self.state.asking {
+                    self.state.asking = false;
+                }
+
                 if let Some(owner_node) = snapshot.nodes.get(&owner) {
                     Some(Response::error(format!(
                         "MOVED {} {}:{}",
@@ -257,7 +273,18 @@ impl ConnectionHandler {
                 }
             }
             None => {
-                // Slot not assigned
+                // Slot not assigned locally — check if we're importing it
+                if let Some(migration) = snapshot.migrations.get(&first_slot)
+                    && migration.target_node == node_id
+                    && (self.state.asking || cmd_name.as_ref() == "RESTORE")
+                {
+                    self.state.asking = false;
+                    return None; // Allow: importing node accepts during migration
+                }
+                if self.state.asking {
+                    self.state.asking = false;
+                }
+
                 Some(Response::error(format!(
                     "CLUSTERDOWN Hash slot {} not served",
                     first_slot

@@ -450,7 +450,9 @@ pub(super) fn cluster_setslot(
 
     match subcommand.as_str() {
         "IMPORTING" => {
-            // Mark slot as importing from source node
+            // CLUSTER SETSLOT <slot> IMPORTING <source-id> [<target-id>]
+            // target-id is optional; defaults to my_node_id for direct calls.
+            // When Raft-forwarded, the caller should pass the actual target.
             if args.len() < 3 {
                 return Err(CommandError::WrongArgCount {
                     command: "cluster setslot importing".to_string(),
@@ -466,18 +468,34 @@ pub(super) fn cluster_setslot(
                 }
             })?;
 
+            let target_node = if args.len() > 3 {
+                let target_id_str =
+                    std::str::from_utf8(&args[3]).map_err(|_| CommandError::InvalidArgument {
+                        message: "invalid node ID".to_string(),
+                    })?;
+                u64::from_str_radix(target_id_str, 16).map_err(|_| {
+                    CommandError::InvalidArgument {
+                        message: "invalid node ID format".to_string(),
+                    }
+                })?
+            } else {
+                my_node_id
+            };
+
             Ok(Response::RaftNeeded {
                 op: RaftClusterOp::BeginSlotMigration {
                     slot,
                     source_node,
-                    target_node: my_node_id,
+                    target_node,
                 },
                 register_node: None,
                 unregister_node: None,
             })
         }
         "MIGRATING" => {
-            // Mark slot as migrating to target node
+            // CLUSTER SETSLOT <slot> MIGRATING <target-id> [<source-id>]
+            // source-id is optional; defaults to my_node_id for direct calls.
+            // When Raft-forwarded, the caller should pass the actual source.
             if args.len() < 3 {
                 return Err(CommandError::WrongArgCount {
                     command: "cluster setslot migrating".to_string(),
@@ -493,10 +511,24 @@ pub(super) fn cluster_setslot(
                 }
             })?;
 
+            let source_node = if args.len() > 3 {
+                let source_id_str =
+                    std::str::from_utf8(&args[3]).map_err(|_| CommandError::InvalidArgument {
+                        message: "invalid node ID".to_string(),
+                    })?;
+                u64::from_str_radix(source_id_str, 16).map_err(|_| {
+                    CommandError::InvalidArgument {
+                        message: "invalid node ID format".to_string(),
+                    }
+                })?
+            } else {
+                my_node_id
+            };
+
             Ok(Response::RaftNeeded {
                 op: RaftClusterOp::BeginSlotMigration {
                     slot,
-                    source_node: my_node_id,
+                    source_node,
                     target_node,
                 },
                 register_node: None,
