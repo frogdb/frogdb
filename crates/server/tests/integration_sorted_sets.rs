@@ -3,16 +3,29 @@
 mod common;
 
 use bytes::Bytes;
-use common::test_server::TestServer;
+use common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
+use frogdb_server::config::server::SortedSetIndexConfig;
+use rstest::rstest;
+
+async fn zset_server(backend: SortedSetIndexConfig) -> TestServer {
+    TestServer::start_standalone_with_config(TestServerConfig {
+        sorted_set_index: Some(backend),
+        ..Default::default()
+    })
+    .await
+}
 
 // ============================================================================
 // Sorted Set Tests
 // ============================================================================
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zadd_basic() {
-    let server = TestServer::start_standalone().await;
+async fn test_zadd_basic(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     // ZADD returns number of elements added
@@ -36,9 +49,12 @@ async fn test_zadd_basic() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zadd_options() {
-    let server = TestServer::start_standalone().await;
+async fn test_zadd_options(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     // Add initial member
@@ -64,7 +80,7 @@ async fn test_zadd_options() {
 
     // Verify score was updated
     let response = client.command(&["ZSCORE", "myzset", "one"]).await;
-    assert_eq!(response, Response::Integer(5));
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("5"))));
 
     // CH - return changed count
     let response = client.command(&["ZADD", "myzset", "CH", "10", "one"]).await;
@@ -73,9 +89,12 @@ async fn test_zadd_options() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zadd_incr() {
-    let server = TestServer::start_standalone().await;
+async fn test_zadd_incr(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     // INCR mode returns the new score
@@ -93,9 +112,12 @@ async fn test_zadd_incr() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zscore() {
-    let server = TestServer::start_standalone().await;
+async fn test_zscore(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -116,9 +138,12 @@ async fn test_zscore() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zmscore() {
-    let server = TestServer::start_standalone().await;
+async fn test_zmscore(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -131,8 +156,8 @@ async fn test_zmscore() {
     assert_eq!(
         response,
         Response::Array(vec![
-            Response::Integer(1),
-            Response::Integer(2),
+            Response::Bulk(Some(Bytes::from("1"))),
+            Response::Bulk(Some(Bytes::from("2"))),
             Response::Bulk(None),
         ])
     );
@@ -140,9 +165,12 @@ async fn test_zmscore() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zrem() {
-    let server = TestServer::start_standalone().await;
+async fn test_zrem(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -158,9 +186,12 @@ async fn test_zrem() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zincrby() {
-    let server = TestServer::start_standalone().await;
+async fn test_zincrby(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     // Increment non-existent key
@@ -178,9 +209,12 @@ async fn test_zincrby() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zrank() {
-    let server = TestServer::start_standalone().await;
+async fn test_zrank(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -203,9 +237,12 @@ async fn test_zrank() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zrevrank() {
-    let server = TestServer::start_standalone().await;
+async fn test_zrevrank(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -221,9 +258,12 @@ async fn test_zrevrank() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zrange_by_rank() {
-    let server = TestServer::start_standalone().await;
+async fn test_zrange_by_rank(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -273,9 +313,12 @@ async fn test_zrange_by_rank() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zrange_by_score() {
-    let server = TestServer::start_standalone().await;
+async fn test_zrange_by_score(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -319,9 +362,12 @@ async fn test_zrange_by_score() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zrangebyscore_legacy() {
-    let server = TestServer::start_standalone().await;
+async fn test_zrangebyscore_legacy(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -352,9 +398,12 @@ async fn test_zrangebyscore_legacy() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zcount() {
-    let server = TestServer::start_standalone().await;
+async fn test_zcount(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -373,9 +422,12 @@ async fn test_zcount() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zpopmin_zpopmax() {
-    let server = TestServer::start_standalone().await;
+async fn test_zpopmin_zpopmax(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -409,9 +461,12 @@ async fn test_zpopmin_zpopmax() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zunionstore() {
-    let server = TestServer::start_standalone().await;
+async fn test_zunionstore(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -428,20 +483,23 @@ async fn test_zunionstore() {
 
     // Check scores (default SUM aggregate)
     let response = client.command(&["ZSCORE", "{z}result", "a"]).await;
-    assert_eq!(response, Response::Integer(1));
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("1"))));
 
     let response = client.command(&["ZSCORE", "{z}result", "b"]).await;
-    assert_eq!(response, Response::Integer(5)); // 2 + 3
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("5")))); // 2 + 3
 
     let response = client.command(&["ZSCORE", "{z}result", "c"]).await;
-    assert_eq!(response, Response::Integer(4));
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("4"))));
 
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zinterstore() {
-    let server = TestServer::start_standalone().await;
+async fn test_zinterstore(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -457,14 +515,17 @@ async fn test_zinterstore() {
     assert_eq!(response, Response::Integer(1)); // Only b is in both
 
     let response = client.command(&["ZSCORE", "{z}result", "b"]).await;
-    assert_eq!(response, Response::Integer(5)); // 2 + 3
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("5")))); // 2 + 3
 
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zdiffstore() {
-    let server = TestServer::start_standalone().await;
+async fn test_zdiffstore(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -480,14 +541,17 @@ async fn test_zdiffstore() {
     assert_eq!(response, Response::Integer(1)); // Only a is in zset1 but not zset2
 
     let response = client.command(&["ZSCORE", "{z}result", "a"]).await;
-    assert_eq!(response, Response::Integer(1));
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("1"))));
 
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zremrangebyrank() {
-    let server = TestServer::start_standalone().await;
+async fn test_zremrangebyrank(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -505,9 +569,12 @@ async fn test_zremrangebyrank() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_zremrangebyscore() {
-    let server = TestServer::start_standalone().await;
+async fn test_zremrangebyscore(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client
@@ -525,9 +592,12 @@ async fn test_zremrangebyscore() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_wrongtype_error() {
-    let server = TestServer::start_standalone().await;
+async fn test_wrongtype_error(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     // Create a string key
@@ -543,9 +613,12 @@ async fn test_wrongtype_error() {
     server.shutdown().await;
 }
 
+#[rstest]
+#[case::skiplist(SortedSetIndexConfig::Skiplist)]
+#[case::btree(SortedSetIndexConfig::Btreemap)]
 #[tokio::test]
-async fn test_type_command_zset() {
-    let server = TestServer::start_standalone().await;
+async fn test_type_command_zset(#[case] backend: SortedSetIndexConfig) {
+    let server = zset_server(backend).await;
     let mut client = server.connect().await;
 
     client.command(&["ZADD", "myzset", "1", "one"]).await;
