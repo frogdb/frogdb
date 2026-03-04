@@ -46,6 +46,7 @@ struct RotationConfig {
 level = "info"
 format = "json"                 # "json" or "pretty"
 output = "stdout"               # "stdout", "stderr", or "file"
+per_request_spans = false       # Enable per-request tracing spans (~13% CPU overhead when enabled)
 # file_path = "/var/log/frogdb/frogdb.log"
 
 [logging.rotation]
@@ -55,6 +56,8 @@ compress = true
 ```
 
 > **Implementation note:** File output with rotation requires `tracing-appender` for non-blocking writes. The current implementation supports stdout/stderr via `tracing-subscriber`'s `fmt` layer; file output is specified but not yet implemented.
+>
+> **Performance note:** `per_request_spans` defaults to `false` for production performance (~13% CPU savings). Enable for detailed per-request tracing during debugging.
 
 ### Structured Fields
 

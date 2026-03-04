@@ -211,30 +211,44 @@ sequenceDiagram
 
 Commands execute with access to `CommandContext`, which provides store access, connection state, and shard routing. See [EXECUTION.md](EXECUTION.md#commandcontext-definition) for the complete definition.
 
-### CommandContext (Phase 1)
+### CommandContext
 
 Commands execute with this context:
 
 ```rust
 pub struct CommandContext<'a> {
-    /// Mutable access to shard's store
+    /// Local shard's data store
     pub store: &'a mut dyn Store,
-    /// Connection state (auth, subscriptions, blocked)
-    pub conn_state: &'a mut ConnectionState,
-    /// Channel senders to other shards (for forwarding)
-    pub shard_senders: &'a [mpsc::Sender<ShardMessage>],
+    /// For commands that need to reach other shards
+    pub shard_senders: &'a Arc<Vec<mpsc::Sender<ShardMessage>>>,
     /// This shard's ID (0 to num_shards-1)
     pub shard_id: usize,
     /// Total number of shards
     pub num_shards: usize,
-    /// Current timestamp (for TTL operations)
-    pub now: Instant,
-    /// WAL writer (supports Async/Periodic/Sync durability modes)
-    pub wal: &'a mut dyn WalWriter,
+    /// Connection ID (for client-specific operations)
+    pub conn_id: u64,
+    /// Protocol version for response encoding (RESP2 or RESP3)
+    pub protocol_version: ProtocolVersion,
+    /// Optional replication tracker for WAIT command and replica ACKs
+    pub replication_tracker: Option<&'a Arc<ReplicationTrackerImpl>>,
+    /// Optional replication state for INFO replication section
+    pub replication_state: Option<&'a Arc<RwLock<ReplicationState>>>,
+    /// Optional cluster state for cluster commands and routing
+    pub cluster_state: Option<&'a Arc<ClusterState>>,
+    /// This node's ID (for cluster mode)
+    pub node_id: Option<u64>,
+    /// Optional Raft instance for cluster command execution
+    pub raft: Option<&'a Arc<ClusterRaft>>,
+    /// Optional network factory for cluster node management
+    pub network_factory: Option<&'a Arc<ClusterNetworkFactory>>,
+    /// Optional quorum checker for local cluster health detection
+    pub quorum_checker: Option<&'a dyn QuorumChecker>,
+    /// Optional command registry for introspection commands (COMMAND GETKEYS)
+    pub command_registry: Option<&'a Arc<CommandRegistry>>,
+    /// Number of dirty changes made by this command (for rdb_changes_since_last_save)
+    pub dirty_delta: i64,
 }
 ```
-
-Note: `replication_tracker` field is added in Phase 14.
 
 ### ACL Integration
 

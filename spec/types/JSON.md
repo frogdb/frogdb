@@ -64,7 +64,7 @@ pub enum Value {
 | JSON.CLEAR | O(N) | Clear container |
 | JSON.TOGGLE | O(1) | Toggle boolean |
 | JSON.MERGE | O(N+M) | Deep merge objects |
-| JSON.DEBUG | O(N) | Debug info |
+| JSON.DEBUG | O(N) | Debug info **[Not Yet Implemented]** |
 
 Where N = path elements, M = value size.
 

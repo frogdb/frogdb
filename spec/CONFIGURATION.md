@@ -171,8 +171,8 @@ FrogDB supports Redis-compatible `CONFIG` commands for runtime configuration cha
 |---------|-------------|
 | `CONFIG GET pattern` | Get configuration parameters matching glob pattern |
 | `CONFIG SET param value` | Set configuration parameter at runtime |
-| `CONFIG RESETSTAT` | Reset statistics (future) |
-| `CONFIG HELP` | Show CONFIG subcommands (future) |
+| `CONFIG RESETSTAT` | Reset statistics |
+| `CONFIG HELP` | Show CONFIG subcommands |
 
 **Note:** `CONFIG REWRITE` is not supported. Runtime changes are transient and lost on restart.
 
@@ -497,7 +497,7 @@ pub struct ParamMeta {
     /// Optional validator function
     pub validator: Option<fn(&str) -> Result<(), String>>,
 
-    /// Help text for CONFIG HELP (future)
+    /// Help text for CONFIG HELP
     pub description: &'static str,
 }
 

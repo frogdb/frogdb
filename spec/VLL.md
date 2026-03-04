@@ -933,7 +933,7 @@ When a client disconnects while holding a continuation lock:
 1. **Detection**: TCP connection close detected by shard's connection handler
 2. **Immediate release**: Continuation lock released synchronously on disconnect detection
 3. **Transaction abort**: Any in-progress MULTI transaction is discarded (no EXEC)
-4. **Blocked operations**: WATCH state cleared, blocked commands (future) unblocked
+4. **Blocked operations**: WATCH state cleared, blocked commands unblocked
 
 **Guarantees:**
 - Lock held for at most `connection_timeout_ms` after network failure

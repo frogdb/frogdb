@@ -4,7 +4,7 @@ This document covers FrogDB's clustering architecture, including slot-based shar
 
 ## Overview
 
-FrogDB is designed for single-node operation initially, with clustering as a future capability. The architecture uses:
+FrogDB supports both single-node and cluster operation. Cluster Phases 1 (replication) and 3 (client protocol) are complete; Phases 4-6 (failover, migration, advanced features) are pending. The architecture uses:
 
 - **Orchestrated control plane** (DragonflyDB-style) rather than gossip
 - **16384 hash slots** for Redis Cluster client compatibility
@@ -1518,7 +1518,7 @@ Client connection state may be affected during slot migration:
 
 ### Blocking Commands and Failover (Design Notes)
 
-When blocking commands (BLPOP, BRPOP, BLMOVE) are implemented:
+Blocking commands (BLPOP, BRPOP, BLMOVE, BLMPOP, BZPOPMIN, BZPOPMAX, BZMPOP, BRPOPLPUSH) are implemented. Their cluster failover behavior:
 
 | Failover Event | Blocking Client Behavior |
 |----------------|-------------------------|

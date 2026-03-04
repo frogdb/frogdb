@@ -418,7 +418,7 @@ watchdog_timeout_s = 60  # 0 = disabled
 
 ## Node Failures (Cluster Mode)
 
-*Note: Cluster mode is planned for future implementation.*
+*Note: Cluster mode is partially implemented (Phases 1 and 3 complete; Phases 4-6 pending).*
 
 ### Primary Unavailable
 
@@ -932,4 +932,4 @@ WARN  "Slow command"             → Performance issue
 - [LIFECYCLE.md](LIFECYCLE.md) - Startup/shutdown procedures
 - [OBSERVABILITY.md](OBSERVABILITY.md) - Metrics and logging
 - [CONFIGURATION.md](CONFIGURATION.md) - Configuration system
-- [CLUSTER.md](CLUSTER.md) - Cluster architecture (future)
+- [CLUSTER.md](CLUSTER.md) - Cluster architecture (partially implemented)

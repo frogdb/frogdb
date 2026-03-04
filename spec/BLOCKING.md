@@ -92,7 +92,7 @@ enum BlockingOp {
 
 ---
 
-## Proposed Architecture
+## Architecture
 
 ### Single-Shard Blocking
 
@@ -659,6 +659,8 @@ max_blocked_connections = 50000
 ---
 
 ## Cluster Mode: Slot Migration Interaction
+
+> **[Not Yet Implemented]** The slot migration interaction described in this section is a future design. The `on_slot_migration_key_transferred()` callback and related behaviors for sending `-MOVED` to blocked clients during migration are not yet implemented.
 
 When slots migrate between nodes, blocked clients must be handled correctly.
 This fixes [Redis issue #2379](https://github.com/redis/redis/issues/2379) where BLPOP blocks

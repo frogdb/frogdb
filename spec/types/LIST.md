@@ -31,17 +31,24 @@ pub struct ListValue {
 | LINSERT | Insert before/after pivot |
 | LREM | Remove elements by value |
 | LTRIM | Trim to specified range |
+| LPUSHX | Insert element at head only if list exists |
+| RPUSHX | Insert element at tail only if list exists |
+| LPOS | Return position of element in list |
 | LMOVE | Move element between lists |
+| RPOPLPUSH | Pop tail and push to head of another list (deprecated, use LMOVE) |
+| LMPOP | Pop elements from multiple lists |
 | BLPOP | Blocking pop from head |
 | BRPOP | Blocking pop from tail |
 | BLMOVE | Blocking move between lists |
+| BLMPOP | Blocking pop from multiple lists |
+| BRPOPLPUSH | Blocking pop tail and push head (deprecated, use BLMOVE) |
 
 ## Implementation Notes
 
 - **Memory accounting:** Sum of all element lengths + VecDeque overhead
 - **Persistence format:** `[len:u32][elem1_len:u32][elem1]...`
 - **Cross-shard behavior:** Use hash tags for atomic multi-list operations
-- **Blocking commands:** Require List implementation before blocking can be enabled
+- **Blocking commands:** All blocking list commands (BLPOP, BRPOP, BLMOVE, BLMPOP, BRPOPLPUSH) are implemented
 
 ## References
 

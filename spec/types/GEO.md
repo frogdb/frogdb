@@ -53,6 +53,8 @@ pub fn geohash_to_string(hash: f64, precision: u8) -> String {
 | GEOSEARCHSTORE | O(N+log M) | Search and store results |
 | GEORADIUS | O(N+log M) | Search by radius (deprecated) |
 | GEORADIUSBYMEMBER | O(N+log M) | Search from member (deprecated) |
+| GEORADIUS_RO | O(N+log M) | Read-only variant of GEORADIUS (for replicas) |
+| GEORADIUSBYMEMBER_RO | O(N+log M) | Read-only variant of GEORADIUSBYMEMBER (for replicas) |
 
 Where N = items in search area, M = sorted set size.
 
