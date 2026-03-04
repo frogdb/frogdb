@@ -231,3 +231,23 @@ metadata_command!(
         | CommandFlags::NO_PROPAGATE,
     ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth)
 );
+
+// =============================================================================
+// Persistence Commands (handled at connection level)
+// =============================================================================
+
+metadata_command!(
+    BgsaveMetadata,
+    "BGSAVE",
+    Arity::Range { min: 0, max: 1 },
+    CommandFlags::ADMIN,
+    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence)
+);
+
+metadata_command!(
+    LastsaveMetadata,
+    "LASTSAVE",
+    Arity::Fixed(0),
+    CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE,
+    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence)
+);

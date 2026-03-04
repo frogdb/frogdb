@@ -5,6 +5,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, HyperLogLogValue, Value,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -26,6 +27,10 @@ impl Command for PfaddCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -140,6 +145,10 @@ impl Command for PfmergeCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

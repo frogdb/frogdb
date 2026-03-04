@@ -8,7 +8,9 @@
 //! - HSCAN, HRANDFIELD - iteration & random
 
 use bytes::Bytes;
-use frogdb_core::{ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 use super::utils::{format_float, get_or_create_hash, parse_f64, parse_i64};
@@ -30,6 +32,10 @@ impl Command for HsetCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -82,6 +88,10 @@ impl Command for HsetnxCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -173,6 +183,10 @@ impl Command for HdelCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistOrDeleteFirstKey
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
@@ -229,6 +243,10 @@ impl Command for HmsetCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -581,6 +599,10 @@ impl Command for HincrbyCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let field = args[1].clone();
@@ -628,6 +650,10 @@ impl Command for HincrbyfloatCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

@@ -1,5 +1,7 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy, impl_keys_first,
+};
 use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
 
@@ -23,6 +25,10 @@ impl Command for JsonNumIncrByCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -75,6 +81,10 @@ impl Command for JsonNumMultByCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

@@ -92,6 +92,8 @@ pub enum ConnectionLevelHandler {
     Cluster,
     /// Replication commands (PSYNC, REPLCONF, etc.).
     Replication,
+    /// Persistence commands (BGSAVE, LASTSAVE).
+    Persistence,
 }
 
 /// Strategy for scatter-gather operations.
@@ -212,6 +214,7 @@ impl CommandRouter {
             ConnectionLevelOp::Admin => ConnectionLevelHandler::Client,
             ConnectionLevelOp::ConnectionState => ConnectionLevelHandler::ConnectionState,
             ConnectionLevelOp::Replication => ConnectionLevelHandler::Replication,
+            ConnectionLevelOp::Persistence => ConnectionLevelHandler::Persistence,
         }
     }
 }

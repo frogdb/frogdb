@@ -56,17 +56,17 @@ impl ShardWorker {
             let mut ctx = CommandContext::with_cluster(
                 store,
                 &self.shard_senders,
-                self.shard_id,
-                self.num_shards,
+                self.identity.shard_id,
+                self.identity.num_shards,
                 conn_id,
                 protocol_version,
                 None, // replication_tracker - not available in shard
                 None, // replication_state - not available in shard
-                self.cluster_state.as_ref(),
-                self.node_id,
-                self.raft.as_ref(),
-                self.network_factory.as_ref(),
-                self.quorum_checker.as_ref().map(|q| q.as_ref()),
+                self.cluster.cluster_state.as_ref(),
+                self.cluster.node_id,
+                self.cluster.raft.as_ref(),
+                self.cluster.network_factory.as_ref(),
+                self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
             );
             ctx.command_registry = Some(&self.registry);
 
@@ -84,11 +84,17 @@ impl ShardWorker {
         );
         if is_get_command {
             if matches!(response, Response::Null) {
-                self.metrics_recorder
-                    .increment_counter("frogdb_keyspace_misses_total", 1, &[]);
+                self.observability.metrics_recorder.increment_counter(
+                    "frogdb_keyspace_misses_total",
+                    1,
+                    &[],
+                );
             } else {
-                self.metrics_recorder
-                    .increment_counter("frogdb_keyspace_hits_total", 1, &[]);
+                self.observability.metrics_recorder.increment_counter(
+                    "frogdb_keyspace_hits_total",
+                    1,
+                    &[],
+                );
             }
         }
 
@@ -211,7 +217,7 @@ impl ShardWorker {
                     self.store.set(key.clone(), val.clone());
 
                     // Persist to WAL if enabled
-                    if let Some(ref wal) = self.wal_writer {
+                    if let Some(ref wal) = self.persistence.wal_writer {
                         let metadata = KeyMetadata::new(val.memory_size());
                         if let Err(e) = wal.write_set(key, &val, &metadata).await {
                             tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist MSET");
@@ -235,7 +241,7 @@ impl ShardWorker {
                     // Persist delete to WAL if enabled
                     if deleted {
                         any_deleted = true;
-                        if let Some(ref wal) = self.wal_writer
+                        if let Some(ref wal) = self.persistence.wal_writer
                             && let Err(e) = wal.write_delete(key).await
                         {
                             tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist DEL");
@@ -384,7 +390,7 @@ impl ShardWorker {
                         }
 
                         // Persist to WAL if enabled
-                        if let Some(ref wal) = self.wal_writer {
+                        if let Some(ref wal) = self.persistence.wal_writer {
                             let metadata = KeyMetadata::new(value.memory_size());
                             if let Err(e) = wal.write_set(dest_key, &value, &metadata).await {
                                 tracing::error!(

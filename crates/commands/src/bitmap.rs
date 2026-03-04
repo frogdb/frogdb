@@ -10,7 +10,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, Command, CommandContext,
-    CommandError, CommandFlags, OverflowMode, StringValue, Value, bitop,
+    CommandError, CommandFlags, OverflowMode, StringValue, Value, WalStrategy, bitop,
 };
 use frogdb_protocol::Response;
 
@@ -33,6 +33,10 @@ impl Command for SetbitCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -226,6 +230,10 @@ impl Command for BitopCommand {
         CommandFlags::WRITE
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let op = BitOp::parse(&args[0]).ok_or_else(|| CommandError::InvalidArgument {
             message: "operation is not a valid BITOP operation".to_string(),
@@ -387,6 +395,10 @@ impl Command for BitfieldCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

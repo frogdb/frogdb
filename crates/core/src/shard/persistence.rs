@@ -9,7 +9,7 @@ impl ShardWorker {
     /// Handle a new connection assigned to this shard.
     pub(crate) async fn handle_new_connection(&self, new_conn: NewConnection) {
         tracing::debug!(
-            shard_id = self.shard_id,
+            shard_id = self.shard_id(),
             conn_id = new_conn.conn_id,
             addr = %new_conn.addr,
             "New connection assigned to shard"
@@ -25,7 +25,7 @@ impl ShardWorker {
 
     /// Persist a key's current state to WAL after a write operation.
     pub(crate) async fn persist_key_to_wal(&self, key: &[u8]) {
-        if let Some(ref wal) = self.wal_writer
+        if let Some(ref wal) = self.persistence.wal_writer
             && let Some(value) = self.store.get(key)
         {
             let metadata = self
@@ -44,7 +44,7 @@ impl ShardWorker {
 
     /// Persist a deletion to WAL.
     pub(crate) async fn persist_delete_to_wal(&self, key: &[u8]) {
-        if let Some(ref wal) = self.wal_writer
+        if let Some(ref wal) = self.persistence.wal_writer
             && let Err(e) = wal.write_delete(key).await
         {
             tracing::error!(
@@ -57,7 +57,7 @@ impl ShardWorker {
 
     /// Persist command changes to WAL based on command type.
     pub(crate) async fn persist_command_to_wal(&self, cmd_name: &str, args: &[Bytes]) {
-        if self.wal_writer.is_none() {
+        if self.persistence.wal_writer.is_none() {
             return;
         }
 

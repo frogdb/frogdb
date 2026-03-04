@@ -75,6 +75,8 @@ pub enum ServerWideOp {
     FlushAll,
     /// SHUTDOWN: gracefully shutdown the server.
     Shutdown,
+    /// MIGRATE: move keys between servers.
+    Migrate,
 }
 
 /// Operations handled at the connection level (not routed to shards).
@@ -94,6 +96,8 @@ pub enum ConnectionLevelOp {
     ConnectionState,
     /// Replication: PSYNC - requires connection takeover.
     Replication,
+    /// Persistence: BGSAVE, LASTSAVE.
+    Persistence,
 }
 
 /// Strategy for merging results from scatter-gather operations.
@@ -129,6 +133,47 @@ pub trait QuorumChecker: Send + Sync {
     fn count_reachable_nodes(&self) -> usize;
 }
 
+/// Declares how a write command's effects should be persisted to the WAL.
+///
+/// Commands override `wal_strategy()` to declare their persistence behavior.
+/// The default is `Infer`, which falls back to the legacy string-match logic
+/// in `persist_command_to_wal_legacy`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum WalStrategy {
+    /// Persist the current value of the first key (args[0]).
+    /// Used by SET, APPEND, INCR, LPUSH, SADD, ZADD, HSET, etc.
+    PersistFirstKey,
+
+    /// Persist deletion for each arg key that no longer exists.
+    /// Used by DEL, UNLINK, GETDEL.
+    DeleteKeys,
+
+    /// If the first key still exists, persist it; otherwise persist deletion.
+    /// Used by LPOP, RPOP, SPOP, SREM, ZPOPMIN, HDEL, LTRIM, etc.
+    PersistOrDeleteFirstKey,
+
+    /// Delete old key (args[0]) if gone, persist new key (args[1]).
+    /// Used by RENAME, RENAMENX.
+    RenameKeys,
+
+    /// Persist-or-delete source (args[0]), persist destination (args[1]).
+    /// Used by RPOPLPUSH, LMOVE.
+    MoveKeys,
+
+    /// Persist destination key at the given arg index if it exists.
+    /// Used by SINTERSTORE (0), LMOVE dest (1), COPY dest (1), ZRANGESTORE (0).
+    PersistDestination(usize),
+
+    /// No WAL action needed.
+    /// Used by FLUSHDB, FLUSHALL (handled by RocksDB clear).
+    NoOp,
+
+    /// Legacy fallback — dispatch to the string-match logic.
+    /// This is the default for commands that haven't been migrated yet.
+    #[default]
+    Infer,
+}
+
 /// Command trait that all Redis commands implement.
 pub trait Command: Send + Sync {
     /// Command name (e.g., "GET", "SET", "ZADD").
@@ -147,6 +192,15 @@ pub trait Command: Send + Sync {
     /// scatter-gather, or connection-level handling.
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::Standard
+    }
+
+    /// How this command's effects should be persisted to the WAL.
+    ///
+    /// Defaults to `WalStrategy::Infer` which falls back to the legacy
+    /// string-match persistence logic. Override this to declare explicit
+    /// persistence behavior.
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::default()
     }
 
     /// Execute the command.

@@ -9,8 +9,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, MergeStrategy,
-    ServerWideOp,
+    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, ServerWideOp,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,14 +34,10 @@ impl Command for DbsizeCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ScatterGather {
-            merge: MergeStrategy::SumIntegers,
-        }
+        ExecutionStrategy::ServerWide(ServerWideOp::DbSize)
     }
 
     fn execute(&self, ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
-        // Returns local shard key count
-        // In scatter-gather mode, connection.rs will sum counts from all shards
         let count = ctx.store.len();
         Ok(Response::Integer(count as i64))
     }
@@ -72,9 +67,7 @@ impl Command for FlushdbCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ScatterGather {
-            merge: MergeStrategy::AllOk,
-        }
+        ExecutionStrategy::ServerWide(ServerWideOp::FlushDb)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -123,9 +116,7 @@ impl Command for FlushallCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ScatterGather {
-            merge: MergeStrategy::AllOk,
-        }
+        ExecutionStrategy::ServerWide(ServerWideOp::FlushAll)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

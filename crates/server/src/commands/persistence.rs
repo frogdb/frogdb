@@ -2,7 +2,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyMetadata, deserialize, serialize,
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy, KeyMetadata, deserialize, serialize,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -23,6 +24,10 @@ impl Command for BgsaveCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::ADMIN
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence)
     }
 
     fn execute(
@@ -54,6 +59,10 @@ impl Command for LastsaveCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence)
     }
 
     fn execute(

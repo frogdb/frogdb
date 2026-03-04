@@ -20,22 +20,22 @@ impl ShardWorker {
         execute_rx: oneshot::Receiver<ExecuteSignal>,
     ) {
         // Ensure we have the VLL infrastructure
-        if self.intent_table.is_none() {
-            self.intent_table = Some(IntentTable::new());
+        if self.vll.intent_table.is_none() {
+            self.vll.intent_table = Some(IntentTable::new());
         }
-        if self.tx_queue.is_none() {
-            self.tx_queue = Some(TransactionQueue::new(10000));
+        if self.vll.tx_queue.is_none() {
+            self.vll.tx_queue = Some(TransactionQueue::new(10000));
         }
 
-        let intent_table = self.intent_table.as_mut().unwrap();
-        let tx_queue = self.tx_queue.as_mut().unwrap();
+        let intent_table = self.vll.intent_table.as_mut().unwrap();
+        let tx_queue = self.vll.tx_queue.as_mut().unwrap();
 
         // Check queue capacity - warn when queue depth is high
         let queue_depth = tx_queue.len();
         // Warn when queue has 8000+ transactions (80% of default 10000)
         if queue_depth >= 8000 {
             tracing::warn!(
-                shard_id = self.shard_id,
+                shard_id = self.identity.shard_id,
                 queue_depth,
                 "Shard message queue depth high"
             );
@@ -54,7 +54,7 @@ impl ShardWorker {
             VllPendingOp::new(txid, keys.clone(), mode, operation, ready_tx, execute_rx);
         if let Err(e) = tx_queue.enqueue(pending_op) {
             intent_table.remove_all_intents(&keys, txid);
-            tracing::warn!(shard_id = self.shard_id, txid, error = %e, "Failed to enqueue VLL operation");
+            tracing::warn!(shard_id = self.identity.shard_id, txid, error = %e, "Failed to enqueue VLL operation");
             return;
         }
 
@@ -64,11 +64,11 @@ impl ShardWorker {
 
     /// Try to acquire locks for a VLL operation using SCA.
     async fn try_acquire_vll_locks(&mut self, txid: u64) {
-        let intent_table = match self.intent_table.as_mut() {
+        let intent_table = match self.vll.intent_table.as_mut() {
             Some(t) => t,
             None => return,
         };
-        let tx_queue = match self.tx_queue.as_mut() {
+        let tx_queue = match self.vll.tx_queue.as_mut() {
             Some(q) => q,
             None => return,
         };
@@ -100,7 +100,7 @@ impl ShardWorker {
         txid: u64,
         response_tx: oneshot::Sender<PartialResult>,
     ) {
-        let tx_queue = match self.tx_queue.as_mut() {
+        let tx_queue = match self.vll.tx_queue.as_mut() {
             Some(q) => q,
             None => {
                 // No queue means no operation to execute
@@ -122,7 +122,7 @@ impl ShardWorker {
         let result = self.execute_scatter_part(&op.keys, &op.operation).await;
 
         // Release locks
-        if let Some(intent_table) = self.intent_table.as_mut() {
+        if let Some(intent_table) = self.vll.intent_table.as_mut() {
             intent_table.release_locks(&op.keys, op.mode);
             intent_table.remove_all_intents(&op.keys, txid);
         }
@@ -137,11 +137,11 @@ impl ShardWorker {
     /// Handle VLL abort - cleanup a failed operation.
     pub(crate) fn handle_vll_abort(&mut self, txid: u64) {
         // Remove from queue
-        if let Some(tx_queue) = self.tx_queue.as_mut()
+        if let Some(tx_queue) = self.vll.tx_queue.as_mut()
             && let Some(op) = tx_queue.dequeue(txid)
         {
             // Release any held locks and remove intents
-            if let Some(intent_table) = self.intent_table.as_mut() {
+            if let Some(intent_table) = self.vll.intent_table.as_mut() {
                 if op.state == crate::vll::PendingOpState::Ready {
                     // Was holding locks
                     intent_table.release_locks(&op.keys, op.mode);
@@ -163,7 +163,7 @@ impl ShardWorker {
         release_rx: oneshot::Receiver<()>,
     ) {
         // Check if continuation lock is already held
-        if self.continuation_lock.is_some() {
+        if self.vll.continuation_lock.is_some() {
             let _ = ready_tx.send(ShardReadyResult::Failed(VllError::ShardBusy));
             return;
         }
@@ -172,7 +172,7 @@ impl ShardWorker {
         let drain_timeout = std::time::Duration::from_millis(2000);
         let start = std::time::Instant::now();
 
-        while let Some(tx_queue) = self.tx_queue.as_ref() {
+        while let Some(tx_queue) = self.vll.tx_queue.as_ref() {
             if tx_queue.is_empty() {
                 break;
             }
@@ -185,10 +185,10 @@ impl ShardWorker {
         }
 
         // Acquire continuation lock
-        self.continuation_lock = Some(crate::vll::ContinuationLock::new(txid, conn_id));
+        self.vll.continuation_lock = Some(crate::vll::ContinuationLock::new(txid, conn_id));
 
         // Store release receiver for polling in main loop (non-blocking!)
-        self.pending_continuation_release = Some(release_rx);
+        self.vll.pending_continuation_release = Some(release_rx);
 
         // Notify ready - shard continues processing messages from lock owner
         let _ = ready_tx.send(ShardReadyResult::Ready);
@@ -196,7 +196,7 @@ impl ShardWorker {
 
     /// Process waiting VLL operations after one completes.
     async fn process_waiting_vll_ops(&mut self) {
-        let tx_queue = match self.tx_queue.as_ref() {
+        let tx_queue = match self.vll.tx_queue.as_ref() {
             Some(q) => q,
             None => return,
         };

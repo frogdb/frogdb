@@ -12,9 +12,9 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags, Coordinates,
-    DistanceUnit, ScoreBound, SortedSetValue, Value, geohash_calculate_areas, geohash_decode,
-    geohash_encode, geohash_score_range, geohash_to_score, geohash_to_string, haversine_distance,
-    is_within_box, score_to_geohash,
+    DistanceUnit, ScoreBound, SortedSetValue, Value, WalStrategy, geohash_calculate_areas,
+    geohash_decode, geohash_encode, geohash_score_range, geohash_to_score, geohash_to_string,
+    haversine_distance, is_within_box, score_to_geohash,
 };
 use frogdb_protocol::Response;
 
@@ -54,6 +54,10 @@ impl Command for GeoaddCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -379,6 +383,10 @@ impl Command for GeosearchstoreCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistDestination(0)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

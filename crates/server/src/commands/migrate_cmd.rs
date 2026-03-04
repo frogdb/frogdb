@@ -5,7 +5,9 @@
 //! this command is handled specially by the connection handler.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, ServerWideOp,
+};
 use frogdb_protocol::Response;
 
 use crate::migrate::MigrateArgs;
@@ -27,6 +29,10 @@ impl Command for MigrateCommand {
     fn flags(&self) -> CommandFlags {
         // MIGRATE modifies data (deletes source key unless COPY) and is slow
         CommandFlags::WRITE | CommandFlags::NOSCRIPT
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::Migrate)
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

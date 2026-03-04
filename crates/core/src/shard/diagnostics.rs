@@ -40,27 +40,27 @@ impl ShardWorker {
         let overhead_estimate = keys * per_key_overhead + 1024; // Plus shard structures
 
         ShardMemoryStats {
-            shard_id: self.shard_id,
+            shard_id: self.shard_id(),
             data_memory,
             keys,
-            peak_memory: self.peak_memory,
-            memory_limit: self.memory_limit,
+            peak_memory: self.observability.peak_memory,
+            memory_limit: self.eviction.memory_limit,
             overhead_estimate,
         }
     }
 
     /// Collect WAL lag statistics for this shard.
     pub(crate) async fn collect_wal_lag_stats(&self) -> WalLagStatsResponse {
-        if let Some(ref wal_writer) = self.wal_writer {
+        if let Some(ref wal_writer) = self.persistence.wal_writer {
             let lag_stats = wal_writer.lag_stats().await;
             WalLagStatsResponse {
-                shard_id: self.shard_id,
+                shard_id: self.shard_id(),
                 persistence_enabled: true,
                 lag_stats: Some(lag_stats),
             }
         } else {
             WalLagStatsResponse {
-                shard_id: self.shard_id,
+                shard_id: self.shard_id(),
                 persistence_enabled: false,
                 lag_stats: None,
             }
@@ -100,7 +100,7 @@ impl ShardWorker {
         let truncated = big_keys.len() >= max_keys;
 
         BigKeysScanResponse {
-            shard_id: self.shard_id,
+            shard_id: self.shard_id(),
             big_keys,
             keys_scanned,
             truncated,
@@ -109,27 +109,29 @@ impl ShardWorker {
 
     /// Calculate hot shard statistics for the given period.
     pub(crate) fn calculate_hot_shard_stats(&mut self, period_secs: u64) -> HotShardStatsResponse {
-        let (ops_per_sec, reads_per_sec, writes_per_sec) =
-            self.operation_counters.calculate_ops_per_sec(period_secs);
+        let (ops_per_sec, reads_per_sec, writes_per_sec) = self
+            .observability
+            .operation_counters
+            .calculate_ops_per_sec(period_secs);
 
         HotShardStatsResponse {
-            shard_id: self.shard_id,
+            shard_id: self.shard_id(),
             ops_per_sec,
             reads_per_sec,
             writes_per_sec,
-            queue_depth: self.queue_depth.load(Ordering::Relaxed),
+            queue_depth: self.observability.queue_depth.load(Ordering::Relaxed),
         }
     }
 
     /// Collect VLL queue information for debugging.
     pub(crate) fn collect_vll_queue_info(&self) -> VllQueueInfo {
         let mut info = VllQueueInfo {
-            shard_id: self.shard_id,
+            shard_id: self.shard_id(),
             ..Default::default()
         };
 
         // Collect queue depth and pending ops
-        if let Some(ref tx_queue) = self.tx_queue {
+        if let Some(ref tx_queue) = self.vll.tx_queue {
             info.queue_depth = tx_queue.len();
 
             // Find executing txid (the one with Executing state)
@@ -149,7 +151,7 @@ impl ShardWorker {
         }
 
         // Collect continuation lock info
-        if let Some(ref lock) = self.continuation_lock {
+        if let Some(ref lock) = self.vll.continuation_lock {
             info.continuation_lock = Some(VllContinuationLockInfo {
                 txid: lock.txid,
                 conn_id: lock.conn_id,
@@ -158,7 +160,7 @@ impl ShardWorker {
         }
 
         // Collect intent table info
-        if let Some(ref intent_table) = self.intent_table {
+        if let Some(ref intent_table) = self.vll.intent_table {
             for (key, txids) in intent_table.iter_keys() {
                 let lock_state = intent_table.get_lock_state_string(key);
                 info.intent_table.push(VllKeyIntentInfo {

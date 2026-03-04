@@ -1,5 +1,7 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy, impl_keys_first,
+};
 use frogdb_protocol::Response;
 
 use crate::utils::{ZaddOptions, format_float, get_or_create_zset, parse_f64, score_response};
@@ -21,6 +23,10 @@ impl Command for ZaddCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -185,6 +191,10 @@ impl Command for ZremCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistOrDeleteFirstKey
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
@@ -346,6 +356,10 @@ impl Command for ZincrbyCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

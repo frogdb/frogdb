@@ -11,6 +11,7 @@ use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, Expiry,
     IncrementError, MergeStrategy, SetCondition, SetOptions, SetResult, StringValue, Value,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -34,6 +35,10 @@ impl Command for SetnxCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -77,6 +82,10 @@ impl Command for SetexCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -127,6 +136,10 @@ impl Command for PsetexCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = args[0].clone();
         let ms = parse_i64(&args[1])?;
@@ -173,6 +186,10 @@ impl Command for AppendCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -311,6 +328,10 @@ impl Command for SetrangeCommand {
         CommandFlags::WRITE
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let offset = parse_u64(&args[1])? as usize;
@@ -373,6 +394,10 @@ impl Command for GetdelCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::DeleteKeys
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
@@ -414,6 +439,10 @@ impl Command for GetexCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -539,6 +568,10 @@ impl Command for IncrCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
@@ -587,6 +620,10 @@ impl Command for DecrCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -639,6 +676,10 @@ impl Command for IncrbyCommand {
         CommandFlags::WRITE | CommandFlags::FAST
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let delta = parse_i64(&args[1])?;
@@ -688,6 +729,10 @@ impl Command for DecrbyCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -743,6 +788,10 @@ impl Command for IncrbyfloatCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -867,6 +916,10 @@ impl Command for MsetCommand {
         }
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if !args.len().is_multiple_of(2) {
             return Err(CommandError::WrongArity { command: "mset" });
@@ -902,6 +955,10 @@ impl Command for MsetnxCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1211,6 +1268,10 @@ impl Command for GetsetCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, SortedSetValue, Value,
+    Arity, Command, CommandContext, CommandError, CommandFlags, SortedSetValue, Value, WalStrategy,
     impl_keys_first, shard_for_key,
 };
 use frogdb_protocol::Response;
@@ -24,6 +24,10 @@ impl Command for ZrangestoreCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistDestination(0)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -165,6 +169,10 @@ impl Command for ZremrangebyrankCommand {
         CommandFlags::WRITE
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistOrDeleteFirstKey
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let start = parse_i64(&args[1])?;
@@ -207,6 +215,10 @@ impl Command for ZremrangebyscoreCommand {
         CommandFlags::WRITE
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistOrDeleteFirstKey
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let min = parse_score_bound(&args[1])?;
@@ -247,6 +259,10 @@ impl Command for ZremrangebylexCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistOrDeleteFirstKey
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

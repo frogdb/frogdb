@@ -13,7 +13,7 @@ use super::worker::ShardWorker;
 impl ShardWorker {
     /// Run the shard worker event loop.
     pub async fn run(mut self) {
-        tracing::info!(shard_id = self.shard_id, "Shard worker started");
+        tracing::info!(shard_id = self.shard_id(), "Shard worker started");
 
         // Active expiry runs every 100ms
         let mut expiry_interval = tokio::time::interval(Duration::from_millis(100));
@@ -40,7 +40,7 @@ impl ShardWorker {
                                 let _ = response_tx.send(err);
                                 continue;
                             }
-                            let shard_id = self.shard_id;
+                            let shard_id = self.shard_id();
                             let response = self
                                 .execute_command(command.as_ref(), conn_id, protocol_version)
                                 .instrument(tracing::info_span!("shard_execute", shard_id))
@@ -161,20 +161,20 @@ impl ShardWorker {
 
                         // Slowlog handlers
                         ShardMessage::SlowlogGet { count, response_tx } => {
-                            let entries = self.slowlog.get(count);
+                            let entries = self.observability.slowlog.get(count);
                             let _ = response_tx.send(entries);
                         }
                         ShardMessage::SlowlogLen { response_tx } => {
-                            let _ = response_tx.send(self.slowlog.len());
+                            let _ = response_tx.send(self.observability.slowlog.len());
                         }
                         ShardMessage::SlowlogReset { response_tx } => {
-                            self.slowlog.reset();
+                            self.observability.slowlog.reset();
                             let _ = response_tx.send(());
                         }
                         ShardMessage::SlowlogAdd { duration_us, command, client_addr, client_name, max_len } => {
                             // Keep shard slowlog max_len in sync with runtime config
-                            self.slowlog.set_max_len(max_len);
-                            self.slowlog.add_pre_truncated(duration_us, command, client_addr, client_name);
+                            self.observability.slowlog.set_max_len(max_len);
+                            self.observability.slowlog.add_pre_truncated(duration_us, command, client_addr, client_name);
                         }
 
                         // Memory handlers
@@ -197,25 +197,25 @@ impl ShardWorker {
 
                         // Latency handlers
                         ShardMessage::LatencyLatest { response_tx } => {
-                            let latest = self.latency_monitor.latest();
+                            let latest = self.observability.latency_monitor.latest();
                             let _ = response_tx.send(latest);
                         }
                         ShardMessage::LatencyHistory { event, response_tx } => {
-                            let history = self.latency_monitor.history(event);
+                            let history = self.observability.latency_monitor.history(event);
                             let _ = response_tx.send(history);
                         }
                         ShardMessage::LatencyReset { events, response_tx } => {
-                            self.latency_monitor.reset(&events);
+                            self.observability.latency_monitor.reset(&events);
                             let _ = response_tx.send(());
                         }
 
                         ShardMessage::ResetStats { response_tx } => {
                             // Reset latency monitor (all events)
-                            self.latency_monitor.reset(&[]);
+                            self.observability.latency_monitor.reset(&[]);
                             // Reset slowlog
-                            self.slowlog.reset();
+                            self.observability.slowlog.reset();
                             // Reset peak memory
-                            self.peak_memory = 0;
+                            self.observability.peak_memory = 0;
                             let _ = response_tx.send(());
                         }
 
@@ -226,15 +226,15 @@ impl ShardWorker {
 
                         ShardMessage::UpdateConfig { eviction_config, response_tx } => {
                             if let Some(config) = eviction_config {
-                                self.eviction_config = config;
+                                self.eviction.config = config;
                                 // Recalculate per-shard memory limit
-                                self.memory_limit = if self.eviction_config.maxmemory > 0 {
-                                    self.eviction_config.maxmemory / self.num_shards as u64
+                                self.eviction.memory_limit = if self.eviction.config.maxmemory > 0 {
+                                    self.eviction.config.maxmemory / self.num_shards() as u64
                                 } else {
                                     0
                                 };
                                 tracing::info!(
-                                    shard_id = self.shard_id,
+                                    shard_id = self.shard_id(),
                                     "Shard config updated"
                                 );
                             }
@@ -257,7 +257,7 @@ impl ShardWorker {
 
                         // Cluster / Raft message handlers
                         ShardMessage::RaftCommand { cmd, response_tx } => {
-                            let result = if let Some(ref raft) = self.raft {
+                            let result = if let Some(ref raft) = self.cluster.raft {
                                 raft.client_write(cmd).await
                                     .map(|_| ())
                                     .map_err(|e| e.to_string())
@@ -273,11 +273,11 @@ impl ShardWorker {
                         }
 
                         ShardMessage::Shutdown => {
-                            tracing::info!(shard_id = self.shard_id, "Shard worker shutting down");
+                            tracing::info!(shard_id = self.shard_id(), "Shard worker shutting down");
                             // Flush WAL before shutdown
-                            if let Some(ref wal) = self.wal_writer
+                            if let Some(ref wal) = self.persistence.wal_writer
                                 && let Err(e) = wal.flush_async().await {
-                                    tracing::error!(shard_id = self.shard_id, error = %e, "Failed to flush WAL on shutdown");
+                                    tracing::error!(shard_id = self.shard_id(), error = %e, "Failed to flush WAL on shutdown");
                                 }
                             break;
                         }
@@ -301,15 +301,15 @@ impl ShardWorker {
 
                 // Check for continuation lock release signal
                 _ = async {
-                    match &mut self.pending_continuation_release {
+                    match &mut self.vll.pending_continuation_release {
                         Some(rx) => rx.await,
                         None => std::future::pending().await,
                     }
                 } => {
                     // Release signal received - clear the continuation lock
-                    self.continuation_lock = None;
-                    self.pending_continuation_release = None;
-                    tracing::debug!(shard_id = self.shard_id, "Continuation lock released");
+                    self.vll.continuation_lock = None;
+                    self.vll.pending_continuation_release = None;
+                    tracing::debug!(shard_id = self.shard_id(), "Continuation lock released");
                 }
 
                 else => break,
@@ -317,10 +317,10 @@ impl ShardWorker {
         }
 
         // Final WAL flush
-        if let Some(ref wal) = self.wal_writer
+        if let Some(ref wal) = self.persistence.wal_writer
             && let Err(e) = wal.flush_async().await
         {
-            tracing::error!(shard_id = self.shard_id, error = %e, "Failed to flush WAL on exit");
+            tracing::error!(shard_id = self.shard_id(), error = %e, "Failed to flush WAL on exit");
         }
     }
 
@@ -339,7 +339,7 @@ impl ShardWorker {
 
         for key in expired {
             if start.elapsed() > budget {
-                tracing::trace!(shard_id = self.shard_id, "Active expiry budget exhausted");
+                tracing::trace!(shard_id = self.shard_id(), "Active expiry budget exhausted");
                 break;
             }
 
@@ -347,7 +347,7 @@ impl ShardWorker {
             if self.store.delete(&key) {
                 deleted_count += 1;
                 tracing::trace!(
-                    shard_id = self.shard_id,
+                    shard_id = self.shard_id(),
                     key = %String::from_utf8_lossy(&key),
                     "Active expiry deleted key"
                 );
@@ -356,8 +356,8 @@ impl ShardWorker {
 
         // Record expired keys metric and increment version
         if deleted_count > 0 {
-            let shard_label = self.shard_id.to_string();
-            self.metrics_recorder.increment_counter(
+            let shard_label = self.shard_id().to_string();
+            self.observability.metrics_recorder.increment_counter(
                 "frogdb_keys_expired_total",
                 deleted_count,
                 &[("shard", &shard_label)],
@@ -368,52 +368,52 @@ impl ShardWorker {
 
     /// Collect and emit shard metrics periodically.
     fn collect_shard_metrics(&mut self) {
-        let shard_label = self.shard_id.to_string();
+        let shard_label = self.shard_id().to_string();
         let memory_used = self.store.memory_used() as u64;
 
         // Update peak memory if current exceeds it
-        if memory_used > self.peak_memory {
-            self.peak_memory = memory_used;
+        if memory_used > self.observability.peak_memory {
+            self.observability.peak_memory = memory_used;
         }
 
         // Memory used by this shard
-        self.metrics_recorder.record_gauge(
+        self.observability.metrics_recorder.record_gauge(
             "frogdb_shard_memory_bytes",
             memory_used as f64,
             &[("shard", &shard_label)],
         );
 
         // Per-shard memory metrics
-        self.metrics_recorder.record_gauge(
+        self.observability.metrics_recorder.record_gauge(
             "frogdb_memory_used_bytes",
             memory_used as f64,
             &[("shard", &shard_label)],
         );
 
         // Peak memory for this shard
-        self.metrics_recorder.record_gauge(
+        self.observability.metrics_recorder.record_gauge(
             "frogdb_memory_peak_bytes",
-            self.peak_memory as f64,
+            self.observability.peak_memory as f64,
             &[("shard", &shard_label)],
         );
 
         // Keyspace metrics: key count
         let key_count = self.store.len() as f64;
 
-        self.metrics_recorder.record_gauge(
+        self.observability.metrics_recorder.record_gauge(
             "frogdb_shard_keys",
             key_count,
             &[("shard", &shard_label)],
         );
 
-        self.metrics_recorder.record_gauge(
+        self.observability.metrics_recorder.record_gauge(
             "frogdb_keys_total",
             key_count,
             &[("shard", &shard_label)],
         );
 
         // Keys with expiry (using cleaner abstraction)
-        self.metrics_recorder.record_gauge(
+        self.observability.metrics_recorder.record_gauge(
             "frogdb_keys_with_expiry",
             self.store.keys_with_expiry_count() as f64,
             &[("shard", &shard_label)],

@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, SortedSetValue, Value,
+    Arity, Command, CommandContext, CommandError, CommandFlags, SortedSetValue, Value, WalStrategy,
     shard_for_key,
 };
 use frogdb_protocol::Response;
@@ -233,6 +233,10 @@ impl Command for ZunionstoreCommand {
         CommandFlags::WRITE
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistDestination(0)
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let dest = args[0].clone();
         let numkeys = parse_usize(&args[1])?;
@@ -426,6 +430,10 @@ impl Command for ZinterstoreCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistDestination(0)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -739,6 +747,10 @@ impl Command for ZdiffstoreCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistDestination(0)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
