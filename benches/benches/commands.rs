@@ -428,7 +428,7 @@ fn bench_zset_zscore(c: &mut Criterion) {
 fn bench_zset_zrank(c: &mut Criterion) {
     let mut group = c.benchmark_group("commands/zset/zrank");
 
-    for zset_size in [100, 1000, 10000] {
+    for zset_size in [100, 1000, 10000, 100_000] {
         let mut zset = SortedSetValue::new();
         for i in 0..zset_size {
             zset.add(Bytes::from(format!("member:{:08}", i)), i as f64);
@@ -481,7 +481,7 @@ fn bench_zset_zrange(c: &mut Criterion) {
 fn bench_zset_zrangebyscore(c: &mut Criterion) {
     let mut group = c.benchmark_group("commands/zset/zrangebyscore");
 
-    for zset_size in [100, 1000, 10000] {
+    for zset_size in [100, 1000, 10000, 100_000] {
         let mut zset = SortedSetValue::new();
         for i in 0..zset_size {
             zset.add(Bytes::from(format!("member:{:08}", i)), i as f64);
@@ -499,6 +499,91 @@ fn bench_zset_zrangebyscore(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(zset.range_by_score(&min, &max, 0, None));
                 });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_zset_zcount(c: &mut Criterion) {
+    let mut group = c.benchmark_group("commands/zset/zcount");
+
+    for zset_size in [100, 1000, 10000, 100_000] {
+        let mut zset = SortedSetValue::new();
+        for i in 0..zset_size {
+            zset.add(Bytes::from(format!("member:{:08}", i)), i as f64);
+        }
+
+        // Count ~10% of elements in the middle
+        let min = ScoreBound::Inclusive((zset_size / 2) as f64);
+        let max = ScoreBound::Inclusive((zset_size / 2 + zset_size / 10) as f64);
+
+        group.throughput(Throughput::Elements(1));
+        group.bench_with_input(
+            BenchmarkId::new("zset_size", zset_size),
+            &zset_size,
+            |b, _| {
+                b.iter(|| {
+                    black_box(zset.count_by_score(&min, &max));
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_zset_zrandmember(c: &mut Criterion) {
+    let mut group = c.benchmark_group("commands/zset/zrandmember");
+
+    for zset_size in [100, 1000, 10000, 100_000] {
+        let mut zset = SortedSetValue::new();
+        for i in 0..zset_size {
+            zset.add(Bytes::from(format!("member:{:08}", i)), i as f64);
+        }
+
+        group.throughput(Throughput::Elements(1));
+        group.bench_with_input(
+            BenchmarkId::new("zset_size", zset_size),
+            &zset_size,
+            |b, _| {
+                b.iter(|| {
+                    black_box(zset.random_members(1));
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_zset_zremrangebyscore(c: &mut Criterion) {
+    let mut group = c.benchmark_group("commands/zset/zremrangebyscore");
+
+    for zset_size in [1000, 10000, 100_000] {
+        // Remove ~10% of elements from the middle
+        let min = ScoreBound::Inclusive((zset_size / 2) as f64);
+        let max = ScoreBound::Inclusive((zset_size / 2 + zset_size / 10) as f64);
+
+        group.throughput(Throughput::Elements(1));
+        group.bench_with_input(
+            BenchmarkId::new("zset_size", zset_size),
+            &zset_size,
+            |b, _| {
+                b.iter_batched(
+                    || {
+                        let mut zset = SortedSetValue::new();
+                        for i in 0..zset_size {
+                            zset.add(Bytes::from(format!("member:{:08}", i)), i as f64);
+                        }
+                        zset
+                    },
+                    |mut zset| {
+                        black_box(zset.remove_range_by_score(&min, &max));
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
             },
         );
     }
@@ -557,6 +642,9 @@ criterion_group!(
     bench_zset_zrank,
     bench_zset_zrange,
     bench_zset_zrangebyscore,
+    bench_zset_zcount,
+    bench_zset_zrandmember,
+    bench_zset_zremrangebyscore,
     bench_zset_zincrby,
 );
 

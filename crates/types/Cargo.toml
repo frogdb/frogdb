@@ -20,6 +20,7 @@ xxhash-rust.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rand.workspace = true
+smallvec.workspace = true
 shuttle = { workspace = true, optional = true }
 
 [dev-dependencies]
