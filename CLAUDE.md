@@ -39,6 +39,12 @@ This validates compatibility with the Redis protocol and expected command semant
 
 ## Agent Guidelines
 
-- **ALWAYS** ensure all packages build, lint, and pass tests before finishing a task
+- **ALWAYS** ensure changed packages build, lint, and pass tests before finishing a task
+- Scope checks to the crates you actually changed — don't run the full workspace suite when only one crate is affected:
+  - `just check-crate <name>` instead of `just check`
+  - `just lint-crate <name>` instead of `just lint`
+  - `just test-crate <name>` instead of `just test`
+  - For a single test file: `cargo test -p <crate> --test <test_name>`
+- Only run workspace-wide `just check` / `just lint` / `just test` when changes span multiple crates or you're doing a final pre-commit/pre-PR validation
 - Prefer `just` commands over raw CLI tools
 - If a `just` command doesn't work for a task, we should fix it so it does
