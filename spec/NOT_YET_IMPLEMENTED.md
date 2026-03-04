@@ -13,6 +13,8 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 | DUMP/RESTORE serialization: TimeSeries | `crates/types/src/types.rs:233-237` | Same: empty bytes for time series | [PERSISTENCE.md](PERSISTENCE.md) |
 | Slot migration doesn't move keys | `crates/server/src/commands/cluster/` | CLUSTER SETSLOT updates metadata but actual key movement is not implemented | [ROADMAP.md](ROADMAP.md), [CLUSTER_PLAN.md](CLUSTER_PLAN.md) |
 | Proactive lag-threshold full-resync | `crates/replication/src/`, `crates/server/src/replication/primary.rs` | A FULLRESYNC does occur reactively when the broadcast buffer overflows (disconnect → reconnect → PSYNC). What's missing is a configurable lag threshold that triggers proactive FULLRESYNC before buffer overflow. | [ROADMAP.md](ROADMAP.md) |
+| Replica READONLY enforcement | `crates/server/src/connection/handlers/` | Replicas accept writes instead of returning `-READONLY` error. Jepsen split-brain test confirms replicas behave as writable masters in replication mode. | — |
+| Replication-mode partition recovery | `crates/replication/src/` | After a network partition heals, async writes to the old primary are not rolled back or fenced. Jepsen zombie test confirms stale writes survive partition healing. | — |
 
 ---
 

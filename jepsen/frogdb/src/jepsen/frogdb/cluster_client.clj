@@ -212,7 +212,7 @@
   [conn cmd-vec]
   (wcar conn
     (car/redis-call ["ASKING"])
-    (apply car/redis-call cmd-vec)))
+    (car/redis-call cmd-vec)))
 
 (defn execute-with-redirect
   "Execute a command with automatic MOVED/ASK redirect handling.
@@ -253,7 +253,7 @@
               {:type :success
                :value (if asking?
                         (execute-asking conn cmd-vec)
-                        (wcar conn (apply car/redis-call cmd-vec)))}
+                        (wcar conn (car/redis-call cmd-vec)))}
               (catch clojure.lang.ExceptionInfo e
                 (if-let [redirect (is-redirect-error? e)]
                   (case (:type redirect)
