@@ -106,12 +106,14 @@ def parse_sources_md(filepath: Path) -> list[dict]:
                 if url_match:
                     url = url_match.group(0)
                     notes = parts[2] if len(parts) > 2 else ""
-                    sources.append({
-                        "url": url,
-                        "topic": topic,
-                        "category": current_category,
-                        "notes": notes,
-                    })
+                    sources.append(
+                        {
+                            "url": url,
+                            "topic": topic,
+                            "category": current_category,
+                            "notes": notes,
+                        }
+                    )
         i += 1
 
     return sources
@@ -130,9 +132,7 @@ def fetch_web_content(url: str) -> str | None:
     """Fetch HTML page and extract main text content."""
     rate_limit(url)
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; FrogDB-Sync/1.0)"
-        }
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; FrogDB-Sync/1.0)"}
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
 
@@ -238,12 +238,10 @@ def fetch_pdf_content(url: str) -> tuple[str | None, str | None]:
     rate_limit(url)
 
     # Download PDF
-    print(f"      Downloading...", end=" ", flush=True)
+    print("      Downloading...", end=" ", flush=True)
     download_start = time.time()
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; FrogDB-Sync/1.0)"
-        }
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; FrogDB-Sync/1.0)"}
         response = requests.get(url, headers=headers, timeout=60)
         response.raise_for_status()
         download_time = time.time() - download_start
@@ -256,7 +254,7 @@ def fetch_pdf_content(url: str) -> tuple[str | None, str | None]:
         return None, f"Download failed: {e}"
 
     # Parse PDF
-    print(f"      Extracting text...", end=" ", flush=True)
+    print("      Extracting text...", end=" ", flush=True)
     try:
         pdf_file = io.BytesIO(response.content)
         reader = PdfReader(pdf_file)
@@ -275,7 +273,7 @@ def fetch_pdf_content(url: str) -> tuple[str | None, str | None]:
                 page_text = page.extract_text()
                 if page_text:
                     text_parts.append(page_text)
-            except Exception as e:
+            except Exception:
                 failed_pages.append(i + 1)
 
         if failed_pages:
@@ -283,7 +281,10 @@ def fetch_pdf_content(url: str) -> tuple[str | None, str | None]:
 
         if not text_parts:
             print(f"{page_count} pages, no text")
-            return None, f"PDF has {page_count} pages but no extractable text (likely scanned/image PDF)"
+            return (
+                None,
+                f"PDF has {page_count} pages but no extractable text (likely scanned/image PDF)",
+            )
 
         total_chars = sum(len(t) for t in text_parts)
         print(f"{page_count} pages, {total_chars:,} chars")
@@ -348,7 +349,7 @@ def sync_external_url(
     print(f"      {url}")
 
     if dry_run:
-        print(f"      → SKIP (dry-run)")
+        print("      → SKIP (dry-run)")
         return True, None
 
     # Fetch content based on type
@@ -356,7 +357,7 @@ def sync_external_url(
     if url_type == "PDF":
         content, error_msg = fetch_pdf_content(url)
     elif url_type == "GITHUB":
-        print(f"      Fetching...", end=" ", flush=True)
+        print("      Fetching...", end=" ", flush=True)
         fetch_start = time.time()
         content = fetch_github_content(url, config)
         fetch_time = time.time() - fetch_start
@@ -366,7 +367,7 @@ def sync_external_url(
             print("FAILED")
             error_msg = "Failed to fetch GitHub content"
     else:
-        print(f"      Fetching...", end=" ", flush=True)
+        print("      Fetching...", end=" ", flush=True)
         fetch_start = time.time()
         content = fetch_web_content(url)
         fetch_time = time.time() - fetch_start
@@ -390,7 +391,7 @@ def sync_external_url(
         "Content-Type": "application/json",
     }
 
-    print(f"      Uploading...", end=" ", flush=True)
+    print("      Uploading...", end=" ", flush=True)
     try:
         response = requests.post(api_url, json=document, headers=headers, timeout=30)
         response.raise_for_status()
@@ -459,7 +460,7 @@ def sync_file(
     try:
         content = filepath.read_text(encoding="utf-8")
     except Exception as e:
-        print(f"→ FAILED")
+        print("→ FAILED")
         error_msg = f"Error reading file: {e}"
         print(f"      {error_msg}")
         return False, error_msg
@@ -501,15 +502,9 @@ def find_files(base_path: Path, patterns: list[str]) -> list[Path]:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Sync FrogDB files to Onyx knowledge base"
-    )
-    parser.add_argument(
-        "--spec-only", action="store_true", help="Only sync spec/ directory"
-    )
-    parser.add_argument(
-        "--src-only", action="store_true", help="Only sync src/ directory"
-    )
+    parser = argparse.ArgumentParser(description="Sync FrogDB files to Onyx knowledge base")
+    parser.add_argument("--spec-only", action="store_true", help="Only sync spec/ directory")
+    parser.add_argument("--src-only", action="store_true", help="Only sync src/ directory")
     parser.add_argument(
         "--sources", action="store_true", help="Also sync external URLs from spec/SOURCES.md"
     )
@@ -525,7 +520,10 @@ def main():
 
     # Handle conflicting flags
     if args.sources_only and (args.spec_only or args.src_only):
-        print("Error: --sources-only cannot be combined with --spec-only or --src-only", file=sys.stderr)
+        print(
+            "Error: --sources-only cannot be combined with --spec-only or --src-only",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Find repo root (where this script is in scripts/)
@@ -558,7 +556,9 @@ def main():
 
             for i, filepath in enumerate(spec_files, 1):
                 relative = filepath.relative_to(repo_root)
-                success, error = sync_file(relative, "spec", config, args.dry_run, i, len(spec_files))
+                success, error = sync_file(
+                    relative, "spec", config, args.dry_run, i, len(spec_files)
+                )
                 if success:
                     success_count += 1
                 else:
@@ -579,7 +579,9 @@ def main():
 
             for i, filepath in enumerate(src_files, 1):
                 relative = filepath.relative_to(repo_root)
-                success, error = sync_file(relative, "source", config, args.dry_run, i, len(src_files))
+                success, error = sync_file(
+                    relative, "source", config, args.dry_run, i, len(src_files)
+                )
                 if success:
                     success_count += 1
                 else:

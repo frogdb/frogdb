@@ -19,7 +19,6 @@ import argparse
 import gzip
 import json
 import subprocess
-import sys
 from collections import Counter
 from pathlib import Path
 
@@ -41,7 +40,9 @@ def resolve_addresses(binary: str, addrs: list[int], base: int = 0x100000000) ->
     try:
         result = subprocess.run(
             ["atos", "-o", binary] + abs_addrs,
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         resolved = result.stdout.strip().split("\n")
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -55,9 +56,15 @@ def resolve_addresses(binary: str, addrs: list[int], base: int = 0x100000000) ->
             name = name.split(" (in ")[0]
             # Demangle Rust symbols
             for old, new in [
-                ("_$LT$", "<"), ("$GT$", ">"), ("$u20$", " "),
-                ("$RF$", "&"), ("$C$", ","), ("$LP$", "("), ("$RP$", ")"),
-                ("$u7b$", "{"), ("$u7d$", "}"),
+                ("_$LT$", "<"),
+                ("$GT$", ">"),
+                ("$u20$", " "),
+                ("$RF$", "&"),
+                ("$C$", ","),
+                ("$LP$", "("),
+                ("$RP$", ")"),
+                ("$u7b$", "{"),
+                ("$u7d$", "}"),
             ]:
                 name = name.replace(old, new)
             mapping[addr] = name
@@ -158,7 +165,9 @@ def analyze(profile: dict, binary: str, top_n: int = 40):
     # --- Phase 3: Print results ---
     W = 130
 
-    print(f"\nTotal samples across {len(tokio_threads)} tokio-runtime-worker threads: {total_samples:,}")
+    print(
+        f"\nTotal samples across {len(tokio_threads)} tokio-runtime-worker threads: {total_samples:,}"
+    )
 
     # Library self-time breakdown
     print(f"\n{'=' * W}")
@@ -179,7 +188,7 @@ def analyze(profile: dict, binary: str, top_n: int = 40):
     for addr, count in frogdb_self_time.most_common(top_n):
         pct = count / total_samples * 100
         name = addr_names.get(addr, f"0x{addr:x}")
-        print(f"{pct:7.2f}  {count:9,}  {name[:W - 20]}")
+        print(f"{pct:7.2f}  {count:9,}  {name[: W - 20]}")
 
     # Top frogdb total-time
     print(f"\n{'=' * W}")
@@ -192,28 +201,31 @@ def analyze(profile: dict, binary: str, top_n: int = 40):
         self_count = frogdb_self_time.get(addr, 0)
         self_pct = self_count / total_samples * 100
         name = addr_names.get(addr, f"0x{addr:x}")
-        print(f"{total_pct:7.2f}  {self_pct:7.2f}  {name[:W - 18]}")
+        print(f"{total_pct:7.2f}  {self_pct:7.2f}  {name[: W - 18]}")
 
     # Kernel caller analysis
     print(f"\n{'=' * W}")
-    print(f"KERNEL SYSCALL CALLERS (deepest frogdb-server frame above kernel leaf)")
+    print("KERNEL SYSCALL CALLERS (deepest frogdb-server frame above kernel leaf)")
     print(f"{'=' * W}")
     print(f"{'%':>7}  {'Samples':>9}  Caller Function")
     print(f"{'-' * 7}  {'-' * 9}  {'-' * (W - 20)}")
     for addr, count in kernel_callers.most_common(top_n):
         pct = count / total_samples * 100
         name = addr_names.get(addr, f"0x{addr:x}")
-        print(f"{pct:7.2f}  {count:9,}  {name[:W - 20]}")
+        print(f"{pct:7.2f}  {count:9,}  {name[: W - 20]}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze samply profile for frogdb-server")
     parser.add_argument("profile", help="Path to profile .json or .json.gz file")
     parser.add_argument(
-        "--binary", default="./target/profiling/frogdb-server",
+        "--binary",
+        default="./target/profiling/frogdb-server",
         help="Path to frogdb-server binary with debug symbols (default: ./target/profiling/frogdb-server)",
     )
-    parser.add_argument("--top", type=int, default=40, help="Number of top functions to show (default: 40)")
+    parser.add_argument(
+        "--top", type=int, default=40, help="Number of top functions to show (default: 40)"
+    )
     args = parser.parse_args()
 
     profile = load_profile(args.profile)

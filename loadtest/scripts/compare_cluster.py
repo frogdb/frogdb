@@ -37,7 +37,6 @@ Examples:
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -45,7 +44,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
 
 # --- Configuration ---
 
@@ -95,6 +93,7 @@ WORKLOAD_CONFIGS = {
 
 # --- Utility Functions ---
 
+
 def compose_cmd() -> list[str]:
     """Base docker compose command with project name and file."""
     compose_file = get_compose_file()
@@ -105,7 +104,9 @@ def docker_exec(container: str, cmd: list[str], **kwargs) -> subprocess.Complete
     """Run a command inside a running container."""
     return subprocess.run(
         ["docker", "exec", container] + cmd,
-        capture_output=True, text=True, **kwargs,
+        capture_output=True,
+        text=True,
+        **kwargs,
     )
 
 
@@ -186,6 +187,7 @@ def format_latency(ms: float) -> str:
 
 # --- Docker Compose Management ---
 
+
 def get_compose_file() -> Path:
     script_dir = Path(__file__).parent.resolve()
     return script_dir.parent / COMPOSE_FILE
@@ -196,7 +198,8 @@ def build_memtier_image() -> bool:
     # Check if image already exists
     check = subprocess.run(
         ["docker", "images", "-q", f"{COMPOSE_PROJECT}-memtier"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if check.returncode == 0 and check.stdout.strip():
         print("memtier_benchmark image: cached")
@@ -205,7 +208,8 @@ def build_memtier_image() -> bool:
     print("Building memtier_benchmark image (first run may take a few minutes)...")
     result = subprocess.run(
         compose_cmd() + ["build", "memtier"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         print(f"Error building memtier image: {result.stderr}", file=sys.stderr)
@@ -228,7 +232,8 @@ def start_services(backends: list[str]) -> bool:
     print(f"Starting services: {', '.join(services)}")
     result = subprocess.run(
         compose_cmd() + ["up", "-d"] + services,
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         print(f"Error starting containers: {result.stderr}", file=sys.stderr)
@@ -250,16 +255,17 @@ def stop_services() -> None:
 
 # --- Wait for All Nodes ---
 
+
 def wait_for_backends(backends: list[str]) -> bool:
     all_ok = True
 
     # FrogDB - check via docker exec
     print(f"  Waiting for FrogDB ({FROGDB_IP}:{CLUSTER_PORT})...")
     if not wait_for_container_port("cluster-bench-frogdb", CLUSTER_PORT):
-        print(f"  ERROR: FrogDB not responding", file=sys.stderr)
+        print("  ERROR: FrogDB not responding", file=sys.stderr)
         all_ok = False
     else:
-        print(f"  FrogDB: OK")
+        print("  FrogDB: OK")
 
     for backend in backends:
         if backend == "redis":
@@ -281,15 +287,16 @@ def wait_for_backends(backends: list[str]) -> bool:
         elif backend == "dragonfly":
             print(f"  Waiting for Dragonfly ({DRAGONFLY_IP}:{CLUSTER_PORT})...")
             if not wait_for_container_port("cluster-bench-dragonfly", CLUSTER_PORT):
-                print(f"  ERROR: Dragonfly not responding", file=sys.stderr)
+                print("  ERROR: Dragonfly not responding", file=sys.stderr)
                 all_ok = False
             else:
-                print(f"  Dragonfly: OK")
+                print("  Dragonfly: OK")
 
     return all_ok
 
 
 # --- Cluster Initialization ---
+
 
 def init_redis_cluster() -> bool:
     """Create Redis Cluster from the 3 master nodes via docker exec."""
@@ -348,6 +355,7 @@ def wait_for_cluster_ok(container: str, name: str, max_wait: int = 30) -> bool:
 
 # --- Benchmark Execution ---
 
+
 def run_memtier(
     host: str,
     port: int,
@@ -367,21 +375,35 @@ def run_memtier(
     container_json = f"/output/{json_file.name}"
 
     cmd = compose_cmd() + [
-        "run", "--rm", "-T",
-        "-v", f"{host_dir}:/output",
+        "run",
+        "--rm",
+        "-T",
+        "-v",
+        f"{host_dir}:/output",
         "memtier",
-        "-s", host,
-        "-p", str(port),
-        "--threads", str(threads),
-        "--clients", str(clients),
-        "--requests", str(requests),
-        "--data-size", "128",
-        "--ratio", ratio,
-        "--key-pattern", key_pattern,
-        "--key-maximum", "10000000",
-        "--pipeline", "1",
+        "-s",
+        host,
+        "-p",
+        str(port),
+        "--threads",
+        str(threads),
+        "--clients",
+        str(clients),
+        "--requests",
+        str(requests),
+        "--data-size",
+        "128",
+        "--ratio",
+        ratio,
+        "--key-pattern",
+        key_pattern,
+        "--key-maximum",
+        "10000000",
+        "--pipeline",
+        "1",
         "--hide-histogram",
-        "--json-out-file", container_json,
+        "--json-out-file",
+        container_json,
     ]
 
     if cluster_mode:
@@ -426,13 +448,23 @@ def run_benchmarks(
     frogdb_json = report_dir / "frogdb.json"
     frogdb_txt = report_dir / "frogdb.txt"
     if run_memtier(
-        FROGDB_IP, CLUSTER_PORT, frogdb_json, frogdb_txt,
-        workload.ratio, workload.key_pattern, requests,
-        name="FrogDB", threads=threads, clients=clients,
+        FROGDB_IP,
+        CLUSTER_PORT,
+        frogdb_json,
+        frogdb_txt,
+        workload.ratio,
+        workload.key_pattern,
+        requests,
+        name="FrogDB",
+        threads=threads,
+        clients=clients,
     ):
         if frogdb_json.exists():
             with open(frogdb_json) as f:
-                results["frogdb"] = {"name": BACKEND_DISPLAY_NAMES["frogdb"], "memtier": json.load(f)}
+                results["frogdb"] = {
+                    "name": BACKEND_DISPLAY_NAMES["frogdb"],
+                    "memtier": json.load(f),
+                }
 
     for backend in backends:
         if backend == "redis":
@@ -440,46 +472,77 @@ def run_benchmarks(
             redis_json = report_dir / "redis.json"
             redis_txt = report_dir / "redis.txt"
             if run_memtier(
-                REDIS_CLUSTER_IPS[0], CLUSTER_PORT, redis_json, redis_txt,
-                workload.ratio, workload.key_pattern, requests,
+                REDIS_CLUSTER_IPS[0],
+                CLUSTER_PORT,
+                redis_json,
+                redis_txt,
+                workload.ratio,
+                workload.key_pattern,
+                requests,
                 name="Redis Cluster",
-                cluster_mode=True, threads=threads, clients=clients,
+                cluster_mode=True,
+                threads=threads,
+                clients=clients,
             ):
                 if redis_json.exists():
                     with open(redis_json) as f:
-                        results["redis"] = {"name": BACKEND_DISPLAY_NAMES["redis"], "memtier": json.load(f)}
+                        results["redis"] = {
+                            "name": BACKEND_DISPLAY_NAMES["redis"],
+                            "memtier": json.load(f),
+                        }
 
         elif backend == "valkey":
             print(f"\n  Valkey Cluster (3 masters, {VALKEY_CLUSTER_IPS[0]}:{CLUSTER_PORT}):")
             valkey_json = report_dir / "valkey.json"
             valkey_txt = report_dir / "valkey.txt"
             if run_memtier(
-                VALKEY_CLUSTER_IPS[0], CLUSTER_PORT, valkey_json, valkey_txt,
-                workload.ratio, workload.key_pattern, requests,
+                VALKEY_CLUSTER_IPS[0],
+                CLUSTER_PORT,
+                valkey_json,
+                valkey_txt,
+                workload.ratio,
+                workload.key_pattern,
+                requests,
                 name="Valkey Cluster",
-                cluster_mode=True, threads=threads, clients=clients,
+                cluster_mode=True,
+                threads=threads,
+                clients=clients,
             ):
                 if valkey_json.exists():
                     with open(valkey_json) as f:
-                        results["valkey"] = {"name": BACKEND_DISPLAY_NAMES["valkey"], "memtier": json.load(f)}
+                        results["valkey"] = {
+                            "name": BACKEND_DISPLAY_NAMES["valkey"],
+                            "memtier": json.load(f),
+                        }
 
         elif backend == "dragonfly":
             print(f"\n  Dragonfly (3 threads, {DRAGONFLY_IP}:{CLUSTER_PORT}):")
             df_json = report_dir / "dragonfly.json"
             df_txt = report_dir / "dragonfly.txt"
             if run_memtier(
-                DRAGONFLY_IP, CLUSTER_PORT, df_json, df_txt,
-                workload.ratio, workload.key_pattern, requests,
-                name="Dragonfly", threads=threads, clients=clients,
+                DRAGONFLY_IP,
+                CLUSTER_PORT,
+                df_json,
+                df_txt,
+                workload.ratio,
+                workload.key_pattern,
+                requests,
+                name="Dragonfly",
+                threads=threads,
+                clients=clients,
             ):
                 if df_json.exists():
                     with open(df_json) as f:
-                        results["dragonfly"] = {"name": BACKEND_DISPLAY_NAMES["dragonfly"], "memtier": json.load(f)}
+                        results["dragonfly"] = {
+                            "name": BACKEND_DISPLAY_NAMES["dragonfly"],
+                            "memtier": json.load(f),
+                        }
 
     return results
 
 
 # --- Report Generation ---
+
 
 def generate_cluster_report(
     results: dict[str, Any],
@@ -503,8 +566,12 @@ def generate_cluster_report(
     lines.append("| Backend | Configuration | Endpoint |")
     lines.append("|---------|--------------|----------|")
     lines.append(f"| FrogDB | 1 process, 3 internal shards | `{FROGDB_IP}:{CLUSTER_PORT}` |")
-    lines.append(f"| Redis Cluster | 3 master processes | `{REDIS_CLUSTER_IPS[0]}-{REDIS_CLUSTER_IPS[-1]}:{CLUSTER_PORT}` |")
-    lines.append(f"| Valkey Cluster | 3 master processes | `{VALKEY_CLUSTER_IPS[0]}-{VALKEY_CLUSTER_IPS[-1]}:{CLUSTER_PORT}` |")
+    lines.append(
+        f"| Redis Cluster | 3 master processes | `{REDIS_CLUSTER_IPS[0]}-{REDIS_CLUSTER_IPS[-1]}:{CLUSTER_PORT}` |"
+    )
+    lines.append(
+        f"| Valkey Cluster | 3 master processes | `{VALKEY_CLUSTER_IPS[0]}-{VALKEY_CLUSTER_IPS[-1]}:{CLUSTER_PORT}` |"
+    )
     lines.append(f"| Dragonfly | 1 process, 3 proactor threads | `{DRAGONFLY_IP}:{CLUSTER_PORT}` |")
     lines.append("")
 
@@ -577,7 +644,7 @@ def generate_cluster_report(
                         if ratio >= 1.0:
                             lines.append(f"- FrogDB is **{ratio:.2f}x** faster than {display}")
                         else:
-                            lines.append(f"- FrogDB is **{1/ratio:.2f}x** slower than {display}")
+                            lines.append(f"- FrogDB is **{1 / ratio:.2f}x** slower than {display}")
                 lines.append("")
 
     # Methodology
@@ -630,6 +697,7 @@ def print_summary(results: dict[str, Any]) -> None:
 
 # --- Main ---
 
+
 def main() -> None:
     script_dir = Path(__file__).parent.resolve()
     loadtest_dir = script_dir.parent
@@ -640,32 +708,47 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "-w", "--workload", default="mixed",
+        "-w",
+        "--workload",
+        default="mixed",
         choices=["read-heavy", "write-heavy", "mixed"],
         help="Workload preset (default: mixed)",
     )
     parser.add_argument(
-        "-n", "--requests", type=int, default=10000,
+        "-n",
+        "--requests",
+        type=int,
+        default=10000,
         help="Requests per client (default: 10000)",
     )
     parser.add_argument(
-        "--backends", type=str, default="all",
+        "--backends",
+        type=str,
+        default="all",
         help="Comma-separated: redis,valkey,dragonfly or 'all' (default: all)",
     )
     parser.add_argument(
-        "--threads", type=int, default=4,
+        "--threads",
+        type=int,
+        default=4,
         help="memtier threads (default: 4)",
     )
     parser.add_argument(
-        "--clients", type=int, default=25,
+        "--clients",
+        type=int,
+        default=25,
         help="memtier clients per thread (default: 25)",
     )
     parser.add_argument(
-        "--keep", action="store_true",
+        "--keep",
+        action="store_true",
         help="Don't stop containers after benchmarks",
     )
     parser.add_argument(
-        "-o", "--output", type=Path, default=default_output_dir,
+        "-o",
+        "--output",
+        type=Path,
+        default=default_output_dir,
         help=f"Output directory for results (default: {default_output_dir})",
     )
 
@@ -714,18 +797,26 @@ def main() -> None:
     # Wait for all nodes
     print("\nWaiting for nodes to be ready...")
     if not wait_for_backends(backends):
-        print("Some backends failed to start. Continuing with available backends...", file=sys.stderr)
+        print(
+            "Some backends failed to start. Continuing with available backends...", file=sys.stderr
+        )
 
     # Initialize clusters
     print()
     if "redis" in backends:
         if not init_redis_cluster():
-            print("Warning: Redis Cluster initialization failed, removing from benchmarks", file=sys.stderr)
+            print(
+                "Warning: Redis Cluster initialization failed, removing from benchmarks",
+                file=sys.stderr,
+            )
             backends.remove("redis")
 
     if "valkey" in backends:
         if not init_valkey_cluster():
-            print("Warning: Valkey Cluster initialization failed, removing from benchmarks", file=sys.stderr)
+            print(
+                "Warning: Valkey Cluster initialization failed, removing from benchmarks",
+                file=sys.stderr,
+            )
             backends.remove("valkey")
 
     # Run benchmarks
@@ -734,7 +825,9 @@ def main() -> None:
     print("Running benchmarks...")
     print("-" * 70)
 
-    results = run_benchmarks(backends, workload, args.requests, report_dir, args.threads, args.clients)
+    results = run_benchmarks(
+        backends, workload, args.requests, report_dir, args.threads, args.clients
+    )
 
     # Save combined results
     combined = {
@@ -753,8 +846,16 @@ def main() -> None:
     if generate_script.exists():
         report_file = report_dir / "benchmark_report.md"
         gen_result = subprocess.run(
-            [sys.executable, str(generate_script), "--input", str(combined_json), "--output", str(report_file)],
-            capture_output=True, text=True,
+            [
+                sys.executable,
+                str(generate_script),
+                "--input",
+                str(combined_json),
+                "--output",
+                str(report_file),
+            ],
+            capture_output=True,
+            text=True,
         )
         if gen_result.returncode == 0:
             print(f"\nReport (generic): {report_file}")

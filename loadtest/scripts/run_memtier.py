@@ -67,34 +67,50 @@ def main() -> None:
         add_help=False,
     )
     parser.add_argument("--help", action="help", help="Show this help message and exit")
-    parser.add_argument("-h", "--host", default="127.0.0.1",
-                        help="Server hostname (default: 127.0.0.1)")
-    parser.add_argument("-p", "--port", type=int, default=6379,
-                        help="Server port (default: 6379)")
-    parser.add_argument("-t", "--threads", type=int, default=4,
-                        help="Number of threads (default: 4)")
-    parser.add_argument("-c", "--clients", type=int, default=25,
-                        help="Clients per thread (default: 25)")
-    parser.add_argument("-n", "--requests", type=int, default=10000,
-                        help="Requests per client (default: 10000)")
-    parser.add_argument("--test-time", type=int, default=None,
-                        help="Run for N seconds instead of a fixed request count")
-    parser.add_argument("-d", "--datasize", type=int, default=128,
-                        help="Data size in bytes (default: 128)")
-    parser.add_argument("--ratio", default="1:1",
-                        help="Read:Write ratio (default: 1:1)")
-    parser.add_argument("--key-pattern", default="R:R",
-                        help="Key pattern: P=parallel, R=random, S=sequential, G=gaussian (default: R:R)")
-    parser.add_argument("--key-maximum", type=int, default=10000000,
-                        help="Maximum key number (default: 10000000)")
-    parser.add_argument("--pipeline", type=int, default=1,
-                        help="Pipeline N requests (default: 1)")
-    parser.add_argument("-w", "--workload", choices=["read-heavy", "write-heavy", "mixed"],
-                        help="Predefined workload preset")
-    parser.add_argument("--json", dest="json_file", metavar="FILE",
-                        help="Output JSON results to file")
-    parser.add_argument("--hdr", dest="hdr_file", metavar="FILE",
-                        help="Output HDR histogram to file")
+    parser.add_argument(
+        "-h", "--host", default="127.0.0.1", help="Server hostname (default: 127.0.0.1)"
+    )
+    parser.add_argument("-p", "--port", type=int, default=6379, help="Server port (default: 6379)")
+    parser.add_argument(
+        "-t", "--threads", type=int, default=4, help="Number of threads (default: 4)"
+    )
+    parser.add_argument(
+        "-c", "--clients", type=int, default=25, help="Clients per thread (default: 25)"
+    )
+    parser.add_argument(
+        "-n", "--requests", type=int, default=10000, help="Requests per client (default: 10000)"
+    )
+    parser.add_argument(
+        "--test-time",
+        type=int,
+        default=None,
+        help="Run for N seconds instead of a fixed request count",
+    )
+    parser.add_argument(
+        "-d", "--datasize", type=int, default=128, help="Data size in bytes (default: 128)"
+    )
+    parser.add_argument("--ratio", default="1:1", help="Read:Write ratio (default: 1:1)")
+    parser.add_argument(
+        "--key-pattern",
+        default="R:R",
+        help="Key pattern: P=parallel, R=random, S=sequential, G=gaussian (default: R:R)",
+    )
+    parser.add_argument(
+        "--key-maximum", type=int, default=10000000, help="Maximum key number (default: 10000000)"
+    )
+    parser.add_argument("--pipeline", type=int, default=1, help="Pipeline N requests (default: 1)")
+    parser.add_argument(
+        "-w",
+        "--workload",
+        choices=["read-heavy", "write-heavy", "mixed"],
+        help="Predefined workload preset",
+    )
+    parser.add_argument(
+        "--json", dest="json_file", metavar="FILE", help="Output JSON results to file"
+    )
+    parser.add_argument(
+        "--hdr", dest="hdr_file", metavar="FILE", help="Output HDR histogram to file"
+    )
 
     args = parser.parse_args()
 
@@ -102,7 +118,9 @@ def main() -> None:
     if not shutil.which("memtier_benchmark"):
         print("Error: memtier_benchmark not found", file=sys.stderr)
         print("Install it with: brew install memtier_benchmark (macOS)", file=sys.stderr)
-        print("Or build from source: https://github.com/RedisLabs/memtier_benchmark", file=sys.stderr)
+        print(
+            "Or build from source: https://github.com/RedisLabs/memtier_benchmark", file=sys.stderr
+        )
         sys.exit(1)
 
     # Apply workload presets
@@ -116,17 +134,27 @@ def main() -> None:
     # Build command arguments
     cmd_args = [
         "memtier_benchmark",
-        "-s", args.host,
-        "-p", str(args.port),
-        "--threads", str(args.threads),
-        "--clients", str(args.clients),
-        "--data-size", str(args.datasize),
-        "--ratio", ratio,
-        "--key-pattern", key_pattern,
-        "--key-maximum", str(args.key_maximum),
-        "--pipeline", str(args.pipeline),
+        "-s",
+        args.host,
+        "-p",
+        str(args.port),
+        "--threads",
+        str(args.threads),
+        "--clients",
+        str(args.clients),
+        "--data-size",
+        str(args.datasize),
+        "--ratio",
+        ratio,
+        "--key-pattern",
+        key_pattern,
+        "--key-maximum",
+        str(args.key_maximum),
+        "--pipeline",
+        str(args.pipeline),
         "--hide-histogram",
-        "--print-percentiles", "50,99,99.9",
+        "--print-percentiles",
+        "50,99,99.9",
     ]
 
     # Use --test-time (duration) or --requests (count)

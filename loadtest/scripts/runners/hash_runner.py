@@ -8,13 +8,14 @@ Use cases: User profiles, object storage, session data
 """
 
 import random
-import string
-from pathlib import Path
-from typing import Any, Callable
-
 import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from workload_loader import WorkloadConfig, CommandCategory
+from workload_loader import CommandCategory, WorkloadConfig
+
 from runners.base import register_runner
 from runners.redis_py_base import RedisPyRunner
 
@@ -94,7 +95,7 @@ class HashRunner(RedisPyRunner):
             # Set multiple fields at once
             num_fields = min(3, fields_per_hash)
             mapping = {}
-            for i in range(num_fields):
+            for _i in range(num_fields):
                 field = f"field:{random.randint(0, fields_per_hash - 1)}"
                 mapping[field] = self._generate_value(value_size)
             client.hset(key, mapping=mapping)
@@ -102,8 +103,7 @@ class HashRunner(RedisPyRunner):
         def hmget(client: Any, key: str, index: int) -> None:
             # Get multiple fields at once
             num_fields = min(3, fields_per_hash)
-            fields = [f"field:{random.randint(0, fields_per_hash - 1)}"
-                      for _ in range(num_fields)]
+            fields = [f"field:{random.randint(0, fields_per_hash - 1)}" for _ in range(num_fields)]
             client.hmget(key, fields)
 
         def hgetall(client: Any, key: str, index: int) -> None:
@@ -158,7 +158,11 @@ def main():
 
     # Test with a simple workload
     from workload_loader import (
-        WorkloadConfig, KeysConfig, ConcurrencyConfig, DataConfig, HashConfig
+        ConcurrencyConfig,
+        DataConfig,
+        HashConfig,
+        KeysConfig,
+        WorkloadConfig,
     )
 
     workload = WorkloadConfig(

@@ -87,7 +87,7 @@ class BackendConfig:
     image: str | None = None
     base_cmd: list[str] = field(default_factory=list)
     thread_flag: str | None = None  # For multi-threaded servers (Dragonfly)
-    shard_flag: str | None = None   # For sharded servers (FrogDB)
+    shard_flag: str | None = None  # For sharded servers (FrogDB)
 
 
 # Backend configurations
@@ -129,6 +129,7 @@ BACKENDS = {
 @dataclass
 class CpuAssignment:
     """CPU assignment for a backend container."""
+
     cpus: int
     cpuset: str | None = None  # e.g., "0,1" for cores 0 and 1
 
@@ -257,7 +258,7 @@ def check_connectivity(host: str, port: int, timeout: float = 1.0) -> bool:
             s.settimeout(timeout)
             s.connect((host, port))
             return True
-    except (OSError, socket.timeout):
+    except (TimeoutError, OSError):
         return False
 
 
@@ -297,9 +298,14 @@ def start_container_with_cpu_isolation(
 
     # Build command
     cmd = [
-        "docker", "run", "-d", "--rm",
-        "--name", container_name,
-        "-p", f"{config.port}:6379",
+        "docker",
+        "run",
+        "-d",
+        "--rm",
+        "--name",
+        container_name,
+        "-p",
+        f"{config.port}:6379",
     ]
 
     # CPU isolation
@@ -386,7 +392,9 @@ def start_containers_with_cpu_isolation(
             return False
 
     # Start containers
-    all_backends = ["frogdb"] + [b for b in backends if b != "frogdb"] if include_frogdb else backends
+    all_backends = (
+        ["frogdb"] + [b for b in backends if b != "frogdb"] if include_frogdb else backends
+    )
 
     for backend in all_backends:
         if backend not in assignments:
@@ -415,7 +423,9 @@ def start_containers_with_cpu_isolation(
 
 def stop_containers_with_cpu_isolation(backends: list[str], include_frogdb: bool = True) -> None:
     """Stop containers started with docker run."""
-    all_backends = ["frogdb"] + [b for b in backends if b != "frogdb"] if include_frogdb else backends
+    all_backends = (
+        ["frogdb"] + [b for b in backends if b != "frogdb"] if include_frogdb else backends
+    )
 
     print("Stopping containers...")
     for backend in all_backends:
@@ -426,7 +436,9 @@ def stop_containers_with_cpu_isolation(backends: list[str], include_frogdb: bool
         )
 
 
-def start_docker_containers(backends: list[str], compose_file: Path, include_frogdb: bool = False) -> bool:
+def start_docker_containers(
+    backends: list[str], compose_file: Path, include_frogdb: bool = False
+) -> bool:
     """Start Docker containers for specified backends using docker-compose.
 
     This is the legacy method without CPU isolation. Use start_containers_with_cpu_isolation
@@ -452,9 +464,13 @@ def start_docker_containers(backends: list[str], compose_file: Path, include_fro
 
     print(f"Starting Docker containers: {', '.join(services)}")
     cmd = [
-        "docker", "compose",
-        "-f", str(compose_file),
-        "up", "-d", "--build",
+        "docker",
+        "compose",
+        "-f",
+        str(compose_file),
+        "up",
+        "-d",
+        "--build",
     ] + services
 
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -508,18 +524,29 @@ def run_memtier(
     """Run memtier_benchmark and capture output."""
     cmd = [
         "memtier_benchmark",
-        "-s", host,
-        "-p", str(port),
-        "--threads", "4",
-        "--clients", "25",
-        "--requests", str(requests),
-        "--data-size", "128",
-        "--ratio", ratio,
-        "--key-pattern", key_pattern,
-        "--key-maximum", "10000000",
-        "--pipeline", "1",
+        "-s",
+        host,
+        "-p",
+        str(port),
+        "--threads",
+        "4",
+        "--clients",
+        "25",
+        "--requests",
+        str(requests),
+        "--data-size",
+        "128",
+        "--ratio",
+        ratio,
+        "--key-pattern",
+        key_pattern,
+        "--key-maximum",
+        "10000000",
+        "--pipeline",
+        "1",
         "--hide-histogram",
-        "--json-out-file", str(json_file),
+        "--json-out-file",
+        str(json_file),
     ]
 
     with open(txt_file, "w") as f:
@@ -555,16 +582,23 @@ def run_extended_benchmark(
     # Try to use the new unified benchmark system
     try:
         sys.path.insert(0, str(script_dir))
-        from workload_loader import WorkloadConfig, KeysConfig, ConcurrencyConfig, DataConfig
-        from workload_loader import HashConfig, ListConfig, ZSetConfig
         from runners.hash_runner import HashRunner
         from runners.list_runner import ListRunner
         from runners.zset import ZSetRunner
+        from workload_loader import (
+            ConcurrencyConfig,
+            DataConfig,
+            HashConfig,
+            KeysConfig,
+            ListConfig,
+            WorkloadConfig,
+            ZSetConfig,
+        )
 
         results = {}
 
         # Hash workload
-        print(f"    Running hash operations...")
+        print("    Running hash operations...")
         hash_workload = WorkloadConfig(
             name="extended-hash",
             commands={"HSET": 30, "HGET": 50, "HGETALL": 20},
@@ -581,12 +615,14 @@ def run_extended_benchmark(
             results["hash"] = {
                 "ops_per_sec": hash_result.total_ops_per_sec,
                 "p99_ms": hash_result.p99_latency_ms,
-                "commands": {cmd: {"ops_per_sec": r.ops_per_sec, "p99_ms": r.p99_latency_ms}
-                            for cmd, r in hash_result.commands.items()},
+                "commands": {
+                    cmd: {"ops_per_sec": r.ops_per_sec, "p99_ms": r.p99_latency_ms}
+                    for cmd, r in hash_result.commands.items()
+                },
             }
 
         # List workload
-        print(f"    Running list operations...")
+        print("    Running list operations...")
         list_workload = WorkloadConfig(
             name="extended-list",
             commands={"LPUSH": 50, "RPOP": 30, "LRANGE": 20},
@@ -603,12 +639,14 @@ def run_extended_benchmark(
             results["list"] = {
                 "ops_per_sec": list_result.total_ops_per_sec,
                 "p99_ms": list_result.p99_latency_ms,
-                "commands": {cmd: {"ops_per_sec": r.ops_per_sec, "p99_ms": r.p99_latency_ms}
-                            for cmd, r in list_result.commands.items()},
+                "commands": {
+                    cmd: {"ops_per_sec": r.ops_per_sec, "p99_ms": r.p99_latency_ms}
+                    for cmd, r in list_result.commands.items()
+                },
             }
 
         # ZSet workload
-        print(f"    Running sorted set operations...")
+        print("    Running sorted set operations...")
         zset_workload = WorkloadConfig(
             name="extended-zset",
             commands={"ZADD": 30, "ZINCRBY": 30, "ZRANGE": 25, "ZRANK": 15},
@@ -625,8 +663,10 @@ def run_extended_benchmark(
             results["zset"] = {
                 "ops_per_sec": zset_result.total_ops_per_sec,
                 "p99_ms": zset_result.p99_latency_ms,
-                "commands": {cmd: {"ops_per_sec": r.ops_per_sec, "p99_ms": r.p99_latency_ms}
-                            for cmd, r in zset_result.commands.items()},
+                "commands": {
+                    cmd: {"ops_per_sec": r.ops_per_sec, "p99_ms": r.p99_latency_ms}
+                    for cmd, r in zset_result.commands.items()
+                },
             }
 
         # Save results
@@ -641,7 +681,7 @@ def run_extended_benchmark(
         extended_script = script_dir / "extended_benchmark.py"
 
         if not extended_script.exists():
-            print(f"  Warning: extended_benchmark.py not found, skipping extended workloads")
+            print("  Warning: extended_benchmark.py not found, skipping extended workloads")
             return {}
 
         result = subprocess.run(
@@ -729,37 +769,61 @@ def main() -> None:
         description="Compare FrogDB performance against Redis, Valkey, and Dragonfly",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--backends", type=str,
-                        help="Comma-separated list of backends: redis,valkey,dragonfly")
-    parser.add_argument("--all", action="store_true",
-                        help="Run against all backends")
-    parser.add_argument("--start-docker", action="store_true",
-                        help="Auto-start Docker containers before benchmarks")
-    parser.add_argument("-w", "--workload", default="mixed",
-                        choices=["read-heavy", "write-heavy", "mixed"],
-                        help="Workload preset (default: mixed)")
-    parser.add_argument("--yaml-workload", type=str,
-                        help="Run a YAML workload from workloads/ (e.g., ycsb-a, leaderboard)")
-    parser.add_argument("--extended", action="store_true",
-                        help="Include extended command workloads (hash, list, zset)")
-    parser.add_argument("-n", "--requests", type=int, default=10000,
-                        help="Requests per client (default: 10000)")
-    parser.add_argument("-o", "--output", type=Path, default=default_output_dir,
-                        help=f"Output directory for results (default: {default_output_dir})")
-    parser.add_argument("--frogdb-port", type=int, default=16379,
-                        help="FrogDB port when running natively (default: 16379). Ignored with --start-docker.")
-    parser.add_argument("--frogdb-native", action="store_true",
-                        help="Run FrogDB natively instead of in Docker (even with --start-docker)")
+    parser.add_argument(
+        "--backends", type=str, help="Comma-separated list of backends: redis,valkey,dragonfly"
+    )
+    parser.add_argument("--all", action="store_true", help="Run against all backends")
+    parser.add_argument(
+        "--start-docker", action="store_true", help="Auto-start Docker containers before benchmarks"
+    )
+    parser.add_argument(
+        "-w",
+        "--workload",
+        default="mixed",
+        choices=["read-heavy", "write-heavy", "mixed"],
+        help="Workload preset (default: mixed)",
+    )
+    parser.add_argument(
+        "--yaml-workload",
+        type=str,
+        help="Run a YAML workload from workloads/ (e.g., ycsb-a, leaderboard)",
+    )
+    parser.add_argument(
+        "--extended",
+        action="store_true",
+        help="Include extended command workloads (hash, list, zset)",
+    )
+    parser.add_argument(
+        "-n", "--requests", type=int, default=10000, help="Requests per client (default: 10000)"
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=default_output_dir,
+        help=f"Output directory for results (default: {default_output_dir})",
+    )
+    parser.add_argument(
+        "--frogdb-port",
+        type=int,
+        default=16379,
+        help="FrogDB port when running natively (default: 16379). Ignored with --start-docker.",
+    )
+    parser.add_argument(
+        "--frogdb-native",
+        action="store_true",
+        help="Run FrogDB natively instead of in Docker (even with --start-docker)",
+    )
 
     # CPU isolation options
-    parser.add_argument("--cpus", type=int, default=1,
-                        help="CPUs per server (default: 1)")
-    parser.add_argument("--isolate", action="store_true",
-                        help="Pin each server to dedicated CPU cores via cpuset")
-    parser.add_argument("--scaling", action="store_true",
-                        help="Run scaling test: 1, 2, 4 cores")
-    parser.add_argument("--start-core", type=int, default=0,
-                        help="Begin core assignment from core N (default: 0)")
+    parser.add_argument("--cpus", type=int, default=1, help="CPUs per server (default: 1)")
+    parser.add_argument(
+        "--isolate", action="store_true", help="Pin each server to dedicated CPU cores via cpuset"
+    )
+    parser.add_argument("--scaling", action="store_true", help="Run scaling test: 1, 2, 4 cores")
+    parser.add_argument(
+        "--start-core", type=int, default=0, help="Begin core assignment from core N (default: 0)"
+    )
 
     args = parser.parse_args()
 
@@ -786,11 +850,16 @@ def main() -> None:
 
         # Build command for benchmark.py
         cmd = [
-            sys.executable, str(benchmark_script),
-            "--workload", args.yaml_workload,
-            "--backends", ",".join(backends_to_run),
-            "-n", str(args.requests * 100 * 4),  # Convert per-client to total
-            "-o", str(args.output),
+            sys.executable,
+            str(benchmark_script),
+            "--workload",
+            args.yaml_workload,
+            "--backends",
+            ",".join(backends_to_run),
+            "-n",
+            str(args.requests * 100 * 4),  # Convert per-client to total
+            "-o",
+            str(args.output),
         ]
 
         if args.start_docker:
@@ -831,7 +900,7 @@ def main() -> None:
         print("=" * 70)
         print("FrogDB Scaling Test Suite")
         print("=" * 70)
-        print(f"CPU configurations: 1, 2, 4 cores")
+        print("CPU configurations: 1, 2, 4 cores")
         print(f"Workload:           {args.workload}")
         print(f"Backends:           {', '.join(BACKENDS[b].name for b in backends_to_run)}")
         print("=" * 70)
@@ -855,8 +924,10 @@ def main() -> None:
             # Start containers
             if args.start_docker:
                 if not start_containers_with_cpu_isolation(
-                    comparison_backends, assignments, script_dir.parent.parent,
-                    include_frogdb=frogdb_in_docker
+                    comparison_backends,
+                    assignments,
+                    script_dir.parent.parent,
+                    include_frogdb=frogdb_in_docker,
                 ):
                     print(f"Warning: Failed to start containers for {cpu_count}-CPU test")
                     continue
@@ -912,7 +983,9 @@ def main() -> None:
 
             # Stop containers
             if args.start_docker:
-                stop_containers_with_cpu_isolation(comparison_backends, include_frogdb=frogdb_in_docker)
+                stop_containers_with_cpu_isolation(
+                    comparison_backends, include_frogdb=frogdb_in_docker
+                )
 
         # Generate scaling summary
         print("\n" + "=" * 70)
@@ -935,7 +1008,9 @@ def main() -> None:
                 else:
                     ops_values.append("-")
 
-            print(f"{BACKENDS[backend].name:<12} {ops_values[0]:<15} {ops_values[1]:<15} {ops_values[2]:<15}")
+            print(
+                f"{BACKENDS[backend].name:<12} {ops_values[0]:<15} {ops_values[1]:<15} {ops_values[2]:<15}"
+            )
 
         print("\nResults saved to:")
         for cpu_count in [1, 2, 4]:
@@ -951,7 +1026,9 @@ def main() -> None:
     if use_cpu_isolation and args.start_docker:
         try:
             # Include frogdb in CPU assignments when running in Docker
-            assignment_backends = (["frogdb"] + comparison_backends) if frogdb_in_docker else comparison_backends
+            assignment_backends = (
+                (["frogdb"] + comparison_backends) if frogdb_in_docker else comparison_backends
+            )
             cpu_assignments = calculate_cpu_assignments(
                 assignment_backends, args.cpus, args.isolate, args.start_core
             )
@@ -969,7 +1046,7 @@ def main() -> None:
     if comparison_backends:
         print(f"Backends:       FrogDB, {', '.join(BACKENDS[b].name for b in comparison_backends)}")
     else:
-        print(f"Backends:       FrogDB only")
+        print("Backends:       FrogDB only")
     print(f"FrogDB mode:    {'Docker' if frogdb_in_docker else 'Native'}")
     if use_cpu_isolation and args.start_docker:
         print(f"CPUs/server:    {args.cpus}")
@@ -986,12 +1063,16 @@ def main() -> None:
         if use_cpu_isolation and cpu_assignments:
             print("Starting containers with CPU isolation...")
             if not start_containers_with_cpu_isolation(
-                comparison_backends, cpu_assignments, script_dir.parent.parent,
-                include_frogdb=frogdb_in_docker
+                comparison_backends,
+                cpu_assignments,
+                script_dir.parent.parent,
+                include_frogdb=frogdb_in_docker,
             ):
                 print("Warning: Some containers may not have started correctly", file=sys.stderr)
         else:
-            if not start_docker_containers(comparison_backends, compose_file, include_frogdb=frogdb_in_docker):
+            if not start_docker_containers(
+                comparison_backends, compose_file, include_frogdb=frogdb_in_docker
+            ):
                 print("Warning: Some containers may not have started correctly", file=sys.stderr)
         print()
 
@@ -1000,7 +1081,9 @@ def main() -> None:
     if not check_connectivity(host, frogdb_port):
         print(f"Warning: FrogDB not responding on {host}:{frogdb_port}")
         if frogdb_in_docker:
-            print("Check Docker container status: docker compose -f loadtest/docker-compose.benchmarks.yml ps")
+            print(
+                "Check Docker container status: docker compose -f loadtest/docker-compose.benchmarks.yml ps"
+            )
         else:
             print("Start it with: cargo run --release")
     else:
@@ -1101,9 +1184,12 @@ def main() -> None:
     if generate_script.exists():
         report_file = report_dir / "benchmark_report.md"
         cmd = [
-            sys.executable, str(generate_script),
-            "--input", str(combined_json),
-            "--output", str(report_file),
+            sys.executable,
+            str(generate_script),
+            "--input",
+            str(combined_json),
+            "--output",
+            str(report_file),
         ]
         # Pass CPU config to report generator
         if cpu_config:
@@ -1137,9 +1223,12 @@ def main() -> None:
             if frogdb_json.exists() and backend_json.exists():
                 subprocess.run(
                     [
-                        sys.executable, str(parse_script),
-                        "--frogdb", str(frogdb_json),
-                        "--redis", str(backend_json),
+                        sys.executable,
+                        str(parse_script),
+                        "--frogdb",
+                        str(frogdb_json),
+                        "--redis",
+                        str(backend_json),
                     ],
                 )
 

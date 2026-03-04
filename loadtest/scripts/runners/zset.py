@@ -8,12 +8,14 @@ Use cases: Leaderboards, rankings, priority queues, time-based indexes
 """
 
 import random
-from pathlib import Path
-from typing import Any, Callable
-
 import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from workload_loader import WorkloadConfig, CommandCategory
+from workload_loader import CommandCategory, WorkloadConfig
+
 from runners.base import register_runner
 from runners.redis_py_base import RedisPyRunner
 
@@ -160,7 +162,11 @@ def main():
 
     # Test with a simple workload
     from workload_loader import (
-        WorkloadConfig, KeysConfig, ConcurrencyConfig, DataConfig, ZSetConfig
+        ConcurrencyConfig,
+        DataConfig,
+        KeysConfig,
+        WorkloadConfig,
+        ZSetConfig,
     )
 
     workload = WorkloadConfig(

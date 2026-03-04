@@ -4,20 +4,22 @@ base.py - Abstract base class for benchmark runners
 Defines the interface all runners must implement and provides common utilities.
 """
 
+import sys
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from workload_loader import WorkloadConfig, CommandCategory
+from workload_loader import CommandCategory, WorkloadConfig
 
 
 @dataclass
 class CommandResult:
     """Results for a single command type."""
+
     command: str
     ops_per_sec: float = 0.0
     p50_latency_ms: float = 0.0
@@ -31,6 +33,7 @@ class CommandResult:
 @dataclass
 class BenchmarkResult:
     """Complete benchmark result for a workload run."""
+
     workload_name: str
     backend_name: str
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -165,11 +168,7 @@ class BenchmarkRunner(ABC):
         categories = workload.get_command_categories()
         return self.category in categories
 
-    def check_targets(
-        self,
-        result: BenchmarkResult,
-        workload: WorkloadConfig
-    ) -> None:
+    def check_targets(self, result: BenchmarkResult, workload: WorkloadConfig) -> None:
         """Check if benchmark result meets workload targets.
 
         Updates result.targets_met and result.target_failures.
@@ -183,9 +182,7 @@ class BenchmarkRunner(ABC):
 
         if targets.ops_per_sec > 0:
             if result.total_ops_per_sec < targets.ops_per_sec:
-                failures.append(
-                    f"ops/sec: {result.total_ops_per_sec:.0f} < {targets.ops_per_sec}"
-                )
+                failures.append(f"ops/sec: {result.total_ops_per_sec:.0f} < {targets.ops_per_sec}")
 
         if targets.p50_latency_ms > 0:
             if result.p50_latency_ms > targets.p50_latency_ms:
@@ -220,11 +217,7 @@ class RunnerRegistry:
     _instances: dict[tuple[CommandCategory, str, int], BenchmarkRunner] = {}
 
     @classmethod
-    def register(
-        cls,
-        category: CommandCategory,
-        runner_class: type[BenchmarkRunner]
-    ) -> None:
+    def register(cls, category: CommandCategory, runner_class: type[BenchmarkRunner]) -> None:
         """Register a runner for a command category.
 
         Args:
@@ -303,7 +296,9 @@ class RunnerRegistry:
         cls._instances.clear()
 
 
-def register_runner(category: CommandCategory) -> Callable[[type[BenchmarkRunner]], type[BenchmarkRunner]]:
+def register_runner(
+    category: CommandCategory,
+) -> Callable[[type[BenchmarkRunner]], type[BenchmarkRunner]]:
     """Decorator to register a runner class.
 
     Usage:
@@ -311,10 +306,12 @@ def register_runner(category: CommandCategory) -> Callable[[type[BenchmarkRunner
         class MemtierRunner(BenchmarkRunner):
             ...
     """
+
     def decorator(cls: type[BenchmarkRunner]) -> type[BenchmarkRunner]:
         cls.category = category
         RunnerRegistry.register(category, cls)
         return cls
+
     return decorator
 
 

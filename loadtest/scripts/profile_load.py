@@ -9,9 +9,9 @@ Usage:
 
 import argparse
 import os
-import subprocess
 import signal
 import socket
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -75,8 +75,11 @@ def run_profile(
     print(f"Starting FrogDB under samply profiler{shard_info}...")
     samply_proc = subprocess.Popen(
         [
-            "samply", "record",
-            "--save-only", "-o", str(profile_path),
+            "samply",
+            "record",
+            "--save-only",
+            "-o",
+            str(profile_path),
             str(REPO_ROOT / "target" / "profiling" / "frogdb-server"),
         ],
         env=server_env,
@@ -99,10 +102,14 @@ def run_profile(
             [
                 sys.executable,
                 str(Path(__file__).parent / "run_memtier.py"),
-                "-w", workload,
-                "-n", str(requests),
-                "-t", str(threads),
-                "-c", str(clients),
+                "-w",
+                workload,
+                "-n",
+                str(requests),
+                "-t",
+                str(threads),
+                "-c",
+                str(clients),
             ],
         )
 
@@ -131,25 +138,29 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "-w", "--workload",
+        "-w",
+        "--workload",
         choices=["read-heavy", "write-heavy", "mixed"],
         default="mixed",
         help="Workload preset",
     )
     parser.add_argument(
-        "-n", "--requests",
+        "-n",
+        "--requests",
         type=int,
         default=10000,
         help="Number of requests per client",
     )
     parser.add_argument(
-        "-t", "--threads",
+        "-t",
+        "--threads",
         type=int,
         default=4,
         help="Number of memtier threads",
     )
     parser.add_argument(
-        "-c", "--clients",
+        "-c",
+        "--clients",
         type=int,
         default=25,
         help="Clients per thread",

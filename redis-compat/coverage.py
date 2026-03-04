@@ -19,51 +19,189 @@ from pathlib import Path
 # This list should be updated as new commands are implemented
 IMPLEMENTED_COMMANDS = {
     # Connection
-    "PING", "ECHO", "QUIT", "AUTH", "SELECT",
+    "PING",
+    "ECHO",
+    "QUIT",
+    "AUTH",
+    "SELECT",
     # Server
-    "DBSIZE", "FLUSHDB", "FLUSHALL", "INFO", "TIME", "COMMAND", "CONFIG",
-    "BGSAVE", "LASTSAVE", "DEBUG",
+    "DBSIZE",
+    "FLUSHDB",
+    "FLUSHALL",
+    "INFO",
+    "TIME",
+    "COMMAND",
+    "CONFIG",
+    "BGSAVE",
+    "LASTSAVE",
+    "DEBUG",
     # Keys
-    "DEL", "EXISTS", "EXPIRE", "EXPIREAT", "EXPIRETIME", "KEYS", "PERSIST",
-    "PEXPIRE", "PEXPIREAT", "PEXPIRETIME", "PTTL", "RANDOMKEY", "RENAME",
-    "RENAMENX", "SCAN", "TOUCH", "TTL", "TYPE", "UNLINK", "COPY", "OBJECT",
+    "DEL",
+    "EXISTS",
+    "EXPIRE",
+    "EXPIREAT",
+    "EXPIRETIME",
+    "KEYS",
+    "PERSIST",
+    "PEXPIRE",
+    "PEXPIREAT",
+    "PEXPIRETIME",
+    "PTTL",
+    "RANDOMKEY",
+    "RENAME",
+    "RENAMENX",
+    "SCAN",
+    "TOUCH",
+    "TTL",
+    "TYPE",
+    "UNLINK",
+    "COPY",
+    "OBJECT",
     # Strings
-    "APPEND", "DECR", "DECRBY", "GET", "GETDEL", "GETEX", "GETRANGE",
-    "GETSET", "INCR", "INCRBY", "INCRBYFLOAT", "MGET", "MSET", "MSETNX",
-    "PSETEX", "SET", "SETEX", "SETNX", "SETRANGE", "STRLEN", "SUBSTR",
+    "APPEND",
+    "DECR",
+    "DECRBY",
+    "GET",
+    "GETDEL",
+    "GETEX",
+    "GETRANGE",
+    "GETSET",
+    "INCR",
+    "INCRBY",
+    "INCRBYFLOAT",
+    "MGET",
+    "MSET",
+    "MSETNX",
+    "PSETEX",
+    "SET",
+    "SETEX",
+    "SETNX",
+    "SETRANGE",
+    "STRLEN",
+    "SUBSTR",
     # Lists
-    "LINDEX", "LINSERT", "LLEN", "LMOVE", "LPOP", "LPOS", "LPUSH", "LPUSHX",
-    "LRANGE", "LREM", "LSET", "LTRIM", "RPOP", "RPOPLPUSH", "RPUSH", "RPUSHX",
+    "LINDEX",
+    "LINSERT",
+    "LLEN",
+    "LMOVE",
+    "LPOP",
+    "LPOS",
+    "LPUSH",
+    "LPUSHX",
+    "LRANGE",
+    "LREM",
+    "LSET",
+    "LTRIM",
+    "RPOP",
+    "RPOPLPUSH",
+    "RPUSH",
+    "RPUSHX",
     "LMPOP",
     # Sets
-    "SADD", "SCARD", "SDIFF", "SDIFFSTORE", "SINTER", "SINTERCARD",
-    "SINTERSTORE", "SISMEMBER", "SMEMBERS", "SMISMEMBER", "SMOVE", "SPOP",
-    "SRANDMEMBER", "SREM", "SSCAN", "SUNION", "SUNIONSTORE",
+    "SADD",
+    "SCARD",
+    "SDIFF",
+    "SDIFFSTORE",
+    "SINTER",
+    "SINTERCARD",
+    "SINTERSTORE",
+    "SISMEMBER",
+    "SMEMBERS",
+    "SMISMEMBER",
+    "SMOVE",
+    "SPOP",
+    "SRANDMEMBER",
+    "SREM",
+    "SSCAN",
+    "SUNION",
+    "SUNIONSTORE",
     # Hashes
-    "HDEL", "HEXISTS", "HGET", "HGETALL", "HINCRBY", "HINCRBYFLOAT", "HKEYS",
-    "HLEN", "HMGET", "HMSET", "HRANDFIELD", "HSCAN", "HSET", "HSETNX",
-    "HSTRLEN", "HVALS",
+    "HDEL",
+    "HEXISTS",
+    "HGET",
+    "HGETALL",
+    "HINCRBY",
+    "HINCRBYFLOAT",
+    "HKEYS",
+    "HLEN",
+    "HMGET",
+    "HMSET",
+    "HRANDFIELD",
+    "HSCAN",
+    "HSET",
+    "HSETNX",
+    "HSTRLEN",
+    "HVALS",
     # Sorted Sets
-    "ZADD", "ZCARD", "ZCOUNT", "ZDIFF", "ZDIFFSTORE", "ZINCRBY", "ZINTER",
-    "ZINTERCARD", "ZINTERSTORE", "ZLEXCOUNT", "ZMPOP", "ZMSCORE", "ZPOPMAX",
-    "ZPOPMIN", "ZRANDMEMBER", "ZRANGE", "ZRANGEBYLEX", "ZRANGEBYSCORE",
-    "ZRANGESTORE", "ZRANK", "ZREM", "ZREMRANGEBYLEX", "ZREMRANGEBYRANK",
-    "ZREMRANGEBYSCORE", "ZREVRANGE", "ZREVRANGEBYLEX", "ZREVRANGEBYSCORE",
-    "ZREVRANK", "ZSCAN", "ZSCORE", "ZUNION", "ZUNIONSTORE",
+    "ZADD",
+    "ZCARD",
+    "ZCOUNT",
+    "ZDIFF",
+    "ZDIFFSTORE",
+    "ZINCRBY",
+    "ZINTER",
+    "ZINTERCARD",
+    "ZINTERSTORE",
+    "ZLEXCOUNT",
+    "ZMPOP",
+    "ZMSCORE",
+    "ZPOPMAX",
+    "ZPOPMIN",
+    "ZRANDMEMBER",
+    "ZRANGE",
+    "ZRANGEBYLEX",
+    "ZRANGEBYSCORE",
+    "ZRANGESTORE",
+    "ZRANK",
+    "ZREM",
+    "ZREMRANGEBYLEX",
+    "ZREMRANGEBYRANK",
+    "ZREMRANGEBYSCORE",
+    "ZREVRANGE",
+    "ZREVRANGEBYLEX",
+    "ZREVRANGEBYSCORE",
+    "ZREVRANK",
+    "ZSCAN",
+    "ZSCORE",
+    "ZUNION",
+    "ZUNIONSTORE",
     # HyperLogLog
-    "PFADD", "PFCOUNT", "PFMERGE",
+    "PFADD",
+    "PFCOUNT",
+    "PFMERGE",
     # Geo
-    "GEOADD", "GEODIST", "GEOHASH", "GEOPOS", "GEORADIUS", "GEORADIUSBYMEMBER",
-    "GEOSEARCH", "GEOSEARCHSTORE",
+    "GEOADD",
+    "GEODIST",
+    "GEOHASH",
+    "GEOPOS",
+    "GEORADIUS",
+    "GEORADIUSBYMEMBER",
+    "GEOSEARCH",
+    "GEOSEARCHSTORE",
     # Bitmap
-    "BITCOUNT", "BITFIELD", "BITOP", "BITPOS", "GETBIT", "SETBIT",
+    "BITCOUNT",
+    "BITFIELD",
+    "BITOP",
+    "BITPOS",
+    "GETBIT",
+    "SETBIT",
     # Pub/Sub
-    "PUBLISH", "SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE", "PUNSUBSCRIBE",
+    "PUBLISH",
+    "SUBSCRIBE",
+    "UNSUBSCRIBE",
+    "PSUBSCRIBE",
+    "PUNSUBSCRIBE",
     "PUBSUB",
     # Transactions
-    "MULTI", "EXEC", "DISCARD", "WATCH", "UNWATCH",
+    "MULTI",
+    "EXEC",
+    "DISCARD",
+    "WATCH",
+    "UNWATCH",
     # Scripting
-    "EVAL", "EVALSHA", "SCRIPT",
+    "EVAL",
+    "EVALSHA",
+    "SCRIPT",
     # Client
     "CLIENT",
 }
@@ -80,19 +218,48 @@ INTENTIONALLY_UNSUPPORTED = {
 # Commands planned but not yet implemented
 NOT_YET_IMPLEMENTED = {
     # Blocking commands (Phase 11)
-    "BLPOP", "BRPOP", "BLMOVE", "BRPOPLPUSH", "BLMPOP",
-    "BZPOPMIN", "BZPOPMAX", "BZMPOP",
+    "BLPOP",
+    "BRPOP",
+    "BLMOVE",
+    "BRPOPLPUSH",
+    "BLMPOP",
+    "BZPOPMIN",
+    "BZPOPMAX",
+    "BZMPOP",
     # Streams (Phase 13)
-    "XADD", "XREAD", "XREADGROUP", "XRANGE", "XREVRANGE", "XLEN", "XINFO",
-    "XACK", "XCLAIM", "XAUTOCLAIM", "XPENDING", "XTRIM", "XDEL", "XGROUP",
+    "XADD",
+    "XREAD",
+    "XREADGROUP",
+    "XRANGE",
+    "XREVRANGE",
+    "XLEN",
+    "XINFO",
+    "XACK",
+    "XCLAIM",
+    "XAUTOCLAIM",
+    "XPENDING",
+    "XTRIM",
+    "XDEL",
+    "XGROUP",
     "XSETID",
     # Cluster (Phase 14)
-    "CLUSTER", "READONLY", "READWRITE", "ASKING",
+    "CLUSTER",
+    "READONLY",
+    "READWRITE",
+    "ASKING",
     # RESP3 (Phase 12)
     "HELLO",
     # Other deferred
-    "MEMORY", "LATENCY", "MODULE", "ACL", "SLOWLOG", "DEBUG", "MONITOR",
-    "FUNCTION", "FCALL", "FCALL_RO",
+    "MEMORY",
+    "LATENCY",
+    "MODULE",
+    "ACL",
+    "SLOWLOG",
+    "DEBUG",
+    "MONITOR",
+    "FUNCTION",
+    "FCALL",
+    "FCALL_RO",
 }
 
 
@@ -123,14 +290,7 @@ def extract_commands_from_tests(tests_dir: Path) -> dict[str, set[str]]:
     # Common Redis command pattern in Tcl tests
     # Matches: r command, $r command, {*}$r command, assert_equal [$r command]
     command_pattern = re.compile(
-        r'(?:\$?r\s+|assert_\w+\s+\[(?:\$?r|\{\*\}\$r)\s+)(\w+)',
-        re.IGNORECASE
-    )
-
-    # Also match direct redis-cli style commands
-    direct_pattern = re.compile(
-        r'^\s*(\w+)\s+',
-        re.MULTILINE
+        r"(?:\$?r\s+|assert_\w+\s+\[(?:\$?r|\{\*\}\$r)\s+)(\w+)", re.IGNORECASE
     )
 
     for tcl_file in tests_dir.rglob("*.tcl"):
@@ -138,12 +298,22 @@ def extract_commands_from_tests(tests_dir: Path) -> dict[str, set[str]]:
         commands = set()
 
         try:
-            content = tcl_file.read_text(encoding='utf-8', errors='ignore')
+            content = tcl_file.read_text(encoding="utf-8", errors="ignore")
 
             # Find commands in test assertions and calls
             for match in command_pattern.finditer(content):
                 cmd = match.group(1).upper()
-                if cmd not in {'SET', 'GET', 'IF', 'ELSE', 'PROC', 'RETURN', 'EXPR', 'PUTS', 'CATCH'}:
+                if cmd not in {
+                    "SET",
+                    "GET",
+                    "IF",
+                    "ELSE",
+                    "PROC",
+                    "RETURN",
+                    "EXPR",
+                    "PUTS",
+                    "CATCH",
+                }:
                     # Filter out Tcl keywords that might match
                     commands.add(cmd)
 
@@ -188,10 +358,7 @@ def analyze_coverage(
 
     for test_file, commands in commands_by_file.items():
         # Check if this test file is skipped
-        is_skipped = any(
-            test_file.startswith(skip) or skip in test_file
-            for skip in skipped_tests
-        )
+        is_skipped = any(test_file.startswith(skip) or skip in test_file for skip in skipped_tests)
 
         if is_skipped:
             skipped_commands.update(commands)
@@ -212,7 +379,8 @@ def analyze_coverage(
         "skipped_commands": skipped_commands,
         "coverage_percent": (
             len(implemented_and_tested) / len(IMPLEMENTED_COMMANDS) * 100
-            if IMPLEMENTED_COMMANDS else 0
+            if IMPLEMENTED_COMMANDS
+            else 0
         ),
     }
 
@@ -229,22 +397,22 @@ def print_report(analysis: dict, verbose: bool = False) -> None:
     print(f"Coverage:                 {analysis['coverage_percent']:.1f}%")
     print()
 
-    if analysis['implemented_and_tested']:
+    if analysis["implemented_and_tested"]:
         print(f"✓ Implemented and tested: {len(analysis['implemented_and_tested'])} commands")
         if verbose:
-            for cmd in sorted(analysis['implemented_and_tested']):
+            for cmd in sorted(analysis["implemented_and_tested"]):
                 print(f"    {cmd}")
         print()
 
-    if analysis['implemented_not_tested']:
+    if analysis["implemented_not_tested"]:
         print(f"⚠ Implemented but not tested: {len(analysis['implemented_not_tested'])} commands")
-        for cmd in sorted(analysis['implemented_not_tested']):
+        for cmd in sorted(analysis["implemented_not_tested"]):
             print(f"    {cmd}")
         print()
 
-    if analysis['tested_not_implemented']:
+    if analysis["tested_not_implemented"]:
         print(f"✗ Tested but not implemented: {len(analysis['tested_not_implemented'])} commands")
-        for cmd in sorted(analysis['tested_not_implemented']):
+        for cmd in sorted(analysis["tested_not_implemented"]):
             status = "(planned)" if cmd in NOT_YET_IMPLEMENTED else "(unknown)"
             print(f"    {cmd} {status}")
         print()
@@ -253,11 +421,10 @@ def print_report(analysis: dict, verbose: bool = False) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Analyze Redis command coverage for FrogDB"
-    )
+    parser = argparse.ArgumentParser(description="Analyze Redis command coverage for FrogDB")
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Show all tested commands",
     )
@@ -290,11 +457,9 @@ def main() -> None:
 
     if args.json:
         import json
+
         # Convert sets to lists for JSON serialization
-        output = {
-            k: list(v) if isinstance(v, set) else v
-            for k, v in analysis.items()
-        }
+        output = {k: list(v) if isinstance(v, set) else v for k, v in analysis.items()}
         print(json.dumps(output, indent=2))
     else:
         print_report(analysis, verbose=args.verbose)

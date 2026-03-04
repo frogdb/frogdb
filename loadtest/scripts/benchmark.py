@@ -40,13 +40,12 @@ Examples:
 
 import argparse
 import json
-import os
 import shutil
 import socket
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -55,25 +54,23 @@ from typing import Any
 script_dir = Path(__file__).parent.resolve()
 sys.path.insert(0, str(script_dir))
 
-from workload_loader import (
-    load_workload,
-    list_workloads,
-    WorkloadConfig,
-    WorkloadValidationError,
-    CommandCategory,
-)
-from runners.base import (
+from runners.base import (  # noqa: E402
     BenchmarkResult,
     RunnerRegistry,
 )
-
-# Import runners to register them
-from runners import memtier, hash_runner, list_runner, zset, set_runner, stream, pubsub, geo
+from workload_loader import (  # noqa: E402
+    CommandCategory,
+    WorkloadConfig,
+    WorkloadValidationError,
+    list_workloads,
+    load_workload,
+)
 
 
 @dataclass
 class BackendConfig:
     """Backend server configuration."""
+
     name: str
     display_name: str
     port: int
@@ -120,7 +117,7 @@ def check_connectivity(host: str, port: int, timeout: float = 1.0) -> bool:
             s.settimeout(timeout)
             s.connect((host, port))
             return True
-    except (OSError, socket.timeout):
+    except (TimeoutError, OSError):
         return False
 
 
@@ -147,16 +144,22 @@ def start_docker_containers(
     services = []
     if include_frogdb:
         services.append("frogdb")
-    services.extend([BACKENDS[b].docker_service for b in backends if b in BACKENDS and b != "frogdb"])
+    services.extend(
+        [BACKENDS[b].docker_service for b in backends if b in BACKENDS and b != "frogdb"]
+    )
 
     if not services:
         return True
 
     print(f"Starting Docker containers: {', '.join(services)}")
     cmd = [
-        "docker", "compose",
-        "-f", str(compose_file),
-        "up", "-d", "--build",
+        "docker",
+        "compose",
+        "-f",
+        str(compose_file),
+        "up",
+        "-d",
+        "--build",
     ] + services
 
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -252,9 +255,11 @@ def run_benchmark(
         result.backend_name = backend.name
 
         # Print summary
-        print(f"    {result.total_ops_per_sec:,.0f} ops/sec, "
-              f"p50={result.p50_latency_ms:.2f}ms, "
-              f"p99={result.p99_latency_ms:.2f}ms")
+        print(
+            f"    {result.total_ops_per_sec:,.0f} ops/sec, "
+            f"p50={result.p50_latency_ms:.2f}ms, "
+            f"p99={result.p99_latency_ms:.2f}ms"
+        )
 
         if not result.targets_met:
             print(f"    Target failures: {', '.join(result.target_failures)}")
@@ -339,9 +344,11 @@ def generate_report(
                 f.write("\n")
 
         # Target failures
-        failures = [(name, result.target_failures)
-                    for name, result in results.items()
-                    if result.target_failures]
+        failures = [
+            (name, result.target_failures)
+            for name, result in results.items()
+            if result.target_failures
+        ]
 
         if failures:
             f.write("## Target Failures\n\n")
@@ -367,26 +374,30 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument("-w", "--workload", type=str,
-                        help="Workload name (from workloads/ directory)")
-    parser.add_argument("--backends", type=str,
-                        help="Comma-separated backends: frogdb,redis,valkey,dragonfly")
-    parser.add_argument("--all", action="store_true",
-                        help="Run against all backends")
-    parser.add_argument("--start-docker", action="store_true",
-                        help="Auto-start Docker containers")
-    parser.add_argument("-n", "--requests", type=int, default=100000,
-                        help="Total requests to run (default: 100000)")
-    parser.add_argument("-o", "--output", type=Path, default=default_output_dir,
-                        help=f"Output directory (default: {default_output_dir})")
-    parser.add_argument("--host", type=str, default="127.0.0.1",
-                        help="Host for backends (default: 127.0.0.1)")
-    parser.add_argument("--list", action="store_true",
-                        help="List available workloads")
-    parser.add_argument("--validate", action="store_true",
-                        help="Validate all workload files")
-    parser.add_argument("--json", action="store_true",
-                        help="Output results as JSON")
+    parser.add_argument(
+        "-w", "--workload", type=str, help="Workload name (from workloads/ directory)"
+    )
+    parser.add_argument(
+        "--backends", type=str, help="Comma-separated backends: frogdb,redis,valkey,dragonfly"
+    )
+    parser.add_argument("--all", action="store_true", help="Run against all backends")
+    parser.add_argument("--start-docker", action="store_true", help="Auto-start Docker containers")
+    parser.add_argument(
+        "-n", "--requests", type=int, default=100000, help="Total requests to run (default: 100000)"
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=default_output_dir,
+        help=f"Output directory (default: {default_output_dir})",
+    )
+    parser.add_argument(
+        "--host", type=str, default="127.0.0.1", help="Host for backends (default: 127.0.0.1)"
+    )
+    parser.add_argument("--list", action="store_true", help="List available workloads")
+    parser.add_argument("--validate", action="store_true", help="Validate all workload files")
+    parser.add_argument("--json", action="store_true", help="Output results as JSON")
 
     args = parser.parse_args()
 
@@ -515,10 +526,7 @@ def main() -> None:
         "workload": workload.name,
         "timestamp": datetime.now().isoformat(),
         "requests": args.requests,
-        "backends": {
-            name: result.to_dict()
-            for name, result in results.items()
-        },
+        "backends": {name: result.to_dict() for name, result in results.items()},
     }
 
     combined_json = report_dir / "combined_results.json"

@@ -14,8 +14,8 @@ This package contains runner implementations for different command categories:
 """
 
 from .base import (
-    BenchmarkRunner,
     BenchmarkResult,
+    BenchmarkRunner,
     CommandResult,
     RunnerRegistry,
     get_runner,
