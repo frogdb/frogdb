@@ -257,55 +257,51 @@
    - {:f :partition :value [:isolate node]} - isolate specific node
    - {:f :heal} - remove all partitions"
   []
-  (let [cluster-mode? (atom false)]
-    (reify nemesis/Nemesis
-      (setup! [this test]
-        ;; Detect cluster mode from test context
-        (reset! cluster-mode? (boolean (some #{:cluster-formation :leader-election
-                                               :slot-migration :cross-slot :key-routing}
-                                             [(keyword (:workload test))])))
-        this)
+  (reify nemesis/Nemesis
+    (setup! [this test]
+      this)
 
-      (invoke! [this test op]
-        (let [cm? @cluster-mode?
-              all-nodes (if cm?
-                          (vec (keys frogdb-db/raft-cluster-node-ips))
-                          ["n1" "n2" "n3"])]
-          (case (:f op)
-            :partition
-            (case (:value op)
-              :primary-isolated
-              (do
-                (info "Partitioning: isolating primary from replicas")
-                (frogdb-db/isolate-primary! cm?)
-                (assoc op :value :primary-isolated))
-
-              :halves
-              (do
-                (info "Partitioning: splitting cluster into halves [n1,n2] vs [n3]")
-                (frogdb-db/partition-halves! cm?)
-                (assoc op :value :halves))
-
-              ;; Handle [:isolate node] pattern
-              (if (and (vector? (:value op))
-                       (= :isolate (first (:value op))))
-                (let [node (second (:value op))]
-                  (info "Partitioning: isolating node" node)
-                  (frogdb-db/partition-node! node (remove #{node} all-nodes) cm?)
-                  (assoc op :value [:isolated node]))
-                (do
-                  (warn "Unknown partition type:" (:value op))
-                  (assoc op :type :fail :error :unknown-partition-type))))
-
-            :heal
+    (invoke! [this test op]
+      (let [topo (or (:topology test) :single)
+            cluster-mode? (= topo :raft)
+            all-nodes (if cluster-mode?
+                        (vec (keys frogdb-db/raft-cluster-node-ips))
+                        ["n1" "n2" "n3"])]
+        (case (:f op)
+          :partition
+          (case (:value op)
+            :primary-isolated
             (do
-              (info "Healing all network partitions")
-              (frogdb-db/heal-all! cm?)
-              (assoc op :value :healed)))))
+              (info "Partitioning: isolating primary from replicas")
+              (frogdb-db/isolate-primary! topo)
+              (assoc op :value :primary-isolated))
 
-      (teardown! [this test]
-        ;; Clean up any remaining partitions
-        (frogdb-db/heal-all! @cluster-mode?)))))
+            :halves
+            (do
+              (info "Partitioning: splitting cluster into halves [n1,n2] vs [n3]")
+              (frogdb-db/partition-halves! topo)
+              (assoc op :value :halves))
+
+            ;; Handle [:isolate node] pattern
+            (if (and (vector? (:value op))
+                     (= :isolate (first (:value op))))
+              (let [node (second (:value op))]
+                (info "Partitioning: isolating node" node)
+                (frogdb-db/partition-node! node (remove #{node} all-nodes) topo)
+                (assoc op :value [:isolated node]))
+              (do
+                (warn "Unknown partition type:" (:value op))
+                (assoc op :type :fail :error :unknown-partition-type))))
+
+          :heal
+          (do
+            (info "Healing all network partitions")
+            (frogdb-db/heal-all! topo)
+            (assoc op :value :healed)))))
+
+    (teardown! [this test]
+      ;; Clean up any remaining partitions
+      (frogdb-db/heal-all! (or (:topology test) :single)))))
 
 (defn partition-generator
   "Generator for network partition cycles.
@@ -415,64 +411,66 @@
    - {:f :clock-strobe :value {:node n :delta-ms ms}} - brief clock jump"
   ([]
    (clock-skew-nemesis false))
-  ([cluster-mode?]
+  ([_cluster-mode?]
    (let [skewed-nodes (atom #{})]
      (reify nemesis/Nemesis
        (setup! [this test]
          this)
 
        (invoke! [this test op]
-         (case (:f op)
-           :clock-skew
-           (let [{:keys [node delta-ms]} (:value op)
-                 nodes (if node [node] (:nodes test))
-                 delta-seconds (quot delta-ms 1000)]
-             (doseq [n nodes]
-               (let [container (container-name n cluster-mode?)]
-                 (info "Skewing clock on" n "by" delta-ms "ms")
-                 (try+
-                   (skew-clock-via-date! container delta-seconds)
-                   (swap! skewed-nodes conj n)
-                   (catch Object e
-                     ;; Fall back to faketime file
-                     (write-faketime-offset! container delta-seconds)
-                     (swap! skewed-nodes conj n)))))
-             (assoc op :value {:nodes nodes :delta-ms delta-ms}))
+         (let [topo (or (:topology test) :single)]
+           (case (:f op)
+             :clock-skew
+             (let [{:keys [node delta-ms]} (:value op)
+                   nodes (if node [node] (:nodes test))
+                   delta-seconds (quot delta-ms 1000)]
+               (doseq [n nodes]
+                 (let [container (container-name n topo)]
+                   (info "Skewing clock on" n "by" delta-ms "ms")
+                   (try+
+                     (skew-clock-via-date! container delta-seconds)
+                     (swap! skewed-nodes conj n)
+                     (catch Object e
+                       ;; Fall back to faketime file
+                       (write-faketime-offset! container delta-seconds)
+                       (swap! skewed-nodes conj n)))))
+               (assoc op :value {:nodes nodes :delta-ms delta-ms}))
 
-           :clock-reset
-           (let [nodes (or (:value op) @skewed-nodes)]
-             (info "Resetting clocks on" nodes)
-             (doseq [n nodes]
-               (let [container (container-name n cluster-mode?)]
-                 (try+
-                   (reset-clock-via-ntp! container)
-                   (catch Object _
-                     (clear-faketime-offset! container)))))
-             (reset! skewed-nodes #{})
-             (assoc op :value :reset))
+             :clock-reset
+             (let [nodes (or (:value op) @skewed-nodes)]
+               (info "Resetting clocks on" nodes)
+               (doseq [n nodes]
+                 (let [container (container-name n topo)]
+                   (try+
+                     (reset-clock-via-ntp! container)
+                     (catch Object _
+                       (clear-faketime-offset! container)))))
+               (reset! skewed-nodes #{})
+               (assoc op :value :reset))
 
-           :clock-strobe
-           (let [{:keys [node delta-ms]} (:value op)
-                 nodes (if node [node] (:nodes test))
-                 delta-seconds (quot delta-ms 1000)]
-             ;; Brief clock jump - skew then immediately reset
-             (doseq [n nodes]
-               (let [container (container-name n cluster-mode?)]
-                 (try+
-                   (skew-clock-via-date! container delta-seconds)
-                   (Thread/sleep 100)
-                   (skew-clock-via-date! container (- delta-seconds))
-                   (catch Object _ nil))))
-             (assoc op :value {:nodes nodes :strobed delta-ms}))))
+             :clock-strobe
+             (let [{:keys [node delta-ms]} (:value op)
+                   nodes (if node [node] (:nodes test))
+                   delta-seconds (quot delta-ms 1000)]
+               ;; Brief clock jump - skew then immediately reset
+               (doseq [n nodes]
+                 (let [container (container-name n topo)]
+                   (try+
+                     (skew-clock-via-date! container delta-seconds)
+                     (Thread/sleep 100)
+                     (skew-clock-via-date! container (- delta-seconds))
+                     (catch Object _ nil))))
+               (assoc op :value {:nodes nodes :strobed delta-ms})))))
 
        (teardown! [this test]
          ;; Reset all clocks on teardown
-         (doseq [n @skewed-nodes]
-           (let [container (container-name n cluster-mode?)]
-             (try+
-               (reset-clock-via-ntp! container)
-               (catch Object _
-                 (clear-faketime-offset! container))))))))))
+         (let [topo (or (:topology test) :single)]
+           (doseq [n @skewed-nodes]
+             (let [container (container-name n topo)]
+               (try+
+                 (reset-clock-via-ntp! container)
+                 (catch Object _
+                   (clear-faketime-offset! container)))))))))))
 
 (defn clock-skew-generator
   "Generator for clock skew cycles.
@@ -541,78 +539,80 @@
    - {:f :disk-corrupt :value {:node n :file f}} - corrupt a file"
   ([]
    (disk-failure-nemesis false))
-  ([cluster-mode?]
+  ([_cluster-mode?]
    (let [affected-nodes (atom #{})]
      (reify nemesis/Nemesis
        (setup! [this test]
          this)
 
        (invoke! [this test op]
-         (case (:f op)
-           :disk-readonly
-           (let [nodes (if (coll? (:value op)) (:value op) [(:value op)])]
-             (doseq [node nodes]
-               (let [container (container-name node cluster-mode?)]
-                 (info "Making disk read-only on" node)
-                 (try+
-                   (make-disk-readonly! container)
-                   (swap! affected-nodes conj node)
-                   (catch Object e
-                     (warn "Failed to make disk readonly on" node ":" e)))))
-             (assoc op :value {:nodes nodes :status :readonly}))
+         (let [topo (or (:topology test) :single)]
+           (case (:f op)
+             :disk-readonly
+             (let [nodes (if (coll? (:value op)) (:value op) [(:value op)])]
+               (doseq [node nodes]
+                 (let [container (container-name node topo)]
+                   (info "Making disk read-only on" node)
+                   (try+
+                     (make-disk-readonly! container)
+                     (swap! affected-nodes conj node)
+                     (catch Object e
+                       (warn "Failed to make disk readonly on" node ":" e)))))
+               (assoc op :value {:nodes nodes :status :readonly}))
 
-           :disk-recover
-           (let [nodes (if (coll? (:value op)) (:value op) [(:value op)])]
-             (doseq [node nodes]
-               (let [container (container-name node cluster-mode?)]
-                 (info "Recovering disk on" node)
-                 (try+
-                   (make-disk-readwrite! container)
-                   (swap! affected-nodes disj node)
-                   (catch Object e
-                     (warn "Failed to recover disk on" node ":" e)))))
-             (assoc op :value {:nodes nodes :status :recovered}))
+             :disk-recover
+             (let [nodes (if (coll? (:value op)) (:value op) [(:value op)])]
+               (doseq [node nodes]
+                 (let [container (container-name node topo)]
+                   (info "Recovering disk on" node)
+                   (try+
+                     (make-disk-readwrite! container)
+                     (swap! affected-nodes disj node)
+                     (catch Object e
+                       (warn "Failed to recover disk on" node ":" e)))))
+               (assoc op :value {:nodes nodes :status :recovered}))
 
-           :disk-full
-           (let [{:keys [node size-mb]} (:value op)
-                 size (or size-mb 100)
-                 container (container-name node cluster-mode?)]
-             (info "Filling disk on" node "with" size "MB")
-             (try+
-               (fill-disk! container size)
-               (swap! affected-nodes conj node)
-               (assoc op :value {:node node :filled-mb size})
-               (catch Object e
-                 (warn "Failed to fill disk on" node ":" e)
-                 (assoc op :type :fail :error :fill-failed))))
+             :disk-full
+             (let [{:keys [node size-mb]} (:value op)
+                   size (or size-mb 100)
+                   container (container-name node topo)]
+               (info "Filling disk on" node "with" size "MB")
+               (try+
+                 (fill-disk! container size)
+                 (swap! affected-nodes conj node)
+                 (assoc op :value {:node node :filled-mb size})
+                 (catch Object e
+                   (warn "Failed to fill disk on" node ":" e)
+                   (assoc op :type :fail :error :fill-failed))))
 
-           :disk-clear
-           (let [node (:value op)
-                 container (container-name node cluster-mode?)]
-             (info "Clearing disk fill on" node)
-             (clear-disk-fill! container)
-             (swap! affected-nodes disj node)
-             (assoc op :value {:node node :status :cleared}))
+             :disk-clear
+             (let [node (:value op)
+                   container (container-name node topo)]
+               (info "Clearing disk fill on" node)
+               (clear-disk-fill! container)
+               (swap! affected-nodes disj node)
+               (assoc op :value {:node node :status :cleared}))
 
-           :disk-corrupt
-           (let [{:keys [node file]} (:value op)
-                 container (container-name node cluster-mode?)]
-             (info "Corrupting file" file "on" node)
-             (try+
-               (corrupt-file! container file)
-               (assoc op :value {:node node :file file :status :corrupted})
-               (catch Object e
-                 (warn "Failed to corrupt file on" node ":" e)
-                 (assoc op :type :fail :error :corrupt-failed))))))
+             :disk-corrupt
+             (let [{:keys [node file]} (:value op)
+                   container (container-name node topo)]
+               (info "Corrupting file" file "on" node)
+               (try+
+                 (corrupt-file! container file)
+                 (assoc op :value {:node node :file file :status :corrupted})
+                 (catch Object e
+                   (warn "Failed to corrupt file on" node ":" e)
+                   (assoc op :type :fail :error :corrupt-failed)))))))
 
        (teardown! [this test]
          ;; Recover all affected disks
-         (doseq [node @affected-nodes]
-           (let [container (container-name node cluster-mode?)]
-             (try+
-               (make-disk-readwrite! container)
-               (clear-disk-fill! container)
-               (catch Object _ nil)))))))))
+         (let [topo (or (:topology test) :single)]
+           (doseq [node @affected-nodes]
+             (let [container (container-name node topo)]
+               (try+
+                 (make-disk-readwrite! container)
+                 (clear-disk-fill! container)
+                 (catch Object _ nil))))))))))
 
 (defn disk-failure-generator
   "Generator for disk failure cycles.
@@ -683,99 +683,101 @@
    - {:f :network-heal-all} - heal all nodes"
   ([]
    (slow-network-nemesis false))
-  ([cluster-mode?]
+  ([_cluster-mode?]
    (let [affected-nodes (atom #{})]
      (reify nemesis/Nemesis
        (setup! [this test]
          this)
 
        (invoke! [this test op]
-         (case (:f op)
-           :add-latency
-           (let [{:keys [node delay-ms jitter-ms]} (:value op)
-                 nodes (if node [node] (:nodes test))
-                 delay (or delay-ms 100)
-                 jitter (or jitter-ms 20)]
-             (doseq [n nodes]
-               (let [container (container-name n cluster-mode?)]
-                 (info "Adding" delay "ms latency (±" jitter "ms) to" n)
-                 (try+
-                   (remove-network-qdisc! container)  ; Clear existing rules
-                   (add-network-delay! container delay jitter)
-                   (swap! affected-nodes conj n)
-                   (catch Object e
-                     (warn "Failed to add latency to" n ":" e)))))
-             (assoc op :value {:nodes nodes :delay-ms delay :jitter-ms jitter}))
+         (let [topo (or (:topology test) :single)]
+           (case (:f op)
+             :add-latency
+             (let [{:keys [node delay-ms jitter-ms]} (:value op)
+                   nodes (if node [node] (:nodes test))
+                   delay (or delay-ms 100)
+                   jitter (or jitter-ms 20)]
+               (doseq [n nodes]
+                 (let [container (container-name n topo)]
+                   (info "Adding" delay "ms latency (±" jitter "ms) to" n)
+                   (try+
+                     (remove-network-qdisc! container)  ; Clear existing rules
+                     (add-network-delay! container delay jitter)
+                     (swap! affected-nodes conj n)
+                     (catch Object e
+                       (warn "Failed to add latency to" n ":" e)))))
+               (assoc op :value {:nodes nodes :delay-ms delay :jitter-ms jitter}))
 
-           :packet-loss
-           (let [{:keys [node percent]} (:value op)
-                 nodes (if node [node] (:nodes test))
-                 loss (or percent 10)]
-             (doseq [n nodes]
-               (let [container (container-name n cluster-mode?)]
-                 (info "Adding" loss "% packet loss to" n)
-                 (try+
+             :packet-loss
+             (let [{:keys [node percent]} (:value op)
+                   nodes (if node [node] (:nodes test))
+                   loss (or percent 10)]
+               (doseq [n nodes]
+                 (let [container (container-name n topo)]
+                   (info "Adding" loss "% packet loss to" n)
+                   (try+
+                     (remove-network-qdisc! container)
+                     (add-packet-loss! container loss)
+                     (swap! affected-nodes conj n)
+                     (catch Object e
+                       (warn "Failed to add packet loss to" n ":" e)))))
+               (assoc op :value {:nodes nodes :percent loss}))
+
+             :packet-corrupt
+             (let [{:keys [node percent]} (:value op)
+                   nodes (if node [node] (:nodes test))
+                   corrupt (or percent 5)]
+               (doseq [n nodes]
+                 (let [container (container-name n topo)]
+                   (info "Adding" corrupt "% packet corruption to" n)
+                   (try+
+                     (remove-network-qdisc! container)
+                     (add-network-corruption! container corrupt)
+                     (swap! affected-nodes conj n)
+                     (catch Object e
+                       (warn "Failed to add corruption to" n ":" e)))))
+               (assoc op :value {:nodes nodes :percent corrupt}))
+
+             :packet-reorder
+             (let [{:keys [node percent delay-ms]} (:value op)
+                   nodes (if node [node] (:nodes test))
+                   reorder (or percent 25)
+                   delay (or delay-ms 50)]
+               (doseq [n nodes]
+                 (let [container (container-name n topo)]
+                   (info "Adding" reorder "% packet reordering to" n)
+                   (try+
+                     (remove-network-qdisc! container)
+                     (add-network-reorder! container reorder delay)
+                     (swap! affected-nodes conj n)
+                     (catch Object e
+                       (warn "Failed to add reordering to" n ":" e)))))
+               (assoc op :value {:nodes nodes :percent reorder :delay-ms delay}))
+
+             :network-heal
+             (let [nodes (if (coll? (:value op)) (:value op) [(:value op)])]
+               (doseq [n nodes]
+                 (let [container (container-name n topo)]
+                   (info "Healing network on" n)
                    (remove-network-qdisc! container)
-                   (add-packet-loss! container loss)
-                   (swap! affected-nodes conj n)
-                   (catch Object e
-                     (warn "Failed to add packet loss to" n ":" e)))))
-             (assoc op :value {:nodes nodes :percent loss}))
+                   (swap! affected-nodes disj n)))
+               (assoc op :value {:nodes nodes :status :healed}))
 
-           :packet-corrupt
-           (let [{:keys [node percent]} (:value op)
-                 nodes (if node [node] (:nodes test))
-                 corrupt (or percent 5)]
-             (doseq [n nodes]
-               (let [container (container-name n cluster-mode?)]
-                 (info "Adding" corrupt "% packet corruption to" n)
-                 (try+
-                   (remove-network-qdisc! container)
-                   (add-network-corruption! container corrupt)
-                   (swap! affected-nodes conj n)
-                   (catch Object e
-                     (warn "Failed to add corruption to" n ":" e)))))
-             (assoc op :value {:nodes nodes :percent corrupt}))
-
-           :packet-reorder
-           (let [{:keys [node percent delay-ms]} (:value op)
-                 nodes (if node [node] (:nodes test))
-                 reorder (or percent 25)
-                 delay (or delay-ms 50)]
-             (doseq [n nodes]
-               (let [container (container-name n cluster-mode?)]
-                 (info "Adding" reorder "% packet reordering to" n)
-                 (try+
-                   (remove-network-qdisc! container)
-                   (add-network-reorder! container reorder delay)
-                   (swap! affected-nodes conj n)
-                   (catch Object e
-                     (warn "Failed to add reordering to" n ":" e)))))
-             (assoc op :value {:nodes nodes :percent reorder :delay-ms delay}))
-
-           :network-heal
-           (let [nodes (if (coll? (:value op)) (:value op) [(:value op)])]
-             (doseq [n nodes]
-               (let [container (container-name n cluster-mode?)]
-                 (info "Healing network on" n)
-                 (remove-network-qdisc! container)
-                 (swap! affected-nodes disj n)))
-             (assoc op :value {:nodes nodes :status :healed}))
-
-           :network-heal-all
-           (do
-             (doseq [n @affected-nodes]
-               (let [container (container-name n cluster-mode?)]
-                 (info "Healing network on" n)
-                 (remove-network-qdisc! container)))
-             (reset! affected-nodes #{})
-             (assoc op :value :all-healed))))
+             :network-heal-all
+             (do
+               (doseq [n @affected-nodes]
+                 (let [container (container-name n topo)]
+                   (info "Healing network on" n)
+                   (remove-network-qdisc! container)))
+               (reset! affected-nodes #{})
+               (assoc op :value :all-healed)))))
 
        (teardown! [this test]
          ;; Heal all affected nodes
-         (doseq [n @affected-nodes]
-           (let [container (container-name n cluster-mode?)]
-             (remove-network-qdisc! container))))))))
+         (let [topo (or (:topology test) :single)]
+           (doseq [n @affected-nodes]
+             (let [container (container-name n topo)]
+               (remove-network-qdisc! container)))))))))
 
 (defn slow-network-generator
   "Generator for slow network cycles.
@@ -850,56 +852,58 @@
    - {:f :oom-trigger :value node} - trigger near-OOM conditions"
   ([]
    (memory-pressure-nemesis false))
-  ([cluster-mode?]
+  ([_cluster-mode?]
    (let [stressed-nodes (atom #{})]
      (reify nemesis/Nemesis
        (setup! [this test]
          this)
 
        (invoke! [this test op]
-         (case (:f op)
-           :memory-stress
-           (let [{:keys [node mb]} (:value op)
-                 nodes (if node [node] (:nodes test))
-                 alloc-mb (or mb 256)]
-             (doseq [n nodes]
-               (let [container (container-name n cluster-mode?)]
-                 (info "Applying" alloc-mb "MB memory pressure to" n)
-                 (try+
-                   (start-memory-stress! container alloc-mb)
-                   (swap! stressed-nodes conj n)
-                   (catch Object e
-                     (warn "Failed to apply memory stress to" n ":" e)))))
-             (assoc op :value {:nodes nodes :mb alloc-mb}))
+         (let [topo (or (:topology test) :single)]
+           (case (:f op)
+             :memory-stress
+             (let [{:keys [node mb]} (:value op)
+                   nodes (if node [node] (:nodes test))
+                   alloc-mb (or mb 256)]
+               (doseq [n nodes]
+                 (let [container (container-name n topo)]
+                   (info "Applying" alloc-mb "MB memory pressure to" n)
+                   (try+
+                     (start-memory-stress! container alloc-mb)
+                     (swap! stressed-nodes conj n)
+                     (catch Object e
+                       (warn "Failed to apply memory stress to" n ":" e)))))
+               (assoc op :value {:nodes nodes :mb alloc-mb}))
 
-           :memory-release
-           (let [nodes (if (coll? (:value op)) (:value op) [(:value op)])]
-             (doseq [n nodes]
-               (let [container (container-name n cluster-mode?)]
-                 (info "Releasing memory pressure on" n)
-                 (stop-memory-stress! container)
-                 (free-shm! container)
-                 (swap! stressed-nodes disj n)))
-             (assoc op :value {:nodes nodes :status :released}))
+             :memory-release
+             (let [nodes (if (coll? (:value op)) (:value op) [(:value op)])]
+               (doseq [n nodes]
+                 (let [container (container-name n topo)]
+                   (info "Releasing memory pressure on" n)
+                   (stop-memory-stress! container)
+                   (free-shm! container)
+                   (swap! stressed-nodes disj n)))
+               (assoc op :value {:nodes nodes :status :released}))
 
-           :oom-trigger
-           (let [node (:value op)
-                 container (container-name node cluster-mode?)]
-             (info "Triggering OOM pressure on" node)
-             (try+
-               (let [allocated (trigger-oom-pressure! container)]
-                 (swap! stressed-nodes conj node)
-                 (assoc op :value {:node node :allocated-mb allocated}))
-               (catch Object e
-                 (warn "Failed to trigger OOM on" node ":" e)
-                 (assoc op :type :fail :error :oom-trigger-failed))))))
+             :oom-trigger
+             (let [node (:value op)
+                   container (container-name node topo)]
+               (info "Triggering OOM pressure on" node)
+               (try+
+                 (let [allocated (trigger-oom-pressure! container)]
+                   (swap! stressed-nodes conj node)
+                   (assoc op :value {:node node :allocated-mb allocated}))
+                 (catch Object e
+                   (warn "Failed to trigger OOM on" node ":" e)
+                   (assoc op :type :fail :error :oom-trigger-failed)))))))
 
        (teardown! [this test]
          ;; Release all memory pressure
-         (doseq [n @stressed-nodes]
-           (let [container (container-name n cluster-mode?)]
-             (stop-memory-stress! container)
-             (free-shm! container))))))))
+         (let [topo (or (:topology test) :single)]
+           (doseq [n @stressed-nodes]
+             (let [container (container-name n topo)]
+               (stop-memory-stress! container)
+               (free-shm! container)))))))))
 
 (defn memory-pressure-generator
   "Generator for memory pressure cycles.
