@@ -2,12 +2,11 @@
 
 ## Overview
 
-Set keys will store unordered collections of unique string elements, supporting set operations like union, intersection, and difference.
+Set keys store unordered collections of unique string elements, supporting set operations like union, intersection, and difference.
 
 ## Data Structure
 
 ```rust
-// Planned implementation
 pub struct SetValue {
     data: HashSet<Bytes>,
 }
@@ -17,7 +16,7 @@ pub struct SetValue {
 - Standard HashSet for O(1) membership testing
 - Consider intset encoding for small sets of integers
 
-## Commands (Planned)
+## Commands
 
 | Command | Description |
 |---------|-------------|

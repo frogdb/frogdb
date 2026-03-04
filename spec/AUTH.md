@@ -42,7 +42,8 @@ The system uses an abstracted checker interface that starts as "allow all" (no e
 │  │  dyn AclChecker  │    │  User Store                      │   │
 │  │                  │    │  HashMap<String, Arc<User>>      │   │
 │  │  • AllowAll      │    │                                  │   │
-│  │    (stub/noop)   │    │  "default" → User { ... }        │   │
+│  │    (when ACL     │    │  "default" → User { ... }        │   │
+│  │     disabled)    │    │                                  │   │
 │  │                  │    │  "alice"   → User { ... }        │   │
 │  │  • FullAcl       │    │                                  │   │
 │  │    (enforcing)   │    │                                  │   │
@@ -99,9 +100,9 @@ pub trait AclChecker: Send + Sync {
 }
 ```
 
-### AllowAllChecker (Stub Implementation)
+### AllowAllChecker (Default / ACL Disabled)
 
-Initial implementation that permits everything - zero overhead in hot path:
+Default implementation that permits everything when ACL is not configured - zero overhead in hot path:
 
 ```rust
 pub struct AllowAllChecker;
@@ -624,15 +625,21 @@ Redis-compatible error responses:
 
 ---
 
-## Stub Implementation Notes
+## Implementation Notes
 
-For initial implementation (ACL disabled):
+Full ACL is implemented in `crates/acl/` (manager, checker, parser, user store, all ACL commands).
 
-1. `AllowAllChecker` is the default `AclChecker` implementation
+When ACL is not configured:
+
+1. `AllowAllChecker` is the default `AclChecker` implementation (zero overhead in hot path)
 2. `AuthState` is added to `ConnectionState` with default user
 3. All three hook points exist but always return `Allowed`
-4. No actual password verification occurs
-5. Enable full ACL later via configuration flag
+
+When ACL is enabled (via `--requirepass`, `--aclfile`, or inline user config):
+
+1. Full permission enforcement at all three hook points
+2. Password verification via SHA256 hashing
+3. All ACL commands available (SETUSER, GETUSER, DELUSER, LIST, etc.)
 
 ---
 

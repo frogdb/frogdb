@@ -2,12 +2,11 @@
 
 ## Overview
 
-Hash keys will store field-value mappings, ideal for representing objects with multiple attributes.
+Hash keys store field-value mappings, ideal for representing objects with multiple attributes.
 
 ## Data Structure
 
 ```rust
-// Planned implementation
 pub struct HashValue {
     data: HashMap<Bytes, Bytes>,
 }
@@ -17,7 +16,7 @@ pub struct HashValue {
 - Standard HashMap for O(1) field access
 - Consider ziplist-style encoding for small hashes (< 64 entries)
 
-## Commands (Planned)
+## Commands
 
 | Command | Description |
 |---------|-------------|

@@ -4,11 +4,11 @@ This document describes how FrogDB differs from Redis and what to consider when 
 
 ## Compatibility Goals
 
-FrogDB aims to be **wire-protocol compatible** with Redis v6+ via RESP2 (and RESP3 in the future). Most Redis clients should work without modification. However, FrogDB makes intentional design decisions that differ from Redis, and some features are not yet implemented.
+FrogDB aims to be **wire-protocol compatible** with Redis v6+ via RESP2 and RESP3. Most Redis clients should work without modification. However, FrogDB makes intentional design decisions that differ from Redis, and some features are not yet implemented.
 
 This document is organized into:
 1. **Intentional Incompatibilities** - Permanent design decisions
-2. **Not Yet Implemented** - Planned features with their roadmap phase
+2. **Not Yet Implemented** - Features not currently available
 
 ---
 
@@ -232,36 +232,23 @@ GEO commands use geohash encoding with ~0.6mm precision. Retrieved coordinates m
 
 ## Not Yet Implemented
 
-These features are planned but not available in the current implementation phase. Check the [ROADMAP.md](spec/ROADMAP.md) for current status.
-
-### Protocol
-
-| Feature | Status | Phase | Notes |
-|---------|--------|-------|-------|
-| RESP3 | Planned | 12 | Types defined but encoding returns `unimplemented!()` |
-| Client tracking | Deferred | - | Complex feature with high memory overhead |
-| HELLO command | Planned | 12 | Protocol negotiation for RESP3 |
+These features are planned but not available in the current implementation. Check the [ROADMAP.md](ROADMAP.md) for current status.
 
 ### Commands
 
-| Command Category | Status | Phase | Notes |
-|------------------|--------|-------|-------|
-| Blocking commands | Planned | 11 | BLPOP, BRPOP, BLMOVE, BZPOPMIN, BZPOPMAX, BLMPOP, BZMPOP |
-| Streams | Planned | 13 | XADD, XREAD, XREADGROUP, XACK, XPENDING, etc. |
-| DEBUG (unsafe) | Not planned | - | DEBUG SEGFAULT, DEBUG RELOAD, DEBUG CRASH-AND-RECOVER |
-| MONITOR | Not planned | - | Diagnostic command not prioritized |
-| MEMORY commands | Deferred | - | MEMORY USAGE, MEMORY DOCTOR, etc. |
-| LATENCY commands | Deferred | - | LATENCY DOCTOR, LATENCY HISTORY, etc. |
-| MODULE commands | Not planned | - | No modular architecture |
+| Command Category | Status | Notes |
+|------------------|--------|-------|
+| DEBUG (unsafe) | Not planned | DEBUG SEGFAULT, DEBUG RELOAD, DEBUG CRASH-AND-RECOVER |
+| MONITOR | Not planned | Diagnostic command not prioritized |
+| MODULE commands | Not planned | No modular architecture |
 
 ### Features
 
-| Feature | Status | Phase | Notes |
-|---------|--------|-------|-------|
-| Clustering | Planned | 14 | CLUSTER commands, hash slot migration, failover |
-| Memory eviction | Deferred | - | LRU, LFU, volatile-* policies |
-| Client-side caching | Deferred | - | CLIENT TRACKING not supported |
-| Circuit breakers | Not planned | - | Clients should implement |
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Client tracking | Deferred | CLIENT TRACKING / client-side caching — complex feature with high memory overhead |
+| Circuit breakers | Not planned | Clients should implement |
+| Clustering (full) | In progress | Phases 1 and 3 complete; slot migration and chaos testing remaining |
 
 ---
 
@@ -275,12 +262,15 @@ Quick reference for commands with compatibility notes:
 | CONFIG REWRITE | Not supported | Changes are transient |
 | MGET/MSET | Partial | Requires same hash slot |
 | DEL/EXISTS (multi) | Partial | Requires same hash slot |
-| BLPOP/BRPOP | Not yet | Phase 11 |
-| XADD/XREAD | Not yet | Phase 13 |
-| CLUSTER * | Not yet | Phase 14 |
+| BLPOP/BRPOP | Full | Blocking list operations |
+| XADD/XREAD | Full | Basic stream operations |
+| CLUSTER * | Partial | Phases 1 and 3 implemented |
 | EVAL/EVALSHA | Partial | Strict key validation |
 | PUBLISH | Full | No cross-shard ordering |
 | BGSAVE | Full | Forkless semantics |
+| HELLO | Full | RESP3 protocol negotiation |
+| MEMORY * | Full | DOCTOR, STATS, USAGE, PURGE |
+| LATENCY * | Full | DOCTOR, GRAPH, HISTOGRAM, HISTORY |
 
 ---
 

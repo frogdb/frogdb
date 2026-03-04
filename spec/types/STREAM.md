@@ -2,7 +2,7 @@
 
 Redis Streams implementation for append-only log data structures with consumer groups.
 
-**Status:** Future implementation
+**Status:** Implemented (basic commands: XADD, XLEN, XRANGE, XREVRANGE, XREAD, XTRIM, XDEL; consumer groups and XREADGROUP also available)
 
 ## Overview
 

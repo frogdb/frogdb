@@ -709,5 +709,5 @@ See [PERSISTENCE.md](PERSISTENCE.md) for RocksDB integration, WAL, and snapshots
 - [INDEX.md - Data Structures](INDEX.md#data-structures)
 - [COMMANDS.md](COMMANDS.md) - Command reference index
 - [types/](types/) - Data type implementations and commands
-- [EVICTION.md](EVICTION.md) - Memory eviction policies (planned)
+- [EVICTION.md](EVICTION.md) - Memory eviction policies
 - [PERSISTENCE.md](PERSISTENCE.md) - RocksDB integration
