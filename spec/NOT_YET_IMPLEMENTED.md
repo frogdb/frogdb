@@ -28,6 +28,26 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 
 ---
 
+## Spec-Described but Unimplemented
+
+Items described in spec documentation as if implemented, but not present in the codebase. Spec files have been annotated with `[Not Yet Implemented]` markers.
+
+| Item | Description | Spec |
+|------|-------------|------|
+| Cluster pub/sub forwarding | `ClusterPubSubForwarder` trait, `LocalOnlyForwarder`, `broadcast_to_cluster()`, `forward_to_slot_owner()` — entire cross-node pub/sub design (~440 lines). Current pub/sub is single-node only. | [PUBSUB.md](PUBSUB.md#cluster-mode) |
+| Blocking commands during slot migration | `on_slot_migration_key_transferred()` callback to send `-MOVED` to blocked clients during migration. `ShardWaitQueue` has no migration awareness. | [BLOCKING.md](BLOCKING.md#cluster-mode-slot-migration-interaction) |
+| DEBUG PUBSUB LIMITS | Debug command to report per-connection and per-shard subscription usage | [PUBSUB.md](PUBSUB.md) |
+| Pub/sub graceful degradation thresholds | 80%/90% warning thresholds before subscription limits hit (100% enforcement IS implemented) | [PUBSUB.md](PUBSUB.md) |
+| DTrace/USDT probes | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Feature does not exist in Cargo.toml. | [DEBUGGING.md](DEBUGGING.md#dtrace-usdt-probes) |
+| DEBUG STRUCTSIZE | Show sizes of internal data structures | [types/SERVER.md](types/SERVER.md) |
+| JSON.DEBUG | Debug info for JSON values | [types/JSON.md](types/JSON.md) |
+| TS.MGET | Multi-key get for time series | [types/TIMESERIES.md](types/TIMESERIES.md) |
+| TS.MRANGE / TS.MREVRANGE | Multi-key range queries for time series | [types/TIMESERIES.md](types/TIMESERIES.md) |
+| TS.QUERYINDEX | Find time series keys by labels | [types/TIMESERIES.md](types/TIMESERIES.md) |
+| TS.CREATERULE / TS.DELETERULE | Create/delete downsample rules for time series | [types/TIMESERIES.md](types/TIMESERIES.md) |
+
+---
+
 ## Stub / Unimplemented Commands
 
 | Command | Status | Notes | Spec |
