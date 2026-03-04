@@ -72,7 +72,8 @@
       "WebFetch(domain:ghcr.io)",
       "Bash(samply load:*)",
       "Bash(head:*)",
-      "Bash(just redis-compat:*)"
+      "Bash(just redis-compat:*)",
+      "WebFetch(domain:docs.docker.com)"
     ]
   },
   "enableAllProjectMcpServers": true,

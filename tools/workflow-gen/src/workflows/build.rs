@@ -5,7 +5,7 @@ use gh_workflow::{Event, Expression, Job, Level, Permissions, Step, Workflow, Wo
 use crate::helpers::{
     cargo_cache_matrix, checkout, docker_build_push_with_cache, docker_login_ghcr, docker_metadata,
     download_artifact, install_cargo_zigbuild, linux_build_matrix, rust_toolchain_with_target,
-    setup_buildx, setup_qemu, setup_zig, upload_artifact,
+    setup_buildx, setup_qemu, setup_zig, upload_artifact, RUNNER,
 };
 
 /// Creates the build workflow.
@@ -22,7 +22,7 @@ pub fn build_workflow() -> Workflow {
 /// Binary build job with matrix strategy.
 fn build_job() -> Job {
     Job::new("Build (${{ matrix.target }})")
-        .runs_on("${{ matrix.os }}")
+        .runs_on(RUNNER)
         .strategy(linux_build_matrix())
         .add_step(checkout())
         .add_step(rust_toolchain_with_target("${{ matrix.target }}"))
@@ -44,7 +44,7 @@ fn build_job() -> Job {
 fn docker_job() -> Job {
     Job::new("Docker Build")
         .add_needs("build")
-        .runs_on("ubuntu-latest")
+        .runs_on(RUNNER)
         .cond(Expression::new(
             "github.event_name == 'push' && github.ref == 'refs/heads/main'",
         ))

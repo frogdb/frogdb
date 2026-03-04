@@ -5,7 +5,7 @@ use gh_workflow::{Event, Expression, Job, Level, Permissions, Step, Workflow, Wo
 use crate::helpers::{
     checkout, checkout_with_depth, docker_build_push, docker_login_ghcr, docker_metadata,
     download_all_artifacts, download_artifact, gh_release, release_build_matrix,
-    rust_toolchain_with_target, setup_buildx, setup_helm, setup_qemu, upload_artifact,
+    rust_toolchain_with_target, setup_buildx, setup_helm, setup_qemu, upload_artifact, RUNNER,
 };
 
 /// Creates the release workflow.
@@ -24,7 +24,7 @@ pub fn release_workflow() -> Workflow {
 /// Build release binaries job with matrix strategy.
 fn build_binaries_job() -> Job {
     Job::new("Build Release Binaries (${{ matrix.target }})")
-        .runs_on("${{ matrix.os }}")
+        .runs_on(RUNNER)
         .strategy(release_build_matrix())
         .add_step(checkout())
         .add_step(rust_toolchain_with_target("${{ matrix.target }}"))
@@ -65,7 +65,7 @@ fn build_binaries_job() -> Job {
 fn docker_job() -> Job {
     Job::new("Docker Release")
         .add_needs("build-binaries")
-        .runs_on("ubuntu-latest")
+        .runs_on(RUNNER)
         .permissions(
             Permissions::default()
                 .contents(Level::Read)
@@ -102,7 +102,7 @@ fn docker_job() -> Job {
 fn helm_job() -> Job {
     Job::new("Publish Helm Chart")
         .add_needs("docker")
-        .runs_on("ubuntu-latest")
+        .runs_on(RUNNER)
         .permissions(
             Permissions::default()
                 .contents(Level::Write)
@@ -150,7 +150,7 @@ fn github_release_job() -> Job {
     Job::new("GitHub Release")
         .add_needs("build-binaries")
         .add_needs("docker")
-        .runs_on("ubuntu-latest")
+        .runs_on(RUNNER)
         .permissions(Permissions::default().contents(Level::Write))
         .add_step(checkout())
         .add_step(download_all_artifacts("artifacts"))

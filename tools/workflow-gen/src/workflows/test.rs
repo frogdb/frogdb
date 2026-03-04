@@ -3,7 +3,7 @@
 use gh_workflow::{Event, Job, Step, Workflow, WorkflowDispatch};
 
 use crate::helpers::{
-    cargo_cache, checkout, rust_toolchain, rust_toolchain_with_components, setup_helm,
+    cargo_cache, checkout, rust_toolchain, rust_toolchain_with_components, setup_helm, RUNNER,
 };
 
 /// Creates the test workflow.
@@ -23,7 +23,7 @@ pub fn test_workflow() -> Workflow {
 /// Lint job - formatting and clippy.
 fn lint_job() -> Job {
     Job::new("Lint")
-        .runs_on("ubuntu-latest")
+        .runs_on(RUNNER)
         .add_step(checkout())
         .add_step(rust_toolchain_with_components(&["rustfmt", "clippy"]))
         .add_step(Step::new("Check formatting").run("cargo fmt --all -- --check"))
@@ -35,7 +35,7 @@ fn lint_job() -> Job {
 /// Unit tests job.
 fn unit_tests_job() -> Job {
     Job::new("Unit Tests")
-        .runs_on("ubuntu-latest")
+        .runs_on(RUNNER)
         .add_step(checkout())
         .add_step(rust_toolchain())
         .add_step(cargo_cache("test"))
@@ -45,7 +45,7 @@ fn unit_tests_job() -> Job {
 /// Shuttle concurrency tests job.
 fn shuttle_tests_job() -> Job {
     Job::new("Shuttle Concurrency Tests")
-        .runs_on("ubuntu-latest")
+        .runs_on(RUNNER)
         .add_step(checkout())
         .add_step(rust_toolchain())
         .add_step(cargo_cache("shuttle"))
@@ -58,7 +58,7 @@ fn shuttle_tests_job() -> Job {
 /// Turmoil simulation tests job.
 fn turmoil_tests_job() -> Job {
     Job::new("Turmoil Simulation Tests")
-        .runs_on("ubuntu-latest")
+        .runs_on(RUNNER)
         .add_step(checkout())
         .add_step(rust_toolchain())
         .add_step(cargo_cache("turmoil"))
@@ -71,7 +71,7 @@ fn turmoil_tests_job() -> Job {
 /// Helm generation check job.
 fn helm_gen_check_job() -> Job {
     Job::new("Helm Generation Check")
-        .runs_on("ubuntu-latest")
+        .runs_on(RUNNER)
         .add_step(checkout())
         .add_step(rust_toolchain())
         .add_step(cargo_cache("helm"))
@@ -83,7 +83,7 @@ fn helm_gen_check_job() -> Job {
 /// Workflow generation check job.
 fn workflow_gen_check_job() -> Job {
     Job::new("Workflow Generation Check")
-        .runs_on("ubuntu-latest")
+        .runs_on(RUNNER)
         .add_step(checkout())
         .add_step(rust_toolchain())
         .add_step(cargo_cache("workflow"))
@@ -96,7 +96,7 @@ fn workflow_gen_check_job() -> Job {
 /// Helm lint job.
 fn helm_lint_job() -> Job {
     Job::new("Helm Lint")
-        .runs_on("ubuntu-latest")
+        .runs_on(RUNNER)
         .add_step(checkout())
         .add_step(setup_helm())
         .add_step(Step::new("Lint Helm chart").run("helm lint deploy/helm/frogdb"))

@@ -13,7 +13,7 @@ env:
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -27,7 +27,7 @@ jobs:
       run: cargo clippy --all-targets --all-features -- -D warnings
   unit-tests:
     name: Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
       run: cargo test --all
   shuttle-tests:
     name: Shuttle Concurrency Tests
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -67,7 +67,7 @@ jobs:
       run: cargo test -p frogdb-core --features shuttle --test concurrency
   turmoil-tests:
     name: Turmoil Simulation Tests
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -87,7 +87,7 @@ jobs:
       run: cargo test -p frogdb-server --features turmoil --test simulation
   helm-gen-check:
     name: Helm Generation Check
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -107,7 +107,7 @@ jobs:
       run: cargo run -p helm-gen -- --check
   workflow-gen-check:
     name: Workflow Generation Check
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -127,7 +127,7 @@ jobs:
       run: cargo run -p workflow-gen -- --check
   helm-lint:
     name: Helm Lint
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
     - name: Checkout
       uses: actions/checkout@v4
