@@ -8,7 +8,7 @@ FrogDB supports two pub/sub modes with a unified architecture:
 
 | Mode | Commands | Routing | Use Case |
 |------|----------|---------|----------|
-| **Broadcast** | SUBSCRIBE, PUBLISH, PSUBSCRIBE | All shards | General pub/sub, patterns |
+| **Broadcast** | SUBSCRIBE, PUBLISH, PSUBSCRIBE | Shard 0 (coordinator) | General pub/sub, patterns |
 | **Sharded** | SSUBSCRIBE, SPUBLISH | Hash to owner shard | High-throughput, Redis 7.0+ |
 
 **Message Ordering Guarantee:**
@@ -31,7 +31,7 @@ FrogDB supports two pub/sub modes with a unified architecture:
 │                          │                                 │
 │  ┌───────────────────────┴───────────────────────────┐    │
 │  │                  Routing Decision                  │    │
-│  │  Broadcast: fan-out to all shards                 │    │
+│  │  Broadcast: route to shard 0 (coordinator)        │    │
 │  │  Sharded: route to hash(channel) % num_shards     │    │
 │  └────────────────────────────────────────────────────┘   │
 └───────────────────────────────────────────────────────────┘
@@ -52,7 +52,7 @@ FrogDB supports two pub/sub modes with a unified architecture:
 
 | Aspect | Broadcast | Sharded |
 |--------|-----------|---------|
-| Publish cost | O(shards) | O(1) |
+| Publish cost | O(1) via shard-0 coordinator | O(1) |
 | Subscribe cost | O(1) local | O(1) or forward |
 | Pattern support | Yes | No |
 | Use case | General, low-volume | High-throughput |
@@ -69,7 +69,7 @@ FrogDB supports two pub/sub modes with a unified architecture:
 | UNSUBSCRIBE [channel...] | Unsubscribe from channel(s) |
 | PSUBSCRIBE pattern [pattern...] | Subscribe to pattern(s) |
 | PUNSUBSCRIBE [pattern...] | Unsubscribe from pattern(s) |
-| PUBLISH channel message | Publish message to all shards |
+| PUBLISH channel message | Publish message via shard-0 coordinator |
 
 ### Sharded Mode (Redis 7.0+)
 
@@ -192,9 +192,9 @@ Client: SPUBLISH channel message
 
 | Command | Single-Node Routing | Cluster Routing |
 |---------|---------------------|-----------------|
-| PUBLISH | Fan-out to all internal shards | Fan-out to all nodes → each fans out internally |
+| PUBLISH | Route to shard 0 (coordinator) | Route to shard 0 on each node via cluster bus |
 | SPUBLISH | Route to `hash(channel) % num_shards` | Route to slot owner node → owner shard |
-| SUBSCRIBE | Store on all internal shards | Store locally (global: any node receives) |
+| SUBSCRIBE | Register on shard 0 (coordinator) | Register on shard 0 (local node) |
 | SSUBSCRIBE | Store on owner shard | Store on slot owner node's owner shard |
 
 ### Message Ordering Guarantees in Cluster Mode

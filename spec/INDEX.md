@@ -17,12 +17,12 @@ FrogDB is designed to be a fast, memory-safe alternative to Redis, leveraging Ru
 
 ### Non-Goals (Initial Implementation)
 
-The following are planned but not implemented in Phases 1-3:
+The following were deferred from initial phases but are now implemented or in progress:
 
-- Full Redis API compatibility from day one (gradual adoption)
-- Clustering (single-node first, see [CLUSTER.md](CLUSTER.md) for Phase 8+ design)
-- RESP3 protocol (RESP2 first; RESP3 planned for Phase 12, see [ROADMAP.md](ROADMAP.md))
-- Blocking commands (BLPOP, BRPOP, BLMOVE) - design documented in [BLOCKING.md](BLOCKING.md)
+- Full Redis API compatibility from day one (gradual adoption — most commands now implemented)
+- Clustering (partially implemented — Phases 1 and 3 complete, see [CLUSTER.md](CLUSTER.md))
+- RESP3 protocol (implemented, see [PROTOCOL.md](PROTOCOL.md))
+- Blocking commands (implemented — BLPOP, BRPOP, BLMOVE, etc., see [BLOCKING.md](BLOCKING.md))
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for a complete list of Redis incompatibilities and migration guidance.
 
@@ -113,7 +113,7 @@ Hash tags (e.g., `{user:1}:profile`) guarantee that related keys land on the **s
 
 ## Data Structures
 
-FrogDB supports multiple Redis-compatible data types including Strings, Sorted Sets, and planned support for Hashes, Lists, Sets, and Streams. Each type has optimized internal representations.
+FrogDB supports multiple Redis-compatible data types including Strings, Hashes, Lists, Sets, Sorted Sets, Streams, Bitmaps, HyperLogLog, Geo, JSON, TimeSeries, and BloomFilter. Each type has optimized internal representations.
 
 See [STORAGE.md](STORAGE.md) for the Value enum and [types/](types/) for data structure implementations and commands.
 
@@ -137,7 +137,7 @@ See [STORAGE.md](STORAGE.md) for expiry index implementation.
 
 ## Memory Management
 
-When configured memory limit (`max_memory`) is reached, write operations return `-OOM command not allowed when used memory > 'maxmemory'` errors while reads continue normally. Planned eviction policies include LRU, LFU, and volatile variants.
+When configured memory limit (`max_memory`) is reached, eviction policies (LRU, LFU, Random, TTL) remove keys to free memory. If eviction cannot free enough memory, write operations return `-OOM command not allowed when used memory > 'maxmemory'` errors while reads continue normally.
 
 See [EVICTION.md](EVICTION.md) for eviction policy implementation.
 
@@ -209,7 +209,7 @@ See [PUBSUB.md](PUBSUB.md) for architecture and commands.
 
 ## Blocking Commands
 
-Blocking commands (BLPOP, BRPOP, BLMOVE, etc.) are a future feature. They require special handling in the shared-nothing architecture, with keys constrained to the same shard via hash tags.
+Blocking commands (BLPOP, BRPOP, BLMOVE, BLMPOP, BZPOPMIN, BZPOPMAX, BZMPOP) are implemented. They require keys to be on the same shard via hash tags due to the shared-nothing architecture.
 
 See [BLOCKING.md](BLOCKING.md) for design considerations.
 
@@ -255,7 +255,7 @@ See [AUTH.md](AUTH.md) for ACL architecture and commands.
 
 ## Clustering
 
-FrogDB is designed for single-node operation initially, with abstractions for future clustering. The design uses an orchestrated control plane (no gossip), 16384 hash slots (Redis Cluster compatible), and RocksDB WAL streaming for replication.
+FrogDB supports single-node and clustered operation (clustering partially implemented — Phases 1 and 3 complete). The design uses an orchestrated control plane (no gossip), 16384 hash slots (Redis Cluster compatible), and RocksDB WAL streaming for replication.
 
 See [CLUSTER.md](CLUSTER.md) for cluster architecture, slot migration, and failover. See [REPLICATION.md](REPLICATION.md) for replication protocol details.
 
@@ -337,7 +337,7 @@ See [ROADMAP.md](ROADMAP.md) for the detailed implementation roadmap with progre
 | 10 | Production: metrics, ACL, config |
 | 11 | Blocking Commands |
 | 12 | RESP3 Protocol |
-| Future | Streams, Clustering, Jepsen tests |
+| Future | Full clustering, Jepsen tests |
 
 ---
 

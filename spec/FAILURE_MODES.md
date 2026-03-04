@@ -801,8 +801,6 @@ fn create_snapshot(&self) -> Result<()> {
 
 ### Blocking Command Queue
 
-*Note: Blocking commands (BLPOP, etc.) planned for future implementation.*
-
 **Design:** Blocked clients tracked separately, don't consume shard resources.
 
 **Timeout:** Blocking commands have mandatory timeout parameter.

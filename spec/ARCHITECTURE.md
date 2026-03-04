@@ -2,9 +2,9 @@
 
 This document describes FrogDB's software architecture: how components connect, interact, and divide responsibilities. For feature specifications and design rationale, see [INDEX.md](INDEX.md).
 
-**Scope**: Phase 1 implementation with future components as NOOP stubs (log + passthrough).
+**Scope**: Full architecture overview covering all implemented and in-progress components.
 
-> **Reading These Specs:** This document describes FrogDB's complete architecture. For what to implement in each phase, see [ROADMAP.md](ROADMAP.md). Features marked as "NOOP" or "future" are documented for reference but not yet implemented.
+> **Reading These Specs:** This document describes FrogDB's complete architecture. For implementation progress, see [ROADMAP.md](ROADMAP.md). A component status table is included at the end of this document.
 
 ---
 
@@ -16,7 +16,7 @@ This document describes FrogDB's software architecture: how components connect, 
 4. [Component Relationships](#component-relationships)
 5. [Responsibility Boundaries](#responsibility-boundaries)
 6. [Data Flow](#data-flow)
-7. [Future Components (NOOP)](#future-components-noop)
+7. [Component Implementation Status](#component-implementation-status)
 8. [Phase 1 Scope](#phase-1-scope)
 
 ---
@@ -30,7 +30,7 @@ FrogDB is a Redis-compatible in-memory database written in Rust. The architectur
 - **Pin-based connections**: Connections assigned to a single shard worker for their lifetime
 - **Clean crate boundaries**: Separate concerns across 5 crates
 
-The system is designed so that future components (persistence, ACL, Lua scripting) can be added without refactoring the core architecture.
+The architecture uses trait-based abstractions so that components (persistence, ACL, Lua scripting, etc.) can be swapped between stub and full implementations without refactoring.
 
 ---
 
@@ -88,8 +88,8 @@ Each crate has a clear, bounded responsibility:
 - **Protocol**: Wire format only (no command semantics)
 - **Core**: Data structures and command logic (no I/O)
 - **Server**: I/O, concurrency, orchestration
-- **Lua**: Script execution (NOOP in Phase 1)
-- **Persistence**: Durability (NOOP in Phase 1)
+- **Lua**: Script execution (Lua VM pool, redis.call bindings)
+- **Persistence**: Durability (WAL, RocksDB, snapshots)
 
 ---
 
@@ -102,8 +102,8 @@ graph TD
     SERVER[frogdb-server<br/>Binary]
     PROTO[frogdb-protocol<br/>Library]
     CORE[frogdb-core<br/>Library]
-    LUA[frogdb-lua<br/>Library<br/>NOOP]
-    PERSIST[frogdb-persistence<br/>Library<br/>NOOP]
+    LUA[frogdb-lua<br/>Library]
+    PERSIST[frogdb-persistence<br/>Library]
 
     SERVER --> PROTO
     SERVER --> CORE
@@ -137,7 +137,7 @@ graph TD
 | **Dependencies** | `bytes`, `griddle` |
 | **Dependents** | `frogdb-server`, `frogdb-lua`, `frogdb-persistence` |
 
-### frogdb-lua (NOOP)
+### frogdb-lua
 
 **Responsibility**: Lua script execution within shards.
 
@@ -146,11 +146,10 @@ graph TD
 | **Owns** | Lua VM pool, `redis.call()` bindings, script caching |
 | **Does NOT own** | Key routing (scripts must use hash tags for colocation) |
 | **Key types** | `LuaVmPool`, `ScriptRegistry` |
-| **Dependencies** | `frogdb-core`, `mlua` (future) |
+| **Dependencies** | `frogdb-core`, `mlua` |
 | **Dependents** | `frogdb-server` |
-| **Phase 1 behavior** | Returns `NotImplemented` error, logs invocation |
 
-### frogdb-persistence (NOOP)
+### frogdb-persistence
 
 **Responsibility**: Durable storage via RocksDB.
 
@@ -159,9 +158,8 @@ graph TD
 | **Owns** | WAL writing, snapshot management, crash recovery |
 | **Does NOT own** | In-memory storage (that's `frogdb-core`) |
 | **Key types** | `WalWriter`, `SnapshotManager`, `RocksDbBackend` |
-| **Dependencies** | `frogdb-core`, `rocksdb` (future) |
+| **Dependencies** | `frogdb-core`, `rocksdb` |
 | **Dependents** | `frogdb-server` |
-| **Phase 1 behavior** | Returns `Ok(())`, logs invocation |
 
 ### frogdb-server
 
@@ -187,10 +185,10 @@ sequenceDiagram
     participant H as ConnectionHandler
     participant P as Protocol
     participant R as Router
-    participant ACL as ACL [NOOP]
+    participant ACL as ACL
     participant W as ShardWorker
     participant S as Store
-    participant WAL as WAL [NOOP]
+    participant WAL as WAL
 
     C->>A: TCP Connect
     A->>H: Spawn handler on assigned shard
@@ -199,12 +197,12 @@ sequenceDiagram
     P-->>H: ParsedCommand
     H->>R: Route command
     R->>ACL: Check permission
-    ACL-->>R: Allowed (logged)
+    ACL-->>R: Allowed/Denied
     R->>W: Execute
     W->>S: Store operation
     S-->>W: Result
     W->>WAL: Persist (write commands)
-    WAL-->>W: Ok (logged, no-op)
+    WAL-->>W: Ok
     W-->>H: Response
     H->>P: Encode
     P-->>H: Bytes
@@ -231,7 +229,7 @@ pub struct CommandContext<'a> {
     pub num_shards: usize,
     /// Current timestamp (for TTL operations)
     pub now: Instant,
-    /// WAL writer (NOOP in Phase 1)
+    /// WAL writer (supports Async/Periodic/Sync durability modes)
     pub wal: &'a mut dyn WalWriter,
 }
 ```
@@ -242,8 +240,8 @@ Note: `replication_tracker` field is added in Phase 14.
 
 The sequence diagram shows "R->>ACL: Check permission". This is implemented via the `AclChecker` trait:
 
-- Phase 1 uses `AlwaysAllowAcl` (NOOP that logs and returns Allowed)
-- Phase 10 implements full ACL enforcement
+- `AllowAllChecker` is used when ACL is not configured (zero overhead)
+- Full ACL enforcement is available via the `crates/acl/` module
 
 `ConnectionState.auth` tracks authentication (AUTH command). `AclChecker` handles authorization (permissions). These are separate concerns.
 
@@ -295,9 +293,9 @@ graph TB
 | **Acceptor → ShardWorker** | New connections sent via `NewConnection { socket, addr, conn_id }` struct |
 | **ConnectionHandler → Protocol** | Parsing and encoding via `frogdb-protocol` types |
 | **ConnectionHandler → Router** | Command routing based on key hashing |
-| **Router → ACL** | Permission check before execution (NOOP: always allowed) |
+| **Router → ACL** | Permission check before execution (AllowAll when ACL disabled, full enforcement when enabled) |
 | **ShardWorker → Store** | Data operations via `Store` trait |
-| **ShardWorker → WAL** | Persistence hook for write commands (NOOP: log + skip) |
+| **ShardWorker → WAL** | Persistence hook for write commands (Async/Periodic/Sync modes) |
 | **ShardWorker ↔ ShardWorker** | Cross-shard requests via `mpsc` channels |
 
 ---
@@ -352,8 +350,8 @@ graph TB
 │  DELEGATES TO:                                           │
 │    - frogdb-protocol: parsing/encoding                   │
 │    - frogdb-core: command execution                      │
-│    - frogdb-persistence: durability (NOOP)               │
-│    - frogdb-lua: script execution (NOOP)                 │
+│    - frogdb-persistence: durability (WAL, snapshots)      │
+│    - frogdb-lua: script execution (Lua VM)               │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -367,22 +365,28 @@ Command errors are returned via `CommandError` enum (see [EXECUTION.md](EXECUTIO
 
 > **Note:** Key routing is implemented as functions within the server crate, not as a separate `Router` struct. The routing logic uses hash functions defined in [CONCURRENCY.md](CONCURRENCY.md#key-hashing).
 
-### NOOP Crate Boundaries
+### Persistence Crate Boundary
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│              frogdb-persistence [NOOP]                   │
+│                   frogdb-persistence                     │
 ├─────────────────────────────────────────────────────────┤
-│  WalWriter::write(entry) → log("WAL write noop") → Ok(())│
-│  SnapshotManager::create() → log("snapshot noop") → Ok() │
-│  Recovery::load() → log("recovery noop") → empty store   │
+│  WalWriter: Async, Periodic, and Sync durability modes   │
+│  SnapshotManager: Epoch-based forkless snapshots         │
+│  Recovery: WAL replay + snapshot loading                 │
+│  Backend: RocksDB storage engine                         │
 └─────────────────────────────────────────────────────────┘
+```
 
+### Lua Crate Boundary
+
+```
 ┌─────────────────────────────────────────────────────────┐
-│                  frogdb-lua [NOOP]                       │
+│                      frogdb-lua                          │
 ├─────────────────────────────────────────────────────────┤
-│  EVAL/EVALSHA → log("lua noop") → NotImplemented error   │
-│  SCRIPT LOAD → log("lua noop") → NotImplemented error    │
+│  EVAL/EVALSHA: Execute Lua scripts via VM pool           │
+│  SCRIPT LOAD/EXISTS/FLUSH: Script cache management       │
+│  redis.call()/redis.pcall(): Lua-to-Redis bindings       │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -401,7 +405,7 @@ sequenceDiagram
     participant Handler as ConnectionHandler
     participant Protocol
     participant Router
-    participant ACL as AclChecker [NOOP]
+    participant ACL as AclChecker
     participant Worker as ShardWorker
     participant Store as HashMapStore
 
@@ -419,9 +423,9 @@ sequenceDiagram
     Note over Client,Store: 4. Command Lookup
     Handler->>Handler: registry.get("GET") → GetCommand
 
-    Note over Client,Store: 5. ACL Check [NOOP]
+    Note over Client,Store: 5. ACL Check
     Handler->>ACL: check_command(user, "GET", ["mykey"])
-    ACL-->>Handler: Allowed (logged: "ACL check noop: allowing GET")
+    ACL-->>Handler: Allowed
 
     Note over Client,Store: 6. Key Routing
     Handler->>Router: route("mykey", num_shards)
@@ -441,19 +445,19 @@ sequenceDiagram
     Handler->>Client: $5\r\nhello\r\n
 ```
 
-### SET Command Walkthrough (with NOOP persistence)
+### SET Command Walkthrough
 
-For write commands, the persistence hook is invoked but does nothing:
+For write commands, the persistence hook writes to the WAL:
 
 ```
 1. Client sends: SET mykey hello
 2. Protocol parses to ParsedCommand
-3. ACL check: log("ACL check noop: allowing SET") → Allowed
+3. ACL check: Allowed (or Denied if ACL configured)
 4. Router: shard_id = hash("mykey") % num_shards
 5. SetCommand.execute():
    a. store.set("mykey", Value::String("hello"))
    b. wal_writer.write(SetEntry { key, value })
-      → log("WAL write noop: SET mykey") → Ok(())
+      → persisted per configured durability mode (Async/Periodic/Sync)
 6. Response: +OK\r\n
 ```
 
@@ -473,194 +477,90 @@ When a command's key maps to a different shard:
 
 ---
 
-## Future Components (NOOP)
+## Component Implementation Status
 
-Components that exist as stubs in Phase 1, ready for future implementation:
+Status of major components across all crates:
 
-| Component | Crate | NOOP Behavior | Implemented In |
-|-----------|-------|---------------|----------------|
-| **AclChecker** | frogdb-server | Log + return `Allowed` | Phase 10 |
-| **LuaVmPool** | frogdb-lua | Log + return `NotImplemented` error | Phase 8 |
-| **WalWriter** | frogdb-persistence | Log + return `Ok(())` | Phase 5 |
-| **SnapshotManager** | frogdb-persistence | Log + return `Ok(())` | Phase 5 |
-| **RocksDbBackend** | frogdb-persistence | Log + return `Ok(())` | Phase 5 |
-| **ReplicationTracker** | frogdb-server | Log + return `Ok(())` | Phase 14 |
-| **Clustering** | frogdb-server | Not wired in | Phase 14 |
-| **PubSub** | frogdb-server | Log + return error | Phase 7 |
-| **BlockingCommands** | frogdb-core | Not implemented | Phase 11 |
-| **NonStringTypes** | frogdb-core | Return `WRONGTYPE` error | Phase 2-6 |
-| **Eviction** | frogdb-core | No-op (no memory limits) | Phase 10 |
-| **VllCoordination** | frogdb-server | Single-shard only | Phase 4 |
-| **ExpiryIndex** | frogdb-core | Empty struct, no-op methods | Phase 2 |
-| **MetricsRecorder** | frogdb-server | Log + no-op | Phase 10 |
-| **Tracer** | frogdb-server | Log + no-op span | Phase 10 |
+| Component | Crate | Status | Notes |
+|-----------|-------|--------|-------|
+| **AclChecker** | crates/acl/ | **Implemented** | Full ACL with manager, checker, parser, user store; AllowAllChecker when disabled |
+| **LuaVmPool** | frogdb-lua | **Implemented** | EVAL/EVALSHA, SCRIPT LOAD/EXISTS/FLUSH, redis.call bindings |
+| **WalWriter** | frogdb-persistence | **Implemented** | Async, Periodic, and Sync durability modes |
+| **SnapshotManager** | frogdb-persistence | **Implemented** | Epoch-based forkless RocksDB snapshots |
+| **RocksDbBackend** | frogdb-persistence | **Implemented** | Full persistence backend |
+| **ReplicationTracker** | frogdb-server | **Implemented** | PSYNC/FULLRESYNC working |
+| **Clustering** | frogdb-server | **Partial** | Phases 1 and 3 complete; slot migration, chaos testing remaining |
+| **PubSub** | frogdb-server | **Implemented** | Broadcast (shard-0 coordinator) and Sharded modes |
+| **BlockingCommands** | frogdb-core | **Implemented** | BLPOP, BRPOP, BLMOVE, BLMPOP, BZPOPMIN, BZPOPMAX, BZMPOP |
+| **NonStringTypes** | frogdb-core | **Implemented** | Hash, List, Set, SortedSet, Stream, Bitmap, HyperLogLog, Geo, JSON, TimeSeries, BloomFilter |
+| **Eviction** | frogdb-core | **Implemented** | LRU, LFU, Random, TTL policies |
+| **VllCoordination** | frogdb-server | **Implemented** | Cross-shard coordination in standalone mode |
+| **ExpiryIndex** | frogdb-core | **Implemented** | Functional TTL expiry |
+| **MetricsRecorder** | frogdb-server | **Implemented** | Prometheus endpoint |
+| **Tracer** | frogdb-server | **Implemented** | OpenTelemetry OTLP export |
 
-### NOOP Implementation Pattern
+### Trait Interfaces
 
-All NOOP components follow this pattern:
-
-```rust
-// Example: AclChecker NOOP
-pub struct AlwaysAllowAcl;
-
-impl AclChecker for AlwaysAllowAcl {
-    fn check_command(&self, user: &User, cmd: &str, keys: &[&[u8]]) -> AclResult {
-        tracing::debug!(
-            user = %user.name,
-            command = cmd,
-            "ACL check (noop): allowing"
-        );
-        AclResult::Allowed
-    }
-}
-
-// Example: WalWriter NOOP
-pub struct NoopWalWriter;
-
-impl WalWriter for NoopWalWriter {
-    fn write(&self, entry: &WalEntry) -> Result<(), PersistenceError> {
-        tracing::debug!(?entry, "WAL write (noop): skipping");
-        Ok(())
-    }
-}
-```
-
-Key aspects:
-1. **Same interface** as the real implementation will have
-2. **Logs the invocation** for debugging visibility
-3. **Returns success** (or appropriate passthrough value)
-4. **No side effects** (no actual persistence, no actual checks)
-
-### NOOP Trait Interfaces
-
-The following traits define the contracts that NOOP implementations must fulfill. These will be implemented fully in later phases.
+Core traits that define component contracts:
 
 #### AclChecker Trait
 
 ```rust
 pub trait AclChecker: Send + Sync {
-    /// Check if user has permission to execute command on given keys
-    fn check_command(&self, user: &User, cmd: &str, keys: &[&[u8]]) -> AclResult;
-
-    /// Check if user can access a specific key
-    fn check_key(&self, user: &User, key: &[u8], access: KeyAccess) -> AclResult;
-
-    /// Check if user can subscribe to a channel
-    fn check_channel(&self, user: &User, channel: &[u8]) -> AclResult;
-}
-
-pub enum AclResult {
-    Allowed,
-    Denied { reason: &'static str },
-}
-
-pub enum KeyAccess {
-    Read,
-    Write,
+    fn check_command(&self, user: &AuthenticatedUser, command: &str, subcommand: Option<&str>) -> PermissionResult;
+    fn check_key_access(&self, user: &AuthenticatedUser, key: &[u8], access_type: KeyAccessType) -> PermissionResult;
+    fn check_channel_access(&self, user: &AuthenticatedUser, channel: &[u8]) -> PermissionResult;
 }
 ```
+
+See [AUTH.md](AUTH.md) for full ACL architecture.
 
 #### WalWriter Trait
 
 ```rust
 pub trait WalWriter: Send {
-    /// Append a write operation to the WAL
     fn write(&mut self, entry: &WalEntry) -> Result<(), PersistenceError>;
-
-    /// Flush pending writes to disk
     fn flush(&mut self) -> Result<(), PersistenceError>;
-
-    /// Sync WAL to durable storage
     fn sync(&mut self) -> Result<(), PersistenceError>;
 }
-
-pub struct WalEntry {
-    pub key: Bytes,
-    pub operation: WalOperation,
-    pub timestamp: u64,
-}
-
-pub enum WalOperation {
-    Set(Bytes),
-    Delete,
-    Expire(u64),
-}
 ```
 
-#### PersistenceError Enum
-
-```rust
-/// Errors from persistence operations
-#[derive(Debug)]
-pub enum PersistenceError {
-    /// I/O error during write
-    Io(std::io::Error),
-    /// Serialization error
-    Serialization(String),
-    /// Storage backend error (RocksDB, etc.)
-    Backend(String),
-    /// Operation timed out
-    Timeout,
-}
-```
-
-Phase 1 NOOP implementations always return `Ok(())`, but this enum is defined for future use.
-
-#### SnapshotManager Trait
-
-```rust
-pub trait SnapshotManager: Send {
-    /// Start a new snapshot
-    fn start(&mut self) -> Result<SnapshotId, PersistenceError>;
-
-    /// Write key-value batch to snapshot
-    fn write_batch(&mut self, id: SnapshotId, batch: &[(Bytes, Value)]) -> Result<(), PersistenceError>;
-
-    /// Finalize snapshot
-    fn finish(&mut self, id: SnapshotId) -> Result<(), PersistenceError>;
-
-    /// Abort snapshot
-    fn abort(&mut self, id: SnapshotId) -> Result<(), PersistenceError>;
-}
-```
+See [PERSISTENCE.md](PERSISTENCE.md) for durability modes and WAL configuration.
 
 ---
 
 ## Phase 1 Scope
 
-What IS implemented in Phase 1:
+What was part of the initial Phase 1 foundation (now superseded by full implementations):
 
-### Implemented Components
+### Foundation Components
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| **RESP2 Protocol** | Full | Parse and encode all RESP2 types |
-| **GET, SET, DEL** | Full | Basic string operations |
-| **PING, ECHO, QUIT** | Full | Connection utilities |
-| **EXISTS** | Full | Key existence check |
+| **RESP2/RESP3 Protocol** | Full | Parse and encode all RESP2 and RESP3 types |
+| **String Commands** | Full | GET, SET, DEL, EXISTS, and all string operations |
+| **All Data Types** | Full | Hash, List, Set, SortedSet, Stream, Bitmap, HyperLogLog, Geo, JSON, TimeSeries, BloomFilter |
 | **HashMapStore** | Full | In-memory storage via `griddle::HashMap` |
 | **ShardWorker** | Full | Event loop, connection handling |
 | **Key Routing** | Full | Hash tag support, shard assignment |
-| **Configuration** | Full | Figment: CLI > env > TOML > defaults |
+| **Configuration** | Full | Figment: CLI > env > TOML > defaults, CONFIG GET/SET |
 | **Logging** | Full | `tracing` with pretty/JSON formats |
-
-### Not Implemented (NOOP)
-
-- Persistence (WAL, snapshots, RocksDB)
-- ACL (always allows)
-- Lua scripting (returns error)
-- Non-string data types
-- TTL/expiry
-- Multi-shard atomic operations
-- Pub/Sub
-- Metrics/tracing
-- Replication/clustering
+| **Persistence** | Full | WAL (Async/Periodic/Sync), RocksDB snapshots |
+| **ACL** | Full | Full Redis 7.0 ACL support |
+| **Lua Scripting** | Full | EVAL/EVALSHA with VM pool |
+| **Pub/Sub** | Full | Broadcast and Sharded modes |
+| **Blocking Commands** | Full | BLPOP, BRPOP, BLMOVE, BLMPOP, BZPOP* |
+| **Eviction** | Full | LRU, LFU, Random, TTL policies |
+| **Metrics** | Full | Prometheus endpoint |
+| **Tracing** | Full | OpenTelemetry OTLP |
+| **Replication** | Full | PSYNC/FULLRESYNC |
+| **Clustering** | Partial | Phases 1 and 3 complete |
 
 ### Shard Configuration
 
-Phase 1 supports multiple shards but:
+Multiple shards supported with:
 - Cross-shard operations return `CROSSSLOT` error (unless same hash tag)
-- VLL coordination is not implemented (single-shard atomicity only)
+- VLL coordination available in standalone mode (`allow_cross_slot_standalone = true`)
 
 ---
 

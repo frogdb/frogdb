@@ -82,7 +82,7 @@ pub struct ConnectionState {
     pub patterns: HashSet<Bytes>,      // Patterns (PSUBSCRIBE)
     pub pubsub_mode: bool,
 
-    /// Blocking state (future)
+    /// Blocking state (BLPOP, BRPOP, BLMOVE, etc.)
     pub blocked: Option<BlockedState>,
 }
 
@@ -170,9 +170,9 @@ All other commands return error.
 
 See [PUBSUB.md](PUBSUB.md) for complete pub/sub architecture.
 
-### Blocked Mode (Future)
+### Blocked Mode
 
-Entered via blocking commands (BLPOP, BRPOP, BLMOVE).
+Entered via blocking commands (BLPOP, BRPOP, BLMOVE, BLMPOP, BZPOPMIN, BZPOPMAX, BZMPOP).
 
 - Connection waits for data or timeout
 - Unblocked when: data pushed, timeout expires, or client disconnects
@@ -190,7 +190,7 @@ This section specifies the complete state machine for connection states, includi
 |------------|---------------|----------|-------|
 | NORMAL | MULTI | TRANSACTION | Start transaction |
 | NORMAL | SUBSCRIBE/PSUBSCRIBE/SSUBSCRIBE | PUBSUB | Enter pub/sub mode |
-| NORMAL | BLPOP/BRPOP/BLMOVE | BLOCKED | Future: blocking mode |
+| NORMAL | BLPOP/BRPOP/BLMOVE | BLOCKED | Enter blocking mode |
 | NORMAL | QUIT | CLOSED | Clean disconnect |
 | NORMAL | Any other command | NORMAL | Execute and stay in state |
 | TRANSACTION | EXEC | NORMAL | Execute transaction |

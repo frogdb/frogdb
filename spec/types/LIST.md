@@ -2,12 +2,11 @@
 
 ## Overview
 
-List keys will store ordered sequences of string elements, supporting operations from both ends (head and tail).
+List keys store ordered sequences of string elements, supporting operations from both ends (head and tail).
 
 ## Data Structure
 
 ```rust
-// Planned implementation
 pub struct ListValue {
     data: VecDeque<Bytes>,
 }
@@ -17,7 +16,7 @@ pub struct ListValue {
 - `VecDeque` provides O(1) push/pop at both ends
 - Alternative: chunked linked list for better memory locality on large lists
 
-## Commands (Planned)
+## Commands
 
 | Command | Description |
 |---------|-------------|

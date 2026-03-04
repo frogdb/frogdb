@@ -119,26 +119,26 @@ GET /alerts/prometheus
 
 ## Code Quality & Refactoring
 
-##### Split connection.rs (HIGH effort)
+##### Split connection.rs (DONE)
 
-`crates/server/src/connection.rs` is 5,932 lines handling multiple concerns.
+`connection.rs` has been decomposed into `connection/handlers/` with 17 handler modules plus routing, dispatch, state, and builder modules.
 
-- [ ] Extract auth handling to `connection/auth.rs`
-- [ ] Extract transaction handling to `connection/transaction.rs`
-- [ ] Extract pub/sub handling to `connection/pubsub.rs`
-- [ ] Extract blocking state to `connection/blocking.rs`
-- [ ] Extract routing logic to `connection/routing.rs`
-- [ ] Extract scatter-gather to `connection/scatter_gather.rs`
+- [x] Extract auth handling to `connection/handlers/auth.rs`
+- [x] Extract transaction handling to `connection/handlers/transaction.rs`
+- [x] Extract pub/sub handling to `connection/handlers/pubsub.rs`
+- [x] Extract blocking state to `connection/handlers/blocking.rs`
+- [x] Extract routing logic to `connection/routing.rs`
+- [x] Extract scatter-gather to `connection/handlers/scatter.rs`
 
-##### Split shard.rs (MEDIUM effort)
+##### Split shard.rs (DONE)
 
-`crates/core/src/shard.rs` is 3,720 lines with eviction logic mixed in.
+Eviction extracted to dedicated modules.
 
-- [ ] Extract eviction strategies to `shard/eviction.rs`
+- [x] Extract eviction strategies to `shard/eviction.rs` and `crates/core/src/eviction/` (lfu, policy, pool)
 
-##### Split types.rs (MEDIUM-HIGH effort)
+##### Split types.rs (PARTIALLY DONE)
 
-`crates/core/src/types.rs` is 3,668 lines containing all value types.
+Types split into `crates/types/` crate. Specialized types extracted to individual files; core value types remain in `types.rs`.
 
 - [ ] Extract string types to `types/string.rs`
 - [ ] Extract list types to `types/list.rs`
@@ -146,7 +146,7 @@ GET /alerts/prometheus
 - [ ] Extract hash types to `types/hash.rs`
 - [ ] Extract sorted set types to `types/sorted_set.rs`
 - [ ] Extract stream types to `types/stream.rs`
-- [ ] Extract specialized types (BloomFilter, HyperLogLog, TimeSeries, Json) to `types/specialized.rs`
+- [x] Extract specialized types (BloomFilter, HyperLogLog, Geo, Json, Bitmap) to individual files in `crates/types/src/`
 
 ##### Config magic numbers (LOW effort)
 
@@ -182,7 +182,7 @@ See [optimizations/](optimizations/INDEX.md) for detailed profiling infrastructu
 
 **Goal**: Documentation accuracy and completeness.
 
-- [ ] Update COMPATIBILITY.md - Remove outdated "planned" status for Blocking Commands and Streams
+- [x] Update COMPATIBILITY.md - Remove outdated "planned" status for Blocking Commands, Streams, RESP3, MEMORY, LATENCY, Eviction
 - [ ] Audit all spec files for accuracy against implementation
 - [ ] Add missing command documentation to types/\*.md files
 
@@ -192,17 +192,17 @@ See [optimizations/](optimizations/INDEX.md) for detailed profiling infrastructu
 
 These must exist from the initial foundation to avoid refactoring:
 
-| Abstraction                | Initial                 | Full Implementation       |
+| Abstraction                | Initial (Stub)          | Current Status            |
 | -------------------------- | ----------------------- | ------------------------- |
 | `Store` trait              | HashMapStore            | Same                      |
 | `Command` trait            | Full                    | Same                      |
 | `Value` enum               | StringValue only        | All types ✓               |
-| `WalWriter` trait          | Noop                    | RocksDB WAL ✓             |
-| `ReplicationConfig`        | Standalone              | Primary/Replica (Phase 5) |
-| `ReplicationTracker` trait | Noop                    | WAL streaming (Phase 5)   |
-| `AclChecker` trait         | AlwaysAllow             | Full ACL ✓                |
-| `MetricsRecorder` trait    | Noop                    | Prometheus ✓              |
-| `Tracer` trait             | Noop                    | OpenTelemetry ✓           |
+| `WalWriter` trait          | NoopWalWriter           | RocksDB WAL ✓             |
+| `ReplicationConfig`        | Standalone              | Primary/Replica ✓         |
+| `ReplicationTracker` trait | NoopTracker             | WAL streaming ✓           |
+| `AclChecker` trait         | AllowAllChecker         | Full ACL ✓                |
+| `MetricsRecorder` trait    | NoopRecorder            | Prometheus ✓              |
+| `Tracer` trait             | NoopTracer              | OpenTelemetry ✓           |
 | Shard channels             | 1 shard                 | N shards ✓                |
 | `ExpiryIndex`              | Empty                   | Functional ✓              |
 | `ProtocolVersion`          | Resp2 only              | Resp2 + Resp3 ✓           |

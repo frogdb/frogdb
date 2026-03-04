@@ -126,7 +126,7 @@ durability_mode = { periodic = { interval_ms = 1000 } }
 
 ## Cluster Consistency
 
-> **Note:** Clustering is a future capability. This section describes the planned consistency model.
+> **Note:** Clustering is partially implemented (Phases 1 and 3 complete). This section describes the consistency model for clustered deployments.
 
 ### Replication Model
 
