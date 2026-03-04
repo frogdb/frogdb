@@ -7,14 +7,16 @@ This project uses `just` (see `Justfile`) as the command runner. Always use `jus
 Run `just` with no arguments to see all available recipes. Common examples:
 
 ```bash
-just check              # check for compilation errors for all targets
-just test               # run all tests
-just test-crate <name>  # test a particular crate
-just test-one <name>    # run an individual test
-just fmt                # format all files
-just lint               # clippy
-just deny               # check for invalid package dependencies
-just concurrency        # run Shuttle + Turmoil concurrency/chaos tests
+just check                    # check for compilation errors for all targets
+just check-crate <name>       # check a specific crate (lib only)
+just check-crate-tests <name> # check a specific crate including tests/integration tests
+just test                     # run all tests
+just test-crate <name>        # test a particular crate
+just test-one <name>          # run an individual test
+just fmt                      # format all files
+just lint                     # clippy
+just deny                     # check for invalid package dependencies
+just concurrency              # run Shuttle + Turmoil concurrency/chaos tests
 ```
 
 - this project uses multiple git worktrees; to clean stale artifacts across all worktrees run `just clean-worktrees`
@@ -66,6 +68,7 @@ Run **targeted tests**, not the full suite, unless changes are truly cross-cutti
 - **ALWAYS** ensure changed packages build, lint, and pass tests before finishing a task
 - Scope checks to the crates you actually changed — don't run the full workspace suite when only one crate is affected:
   - `just check-crate <name>` instead of `just check`
+  - `just check-crate-tests <name>` to also verify integration tests compile (e.g. `just check-crate-tests frogdb-server`)
   - `just lint-crate <name>` instead of `just lint`
   - `just test-crate <name>` instead of `just test`
   - For a single test file: `cargo test -p <crate> --test <test_name>`

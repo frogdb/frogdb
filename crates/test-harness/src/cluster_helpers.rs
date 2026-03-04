@@ -3,16 +3,18 @@
 //! Provides utility functions for cluster testing including:
 //! - Slot calculation and key generation
 //! - Response parsing for CLUSTER commands
-
-#![allow(dead_code)]
 //! - Redirect detection (MOVED/ASK)
 
-use bytes::Bytes;
+#![allow(dead_code)]
+
 use frogdb_protocol::Response;
 use std::collections::HashMap;
 
 // Re-export slot_for_key from frogdb_core
 pub use frogdb_core::slot_for_key;
+
+// Re-export response helpers already defined in crate::server
+pub use crate::server::{get_error_message, is_error};
 
 /// Error type for cluster operations.
 #[derive(Debug, Clone)]
@@ -274,23 +276,10 @@ pub fn is_cluster_down(response: &Response) -> bool {
     false
 }
 
-/// Check if response is an error.
-pub fn is_error(response: &Response) -> bool {
-    matches!(response, Response::Error(_))
-}
-
-/// Get error message from response.
-pub fn get_error_message(response: &Response) -> Option<&str> {
-    if let Response::Error(e) = response {
-        std::str::from_utf8(e).ok()
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
 
     #[test]
     fn test_slot_for_key_basic() {

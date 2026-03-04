@@ -2,29 +2,22 @@
 //!
 //! Provides types and utilities for testing multi-node cluster operations:
 //! - ClusterNodeConfig: Configuration for individual cluster nodes
-//! - ClusterTestNode: Wrapper for a single cluster node
-
-#![allow(dead_code)]
+//! - ClusterTestNode: Wrapper for a single cluster node (delegates to TestServer)
 //! - ClusterTestHarness: Orchestrates multi-node cluster testing
 
-use super::cluster_helpers::{ClusterError, ClusterInfo};
-use super::test_server::TestClient;
+#![allow(dead_code)]
+
+use crate::cluster_helpers::{ClusterError, ClusterInfo};
+use crate::server::{TestClient, TestServer, TestServerConfig};
 use frogdb_core::ClusterState;
 use frogdb_core::cluster::ClusterRaft;
 use frogdb_protocol::Response;
 use frogdb_server::net::tcp_listener_reusable;
-use frogdb_server::{Config, Server, ServerListeners};
-use redis_protocol::codec::Resp2;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::net::TcpStream;
-use tokio::sync::oneshot;
-use tokio::time::timeout;
-use tokio_util::codec::Framed;
 
 /// Configuration for a cluster test node.
 #[derive(Clone, Debug)]
@@ -69,55 +62,60 @@ impl Default for ClusterNodeConfig {
 #[derive(Clone)]
 struct NodeRestartInfo {
     node_id: u64,
-    client_port: u16,
     cluster_port: u16,
-    metrics_port: u16,
     data_dir: PathBuf,
     config: ClusterNodeConfig,
     initial_nodes: Vec<String>,
-    raft: Option<Arc<ClusterRaft>>,
-    cluster_state: Option<Arc<ClusterState>>,
 }
 
 /// A single cluster node for testing.
+///
+/// Wraps a `TestServer` and adds cluster-specific identity and lifecycle.
+/// `node_id` and `cluster_port` are constant across restarts.
 pub struct ClusterTestNode {
     node_id: u64,
-    client_port: u16,
     cluster_port: u16,
-    metrics_port: u16,
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    handle: Option<tokio::task::JoinHandle<()>>,
-    data_dir: Option<PathBuf>,
-    running: Arc<AtomicBool>,
+    server: Option<TestServer>,
     restart_info: Option<NodeRestartInfo>,
-    raft: Option<Arc<ClusterRaft>>,
-    cluster_state: Option<Arc<ClusterState>>,
 }
 
 impl ClusterTestNode {
-    /// Create a unique temp directory for test data.
-    fn create_temp_dir() -> PathBuf {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = PathBuf::from(format!(
-            "/tmp/claude/frogdb_cluster_test_{}_{}",
-            timestamp, id
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     /// Generate a node ID from cluster port (deterministic).
-    fn generate_node_id_from_port(cluster_port: u16) -> u64 {
+    pub fn generate_node_id_from_port(cluster_port: u16) -> u64 {
         use std::hash::{Hash, Hasher};
-        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", cluster_port).parse().unwrap();
+        let addr: SocketAddr = format!("127.0.0.1:{}", cluster_port).parse().unwrap();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         addr.hash(&mut hasher);
         hasher.finish()
+    }
+
+    /// Build a `TestServerConfig` from `ClusterNodeConfig` plus cluster-specific fields.
+    fn build_test_server_config(
+        config: &ClusterNodeConfig,
+        node_id: u64,
+        data_dir: &Path,
+        initial_nodes: Vec<String>,
+        cluster_bus_listener: frogdb_server::net::TcpListener,
+    ) -> TestServerConfig {
+        let cluster_data_dir = data_dir.join("cluster");
+        std::fs::create_dir_all(&cluster_data_dir).ok();
+
+        TestServerConfig {
+            num_shards: config.num_shards,
+            persistence: config.persistence,
+            data_dir: Some(data_dir.to_path_buf()),
+            log_level: config.log_level.clone(),
+            cluster_enabled: true,
+            cluster_node_id: Some(node_id),
+            cluster_initial_nodes: Some(initial_nodes),
+            cluster_data_dir: Some(cluster_data_dir),
+            cluster_election_timeout_ms: Some(config.election_timeout_ms),
+            cluster_heartbeat_interval_ms: Some(config.heartbeat_interval_ms),
+            cluster_connect_timeout_ms: Some(config.connect_timeout_ms),
+            cluster_request_timeout_ms: Some(config.request_timeout_ms),
+            cluster_bus_listener: Some(cluster_bus_listener),
+            ..Default::default()
+        }
     }
 
     /// Start a cluster node with the given configuration.
@@ -128,116 +126,42 @@ impl ClusterTestNode {
                 .await
                 .unwrap();
         let cluster_port = cluster_bus_listener.local_addr().unwrap().port();
-        let cluster_bus_addr_str = format!("127.0.0.1:{}", cluster_port);
 
         let data_dir = config
             .data_dir
             .clone()
-            .unwrap_or_else(Self::create_temp_dir);
+            .unwrap_or_else(TestServer::create_temp_dir);
         let node_id = if config.node_id == 0 {
             Self::generate_node_id_from_port(cluster_port)
         } else {
             config.node_id
         };
 
-        // Create cluster data directory
-        let cluster_data_dir = data_dir.join("cluster");
-        std::fs::create_dir_all(&cluster_data_dir).unwrap();
+        let test_config = Self::build_test_server_config(
+            &config,
+            node_id,
+            &data_dir,
+            initial_nodes.clone(),
+            cluster_bus_listener,
+        );
 
-        let running = Arc::new(AtomicBool::new(true));
-        let running_clone = running.clone();
-
-        // Build server config (client and metrics ports use 0 — read actual ports after construction)
-        let mut server_config = Config::default();
-        server_config.server.bind = "127.0.0.1".to_string();
-        server_config.server.port = 0;
-        server_config.server.num_shards = config.num_shards.unwrap_or(4);
-        server_config.logging.level = config
-            .log_level
-            .clone()
-            .unwrap_or_else(|| "warn".to_string());
-        server_config.persistence.enabled = config.persistence;
-        server_config.persistence.data_dir = data_dir.clone();
-        server_config.metrics.bind = "127.0.0.1".to_string();
-        server_config.metrics.port = 0;
-
-        // Cluster configuration
-        server_config.cluster.enabled = true;
-        server_config.cluster.node_id = node_id;
-        server_config.cluster.cluster_bus_addr = cluster_bus_addr_str;
-        server_config.cluster.initial_nodes = initial_nodes.clone();
-        server_config.cluster.data_dir = cluster_data_dir;
-        server_config.cluster.election_timeout_ms = config.election_timeout_ms;
-        server_config.cluster.heartbeat_interval_ms = config.heartbeat_interval_ms;
-        server_config.cluster.connect_timeout_ms = config.connect_timeout_ms;
-        server_config.cluster.request_timeout_ms = config.request_timeout_ms;
-
-        // Construct server OUTSIDE spawn so we can read bound addresses
-        let listeners = ServerListeners {
-            cluster_bus: Some(cluster_bus_listener),
-        };
-        let server = Server::with_listeners(server_config, listeners)
-            .await
-            .unwrap();
-        let client_port = server.local_addr().unwrap().port();
-        let metrics_port = server
-            .metrics_addr()
-            .and_then(|r| r.ok())
-            .map(|a| a.port())
-            .unwrap_or(0);
-        let raft = server.raft().cloned();
-        let cluster_state = server.cluster_state().cloned();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        let handle = tokio::spawn(async move {
-            let _ = server
-                .run_until(async move {
-                    let _ = shutdown_rx.await;
-                })
-                .await;
-            running_clone.store(false, Ordering::SeqCst);
-        });
-
-        // Wait for server to be ready
-        Self::wait_for_ready(client_port).await;
+        use crate::server::ServerRole;
+        let server = TestServer::start_with_config(test_config, ServerRole::Standalone).await;
 
         let restart_info = NodeRestartInfo {
             node_id,
-            client_port,
             cluster_port,
-            metrics_port,
-            data_dir: data_dir.clone(),
-            config: config.clone(),
+            data_dir,
+            config,
             initial_nodes,
-            raft: raft.clone(),
-            cluster_state: cluster_state.clone(),
         };
 
         Self {
             node_id,
-            client_port,
             cluster_port,
-            metrics_port,
-            shutdown_tx: Some(shutdown_tx),
-            handle: Some(handle),
-            data_dir: Some(data_dir),
-            running,
+            server: Some(server),
             restart_info: Some(restart_info),
-            raft,
-            cluster_state,
         }
-    }
-
-    /// Wait for the server to be ready to accept connections.
-    async fn wait_for_ready(port: u16) {
-        for _ in 0..100 {
-            if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        panic!("Cluster node failed to start on port {}", port);
     }
 
     /// Get the node ID.
@@ -247,7 +171,10 @@ impl ClusterTestNode {
 
     /// Get the client address.
     pub fn client_addr(&self) -> String {
-        format!("127.0.0.1:{}", self.client_port)
+        self.server
+            .as_ref()
+            .map(|s| s.addr())
+            .unwrap_or_default()
     }
 
     /// Get the cluster bus address.
@@ -257,7 +184,7 @@ impl ClusterTestNode {
 
     /// Get the client port.
     pub fn client_port(&self) -> u16 {
-        self.client_port
+        self.server.as_ref().map(|s| s.port()).unwrap_or(0)
     }
 
     /// Get the cluster port.
@@ -267,29 +194,29 @@ impl ClusterTestNode {
 
     /// Check if the node is running.
     pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
+        self.server
+            .as_ref()
+            .is_some_and(|s| !s.is_finished())
     }
 
     /// Get the Raft instance, if cluster mode is enabled.
     pub fn raft(&self) -> Option<&Arc<ClusterRaft>> {
-        self.raft.as_ref()
+        self.server.as_ref().and_then(|s| s.raft())
     }
 
     /// Get the cluster state, if cluster mode is enabled.
     pub fn cluster_state(&self) -> Option<&Arc<ClusterState>> {
-        self.cluster_state.as_ref()
+        self.server.as_ref().and_then(|s| s.cluster_state())
     }
 
     /// Connect to this node and return a TestClient.
     /// Retries on transient errors (e.g. EADDRNOTAVAIL during rapid restarts).
     pub async fn connect(&self) -> TestClient {
+        let server = self.server.as_ref().expect("Node not running");
         let mut last_err = None;
         for _ in 0..10 {
-            match TcpStream::connect(("127.0.0.1", self.client_port)).await {
-                Ok(stream) => {
-                    let framed = Framed::new(stream, Resp2);
-                    return TestClient { framed };
-                }
+            match server.try_connect().await {
+                Ok(client) => return client,
                 Err(e) => {
                     last_err = Some(e);
                     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -298,7 +225,7 @@ impl ClusterTestNode {
         }
         panic!(
             "Failed to connect to node on port {} after 10 attempts: {}",
-            self.client_port,
+            self.client_port(),
             last_err.unwrap()
         );
     }
@@ -313,41 +240,20 @@ impl ClusterTestNode {
 
     /// Gracefully shutdown the node.
     pub async fn shutdown(&mut self) {
-        // Shutdown the Raft instance to stop background tasks (heartbeats, elections)
-        if let Some(ref raft) = self.raft {
-            let _ = raft.shutdown().await;
+        if let Some(mut server) = self.server.take() {
+            server.shutdown_mut().await;
+            // Wait for the server task to fully terminate
+            // (re-take handle timeout like original)
         }
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
-        if let Some(handle) = self.handle.take() {
-            let _ = timeout(Duration::from_secs(5), handle).await;
-        }
-        self.running.store(false, Ordering::SeqCst);
         // Give the server a moment to clean up
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     /// Immediately stop the node (simulate crash).
-    /// Triggers shutdown and briefly waits for cleanup so RocksDB in-process
-    /// locks are released. In a real crash the OS handles this; in single-process
-    /// tests we must do it ourselves.
     pub async fn kill(&mut self) {
-        // Shutdown the Raft instance to stop background tasks (heartbeats, elections)
-        // so other nodes can detect the failure and elect a new leader.
-        if let Some(ref raft) = self.raft {
-            let _ = raft.shutdown().await;
+        if let Some(mut server) = self.server.take() {
+            server.shutdown_mut().await;
         }
-        // Send shutdown signal to allow the server to clean up child tasks
-        // (Raft, replication, etc.) that hold RocksDB handles.
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
-        // Wait briefly for the server to terminate and release locks
-        if let Some(handle) = self.handle.take() {
-            let _ = timeout(Duration::from_millis(2000), handle).await;
-        }
-        self.running.store(false, Ordering::SeqCst);
     }
 
     /// Restart the node with the same configuration.
@@ -358,14 +264,8 @@ impl ClusterTestNode {
             .ok_or_else(|| ClusterError::new("No restart info available"))?;
 
         // Make sure the node is stopped
-        if self.is_running() {
+        if self.server.is_some() {
             self.shutdown().await;
-        }
-
-        // Wait for old server task to fully terminate (handles both shutdown()
-        // and kill() cases — ensures RocksDB locks are released)
-        if let Some(handle) = self.handle.take() {
-            let _ = timeout(Duration::from_secs(5), handle).await;
         }
 
         // Retry binding with backoff — OS may need time to release TIME_WAIT sockets
@@ -401,101 +301,23 @@ impl ClusterTestNode {
             })?
         };
 
-        // Create cluster data directory if needed
-        let cluster_data_dir = restart_info.data_dir.join("cluster");
-        std::fs::create_dir_all(&cluster_data_dir).ok();
+        let test_config = Self::build_test_server_config(
+            &restart_info.config,
+            restart_info.node_id,
+            &restart_info.data_dir,
+            restart_info.initial_nodes.clone(),
+            cluster_bus_listener,
+        );
 
-        let running = Arc::new(AtomicBool::new(true));
-        let running_clone = running.clone();
-
-        // Build server config (client and metrics use port 0 — read actual after construction)
-        let mut server_config = Config::default();
-        server_config.server.bind = "127.0.0.1".to_string();
-        server_config.server.port = 0;
-        server_config.server.num_shards = restart_info.config.num_shards.unwrap_or(4);
-        server_config.logging.level = restart_info
-            .config
-            .log_level
-            .clone()
-            .unwrap_or_else(|| "warn".to_string());
-        server_config.persistence.enabled = restart_info.config.persistence;
-        server_config.persistence.data_dir = restart_info.data_dir.clone();
-        server_config.metrics.bind = "127.0.0.1".to_string();
-        server_config.metrics.port = 0;
-
-        // Cluster configuration
-        server_config.cluster.enabled = true;
-        server_config.cluster.node_id = restart_info.node_id;
-        server_config.cluster.cluster_bus_addr = format!("127.0.0.1:{}", restart_info.cluster_port);
-        server_config.cluster.initial_nodes = restart_info.initial_nodes.clone();
-        server_config.cluster.data_dir = cluster_data_dir;
-        server_config.cluster.election_timeout_ms = restart_info.config.election_timeout_ms;
-        server_config.cluster.heartbeat_interval_ms = restart_info.config.heartbeat_interval_ms;
-        server_config.cluster.connect_timeout_ms = restart_info.config.connect_timeout_ms;
-        server_config.cluster.request_timeout_ms = restart_info.config.request_timeout_ms;
-
-        // Construct server OUTSIDE spawn to read bound addresses
-        let listeners = ServerListeners {
-            cluster_bus: Some(cluster_bus_listener),
-        };
-        let server = Server::with_listeners(server_config, listeners)
-            .await
-            .map_err(|e| ClusterError::new(format!("Failed to start server: {}", e)))?;
-        let client_port = server.local_addr().unwrap().port();
-        let metrics_port = server
-            .metrics_addr()
-            .and_then(|r| r.ok())
-            .map(|a| a.port())
-            .unwrap_or(0);
-        let raft = server.raft().cloned();
-        let cluster_state = server.cluster_state().cloned();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        let handle = tokio::spawn(async move {
-            let _ = server
-                .run_until(async move {
-                    let _ = shutdown_rx.await;
-                })
-                .await;
-            running_clone.store(false, Ordering::SeqCst);
-        });
-
-        // Wait for server to be ready
-        Self::wait_for_ready(client_port).await;
-
-        // Update ports (client/metrics may change since we use port 0)
-        self.client_port = client_port;
-        self.metrics_port = metrics_port;
-        self.shutdown_tx = Some(shutdown_tx);
-        self.handle = Some(handle);
-        self.running = running;
-        self.raft = raft.clone();
-        self.cluster_state = cluster_state.clone();
-
-        // Update restart_info with new ports
-        self.restart_info = Some(NodeRestartInfo {
-            client_port,
-            metrics_port,
-            raft,
-            cluster_state,
-            ..restart_info
-        });
+        use crate::server::ServerRole;
+        let server = TestServer::start_with_config(test_config, ServerRole::Standalone).await;
+        self.server = Some(server);
 
         Ok(())
     }
 }
 
-impl Drop for ClusterTestNode {
-    fn drop(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
-        if let Some(handle) = self.handle.take() {
-            handle.abort();
-        }
-    }
-}
+// Drop is a no-op — TestServer::Drop handles shutdown + abort.
 
 /// Orchestrates a multi-node cluster for testing.
 pub struct ClusterTestHarness {
@@ -556,102 +378,37 @@ impl ClusterTestHarness {
             let mut config = self.base_config.clone();
             config.node_id = node_id;
 
-            let data_dir = ClusterTestNode::create_temp_dir();
+            let data_dir = TestServer::create_temp_dir();
             config.data_dir = Some(data_dir.clone());
 
-            // Create cluster data directory
-            let cluster_data_dir = data_dir.join("cluster");
-            std::fs::create_dir_all(&cluster_data_dir).unwrap();
+            let test_config = ClusterTestNode::build_test_server_config(
+                &config,
+                node_id,
+                &data_dir,
+                initial_nodes.clone(),
+                bus_listener,
+            );
 
-            let running = Arc::new(AtomicBool::new(true));
-            let running_clone = running.clone();
-
-            // Build server config (client and metrics ports use 0)
-            let mut server_config = Config::default();
-            server_config.server.bind = "127.0.0.1".to_string();
-            server_config.server.port = 0;
-            server_config.server.num_shards = config.num_shards.unwrap_or(4);
-            server_config.logging.level = config
-                .log_level
-                .clone()
-                .unwrap_or_else(|| "warn".to_string());
-            server_config.persistence.enabled = config.persistence;
-            server_config.persistence.data_dir = data_dir.clone();
-            server_config.metrics.bind = "127.0.0.1".to_string();
-            server_config.metrics.port = 0;
-
-            // Cluster configuration
-            server_config.cluster.enabled = true;
-            server_config.cluster.node_id = node_id;
-            server_config.cluster.cluster_bus_addr = bus_addrs[i].clone();
-            server_config.cluster.initial_nodes = initial_nodes.clone();
-            server_config.cluster.data_dir = cluster_data_dir;
-            server_config.cluster.election_timeout_ms = config.election_timeout_ms;
-            server_config.cluster.heartbeat_interval_ms = config.heartbeat_interval_ms;
-            server_config.cluster.connect_timeout_ms = config.connect_timeout_ms;
-            server_config.cluster.request_timeout_ms = config.request_timeout_ms;
-
-            // Construct server OUTSIDE spawn to read bound addresses
-            let listeners = ServerListeners {
-                cluster_bus: Some(bus_listener),
-            };
-            let server = Server::with_listeners(server_config, listeners)
-                .await
-                .unwrap();
-            let client_port = server.local_addr().unwrap().port();
-            let metrics_port = server
-                .metrics_addr()
-                .and_then(|r| r.ok())
-                .map(|a| a.port())
-                .unwrap_or(0);
-            let raft = server.raft().cloned();
-            let cluster_state = server.cluster_state().cloned();
-
-            let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-            let handle = tokio::spawn(async move {
-                let _ = server
-                    .run_until(async move {
-                        let _ = shutdown_rx.await;
-                    })
-                    .await;
-                running_clone.store(false, Ordering::SeqCst);
-            });
+            use crate::server::ServerRole;
+            let server = TestServer::start_with_config(test_config, ServerRole::Standalone).await;
 
             let restart_info = NodeRestartInfo {
                 node_id,
-                client_port,
                 cluster_port,
-                metrics_port,
-                data_dir: data_dir.clone(),
-                config: config.clone(),
+                data_dir,
+                config,
                 initial_nodes: initial_nodes.clone(),
-                raft: raft.clone(),
-                cluster_state: cluster_state.clone(),
             };
 
             let node = ClusterTestNode {
                 node_id,
-                client_port,
                 cluster_port,
-                metrics_port,
-                shutdown_tx: Some(shutdown_tx),
-                handle: Some(handle),
-                data_dir: Some(data_dir),
-                running,
+                server: Some(server),
                 restart_info: Some(restart_info),
-                raft,
-                cluster_state,
             };
 
             self.nodes.insert(node_id, node);
             self.node_order.push(node_id);
-        }
-
-        // Wait for all nodes to be ready
-        for node_id in &self.node_order {
-            let node = self.nodes.get(node_id).unwrap();
-            ClusterTestNode::wait_for_ready(node.client_port).await;
         }
 
         Ok(())
@@ -676,9 +433,6 @@ impl ClusterTestHarness {
         self.node_order.push(node_id);
 
         // Issue CLUSTER MEET from an existing node to add the new node to the cluster
-        // This registers the new node in the Raft membership and network factory
-        // CLUSTER MEET <ip> <client-port> [<cluster-bus-port>]
-        // Try each existing node until one succeeds (handles leader forwarding)
         let mut last_error = None;
         let existing_node_ids: Vec<u64> = self
             .node_order
@@ -700,20 +454,16 @@ impl ClusterTestHarness {
                         ],
                     )
                     .await;
-                // Check if CLUSTER MEET succeeded
                 match &response {
                     frogdb_protocol::Response::Simple(s) if s.as_ref() == b"OK" => {
                         return Ok(node_id);
                     }
                     frogdb_protocol::Response::Error(e) => {
                         let error_msg = String::from_utf8_lossy(e);
-                        // Check if this is a REDIRECT error - try to find the leader
                         if error_msg.starts_with("REDIRECT ") {
-                            // Parse "REDIRECT <node_id> <addr>" and find the leader
                             let parts: Vec<&str> = error_msg.split_whitespace().collect();
                             if parts.len() >= 3 {
                                 let leader_addr = parts[2];
-                                // Find the node with this address and retry
                                 for (&nid, n) in &self.nodes {
                                     if nid != node_id && n.client_addr() == leader_addr {
                                         let retry_response = n
@@ -733,7 +483,7 @@ impl ClusterTestHarness {
                                             {
                                                 return Ok(node_id);
                                             }
-                                            _ => {} // will set last_error below
+                                            _ => {}
                                         }
                                         break;
                                     }
@@ -750,7 +500,6 @@ impl ClusterTestHarness {
             }
         }
 
-        // If we get here, none of the attempts succeeded
         Err(ClusterError::new(last_error.unwrap_or_else(|| {
             "No existing nodes to send CLUSTER MEET".to_string()
         })))
@@ -831,12 +580,10 @@ impl ClusterTestHarness {
                 && let Some(raft) = node.raft()
             {
                 let leader = raft.metrics().borrow().current_leader;
-                if let Some(leader_id) = leader {
-                    // Verify the reported leader is actually running
-                    // (filters stale reports during elections)
-                    if self.nodes.get(&leader_id).is_some_and(|n| n.is_running()) {
-                        return Some(leader_id);
-                    }
+                if let Some(leader_id) = leader
+                    && self.nodes.get(&leader_id).is_some_and(|n| n.is_running())
+                {
+                    return Some(leader_id);
                 }
             }
         }
@@ -945,10 +692,8 @@ impl ClusterTestHarness {
                         continue;
                     }
 
-                    // Check if this node can reach the target
                     match self.get_cluster_info(other_id) {
                         Ok(info) => {
-                            // We expect at least as many nodes as we have
                             let expected = self.nodes.values().filter(|n| n.is_running()).count();
                             if info.cluster_known_nodes < expected {
                                 recognized = false;
@@ -1004,11 +749,5 @@ impl ClusterTestHarness {
 impl Default for ClusterTestHarness {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Drop for ClusterTestHarness {
-    fn drop(&mut self) {
-        // Nodes will be dropped and shut down via their Drop impl
     }
 }

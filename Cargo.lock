@@ -1546,6 +1546,7 @@ name = "frogdb-test-harness"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "frogdb-core",
  "frogdb-protocol",
  "frogdb-server",
  "futures",

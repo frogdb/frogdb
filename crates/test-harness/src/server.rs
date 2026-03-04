@@ -6,6 +6,8 @@
 #![allow(dead_code)]
 
 use bytes::Bytes;
+use frogdb_core::ClusterState;
+use frogdb_core::cluster::ClusterRaft;
 use frogdb_protocol::Response;
 use frogdb_server::net::tcp_listener_reusable;
 use frogdb_server::{Config, Server, ServerListeners};
@@ -15,6 +17,7 @@ use redis_protocol::resp2::types::BytesFrame;
 use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -134,17 +137,19 @@ pub struct TestServer {
     /// Shutdown signal sender
     shutdown_tx: Option<oneshot::Sender<()>>,
     /// Server task handle
-    #[allow(dead_code)]
     handle: tokio::task::JoinHandle<()>,
     /// Data directory path (managed by the test)
-    #[allow(dead_code)]
     data_dir: Option<PathBuf>,
+    /// Raft instance (cluster mode only)
+    raft: Option<Arc<ClusterRaft>>,
+    /// Cluster state (cluster mode only)
+    cluster_state: Option<Arc<ClusterState>>,
 }
 
 impl TestServer {
     /// Create a unique temp directory for test data.
     /// Uses /tmp/claude/ which is writable in the sandbox.
-    fn create_temp_dir() -> PathBuf {
+    pub fn create_temp_dir() -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -221,7 +226,7 @@ impl TestServer {
     // -----------------------------------------------------------------------
 
     /// Start a server with the given configuration and role.
-    async fn start_with_config(test_config: TestServerConfig, role: ServerRole) -> Self {
+    pub async fn start_with_config(test_config: TestServerConfig, role: ServerRole) -> Self {
         let (owned_dir, data_dir) = match test_config.data_dir {
             Some(dir) => (None, dir),
             None => {
@@ -337,6 +342,8 @@ impl TestServer {
             .cluster_bus_addr()
             .and_then(|r| r.ok())
             .map(|a| a.port());
+        let raft = server.raft().cloned();
+        let cluster_state = server.cluster_state().cloned();
 
         let handle = tokio::spawn(async move {
             let _ = server
@@ -358,6 +365,8 @@ impl TestServer {
             shutdown_tx: Some(shutdown_tx),
             handle,
             data_dir: owned_dir,
+            raft,
+            cluster_state,
         }
     }
 
@@ -426,6 +435,33 @@ impl TestServer {
         format!("http://127.0.0.1:{}{}", self.metrics_port, path)
     }
 
+    /// Get the Raft instance (cluster mode only).
+    pub fn raft(&self) -> Option<&Arc<ClusterRaft>> {
+        self.raft.as_ref()
+    }
+
+    /// Get the cluster state (cluster mode only).
+    pub fn cluster_state(&self) -> Option<&Arc<ClusterState>> {
+        self.cluster_state.as_ref()
+    }
+
+    /// Check if the server task has finished.
+    pub fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+
+    /// Get the data directory path.
+    pub fn data_dir(&self) -> Option<&PathBuf> {
+        self.data_dir.as_ref()
+    }
+
+    /// Try to connect to this server, returning an error instead of panicking.
+    pub async fn try_connect(&self) -> std::io::Result<TestClient> {
+        let stream = TcpStream::connect(self.socket_addr()).await?;
+        let framed = Framed::new(stream, Resp2);
+        Ok(TestClient { framed })
+    }
+
     /// Fetch metrics as raw Prometheus text format.
     pub async fn fetch_metrics(&self) -> String {
         reqwest::Client::builder()
@@ -491,7 +527,7 @@ impl TestServer {
     // -----------------------------------------------------------------------
 
     /// Wait for the server to be ready to accept connections.
-    async fn wait_for_ready(port: u16) {
+    pub async fn wait_for_ready(port: u16) {
         for _ in 0..50 {
             if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
                 return;
@@ -501,13 +537,22 @@ impl TestServer {
         panic!("Server failed to start on port {}", port);
     }
 
-    /// Shutdown the test server.
-    pub async fn shutdown(mut self) {
+    /// Shutdown the test server (non-consuming).
+    /// Shuts down raft first if present, then sends the shutdown signal.
+    pub async fn shutdown_mut(&mut self) {
+        if let Some(ref raft) = self.raft {
+            let _ = raft.shutdown().await;
+        }
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
         // Give the server a moment to shut down gracefully
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    /// Shutdown the test server (consuming).
+    pub async fn shutdown(mut self) {
+        self.shutdown_mut().await;
     }
 }
 
@@ -516,6 +561,7 @@ impl Drop for TestServer {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
+        self.handle.abort();
     }
 }
 
