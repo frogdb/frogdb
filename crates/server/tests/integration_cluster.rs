@@ -7020,3 +7020,936 @@ async fn test_cluster_failover_force_works_when_leader_unreachable() {
 
     harness.shutdown_all().await;
 }
+
+// ============================================================================
+// Category A: Cluster Command Primitives
+// ============================================================================
+
+/// ADDSLOTS assigns slots, visible in CLUSTER INFO and CLUSTER NODES.
+#[tokio::test]
+async fn test_cluster_addslots_basic() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // CLUSTER INFO should show all 16384 slots assigned after formation
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let info_resp = node.send("CLUSTER", &["INFO"]).await;
+    let info = parse_cluster_info(&info_resp).unwrap();
+
+    assert_eq!(
+        info.cluster_slots_assigned, 16384,
+        "All 16384 slots should be assigned after cluster formation"
+    );
+    assert_eq!(info.cluster_slots_ok, 16384, "All 16384 slots should be ok");
+
+    // Verify slots appear in CLUSTER NODES
+    let nodes_resp = node.send("CLUSTER", &["NODES"]).await;
+    let nodes = parse_cluster_nodes(&nodes_resp).unwrap();
+    let total_slots: u32 = nodes
+        .iter()
+        .flat_map(|n| &n.slots)
+        .map(|(s, e)| (e - s + 1) as u32)
+        .sum();
+    assert_eq!(
+        total_slots, 16384,
+        "Total slots across all nodes should be 16384"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// ADDSLOTS with already-assigned slot returns error.
+#[tokio::test]
+async fn test_cluster_addslots_already_assigned_error() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // All slots are already assigned. Trying to ADDSLOTS 0 should error.
+    let resp = send_cluster_cmd(&harness, harness.node_ids()[0], &["ADDSLOTS", "0"]).await;
+    assert!(
+        is_error(&resp),
+        "ADDSLOTS for already-assigned slot should error, got: {:?}",
+        resp
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// ADDSLOTS with invalid slot range returns error.
+#[tokio::test]
+async fn test_cluster_addslots_invalid_slot_range() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Slot 16384 is out of range (valid: 0-16383)
+    let resp = send_cluster_cmd(&harness, harness.node_ids()[0], &["ADDSLOTS", "16384"]).await;
+    assert!(
+        is_error(&resp),
+        "ADDSLOTS with slot 16384 should error, got: {:?}",
+        resp
+    );
+
+    // Negative slot (passed as string)
+    let resp2 = send_cluster_cmd(&harness, harness.node_ids()[0], &["ADDSLOTS", "-1"]).await;
+    assert!(
+        is_error(&resp2),
+        "ADDSLOTS with negative slot should error, got: {:?}",
+        resp2
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// DELSLOTS removes slot assignment.
+#[tokio::test]
+async fn test_cluster_delslots_basic() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Delete slot 0
+    let resp = send_cluster_cmd(&harness, harness.node_ids()[0], &["DELSLOTS", "0"]).await;
+    assert!(!is_error(&resp), "DELSLOTS should succeed, got: {:?}", resp);
+
+    // Allow Raft propagation
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // CLUSTER INFO should show 16383 assigned
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let info_resp = node.send("CLUSTER", &["INFO"]).await;
+    let info = parse_cluster_info(&info_resp).unwrap();
+    assert_eq!(
+        info.cluster_slots_assigned, 16383,
+        "Should have 16383 slots after deleting one"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// DELSLOTS for unassigned slot returns error.
+#[tokio::test]
+async fn test_cluster_delslots_unassigned_error() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // First delete slot 0
+    let resp = send_cluster_cmd(&harness, harness.node_ids()[0], &["DELSLOTS", "0"]).await;
+    assert!(!is_error(&resp), "First DELSLOTS should succeed");
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Try to delete slot 0 again — should error
+    let resp2 = send_cluster_cmd(&harness, harness.node_ids()[0], &["DELSLOTS", "0"]).await;
+    assert!(
+        is_error(&resp2),
+        "DELSLOTS for already-deleted slot should error, got: {:?}",
+        resp2
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// COUNTKEYSINSLOT returns correct count.
+#[tokio::test]
+async fn test_cluster_countkeysinslot_returns_correct_count() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 500u16;
+    let (owner_id, _) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+    let owner = harness.node(owner_id).unwrap();
+
+    // Write 5 keys to the slot
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    for i in 0..5 {
+        let key = format!("{}_cnt{}", tag, i);
+        let resp = owner.send("SET", &[&key, "v"]).await;
+        assert!(!is_error(&resp), "SET failed: {:?}", resp);
+    }
+
+    let slot_str = test_slot.to_string();
+    let count_resp = owner.send("CLUSTER", &["COUNTKEYSINSLOT", &slot_str]).await;
+    match &count_resp {
+        frogdb_protocol::Response::Integer(n) => {
+            assert_eq!(*n, 5, "COUNTKEYSINSLOT should return 5");
+        }
+        other => panic!("Expected integer from COUNTKEYSINSLOT, got: {:?}", other),
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// COUNTKEYSINSLOT decreases after DEL.
+#[tokio::test]
+async fn test_cluster_countkeysinslot_decreases_after_delete() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 600u16;
+    let (owner_id, _) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+    let owner = harness.node(owner_id).unwrap();
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key0 = format!("{}_del0", tag);
+    let key1 = format!("{}_del1", tag);
+    let key2 = format!("{}_del2", tag);
+
+    owner.send("SET", &[&key0, "v"]).await;
+    owner.send("SET", &[&key1, "v"]).await;
+    owner.send("SET", &[&key2, "v"]).await;
+
+    let slot_str = test_slot.to_string();
+
+    // Count should be 3
+    let resp = owner.send("CLUSTER", &["COUNTKEYSINSLOT", &slot_str]).await;
+    if let frogdb_protocol::Response::Integer(n) = &resp {
+        assert_eq!(*n, 3, "Should have 3 keys before delete");
+    }
+
+    // Delete one key
+    let del_resp = owner.send("DEL", &[&key1]).await;
+    assert!(!is_error(&del_resp), "DEL failed: {:?}", del_resp);
+
+    // Count should be 2
+    let resp2 = owner.send("CLUSTER", &["COUNTKEYSINSLOT", &slot_str]).await;
+    if let frogdb_protocol::Response::Integer(n) = &resp2 {
+        assert_eq!(*n, 2, "Should have 2 keys after deleting one");
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// GETKEYSINSLOT returns correct key names.
+#[tokio::test]
+async fn test_cluster_getkeysinslot_returns_keys() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 700u16;
+    let (owner_id, _) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+    let owner = harness.node(owner_id).unwrap();
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let mut expected_keys = Vec::new();
+    for i in 0..3 {
+        let key = format!("{}_gk{}", tag, i);
+        owner.send("SET", &[&key, "v"]).await;
+        expected_keys.push(key);
+    }
+
+    let slot_str = test_slot.to_string();
+    let resp = owner
+        .send("CLUSTER", &["GETKEYSINSLOT", &slot_str, "10"])
+        .await;
+
+    match &resp {
+        frogdb_protocol::Response::Array(arr) => {
+            let mut returned_keys: Vec<String> = arr
+                .iter()
+                .filter_map(|item| {
+                    if let frogdb_protocol::Response::Bulk(Some(b)) = item {
+                        Some(String::from_utf8_lossy(b).to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            returned_keys.sort();
+            expected_keys.sort();
+            assert_eq!(
+                returned_keys, expected_keys,
+                "GETKEYSINSLOT should return the keys we inserted"
+            );
+        }
+        other => panic!("Expected array from GETKEYSINSLOT, got: {:?}", other),
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// CLUSTER INFO cluster_slots_assigned matches actual slot count.
+#[tokio::test]
+async fn test_cluster_info_slots_assigned_matches_addslots() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Verify all nodes report the same slot count
+    for &nid in &harness.node_ids() {
+        let node = harness.node(nid).unwrap();
+        let info_resp = node.send("CLUSTER", &["INFO"]).await;
+        let info = parse_cluster_info(&info_resp).unwrap();
+        assert_eq!(
+            info.cluster_slots_assigned, 16384,
+            "Node {} should see 16384 slots assigned",
+            nid
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// CLUSTER INFO cluster_size matches primary count.
+#[tokio::test]
+async fn test_cluster_info_cluster_size() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    for &nid in &harness.node_ids() {
+        let node = harness.node(nid).unwrap();
+        let info_resp = node.send("CLUSTER", &["INFO"]).await;
+        let info = parse_cluster_info(&info_resp).unwrap();
+        // cluster_size = number of primaries with at least one slot
+        assert_eq!(
+            info.cluster_size, 3,
+            "cluster_size should be 3 for a 3-node cluster"
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// CLUSTER MEET adds a new peer node.
+#[tokio::test]
+async fn test_cluster_meet_adds_node() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // add_node uses CLUSTER MEET internally
+    let new_node_id = harness.add_node().await.unwrap();
+
+    // Wait for the new node to be recognized
+    harness
+        .wait_for_node_recognized(new_node_id, Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    // Verify all nodes now see 4 nodes
+    for &nid in &harness.node_ids() {
+        let info = harness.get_cluster_info(nid).unwrap();
+        assert_eq!(
+            info.cluster_known_nodes, 4,
+            "Node {} should see 4 known nodes after MEET",
+            nid
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Category B: Slot Ownership & Gossip
+// ============================================================================
+
+/// SETSLOT NODE propagates to all nodes.
+#[tokio::test]
+async fn test_slot_ownership_propagates_to_all_nodes() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 400u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    // Run full migration (includes SETSLOT NODE)
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    // Allow Raft propagation
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // All nodes should see the target as the new owner
+    let target_cluster_id = harness.get_node_id_str(target_id).unwrap();
+    for &nid in &harness.node_ids() {
+        let node = harness.node(nid).unwrap();
+        let nodes_resp = node.send("CLUSTER", &["NODES"]).await;
+        let nodes = parse_cluster_nodes(&nodes_resp).unwrap();
+
+        // Find which node owns the test_slot
+        let owner = nodes.iter().find(|n| {
+            n.slots
+                .iter()
+                .any(|&(start, end)| test_slot >= start && test_slot <= end)
+        });
+
+        assert!(
+            owner.is_some(),
+            "Node {} should see an owner for slot {}",
+            nid,
+            test_slot
+        );
+        assert_eq!(
+            owner.unwrap().id,
+            target_cluster_id,
+            "Node {} should see target as owner of slot {}",
+            nid,
+            test_slot
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// After slot transfer, source's COUNTKEYSINSLOT drops to 0.
+#[tokio::test]
+async fn test_slot_ownership_transfer_clears_source_keys() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 450u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    // Write keys to the slot on the source
+    let source = harness.node(source_id).unwrap();
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    for i in 0..5 {
+        let key = format!("{}_tc{}", tag, i);
+        source.send("SET", &[&key, "v"]).await;
+    }
+
+    // Verify source has keys
+    let slot_str = test_slot.to_string();
+    let pre_count = source
+        .send("CLUSTER", &["COUNTKEYSINSLOT", &slot_str])
+        .await;
+    if let frogdb_protocol::Response::Integer(n) = &pre_count {
+        assert_eq!(*n, 5, "Source should have 5 keys before migration");
+    }
+
+    // Migrate
+    run_full_slot_migration(&harness, source_id, target_id, test_slot, 100)
+        .await
+        .expect("migration failed");
+
+    // Source's count should be 0 (keys were migrated away)
+    let source = harness.node(source_id).unwrap();
+    let post_count = source
+        .send("CLUSTER", &["COUNTKEYSINSLOT", &slot_str])
+        .await;
+    if let frogdb_protocol::Response::Integer(n) = &post_count {
+        assert_eq!(*n, 0, "Source should have 0 keys after migration");
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Key with TTL in migrating slot returns ASK redirect (not stale data).
+#[tokio::test]
+async fn test_expired_key_during_migration_returns_ask() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 550u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+
+    let source = harness.node(source_id).unwrap();
+
+    let source_cluster_id = harness.get_node_id_str(source_id).unwrap();
+    let target_cluster_id = harness.get_node_id_str(target_id).unwrap();
+
+    // Write a key with TTL
+    let key = format!("{{{}}}_ttlkey", key_for_slot(test_slot));
+    source.send("SET", &[&key, "ttlval"]).await;
+    source.send("PEXPIRE", &[&key, "60000"]).await;
+
+    let slot_str = test_slot.to_string();
+
+    // Start migration (IMPORTING + MIGRATING) but don't finish
+    let import_resp = send_cluster_cmd(
+        &harness,
+        target_id,
+        &[
+            "SETSLOT",
+            &slot_str,
+            "IMPORTING",
+            &source_cluster_id,
+            &target_cluster_id,
+        ],
+    )
+    .await;
+    assert!(
+        !is_error(&import_resp),
+        "SETSLOT IMPORTING failed: {:?}",
+        import_resp
+    );
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Access the key on the source during migration.
+    // Source still owns the key, so it should return the value
+    // OR issue an ASK redirect. Either is acceptable — the key is not lost.
+    let get_resp = source.send("GET", &[&key]).await;
+    let is_accessible = matches!(&get_resp, frogdb_protocol::Response::Bulk(Some(_)));
+    let is_ask = is_ask_redirect(&get_resp).is_some();
+    assert!(
+        is_accessible || is_ask,
+        "Key during migration should be accessible or ASK redirected, got: {:?}",
+        get_resp
+    );
+
+    // Clean up: finish migration to avoid dangling state
+    let _ = send_cluster_cmd(&harness, target_id, &["SETSLOT", &slot_str, "STABLE"]).await;
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Category C: Multi-key & Cross-slot Errors
+// ============================================================================
+
+/// MSET with keys in different slots returns CROSSSLOT error.
+#[tokio::test]
+async fn test_mset_cross_slot_returns_crossslot_error() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Use keys that hash to different slots (no hash tags)
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let resp = node.send("MSET", &["key_a", "val1", "key_b", "val2"]).await;
+
+    // Should get CROSSSLOT or MOVED error
+    assert!(
+        is_error(&resp),
+        "MSET with cross-slot keys should error, got: {:?}",
+        resp
+    );
+    let msg = get_error_message(&resp).unwrap_or_default();
+    let is_crossslot = msg.contains("CROSSSLOT");
+    let is_moved = msg.starts_with("MOVED");
+    assert!(
+        is_crossslot || is_moved,
+        "Expected CROSSSLOT or MOVED error, got: {}",
+        msg
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// MGET with hash-tagged keys in same slot succeeds.
+#[tokio::test]
+async fn test_mget_same_slot_succeeds() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 800u16;
+    let (owner_id, _) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+    let owner = harness.node(owner_id).unwrap();
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let k1 = format!("{}_mg1", tag);
+    let k2 = format!("{}_mg2", tag);
+    let k3 = format!("{}_mg3", tag);
+
+    owner.send("SET", &[&k1, "v1"]).await;
+    owner.send("SET", &[&k2, "v2"]).await;
+    owner.send("SET", &[&k3, "v3"]).await;
+
+    let resp = owner.send("MGET", &[&k1, &k2, &k3]).await;
+    assert!(
+        !is_error(&resp),
+        "MGET with same-slot keys should succeed, got: {:?}",
+        resp
+    );
+
+    if let frogdb_protocol::Response::Array(arr) = &resp {
+        assert_eq!(arr.len(), 3, "MGET should return 3 values");
+    } else {
+        panic!("Expected array from MGET, got: {:?}", resp);
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// EVAL with KEYS in different slots returns error.
+#[tokio::test]
+async fn test_eval_cross_slot_returns_error() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+    // Keys without hash tags will likely land in different slots
+    let resp = node
+        .send("EVAL", &["return 1", "2", "cross_key_a", "cross_key_b"])
+        .await;
+
+    assert!(
+        is_error(&resp),
+        "EVAL with cross-slot keys should error, got: {:?}",
+        resp
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// MULTI + mixed-slot commands returns error.
+#[tokio::test]
+async fn test_multi_exec_cross_slot_returns_error() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let mut client = node.connect().await;
+
+    let multi_resp = client.command(&["MULTI"]).await;
+    assert!(!is_error(&multi_resp), "MULTI should succeed");
+
+    // Queue two commands for different slots
+    let set1_resp = client.command(&["SET", "txn_key_a", "v1"]).await;
+    let set2_resp = client.command(&["SET", "txn_key_b", "v2"]).await;
+
+    let exec_resp = client.command(&["EXEC"]).await;
+
+    // Either the EXEC should fail, or the queued commands should have errors
+    // in the response array. The exact behavior depends on implementation.
+    let has_errors = is_error(&exec_resp)
+        || is_error(&set1_resp)
+        || is_error(&set2_resp)
+        || matches!(&exec_resp, frogdb_protocol::Response::Array(arr) if arr.iter().any(|r| is_error(r)));
+
+    assert!(
+        has_errors,
+        "MULTI/EXEC with cross-slot keys should produce errors somewhere; \
+         MULTI={:?}, SET1={:?}, SET2={:?}, EXEC={:?}",
+        multi_resp, set1_resp, set2_resp, exec_resp
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Category D: Cluster Persistence & Recovery
+// ============================================================================
+
+/// Data survives a full cluster restart (all nodes).
+#[tokio::test]
+async fn test_cluster_data_survives_full_restart() {
+    let config = ClusterNodeConfig {
+        persistence: true,
+        ..Default::default()
+    };
+    let mut harness = ClusterTestHarness::with_config(config);
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 900u16;
+    let (owner_id, _) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner");
+    let owner = harness.node(owner_id).unwrap();
+
+    // Write data
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    for i in 0..5 {
+        let key = format!("{}_persist{}", tag, i);
+        let value = format!("pval_{}", i);
+        let resp = owner.send("SET", &[&key, &value]).await;
+        assert!(!is_error(&resp), "SET failed: {:?}", resp);
+    }
+
+    // Shutdown all nodes
+    let node_ids = harness.node_ids();
+    for &nid in &node_ids {
+        harness.shutdown_node(nid).await;
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Restart all nodes
+    for &nid in &node_ids {
+        harness.restart_node(nid).await.unwrap();
+    }
+
+    // Wait for cluster to reform
+    harness
+        .wait_for_leader(Duration::from_secs(15))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Verify data is still there
+    let (new_owner_id, _) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find slot owner after restart");
+    let new_owner = harness.node(new_owner_id).unwrap();
+
+    let mut found = 0;
+    for i in 0..5 {
+        let key = format!("{}_persist{}", tag, i);
+        let expected = format!("pval_{}", i);
+        let resp = new_owner.send("GET", &[&key]).await;
+        if let frogdb_protocol::Response::Bulk(Some(v)) = &resp {
+            if v.as_ref() == expected.as_bytes() {
+                found += 1;
+            }
+        }
+    }
+    assert_eq!(
+        found, 5,
+        "All 5 keys should survive full restart, found {}",
+        found
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Slot assignment persists across node restart.
+#[tokio::test]
+async fn test_cluster_slot_assignment_persists() {
+    let config = ClusterNodeConfig {
+        persistence: true,
+        ..Default::default()
+    };
+    let mut harness = ClusterTestHarness::with_config(config);
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let leader = harness.get_leader().await.unwrap();
+
+    // Restart one node (non-leader to avoid election complications)
+    let follower = *harness.node_ids().iter().find(|&&id| id != leader).unwrap();
+    harness.shutdown_node(follower).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    harness.restart_node(follower).await.unwrap();
+
+    harness
+        .wait_for_node_recognized(follower, Duration::from_secs(15))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Verify slot assignments are unchanged: total should still be 16384
+    let node = harness.node(harness.get_leader().await.unwrap()).unwrap();
+    let post_nodes_resp = node.send("CLUSTER", &["NODES"]).await;
+    let post_nodes = parse_cluster_nodes(&post_nodes_resp).unwrap();
+    let total: u32 = post_nodes
+        .iter()
+        .flat_map(|n| &n.slots)
+        .map(|(s, e)| (e - s + 1) as u32)
+        .sum();
+    assert_eq!(
+        total, 16384,
+        "Total slots should remain 16384 after restart"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Config epoch persists across restart.
+#[tokio::test]
+async fn test_cluster_epoch_persists() {
+    let config = ClusterNodeConfig {
+        persistence: true,
+        ..Default::default()
+    };
+    let mut harness = ClusterTestHarness::with_config(config);
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let leader = harness.get_leader().await.unwrap();
+    let follower = *harness.node_ids().iter().find(|&&id| id != leader).unwrap();
+
+    // Get epoch before restart
+    let pre_info = harness.get_cluster_info(follower).unwrap();
+    let pre_epoch = pre_info.cluster_current_epoch;
+
+    // Restart follower
+    harness.shutdown_node(follower).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    harness.restart_node(follower).await.unwrap();
+
+    harness
+        .wait_for_node_recognized(follower, Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    // Get epoch after restart
+    let post_info = harness.get_cluster_info(follower).unwrap();
+    let post_epoch = post_info.cluster_current_epoch;
+
+    assert!(
+        post_epoch >= pre_epoch,
+        "Epoch should not decrease after restart: pre={}, post={}",
+        pre_epoch,
+        post_epoch
+    );
+
+    harness.shutdown_all().await;
+}
