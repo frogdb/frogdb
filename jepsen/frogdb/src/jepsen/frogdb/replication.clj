@@ -84,6 +84,12 @@
         :read-all
         (let [results (for [[node conn] conns]
                         [node (frogdb/read-register conn test-key)])]
+          (assoc op :type :ok :value (into {} results)))
+
+        ;; Generic read (used by final-reads phase) — delegates to read-all
+        :read
+        (let [results (for [[node conn] conns]
+                        [node (frogdb/read-register conn test-key)])]
           (assoc op :type :ok :value (into {} results))))))
 
   (teardown! [this test]
@@ -141,10 +147,10 @@
        (map :value)))
 
 (defn extract-read-all
-  "Extract all successful read-all operations."
+  "Extract all successful read-all operations (including :read which delegates to read-all)."
   [history]
   (->> history
-       (filter #(and (= :read-all (:f %))
+       (filter #(and (#{:read-all :read} (:f %))
                      (= :ok (:type %))))
        (map :value)))
 

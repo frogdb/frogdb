@@ -24,9 +24,10 @@
 (def initial-balance 1000)
 
 (defn account-key
-  "Get the Redis key for an account."
+  "Get the Redis key for an account.
+   Uses a hash tag so all accounts route to the same shard."
   [account-id]
-  (str "jepsen-account-" account-id))
+  (str "{jepsen-txn}account-" account-id))
 
 (defn all-account-keys
   "Get all account keys."
@@ -58,46 +59,42 @@
   (invoke! [this test op]
     (frogdb/with-error-handling op
       (case (:f op)
-        ;; Read all account balances atomically
+        ;; Read all account balances atomically using Lua EVAL
         :read
-        (let [balances (wcar conn
-                         (car/multi)
-                         (doseq [i (range num-accounts)]
-                           (car/get (account-key i)))
-                         (car/exec))]
-          ;; Result is a vector of values from the queued commands
-          (let [parsed (->> balances
-                            (map frogdb/parse-value)
-                            (map #(or % 0))
-                            vec)]
-            (assoc op :type :ok :value parsed)))
+        (let [keys (all-account-keys)
+              lua-script (str "local r = {} "
+                              "for i=1,#KEYS do "
+                              "  r[i] = redis.call('GET', KEYS[i]) "
+                              "end "
+                              "return r")
+              results (wcar conn
+                        (apply car/eval lua-script (count keys) keys))
+              parsed (->> results
+                          (map frogdb/parse-value)
+                          (map #(or % 0))
+                          vec)]
+          (assoc op :type :ok :value parsed))
 
-        ;; Transfer between two accounts using MULTI/EXEC
+        ;; Transfer between two accounts using Lua EVAL for atomicity
         :transfer
         (let [{:keys [from to amount]} (:value op)
               from-key (account-key from)
-              to-key (account-key to)]
-          ;; Use WATCH for optimistic locking
-          (let [result (wcar conn
-                         (car/watch from-key to-key)
-                         (let [from-bal (frogdb/parse-value (car/get from-key))
-                               to-bal (frogdb/parse-value (car/get to-key))
-                               from-bal (or from-bal 0)
-                               to-bal (or to-bal 0)]
-                           (if (>= from-bal amount)
-                             ;; Sufficient funds - execute transfer
-                             (do
-                               (car/multi)
-                               (car/set from-key (str (- from-bal amount)))
-                               (car/set to-key (str (+ to-bal amount)))
-                               (car/exec))
-                             ;; Insufficient funds - abort
-                             (do
-                               (car/unwatch)
-                               nil))))]
-            (if result
-              (assoc op :type :ok)
-              (assoc op :type :fail :error :insufficient-funds-or-conflict))))
+              to-key (account-key to)
+              result (wcar conn
+                       (car/eval
+                         (str "local from = tonumber(redis.call('GET', KEYS[1])) "
+                              "local to = tonumber(redis.call('GET', KEYS[2])) "
+                              "if from >= tonumber(ARGV[1]) then "
+                              "  redis.call('SET', KEYS[1], tostring(from - tonumber(ARGV[1]))) "
+                              "  redis.call('SET', KEYS[2], tostring(to + tonumber(ARGV[1]))) "
+                              "  return 1 "
+                              "else "
+                              "  return 0 "
+                              "end")
+                         2 from-key to-key (str amount)))]
+          (if (= 1 result)
+            (assoc op :type :ok)
+            (assoc op :type :fail :error :insufficient-funds)))
 
         ;; Multi-key write: set multiple accounts atomically
         :multi-write

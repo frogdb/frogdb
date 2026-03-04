@@ -45,9 +45,9 @@
     (frogdb/with-error-handling op
       (case (:f op)
         :add
-        (let [delta (:value op)
-              new-value (frogdb/incr-counter! conn counter-key delta)]
-          (assoc op :type :ok :value new-value))
+        (let [delta (:value op)]
+          (frogdb/incr-counter! conn counter-key delta)
+          (assoc op :type :ok))
 
         :read
         (let [value (frogdb/read-counter conn counter-key)]

@@ -80,23 +80,13 @@
   (wcar conn (car/set key (str value))))
 
 (defn cas-register!
-  "Compare-and-swap a register value.
+  "Compare-and-swap a register value using Lua EVAL for atomicity.
    Returns true if successful, false if the expected value didn't match."
   [conn key expected new-value]
-  ;; FrogDB may support CAS via WATCH/MULTI/EXEC or a CAS command
-  ;; For now, use optimistic locking with WATCH
-  (wcar conn
-    (car/watch key)
-    (let [current (parse-value (car/get key))]
-      (if (= current expected)
-        (do
-          (car/multi)
-          (car/set key (str new-value))
-          (let [result (car/exec)]
-            (boolean result)))
-        (do
-          (car/unwatch)
-          false)))))
+  (= 1 (wcar conn
+    (car/eval
+      "if redis.call('GET',KEYS[1])==ARGV[1] then redis.call('SET',KEYS[1],ARGV[2]) return 1 else return 0 end"
+      1 key (str expected) (str new-value)))))
 
 ;; ===========================================================================
 ;; Counter Operations (INCR)
@@ -233,23 +223,21 @@
       (zipmap keys (map parse-value result)))))
 
 (defn transfer!
-  "Transfer amount from one key to another atomically.
-   Uses MULTI/EXEC for atomicity. Returns true if successful."
+  "Transfer amount from one key to another atomically using Lua EVAL.
+   Returns true if successful, false if insufficient funds."
   [conn from-key to-key amount]
-  ;; Use WATCH for optimistic locking
-  (wcar conn
-    (car/watch from-key to-key)
-    (let [from-val (or (parse-value (car/get from-key)) 0)
-          to-val (or (parse-value (car/get to-key)) 0)]
-      (if (>= from-val amount)
-        (do
-          (car/multi)
-          (car/set from-key (str (- from-val amount)))
-          (car/set to-key (str (+ to-val amount)))
-          (boolean (car/exec)))
-        (do
-          (car/unwatch)
-          false)))))
+  (= 1 (wcar conn
+    (car/eval
+      (str "local from = tonumber(redis.call('GET', KEYS[1])) "
+           "local to = tonumber(redis.call('GET', KEYS[2])) "
+           "if from >= tonumber(ARGV[1]) then "
+           "  redis.call('SET', KEYS[1], tostring(from - tonumber(ARGV[1]))) "
+           "  redis.call('SET', KEYS[2], tostring(to + tonumber(ARGV[1]))) "
+           "  return 1 "
+           "else "
+           "  return 0 "
+           "end")
+      2 from-key to-key (str amount)))))
 
 ;; ===========================================================================
 ;; Jepsen Client Protocol Implementation
