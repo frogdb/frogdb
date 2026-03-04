@@ -82,10 +82,11 @@
   client/Client
 
   (open! [this test node]
-    (let [docker? (:docker test)]
+    (let [docker? (:docker test)
+          base-port (get test :base-port frogdb/default-base-port)]
       (info "Opening expiry client to" node "(docker-host?:" docker? ")")
       (assoc this
-             :conn (frogdb/conn-spec node frogdb/default-port docker?)
+             :conn (frogdb/conn-spec node frogdb/default-port docker? base-port)
              :node node
              :docker-host? docker?)))
 

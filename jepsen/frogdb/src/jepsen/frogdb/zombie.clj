@@ -34,9 +34,10 @@
 
   (open! [this test node]
     (let [docker? (:docker test)
+          base-port (get test :base-port frogdb/default-base-port)
           nodes (or (:nodes test) ["n1" "n2" "n3"])
-          all-conns (frogdb/all-node-conns nodes docker?)
-          primary (frogdb/conn-for-node "n1" docker?)]
+          all-conns (frogdb/all-node-conns nodes docker? base-port)
+          primary (frogdb/conn-for-node "n1" docker? base-port)]
       (info "Opening zombie client (docker?:" docker? ", nodes:" nodes ")")
       (assoc this
              :conns all-conns

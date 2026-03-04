@@ -5,12 +5,12 @@
 #   n1, n2, n3 - Initial Raft cluster members (quorum = 2)
 #   n4, n5     - Available for membership change tests
 #
-# Ports (from host):
-#   n1: localhost:6379 (client), localhost:16379 (cluster bus)
-#   n2: localhost:6380 (client), localhost:16380 (cluster bus)
-#   n3: localhost:6381 (client), localhost:16381 (cluster bus)
-#   n4: localhost:6382 (client), localhost:16382 (cluster bus)
-#   n5: localhost:6383 (client), localhost:16383 (cluster bus)
+# Ports (from host, default base=16379):
+#   n1: localhost:16379 (client), localhost:26379 (cluster bus)
+#   n2: localhost:16380 (client), localhost:26380 (cluster bus)
+#   n3: localhost:16381 (client), localhost:26381 (cluster bus)
+#   n4: localhost:16382 (client), localhost:26382 (cluster bus)
+#   n5: localhost:16383 (client), localhost:26383 (cluster bus)
 #
 # Network: 172.21.0.0/16 subnet (separate from replication cluster)
 
@@ -23,8 +23,8 @@ services:
     container_name: frogdb-raft-n1
     hostname: n1
     ports:
-      - "6379:6379"
-      - "16379:16379"
+      - "${FROGDB_PORT_N1:-16379}:6379"
+      - "${FROGDB_BUS_PORT_N1:-26379}:16379"
     volumes:
       - frogdb-raft-n1-data:/data
       - /tmp/frogdb-raft-n1:/tmp/frogdb
@@ -57,8 +57,8 @@ services:
     container_name: frogdb-raft-n2
     hostname: n2
     ports:
-      - "6380:6379"
-      - "16380:16379"
+      - "${FROGDB_PORT_N2:-16380}:6379"
+      - "${FROGDB_BUS_PORT_N2:-26380}:16379"
     volumes:
       - frogdb-raft-n2-data:/data
       - /tmp/frogdb-raft-n2:/tmp/frogdb
@@ -91,8 +91,8 @@ services:
     container_name: frogdb-raft-n3
     hostname: n3
     ports:
-      - "6381:6379"
-      - "16381:16379"
+      - "${FROGDB_PORT_N3:-16381}:6379"
+      - "${FROGDB_BUS_PORT_N3:-26381}:16379"
     volumes:
       - frogdb-raft-n3-data:/data
       - /tmp/frogdb-raft-n3:/tmp/frogdb
@@ -125,8 +125,8 @@ services:
     container_name: frogdb-raft-n4
     hostname: n4
     ports:
-      - "6382:6379"
-      - "16382:16379"
+      - "${FROGDB_PORT_N4:-16382}:6379"
+      - "${FROGDB_BUS_PORT_N4:-26382}:16379"
     volumes:
       - frogdb-raft-n4-data:/data
       - /tmp/frogdb-raft-n4:/tmp/frogdb
@@ -159,8 +159,8 @@ services:
     container_name: frogdb-raft-n5
     hostname: n5
     ports:
-      - "6383:6379"
-      - "16383:16379"
+      - "${FROGDB_PORT_N5:-16383}:6379"
+      - "${FROGDB_BUS_PORT_N5:-26383}:16379"
     volumes:
       - frogdb-raft-n5-data:/data
       - /tmp/frogdb-raft-n5:/tmp/frogdb

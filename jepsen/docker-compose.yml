@@ -7,9 +7,9 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: frogdb-n1
+    container_name: frogdb-single-n1
     ports:
-      - "6379:6379"
+      - "${FROGDB_PORT_N1:-16379}:6379"
     volumes:
       - frogdb-n1-data:/data
     environment:

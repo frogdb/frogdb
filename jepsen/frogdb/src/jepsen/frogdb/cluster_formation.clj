@@ -29,16 +29,18 @@
 ;; Client Implementation
 ;; ===========================================================================
 
-(defrecord ClusterFormationClient [nodes docker-host? killed-nodes]
+(defrecord ClusterFormationClient [nodes docker-host? base-port killed-nodes]
   client/Client
 
   (open! [this test node]
     (let [docker? (get test :docker true)
-          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])]
+          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])
+          bp (get test :base-port cluster-db/default-base-port)]
       (info "Opening cluster formation client")
       (assoc this
              :nodes all-nodes
              :docker-host? docker?
+             :base-port bp
              :killed-nodes (atom #{}))))
 
   (setup! [this test]
@@ -48,25 +50,25 @@
     (try+
       (case (:f op)
         :read-cluster-state
-        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)
+        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host? base-port)
               state (cluster-db/get-cluster-state conn)]
           (assoc op :type :ok :value state))
 
         :read-node-count
-        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)
+        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host? base-port)
               nodes-info (cluster-db/cluster-nodes conn)
               count (count nodes-info)]
           (assoc op :type :ok :value count))
 
         :read-masters
-        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)
-              masters (cluster-db/count-masters nodes docker-host?)]
+        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host? base-port)
+              masters (cluster-db/count-masters nodes docker-host? base-port)]
           (assoc op :type :ok :value masters))
 
         :meet-node
         (let [node-to-meet (:value op)
               ip (get cluster-db/raft-cluster-node-ips node-to-meet)
-              conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)]
+              conn (cluster-db/conn-for-raft-node (first nodes) docker-host? base-port)]
           (if ip
             (do
               (cluster-db/cluster-meet! conn ip 6379)
@@ -76,13 +78,13 @@
 
         :forget-node
         (let [node-to-forget (:value op)
-              conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)
+              conn (cluster-db/conn-for-raft-node (first nodes) docker-host? base-port)
               node-id (cluster-db/get-node-id conn (get cluster-db/raft-cluster-node-ips node-to-forget))]
           (if node-id
             (do
               ;; Forget from all nodes
               (doseq [n (remove #{node-to-forget} nodes)]
-                (let [c (cluster-db/conn-for-raft-node n docker-host?)]
+                (let [c (cluster-db/conn-for-raft-node n docker-host? base-port)]
                   (try+
                     (cluster-db/cluster-forget! c node-id)
                     (catch Object _ nil))))
@@ -90,7 +92,7 @@
             (assoc op :type :fail :error :node-not-found)))
 
         :verify-quorum
-        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)
+        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host? base-port)
               state (cluster-db/get-cluster-state conn)]
           (if (= "ok" state)
             (assoc op :type :ok :value :quorum-ok)
@@ -98,7 +100,7 @@
 
         ;; Generic read (used by final-reads phase) — delegates to read-cluster-state
         :read
-        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)
+        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host? base-port)
               state (cluster-db/get-cluster-state conn)]
           (assoc op :type :ok :value state)))
 

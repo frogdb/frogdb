@@ -104,13 +104,17 @@
    "n4" "172.21.0.5"
    "n5" "172.21.0.6"})
 
-(def raft-cluster-host-ports
+(def default-base-port 16379)
+
+(defn raft-cluster-host-ports
   "Map of node names to their host ports (for testing from host)."
-  {"n1" {:host "localhost" :port 6379}
-   "n2" {:host "localhost" :port 6380}
-   "n3" {:host "localhost" :port 6381}
-   "n4" {:host "localhost" :port 6382}
-   "n5" {:host "localhost" :port 6383}})
+  ([] (raft-cluster-host-ports default-base-port))
+  ([base-port]
+   {"n1" {:host "localhost" :port base-port}
+    "n2" {:host "localhost" :port (+ base-port 1)}
+    "n3" {:host "localhost" :port (+ base-port 2)}
+    "n4" {:host "localhost" :port (+ base-port 3)}
+    "n5" {:host "localhost" :port (+ base-port 4)}}))
 
 (defn get-node-for-ip
   "Find node name for an IP address."
@@ -125,14 +129,17 @@
 
 (defn conn-for-raft-node
   "Create a connection spec for a Raft cluster node."
-  [node docker-host?]
-  (let [resolved (if docker-host?
-                   (get raft-cluster-host-ports node {:host node :port 6379})
-                   {:host node :port 6379})]
-    {:pool {}
-     :spec {:host (:host resolved)
-            :port (:port resolved)
-            :timeout-ms client/default-timeout-ms}}))
+  ([node docker-host?]
+   (conn-for-raft-node node docker-host? default-base-port))
+  ([node docker-host? base-port]
+   (let [host-ports (raft-cluster-host-ports base-port)
+         resolved (if docker-host?
+                    (get host-ports node {:host node :port 6379})
+                    {:host node :port 6379})]
+     {:pool {}
+      :spec {:host (:host resolved)
+             :port (:port resolved)
+             :timeout-ms client/default-timeout-ms}})))
 
 ;; ===========================================================================
 ;; Cluster Commands
@@ -319,22 +326,24 @@
 
 (defn wait-for-node-ready
   "Wait for a specific node to be ready to accept connections."
-  [node docker-host? timeout-ms]
-  (let [conn (conn-for-raft-node node docker-host?)
-        deadline (+ (System/currentTimeMillis) timeout-ms)]
-    (loop []
-      (cond
-        (client/ping conn)
-        true
+  ([node docker-host? timeout-ms]
+   (wait-for-node-ready node docker-host? timeout-ms default-base-port))
+  ([node docker-host? timeout-ms base-port]
+   (let [conn (conn-for-raft-node node docker-host? base-port)
+         deadline (+ (System/currentTimeMillis) timeout-ms)]
+     (loop []
+       (cond
+         (client/ping conn)
+         true
 
-        (> (System/currentTimeMillis) deadline)
-        (throw+ {:type :timeout
-                 :message (str "Timed out waiting for node " node)})
+         (> (System/currentTimeMillis) deadline)
+         (throw+ {:type :timeout
+                  :message (str "Timed out waiting for node " node)})
 
-        :else
-        (do
-          (Thread/sleep 500)
-          (recur))))))
+         :else
+         (do
+           (Thread/sleep 500)
+           (recur)))))))
 
 ;; ===========================================================================
 ;; Slot Assignment
@@ -373,12 +382,14 @@
 (defn setup-cluster-slots!
   "Set up slot distribution for a new cluster.
    Connects to each node and assigns its slots."
-  [nodes docker-host?]
-  (let [slot-assignments (assign-slots-evenly nodes)]
-    (doseq [[node [start end]] slot-assignments]
-      (info "Assigning slots" start "-" end "to node" node)
-      (let [conn (conn-for-raft-node node docker-host?)]
-        (assign-slots-to-node! conn start end)))))
+  ([nodes docker-host?]
+   (setup-cluster-slots! nodes docker-host? default-base-port))
+  ([nodes docker-host? base-port]
+   (let [slot-assignments (assign-slots-evenly nodes)]
+     (doseq [[node [start end]] slot-assignments]
+       (info "Assigning slots" start "-" end "to node" node)
+       (let [conn (conn-for-raft-node node docker-host? base-port)]
+         (assign-slots-to-node! conn start end))))))
 
 ;; ===========================================================================
 ;; Cluster Formation
@@ -389,26 +400,28 @@
    1. Have each node meet every other node
    2. Assign slots to each node
    3. Wait for cluster to be ready."
-  [nodes docker-host?]
-  (info "Forming cluster with nodes:" nodes)
+  ([nodes docker-host?]
+   (form-cluster! nodes docker-host? default-base-port))
+  ([nodes docker-host? base-port]
+   (info "Forming cluster with nodes:" nodes)
 
-  ;; Step 1: Have all nodes meet each other
-  (let [first-node (first nodes)
-        first-conn (conn-for-raft-node first-node docker-host?)]
-    (doseq [node (rest nodes)]
-      (let [ip (get raft-cluster-node-ips node)]
-        (info "Node" first-node "meeting node" node "at" ip)
-        (cluster-meet! first-conn ip 6379))))
+   ;; Step 1: Have all nodes meet each other
+   (let [first-node (first nodes)
+         first-conn (conn-for-raft-node first-node docker-host? base-port)]
+     (doseq [node (rest nodes)]
+       (let [ip (get raft-cluster-node-ips node)]
+         (info "Node" first-node "meeting node" node "at" ip)
+         (cluster-meet! first-conn ip 6379))))
 
-  ;; Wait for gossip to propagate
-  (Thread/sleep 2000)
+   ;; Wait for gossip to propagate
+   (Thread/sleep 2000)
 
-  ;; Step 2: Assign slots
-  (setup-cluster-slots! nodes docker-host?)
+   ;; Step 2: Assign slots
+   (setup-cluster-slots! nodes docker-host? base-port)
 
-  ;; Step 3: Wait for cluster ready
-  (let [conn (conn-for-raft-node (first nodes) docker-host?)]
-    (wait-for-cluster-ready conn)))
+   ;; Step 3: Wait for cluster ready
+   (let [conn (conn-for-raft-node (first nodes) docker-host? base-port)]
+     (wait-for-cluster-ready conn))))
 
 ;; ===========================================================================
 ;; Network Partition Support
@@ -434,9 +447,11 @@
 
 (defn isolate-raft-leader!
   "Isolate the current leader from all followers."
-  [nodes docker-host?]
-  (let [conn (conn-for-raft-node (first nodes) docker-host?)
-        leader (get-current-leader conn)]
+  ([nodes docker-host?]
+   (isolate-raft-leader! nodes docker-host? default-base-port))
+  ([nodes docker-host? base-port]
+   (let [conn (conn-for-raft-node (first nodes) docker-host? base-port)
+         leader (get-current-leader conn)]
     (when leader
       (let [leader-ip (first (str/split (:addr leader) #":"))]
         ;; Find which node this leader is
@@ -447,7 +462,7 @@
               (info "Isolating leader" leader-node "from" other-nodes)
               (partition-raft-node! leader-node other-nodes)
               (doseq [node other-nodes]
-                (partition-raft-node! node [leader-node])))))))))
+                (partition-raft-node! node [leader-node]))))))))))
 
 (defn heal-all-raft-partitions!
   "Heal partitions on all Raft cluster nodes."
@@ -464,10 +479,12 @@
 
    Options:
    - :initial-nodes - nodes to include in initial cluster (default [\"n1\" \"n2\" \"n3\"])
-   - :docker-host? - whether running from Docker host (default true)"
+   - :docker-host? - whether running from Docker host (default true)
+   - :base-port - base host port for Docker port mapping (default 16379)"
   [opts]
   (let [initial-nodes (get opts :initial-nodes ["n1" "n2" "n3"])
-        docker-host? (get opts :docker-host? true)]
+        docker-host? (get opts :docker-host? true)
+        base-port (get opts :base-port default-base-port)]
     (reify db/DB
       (setup! [_ test node]
         (info "Setting up Raft cluster node" node)
@@ -477,12 +494,12 @@
             (catch Object e
               (warn "Container start failed (may already be running):" (:message e))))
           ;; Wait for node to be ready
-          (wait-for-node-ready node docker-host? 30000)
+          (wait-for-node-ready node docker-host? 30000 base-port)
           ;; If this is the last initial node, form the cluster
           (when (and (contains? (set initial-nodes) node)
                      (= node (last initial-nodes)))
             (Thread/sleep 2000)  ; Let all nodes stabilize
-            (form-cluster! initial-nodes docker-host?))))
+            (form-cluster! initial-nodes docker-host? base-port))))
 
       (teardown! [_ test node]
         (info "Tearing down Raft cluster node" node)
@@ -498,7 +515,7 @@
         (info "Starting FrogDB on Raft node" node)
         (let [container (raft-container-name node)]
           (docker-start container)
-          (wait-for-node-ready node docker-host? 30000)))
+          (wait-for-node-ready node docker-host? 30000 base-port)))
 
       db/Pause
       (pause! [_ test node]
@@ -516,24 +533,30 @@
 (defn all-node-conns
   "Create connections to all cluster nodes.
    Returns a map of {node -> conn-spec}."
-  [nodes docker-host?]
-  (into {} (for [node nodes]
-             [node (conn-for-raft-node node docker-host?)])))
+  ([nodes docker-host?]
+   (all-node-conns nodes docker-host? default-base-port))
+  ([nodes docker-host? base-port]
+   (into {} (for [node nodes]
+              [node (conn-for-raft-node node docker-host? base-port)]))))
 
 (defn find-leader-node
   "Find which node is currently the leader.
    Returns the node name (e.g., \"n1\"), or nil if no leader."
-  [nodes docker-host?]
-  (let [conn (conn-for-raft-node (first nodes) docker-host?)
-        leader (get-current-leader conn)]
-    (when leader
-      (let [leader-ip (first (str/split (:addr leader) #":"))]
-        (first (filter #(= (get raft-cluster-node-ips %) leader-ip)
-                       (keys raft-cluster-node-ips)))))))
+  ([nodes docker-host?]
+   (find-leader-node nodes docker-host? default-base-port))
+  ([nodes docker-host? base-port]
+   (let [conn (conn-for-raft-node (first nodes) docker-host? base-port)
+         leader (get-current-leader conn)]
+     (when leader
+       (let [leader-ip (first (str/split (:addr leader) #":"))]
+         (first (filter #(= (get raft-cluster-node-ips %) leader-ip)
+                        (keys raft-cluster-node-ips))))))))
 
 (defn count-masters
   "Count the number of master nodes in the cluster."
-  [nodes docker-host?]
-  (let [conn (conn-for-raft-node (first nodes) docker-host?)
-        all-nodes (cluster-nodes conn)]
-    (count (filter #(contains? (:flags %) "master") all-nodes))))
+  ([nodes docker-host?]
+   (count-masters nodes docker-host? default-base-port))
+  ([nodes docker-host? base-port]
+   (let [conn (conn-for-raft-node (first nodes) docker-host? base-port)
+         all-nodes (cluster-nodes conn)]
+     (count (filter #(contains? (:flags %) "master") all-nodes)))))

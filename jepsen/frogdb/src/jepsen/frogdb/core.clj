@@ -123,6 +123,9 @@
                                      (keyword (:workload opts)))
         multi-node? (or replication? replication-workload?)
         cluster-mode? (or cluster? cluster-workload?)
+        topology (cond cluster-mode? :raft
+                       multi-node? :replication
+                       :else :single)
         nodes (cond
                 local? ["n1"]
                 cluster-mode? (vec (map #(str "n" (inc %)) (range cluster-node-count)))
@@ -131,7 +134,8 @@
                 :else (or (:nodes opts) ["n1"]))]
     (merge tests/noop-test
            opts
-           {:name (str "frogdb-" (:workload opts)
+           {:topology topology
+            :name (str "frogdb-" (:workload opts)
                        (when (not= "none" (:nemesis opts))
                          (str "-" (:nemesis opts)))
                        (when local? "-local")
@@ -144,7 +148,8 @@
             :db (cond
                   local? (db/local-db)
                   cluster-mode? (cluster-db/cluster-db {:initial-nodes nodes
-                                                         :docker-host? true})
+                                                         :docker-host? true
+                                                         :base-port (:base-port opts)})
                   multi-node? (db/replication-db)
                   docker? (db/docker-db)
                   :else (db/docker-db))
@@ -220,7 +225,12 @@
    [nil "--cluster-nodes NUM" "Number of cluster nodes (default 3)"
     :default 3
     :parse-fn #(Integer/parseInt %)
-    :validate [#(and (>= % 1) (<= % 5)) "Must be between 1 and 5"]]])
+    :validate [#(and (>= % 1) (<= % 5)) "Must be between 1 and 5"]]
+
+   [nil "--base-port PORT" "Base host port for Docker port mapping (default 16379)"
+    :default 16379
+    :parse-fn #(Integer/parseInt %)
+    :validate [pos? "Must be positive"]]])
 
 (def all-cli-opts
   "All CLI options including Jepsen's standard options."

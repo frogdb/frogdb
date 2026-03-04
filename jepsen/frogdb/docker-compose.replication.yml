@@ -6,10 +6,10 @@
 #   n2 - Replica node (replicates from n1)
 #   n3 - Replica node (replicates from n1)
 #
-# Ports (from host):
-#   n1: localhost:6379
-#   n2: localhost:6380
-#   n3: localhost:6381
+# Ports (from host, default base=16379):
+#   n1: localhost:16379
+#   n2: localhost:16380
+#   n3: localhost:16381
 
 services:
   n1:
@@ -17,10 +17,10 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
-    container_name: frogdb-n1
+    container_name: frogdb-repl-n1
     hostname: n1
     ports:
-      - "6379:6379"
+      - "${FROGDB_PORT_N1:-16379}:6379"
     volumes:
       - frogdb-n1-data:/data
     environment:
@@ -45,10 +45,10 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
-    container_name: frogdb-n2
+    container_name: frogdb-repl-n2
     hostname: n2
     ports:
-      - "6380:6379"
+      - "${FROGDB_PORT_N2:-16380}:6379"
     volumes:
       - frogdb-n2-data:/data
     environment:
@@ -78,10 +78,10 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
-    container_name: frogdb-n3
+    container_name: frogdb-repl-n3
     hostname: n3
     ports:
-      - "6381:6379"
+      - "${FROGDB_PORT_N3:-16381}:6379"
     volumes:
       - frogdb-n3-data:/data
     environment:

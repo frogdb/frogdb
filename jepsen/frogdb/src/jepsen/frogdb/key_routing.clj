@@ -60,33 +60,37 @@
 
 (defn track-redirect
   "Execute a command and track any redirects."
-  [slot-mapping-atom initial-node key cmd-vec docker-host? nodes]
-  (let [result (cluster-client/execute-with-redirect
-                 slot-mapping-atom initial-node key cmd-vec docker-host? nodes)]
-    {:value (:value result)
-     :redirects (:redirects result)}))
+  ([slot-mapping-atom initial-node key cmd-vec docker-host? nodes]
+   (track-redirect slot-mapping-atom initial-node key cmd-vec docker-host? nodes cluster-db/default-base-port))
+  ([slot-mapping-atom initial-node key cmd-vec docker-host? nodes base-port]
+   (let [result (cluster-client/execute-with-redirect
+                  slot-mapping-atom initial-node key cmd-vec docker-host? nodes base-port)]
+     {:value (:value result)
+      :redirects (:redirects result)})))
 
 ;; ===========================================================================
 ;; Client Implementation
 ;; ===========================================================================
 
-(defrecord KeyRoutingClient [nodes docker-host? slot-mapping routing-stats]
+(defrecord KeyRoutingClient [nodes docker-host? base-port slot-mapping routing-stats]
   client/Client
 
   (open! [this test node]
     (let [docker? (get test :docker true)
-          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])]
+          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])
+          bp (get test :base-port cluster-db/default-base-port)]
       (info "Opening key routing client")
       (assoc this
              :nodes all-nodes
              :docker-host? docker?
-             :slot-mapping (atom (cluster-client/create-slot-mapping all-nodes docker?))
+             :base-port bp
+             :slot-mapping (atom (cluster-client/create-slot-mapping all-nodes docker? bp))
              :routing-stats (atom (->RoutingStats 0 0 0)))))
 
   (setup! [this test]
     ;; Refresh slot mapping
     (when slot-mapping
-      (reset! slot-mapping (cluster-client/refresh-slot-mapping @slot-mapping (first nodes) docker-host?)))
+      (reset! slot-mapping (cluster-client/refresh-slot-mapping @slot-mapping (first nodes) docker-host? base-port)))
     this)
 
   (invoke! [this test op]
@@ -95,7 +99,7 @@
         :write
         (let [key (or (:key (:value op)) (random-key))
               value (or (:value (:value op)) (rand-int 10000))
-              result (track-redirect slot-mapping nil key ["SET" key (str value)] docker-host? nodes)]
+              result (track-redirect slot-mapping nil key ["SET" key (str value)] docker-host? nodes base-port)]
           (swap! routing-stats update :total-ops inc)
           (when (> (:redirects result) 0)
             (swap! routing-stats update :moved-count + (:redirects result)))
@@ -106,7 +110,7 @@
 
         :read
         (let [key (or (:value op) (random-key))
-              result (track-redirect slot-mapping nil key ["GET" key] docker-host? nodes)]
+              result (track-redirect slot-mapping nil key ["GET" key] docker-host? nodes base-port)]
           (swap! routing-stats update :total-ops inc)
           (when (> (:redirects result) 0)
             (swap! routing-stats update :moved-count + (:redirects result)))
@@ -118,7 +122,7 @@
         :targeted-write
         (let [{:keys [slot value]} (:value op)
               key (key-for-slot slot)
-              result (track-redirect slot-mapping nil key ["SET" key (str value)] docker-host? nodes)]
+              result (track-redirect slot-mapping nil key ["SET" key (str value)] docker-host? nodes base-port)]
           (swap! routing-stats update :total-ops inc)
           (assoc op :type :ok :value {:key key
                                        :slot slot
@@ -128,7 +132,7 @@
         :targeted-read
         (let [slot (:value op)
               key (key-for-slot slot)
-              result (track-redirect slot-mapping nil key ["GET" key] docker-host? nodes)]
+              result (track-redirect slot-mapping nil key ["GET" key] docker-host? nodes base-port)]
           (swap! routing-stats update :total-ops inc)
           (assoc op :type :ok :value {:key key
                                        :slot slot
@@ -153,9 +157,9 @@
               slot (cluster-client/slot-for-key key)
               ;; Temporarily point slot to wrong node
               _ (swap! slot-mapping assoc-in [:slots-to-nodes slot]
-                       (let [info (get cluster-db/raft-cluster-host-ports target-node)]
+                       (let [info (get (cluster-db/raft-cluster-host-ports base-port) target-node)]
                          (str (:host info) ":" (:port info))))
-              result (track-redirect slot-mapping nil key ["GET" key] docker-host? nodes)]
+              result (track-redirect slot-mapping nil key ["GET" key] docker-host? nodes base-port)]
           (assoc op :type :ok :value {:key key
                                        :slot slot
                                        :forced-node target-node
@@ -164,7 +168,7 @@
 
         :refresh-mapping
         (do
-          (reset! slot-mapping (cluster-client/refresh-slot-mapping @slot-mapping (first nodes) docker-host?))
+          (reset! slot-mapping (cluster-client/refresh-slot-mapping @slot-mapping (first nodes) docker-host? base-port))
           (assoc op :type :ok :value :refreshed))
 
         :get-routing-stats

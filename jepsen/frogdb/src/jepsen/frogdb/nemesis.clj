@@ -357,11 +357,11 @@
       nil)))
 
 (defn container-name
-  "Get the container name for a node (standard or Raft cluster)."
-  [node cluster-mode?]
-  (if cluster-mode?
-    (str "frogdb-raft-" node)
-    (str "frogdb-" node)))
+  "Get the container name for a node.
+   Accepts a topology keyword (:single, :replication, :raft) or
+   a boolean (true = :raft, false = :single) for backward compatibility."
+  [node topology-or-cluster?]
+  (frogdb-db/container-name node topology-or-cluster?))
 
 ;; ===========================================================================
 ;; Clock Skew Nemesis (using libfaketime via date manipulation)
@@ -947,11 +947,11 @@
               (let [leader "n1"
                     followers (remove #{leader} (keys raft-node-ips))]
                 (doseq [f followers]
-                  (let [container (str "frogdb-raft-" leader)
+                  (let [container (container-name leader :raft)
                         target-ip (get raft-node-ips f)]
                     (docker-exec-ignore-error container "iptables" "-A" "INPUT" "-s" target-ip "-j" "DROP")
                     (docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" target-ip "-j" "DROP"))
-                  (let [container (str "frogdb-raft-" f)
+                  (let [container (container-name f :raft)
                         leader-ip (get raft-node-ips leader)]
                     (docker-exec-ignore-error container "iptables" "-A" "INPUT" "-s" leader-ip "-j" "DROP")
                     (docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" leader-ip "-j" "DROP"))))
@@ -964,11 +964,11 @@
                     majority ["n1" "n2" "n3"]]
                 (doseq [m minority
                         maj majority]
-                  (let [m-container (str "frogdb-raft-" m)
+                  (let [m-container (container-name m :raft)
                         maj-ip (get raft-node-ips maj)]
                     (docker-exec-ignore-error m-container "iptables" "-A" "INPUT" "-s" maj-ip "-j" "DROP")
                     (docker-exec-ignore-error m-container "iptables" "-A" "OUTPUT" "-d" maj-ip "-j" "DROP"))
-                  (let [maj-container (str "frogdb-raft-" maj)
+                  (let [maj-container (container-name maj :raft)
                         m-ip (get raft-node-ips m)]
                     (docker-exec-ignore-error maj-container "iptables" "-A" "INPUT" "-s" m-ip "-j" "DROP")
                     (docker-exec-ignore-error maj-container "iptables" "-A" "OUTPUT" "-d" m-ip "-j" "DROP"))))
@@ -977,7 +977,7 @@
             :asymmetric
             (do
               (info "Partitioning: asymmetric (n1 can reach n2, but n2 cannot reach n1)")
-              (let [container "frogdb-raft-n2"
+              (let [container (container-name "n2" :raft)
                     target-ip (get raft-node-ips "n1")]
                 (docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" target-ip "-j" "DROP"))
               (assoc op :value :asymmetric))
@@ -988,11 +988,11 @@
                     others (remove #{node} (keys raft-node-ips))]
                 (info "Partitioning: isolating" node)
                 (doseq [other others]
-                  (let [container (str "frogdb-raft-" node)
+                  (let [container (container-name node :raft)
                         other-ip (get raft-node-ips other)]
                     (docker-exec-ignore-error container "iptables" "-A" "INPUT" "-s" other-ip "-j" "DROP")
                     (docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" other-ip "-j" "DROP"))
-                  (let [other-container (str "frogdb-raft-" other)
+                  (let [other-container (container-name other :raft)
                         node-ip (get raft-node-ips node)]
                     (docker-exec-ignore-error other-container "iptables" "-A" "INPUT" "-s" node-ip "-j" "DROP")
                     (docker-exec-ignore-error other-container "iptables" "-A" "OUTPUT" "-d" node-ip "-j" "DROP")))
@@ -1005,13 +1005,13 @@
           (do
             (info "Healing all Raft cluster partitions")
             (doseq [node (keys raft-node-ips)]
-              (let [container (str "frogdb-raft-" node)]
+              (let [container (container-name node :raft)]
                 (docker-exec-ignore-error container "iptables" "-F")))
             (assoc op :value :healed))))
 
       (teardown! [this test]
         (doseq [node (keys raft-node-ips)]
-          (let [container (str "frogdb-raft-" node)]
+          (let [container (container-name node :raft)]
             (docker-exec-ignore-error container "iptables" "-F")))))))
 
 (defn raft-cluster-nemesis

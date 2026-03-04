@@ -10,23 +10,31 @@
 
 (def default-port 6379)
 (def default-timeout-ms 5000)
+(def default-base-port 16379)
 
-;; When running in Docker mode from the host, node "n1" maps to localhost:6379
-(def docker-host-map
-  {"n1" {:host "localhost" :port 6379}
-   "n2" {:host "localhost" :port 6380}
-   "n3" {:host "localhost" :port 6381}})
+(defn docker-host-map
+  "Map of node names to host:port for Docker host access.
+   base-port is the starting host port (default 16379)."
+  ([] (docker-host-map default-base-port))
+  ([base-port]
+   {"n1" {:host "localhost" :port base-port}
+    "n2" {:host "localhost" :port (+ base-port 1)}
+    "n3" {:host "localhost" :port (+ base-port 2)}}))
 
 (defn conn-spec
   "Create a Carmine connection spec for the given node.
-   If docker-host? is true, resolves node names to localhost ports."
+   If docker-host? is true, resolves node names to localhost ports.
+   base-port controls the starting host port (default 16379)."
   ([node]
    (conn-spec node default-port false))
   ([node port]
    (conn-spec node port false))
   ([node port docker-host?]
-   (let [resolved (if (and docker-host? (get docker-host-map node))
-                    (get docker-host-map node)
+   (conn-spec node port docker-host? default-base-port))
+  ([node port docker-host? base-port]
+   (let [host-map (docker-host-map base-port)
+         resolved (if (and docker-host? (get host-map node))
+                    (get host-map node)
                     {:host node :port port})]
      {:pool {}
       :spec {:host (:host resolved)
@@ -289,9 +297,9 @@
 
 (defn wait-for-ready
   "Wait for FrogDB to be ready to accept connections."
-  [node & {:keys [timeout-ms interval-ms docker-host?]
-           :or {timeout-ms 30000 interval-ms 500 docker-host? true}}]
-  (let [conn (conn-spec node default-port docker-host?)
+  [node & {:keys [timeout-ms interval-ms docker-host? base-port]
+           :or {timeout-ms 30000 interval-ms 500 docker-host? true base-port default-base-port}}]
+  (let [conn (conn-spec node default-port docker-host? base-port)
         deadline (+ (System/currentTimeMillis) timeout-ms)]
     (loop []
       (cond
@@ -311,30 +319,37 @@
 ;; Multi-Node Connection Support
 ;; ===========================================================================
 
-(def node-ports
-  "Map of node names to their ports (for multi-node testing)."
-  {"n1" 6379
-   "n2" 6380
-   "n3" 6381})
+(defn node-ports
+  "Map of node names to their host ports (for multi-node testing)."
+  ([] (node-ports default-base-port))
+  ([base-port]
+   {"n1" base-port
+    "n2" (+ base-port 1)
+    "n3" (+ base-port 2)}))
 
 (defn conn-for-node
   "Create a connection spec for a specific node in multi-node mode.
    Uses docker-host-map for port resolution when running from host."
-  [node docker-host?]
-  (let [resolved (if docker-host?
-                   (get docker-host-map node {:host node :port default-port})
-                   {:host node :port default-port})]
-    {:pool {}
-     :spec {:host (:host resolved)
-            :port (:port resolved)
-            :timeout-ms default-timeout-ms}}))
+  ([node docker-host?]
+   (conn-for-node node docker-host? default-base-port))
+  ([node docker-host? base-port]
+   (let [host-map (docker-host-map base-port)
+         resolved (if docker-host?
+                    (get host-map node {:host node :port default-port})
+                    {:host node :port default-port})]
+     {:pool {}
+      :spec {:host (:host resolved)
+             :port (:port resolved)
+             :timeout-ms default-timeout-ms}})))
 
 (defn all-node-conns
   "Create connections to all nodes in the cluster.
    Returns a map of {node -> conn-spec}."
-  [nodes docker-host?]
-  (into {} (for [node nodes]
-             [node (conn-for-node node docker-host?)])))
+  ([nodes docker-host?]
+   (all-node-conns nodes docker-host? default-base-port))
+  ([nodes docker-host? base-port]
+   (into {} (for [node nodes]
+              [node (conn-for-node node docker-host? base-port)]))))
 
 ;; ===========================================================================
 ;; Replication Commands
