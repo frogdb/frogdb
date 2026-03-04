@@ -5096,7 +5096,13 @@ async fn test_e2e_migration_ask_redirect() {
     let resp = send_cluster_cmd(
         &harness,
         target_id,
-        &["SETSLOT", &slot_str, "IMPORTING", &source_cluster_id],
+        &[
+            "SETSLOT",
+            &slot_str,
+            "IMPORTING",
+            &source_cluster_id,
+            &target_cluster_id,
+        ],
     )
     .await;
     assert!(!is_error(&resp), "SETSLOT IMPORTING failed: {:?}", resp);
@@ -5105,7 +5111,13 @@ async fn test_e2e_migration_ask_redirect() {
     let resp = send_cluster_cmd(
         &harness,
         source_id,
-        &["SETSLOT", &slot_str, "MIGRATING", &target_cluster_id],
+        &[
+            "SETSLOT",
+            &slot_str,
+            "MIGRATING",
+            &target_cluster_id,
+            &source_cluster_id,
+        ],
     )
     .await;
     assert!(!is_error(&resp), "SETSLOT MIGRATING failed: {:?}", resp);
@@ -5183,6 +5195,11 @@ async fn test_e2e_migration_moved_after_complete() {
         .unwrap();
     harness
         .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+    // Wait for Raft self-registration to propagate correct node addresses
+    harness
+        .wait_for_address_convergence(Duration::from_secs(10))
         .await
         .unwrap();
 
@@ -5348,7 +5365,13 @@ async fn test_e2e_migration_concurrent_writes() {
     let resp = send_cluster_cmd(
         &harness,
         target_id,
-        &["SETSLOT", &slot_str, "IMPORTING", &source_cluster_id],
+        &[
+            "SETSLOT",
+            &slot_str,
+            "IMPORTING",
+            &source_cluster_id,
+            &target_cluster_id,
+        ],
     )
     .await;
     assert!(!is_error(&resp), "SETSLOT IMPORTING failed: {:?}", resp);
@@ -5356,7 +5379,13 @@ async fn test_e2e_migration_concurrent_writes() {
     let resp = send_cluster_cmd(
         &harness,
         source_id,
-        &["SETSLOT", &slot_str, "MIGRATING", &target_cluster_id],
+        &[
+            "SETSLOT",
+            &slot_str,
+            "MIGRATING",
+            &target_cluster_id,
+            &source_cluster_id,
+        ],
     )
     .await;
     assert!(!is_error(&resp), "SETSLOT MIGRATING failed: {:?}", resp);

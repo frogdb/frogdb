@@ -666,6 +666,70 @@ impl ClusterTestHarness {
         Err(ClusterError::new("Timeout waiting for cluster convergence"))
     }
 
+    /// Wait for Raft self-registration to propagate correct node addresses.
+    /// Each node proposes AddNode for itself via Raft; this waits until all nodes
+    /// see the correct client addresses for every peer.
+    pub async fn wait_for_address_convergence(
+        &self,
+        timeout_duration: Duration,
+    ) -> Result<(), ClusterError> {
+        let start = std::time::Instant::now();
+
+        while start.elapsed() < timeout_duration {
+            let mut all_correct = true;
+
+            // Pick any running node's cluster state and check all addresses
+            for &checker_id in &self.node_order {
+                let Some(checker) = self.nodes.get(&checker_id) else {
+                    continue;
+                };
+                if !checker.is_running() {
+                    continue;
+                }
+                let Some(cs) = checker.cluster_state() else {
+                    all_correct = false;
+                    break;
+                };
+                let snapshot = cs.snapshot();
+
+                for &peer_id in &self.node_order {
+                    let Some(peer) = self.nodes.get(&peer_id) else {
+                        continue;
+                    };
+                    if !peer.is_running() {
+                        continue;
+                    }
+                    let expected_addr = peer.client_addr();
+                    let peer_node_id = peer.node_id();
+
+                    if let Some(info) = snapshot.nodes.get(&peer_node_id) {
+                        if info.addr.to_string() != expected_addr {
+                            all_correct = false;
+                            break;
+                        }
+                    } else {
+                        all_correct = false;
+                        break;
+                    }
+                }
+
+                if !all_correct {
+                    break;
+                }
+            }
+
+            if all_correct {
+                return Ok(());
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        Err(ClusterError::new(
+            "Timeout waiting for node address convergence",
+        ))
+    }
+
     /// Wait for a specific node to be recognized by all other nodes.
     pub async fn wait_for_node_recognized(
         &self,

@@ -111,10 +111,12 @@ impl ClusterState {
         let mut inner = self.inner.write();
         let node_id = node.id;
         let node_addr = node.addr;
-        inner.nodes.entry(node.id).or_insert_with(|| {
+        if inner.nodes.contains_key(&node.id) {
+            tracing::info!(node_id = node_id, addr = %node_addr, "Updating node in local cluster state");
+        } else {
             tracing::info!(node_id = node_id, addr = %node_addr, "Adding node to local cluster state");
-            node
-        });
+        }
+        inner.nodes.insert(node.id, node);
     }
 
     /// Assign slots to a node directly (for local initialization during bootstrap).
@@ -147,10 +149,12 @@ impl ClusterState {
 
         match cmd {
             ClusterCommand::AddNode { node } => {
-                if inner.nodes.contains_key(&node.id) {
-                    return Err(ClusterError::NodeAlreadyExists(node.id));
+                let existed = inner.nodes.contains_key(&node.id);
+                if existed {
+                    tracing::info!(node_id = node.id, addr = %node.addr, "Updated node in cluster");
+                } else {
+                    tracing::info!(node_id = node.id, addr = %node.addr, "Adding node to cluster");
                 }
-                tracing::info!(node_id = node.id, addr = %node.addr, "Adding node to cluster");
                 inner.nodes.insert(node.id, node);
                 Ok(ClusterResponse::Ok)
             }
@@ -553,9 +557,16 @@ mod tests {
         state
             .apply_command(ClusterCommand::AddNode { node: node.clone() })
             .unwrap();
-        let result = state.apply_command(ClusterCommand::AddNode { node });
+        // AddNode is an upsert — adding the same node again should succeed
+        let result = state.apply_command(ClusterCommand::AddNode {
+            node: NodeInfo::new_primary(1, test_addr(6380), test_addr(16380)),
+        });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
 
-        assert!(matches!(result, Err(ClusterError::NodeAlreadyExists(1))));
+        // Verify the node was updated with the new addresses
+        let info = state.get_node(1).unwrap();
+        assert_eq!(info.addr, test_addr(6380));
+        assert_eq!(info.cluster_addr, test_addr(16380));
     }
 
     #[test]

@@ -625,10 +625,13 @@ impl Server {
             }
 
             // Add this node to the cluster state (ensure it's there even if not in initial_members)
-            let client_addr = format!("{}:{}", config.server.bind, config.server.port)
-                .parse()
-                .map_err(|e| anyhow::anyhow!("Invalid bind address: {}", e))?;
-            let cluster_bus_addr = config.cluster.cluster_bus_socket_addr();
+            // Use the actual bound addresses (not config) to handle OS-assigned ports (port 0).
+            let client_addr = listener.local_addr()?;
+            let cluster_bus_addr = cluster_bus_listener
+                .as_ref()
+                .map(|l| l.local_addr())
+                .transpose()?
+                .unwrap_or_else(|| config.cluster.cluster_bus_socket_addr());
             let this_node =
                 frogdb_core::cluster::NodeInfo::new_primary(node_id, client_addr, cluster_bus_addr);
             cluster.add_node(this_node);
@@ -657,10 +660,79 @@ impl Server {
                 );
             }
 
+            let raft = Arc::new(raft);
+
+            // Spawn self-registration via Raft so all nodes converge on correct peer
+            // addresses. The initial add_node() calls above use guessed client ports
+            // (cluster_port - 10000), which are wrong when ports are OS-assigned.
+            // Each node knows its own real addresses, so it proposes AddNode for itself
+            // via Raft consensus to correct the cluster state.
+            // Leaders propose directly; followers forward through the cluster bus.
+            {
+                let raft_clone = raft.clone();
+                let network_factory = network_factory_clone.clone();
+                let self_node = frogdb_core::cluster::NodeInfo::new_primary(
+                    node_id,
+                    client_addr,
+                    cluster_bus_addr,
+                );
+                tokio::spawn(async move {
+                    for attempt in 0..30 {
+                        let cmd = frogdb_core::cluster::ClusterCommand::AddNode {
+                            node: self_node.clone(),
+                        };
+                        match raft_clone.client_write(cmd).await {
+                            Ok(_) => {
+                                info!(
+                                    node_id = node_id,
+                                    "Registered self in cluster state via Raft"
+                                );
+                                return;
+                            }
+                            Err(e) => {
+                                // Check if this is a ForwardToLeader error
+                                use openraft::error::{ClientWriteError, RaftError};
+                                if let RaftError::APIError(ClientWriteError::ForwardToLeader(fwd)) =
+                                    &e
+                                    && let Some(leader_id) = fwd.leader_id
+                                    && let Some(leader_addr) =
+                                        network_factory.get_node_addr(leader_id)
+                                {
+                                    let net = frogdb_core::cluster::ClusterNetwork::new(
+                                        leader_id,
+                                        leader_addr,
+                                    );
+                                    let fwd_cmd = frogdb_core::cluster::ClusterCommand::AddNode {
+                                        node: self_node.clone(),
+                                    };
+                                    if net.forward_write(fwd_cmd).await.is_ok() {
+                                        info!(
+                                            node_id = node_id,
+                                            leader_id = leader_id,
+                                            "Registered self via leader forward"
+                                        );
+                                        return;
+                                    }
+                                }
+                                if attempt < 29 {
+                                    tokio::time::sleep(Duration::from_millis(500)).await;
+                                } else {
+                                    warn!(
+                                        node_id = node_id,
+                                        error = %e,
+                                        "Failed to self-register after 30 attempts"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
             (
                 Some(Arc::new(cluster)),
                 Some(node_id),
-                Some(Arc::new(raft)),
+                Some(raft),
                 Some(Arc::new(network_factory_clone)),
             )
         } else {

@@ -980,10 +980,10 @@ impl ScoreBound {
     fn to_btree_lower(self) -> std::ops::Bound<(OrderedFloat<f64>, Bytes)> {
         match self {
             ScoreBound::NegInf => std::ops::Bound::Unbounded,
-            ScoreBound::PosInf => std::ops::Bound::Excluded((OrderedFloat(f64::INFINITY), Bytes::new())),
-            ScoreBound::Inclusive(v) => {
-                std::ops::Bound::Included((OrderedFloat(v), Bytes::new()))
+            ScoreBound::PosInf => {
+                std::ops::Bound::Excluded((OrderedFloat(f64::INFINITY), Bytes::new()))
             }
+            ScoreBound::Inclusive(v) => std::ops::Bound::Included((OrderedFloat(v), Bytes::new())),
             ScoreBound::Exclusive(v) => {
                 // No floats between v and next_up, so Included(next_up) excludes v
                 std::ops::Bound::Included((OrderedFloat(v.next_up()), Bytes::new()))
@@ -995,7 +995,9 @@ impl ScoreBound {
     fn to_btree_upper(self) -> std::ops::Bound<(OrderedFloat<f64>, Bytes)> {
         match self {
             ScoreBound::PosInf => std::ops::Bound::Unbounded,
-            ScoreBound::NegInf => std::ops::Bound::Excluded((OrderedFloat(f64::NEG_INFINITY), Bytes::new())),
+            ScoreBound::NegInf => {
+                std::ops::Bound::Excluded((OrderedFloat(f64::NEG_INFINITY), Bytes::new()))
+            }
             ScoreBound::Inclusive(v) => {
                 let next = v.next_up();
                 if next.is_infinite() && !v.is_infinite() {
@@ -1168,11 +1170,7 @@ impl ScoreIndex {
         }
     }
 
-    fn range_by_score_iter<'a>(
-        &'a self,
-        min: &ScoreBound,
-        max: &ScoreBound,
-    ) -> ScoreIndexIter<'a> {
+    fn range_by_score_iter<'a>(&'a self, min: &ScoreBound, max: &ScoreBound) -> ScoreIndexIter<'a> {
         match self {
             ScoreIndex::BTree(bt) => {
                 ScoreIndexIter::BTreeRange(bt.range((min.to_btree_lower(), max.to_btree_upper())))
@@ -1207,8 +1205,7 @@ impl ScoreIndex {
     ) -> ScoreIndexRevIter<'a> {
         match self {
             ScoreIndex::BTree(bt) => ScoreIndexRevIter::BTreeRange(
-                bt.range((min.to_btree_lower(), max.to_btree_upper()))
-                    .rev(),
+                bt.range((min.to_btree_lower(), max.to_btree_upper())).rev(),
             ),
             ScoreIndex::SkipList(_) => {
                 // For reverse score range on skip list, we use the forward range
@@ -1243,13 +1240,12 @@ impl ScoreIndex {
 
     fn memory_size(&self) -> usize {
         match self {
-            ScoreIndex::BTree(bt) => {
-                bt.iter()
-                    .map(|((_, member), _)| {
-                        member.len() + std::mem::size_of::<OrderedFloat<f64>>() + 32
-                    })
-                    .sum()
-            }
+            ScoreIndex::BTree(bt) => bt
+                .iter()
+                .map(|((_, member), _)| {
+                    member.len() + std::mem::size_of::<OrderedFloat<f64>>() + 32
+                })
+                .sum(),
             ScoreIndex::SkipList(sl) => sl.memory_size(),
         }
     }
@@ -1258,9 +1254,7 @@ impl ScoreIndex {
 /// Forward iterator over ScoreIndex entries.
 enum ScoreIndexIter<'a> {
     BTree(std::collections::btree_map::Iter<'a, (OrderedFloat<f64>, Bytes), ()>),
-    BTreeRange(
-        std::collections::btree_map::Range<'a, (OrderedFloat<f64>, Bytes), ()>,
-    ),
+    BTreeRange(std::collections::btree_map::Range<'a, (OrderedFloat<f64>, Bytes), ()>),
     BTreeSkip {
         inner: std::collections::btree_map::Iter<'a, (OrderedFloat<f64>, Bytes), ()>,
         skip: usize,
@@ -1330,9 +1324,7 @@ impl<'a> Iterator for ScoreIndexIter<'a> {
 enum ScoreIndexRevIter<'a> {
     BTree(std::iter::Rev<std::collections::btree_map::Iter<'a, (OrderedFloat<f64>, Bytes), ()>>),
     BTreeRange(
-        std::iter::Rev<
-            std::collections::btree_map::Range<'a, (OrderedFloat<f64>, Bytes), ()>,
-        >,
+        std::iter::Rev<std::collections::btree_map::Range<'a, (OrderedFloat<f64>, Bytes), ()>>,
     ),
     SkipList(crate::skiplist::SkipListRevIter<'a>),
     Collected(std::vec::IntoIter<(OrderedFloat<f64>, &'a Bytes)>),
@@ -1410,10 +1402,8 @@ impl SortedSetValue {
                 };
             }
             // Remove old entry from index, insert new entry
-            self.index
-                .remove(OrderedFloat(old_score), &member);
-            self.index
-                .insert(OrderedFloat(score), member.clone());
+            self.index.remove(OrderedFloat(old_score), &member);
+            self.index.insert(OrderedFloat(score), member.clone());
             self.members.insert(member, score);
             ZAddResult {
                 added: false,
@@ -1422,8 +1412,7 @@ impl SortedSetValue {
             }
         } else {
             // New member: insert into index first (needs clone), then move into members
-            self.index
-                .insert(OrderedFloat(score), member.clone());
+            self.index.insert(OrderedFloat(score), member.clone());
             self.members.insert(member, score);
             ZAddResult {
                 added: true,
@@ -1483,10 +1472,8 @@ impl SortedSetValue {
         }
 
         if existing.is_some() {
-            self.index
-                .remove(OrderedFloat(old_score), &member);
-            self.index
-                .insert(OrderedFloat(new_score), member.clone());
+            self.index.remove(OrderedFloat(old_score), &member);
+            self.index.insert(OrderedFloat(new_score), member.clone());
             self.members.insert(member, new_score);
         } else {
             self.members.insert(member.clone(), new_score);
@@ -1831,9 +1818,7 @@ impl SortedSetValue {
 
     /// Iterate over all members in score order.
     pub fn iter(&self) -> impl Iterator<Item = (&Bytes, f64)> + '_ {
-        self.index
-            .iter()
-            .map(|(score, member)| (member, score.0))
+        self.index.iter().map(|(score, member)| (member, score.0))
     }
 
     /// Get all members and scores as a vec for serialization.

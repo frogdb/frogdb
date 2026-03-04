@@ -14,7 +14,10 @@
 mod admin;
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, slot_for_key};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy, slot_for_key,
+};
 use frogdb_protocol::Response;
 
 // ============================================================================
@@ -692,6 +695,10 @@ impl Command for AskingCommand {
         CommandFlags::FAST | CommandFlags::STALE
     }
 
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
+    }
+
     fn execute(
         &self,
         _ctx: &mut CommandContext,
@@ -727,6 +734,10 @@ impl Command for ReadonlyCommand {
         CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
     }
 
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
+    }
+
     fn execute(
         &self,
         _ctx: &mut CommandContext,
@@ -759,6 +770,10 @@ impl Command for ReadwriteCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
     }
 
     fn execute(

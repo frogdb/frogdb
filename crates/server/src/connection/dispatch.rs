@@ -480,6 +480,12 @@ impl ConnectionHandler {
             self.route_and_execute(cmd, cmd_name).await
         };
 
+        // For MIGRATING slots: if the key doesn't exist locally (nil response),
+        // convert to ASK redirect so the client retries on the importing target.
+        if let Some(ask) = self.migrating_ask_for_nil(cmd, &response) {
+            return vec![ask];
+        }
+
         // Handle internal action signals (blocking, raft, migrate)
         vec![self.handle_internal_action(response).await]
     }
