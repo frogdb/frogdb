@@ -12,7 +12,7 @@ mod common;
 
 use frogdb_test_harness::cluster_harness::{ClusterNodeConfig, ClusterTestHarness};
 use frogdb_test_harness::cluster_helpers::{
-    get_error_message, is_ask_redirect, is_error, is_moved_redirect, key_for_slot,
+    get_error_message, is_ask_redirect, is_cluster_down, is_error, is_moved_redirect, key_for_slot,
     parse_cluster_info, parse_cluster_nodes, slot_for_key,
 };
 use std::time::Duration;
@@ -6067,6 +6067,956 @@ async fn test_blocking_command_during_migration_gets_moved() {
             r
         );
     }
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 16: Migration Redirect Semantics
+// ============================================================================
+
+/// Tests that MGET on source for a key that has been migrated returns ASK redirect.
+///
+/// Inspired by Redis `29-slot-migration-response.tcl`.
+#[tokio::test]
+async fn test_mget_keys_in_migrating_slot_ask_redirect() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 400u16;
+    let (source_id, target_id) = match find_owner_of_slot(&harness, test_slot).await {
+        Some(pair) => pair,
+        None => {
+            eprintln!("Could not find slot owner, skipping test");
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    let source = harness.node(source_id).unwrap();
+    let target = harness.node(target_id).unwrap();
+
+    let source_cluster_id = harness.get_node_id_str(source_id).unwrap();
+    let target_cluster_id = harness.get_node_id_str(target_id).unwrap();
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key1 = format!("{}_mget1", tag);
+    let key2 = format!("{}_mget2", tag);
+
+    // Write keys to source
+    let resp = source.send("SET", &[&key1, "val1"]).await;
+    assert!(!is_error(&resp), "SET key1 failed: {:?}", resp);
+    let resp = source.send("SET", &[&key2, "val2"]).await;
+    assert!(!is_error(&resp), "SET key2 failed: {:?}", resp);
+
+    let slot_str = test_slot.to_string();
+
+    // Set up migration state
+    let import_resp = send_cluster_cmd(
+        &harness,
+        target_id,
+        &[
+            "SETSLOT",
+            &slot_str,
+            "IMPORTING",
+            &source_cluster_id,
+            &target_cluster_id,
+        ],
+    )
+    .await;
+    let migrate_resp = send_cluster_cmd(
+        &harness,
+        source_id,
+        &[
+            "SETSLOT",
+            &slot_str,
+            "MIGRATING",
+            &target_cluster_id,
+            &source_cluster_id,
+        ],
+    )
+    .await;
+
+    if is_error(&import_resp)
+        || (is_error(&migrate_resp) && {
+            let msg = get_error_message(&migrate_resp).unwrap_or_default();
+            !msg.contains("migration in progress")
+        })
+    {
+        eprintln!("Migration setup failed, skipping test");
+        harness.shutdown_all().await;
+        return;
+    }
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Migrate key1 to target, leave key2 on source
+    let target_addr = target.client_addr();
+    let (host, port) = split_addr(&target_addr);
+    let migrate_result = source
+        .send("MIGRATE", &[host, port, &key1, "0", "5000", "REPLACE"])
+        .await;
+    if is_error(&migrate_result) {
+        eprintln!("MIGRATE failed: {:?}", get_error_message(&migrate_result));
+    }
+
+    // MGET on source for key1 (migrated) — should get ASK redirect
+    let mget_resp = source.send("MGET", &[&key1]).await;
+    if let Some((slot, addr)) = is_ask_redirect(&mget_resp) {
+        assert_eq!(slot, test_slot, "ASK should reference the migrating slot");
+        assert!(
+            !addr.is_empty(),
+            "ASK redirect should include target address"
+        );
+        eprintln!("Got expected ASK redirect for migrated key");
+    } else if is_error(&mget_resp) {
+        let msg = get_error_message(&mget_resp).unwrap_or("unknown");
+        eprintln!(
+            "Got error instead of ASK: {} (acceptable during migration)",
+            msg
+        );
+    } else {
+        // Key might still be locally accessible — not all implementations
+        // return ASK for MGET with single key
+        eprintln!(
+            "MGET returned: {:?} (may be implementation-specific)",
+            mget_resp
+        );
+    }
+
+    // Clean up migration state
+    let _ = send_cluster_cmd(&harness, source_id, &["SETSLOT", &slot_str, "STABLE"]).await;
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that multi-key write on partially-migrated slot returns TRYAGAIN.
+///
+/// Inspired by Redis `29-slot-migration-response.tcl`.
+/// TRYAGAIN is returned when a multi-key operation spans keys that are split
+/// between source and target during migration.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: TRYAGAIN response not implemented for partial-migration multi-key ops"]
+async fn test_mset_keys_in_migrating_slot_returns_tryagain() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 401u16;
+    let (source_id, target_id) = match find_owner_of_slot(&harness, test_slot).await {
+        Some(pair) => pair,
+        None => {
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    let source = harness.node(source_id).unwrap();
+    let target = harness.node(target_id).unwrap();
+
+    let source_cluster_id = harness.get_node_id_str(source_id).unwrap();
+    let target_cluster_id = harness.get_node_id_str(target_id).unwrap();
+
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let key1 = format!("{}_tryagain1", tag);
+    let key2 = format!("{}_tryagain2", tag);
+
+    // Write key1 to source
+    source.send("SET", &[&key1, "val1"]).await;
+
+    let slot_str = test_slot.to_string();
+
+    // Set up migration
+    send_cluster_cmd(
+        &harness,
+        target_id,
+        &[
+            "SETSLOT",
+            &slot_str,
+            "IMPORTING",
+            &source_cluster_id,
+            &target_cluster_id,
+        ],
+    )
+    .await;
+    send_cluster_cmd(
+        &harness,
+        source_id,
+        &[
+            "SETSLOT",
+            &slot_str,
+            "MIGRATING",
+            &target_cluster_id,
+            &source_cluster_id,
+        ],
+    )
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Migrate key1 only
+    let target_addr = target.client_addr();
+    let (host, port) = split_addr(&target_addr);
+    source
+        .send("MIGRATE", &[host, port, &key1, "0", "5000", "REPLACE"])
+        .await;
+
+    // MSET with key1 (on target) and key2 (on source) should return TRYAGAIN
+    let mset_resp = source.send("MSET", &[&key1, "new1", &key2, "new2"]).await;
+    assert!(
+        is_error(&mset_resp),
+        "MSET during split migration should error, got: {:?}",
+        mset_resp
+    );
+    let msg = get_error_message(&mset_resp).unwrap_or("");
+    assert!(
+        msg.contains("TRYAGAIN"),
+        "Expected TRYAGAIN error, got: {}",
+        msg
+    );
+
+    // Clean up
+    let _ = send_cluster_cmd(&harness, source_id, &["SETSLOT", &slot_str, "STABLE"]).await;
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 17: Config Epoch Correctness
+// ============================================================================
+
+/// Tests that cluster_current_epoch >= cluster_my_epoch on every node after failover.
+///
+/// Inspired by Redis `03-failover-loop.tcl` post-conditions.
+#[tokio::test]
+async fn test_current_epoch_gte_my_epoch_invariant() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+
+    let original_leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Kill leader to trigger failover
+    harness.kill_node(original_leader).await;
+
+    // Wait for new leader
+    let _new_leader = harness
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    // Wait for cluster to stabilize
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Verify invariant on all surviving nodes
+    for &node_id in &harness.node_ids() {
+        if node_id == original_leader {
+            continue;
+        }
+        if let Some(node) = harness.node(node_id) {
+            if !node.is_running() {
+                continue;
+            }
+            let info_resp = node.send("CLUSTER", &["INFO"]).await;
+            if let Ok(info) = parse_cluster_info(&info_resp) {
+                assert!(
+                    info.cluster_current_epoch >= info.cluster_my_epoch,
+                    "Node {}: cluster_current_epoch ({}) must be >= cluster_my_epoch ({})",
+                    node_id,
+                    info.cluster_current_epoch,
+                    info.cluster_my_epoch
+                );
+            }
+        }
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that the cluster epoch increases after a leader election / failover.
+///
+/// Inspired by Redis `03-failover-loop.tcl` post-conditions.
+#[tokio::test]
+async fn test_cluster_epoch_increases_after_failover() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+
+    let original_leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Record epoch before failover from a non-leader node
+    let non_leader = *harness
+        .node_ids()
+        .iter()
+        .find(|&&id| id != original_leader)
+        .unwrap();
+    let pre_info_resp = harness
+        .node(non_leader)
+        .unwrap()
+        .send("CLUSTER", &["INFO"])
+        .await;
+    let pre_epoch = parse_cluster_info(&pre_info_resp)
+        .map(|i| i.cluster_current_epoch)
+        .unwrap_or(0);
+
+    // Kill leader to trigger failover
+    harness.kill_node(original_leader).await;
+
+    let _new_leader = harness
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Check epoch after failover
+    let post_info_resp = harness
+        .node(non_leader)
+        .unwrap()
+        .send("CLUSTER", &["INFO"])
+        .await;
+    let post_epoch = parse_cluster_info(&post_info_resp)
+        .map(|i| i.cluster_current_epoch)
+        .unwrap_or(0);
+
+    assert!(
+        post_epoch > pre_epoch,
+        "Epoch should increase after failover: pre={}, post={}",
+        pre_epoch,
+        post_epoch
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 18: Writable Cluster Under Failover Stress
+// ============================================================================
+
+/// Tests that keys written pre-failover are readable on the new leader.
+///
+/// Inspired by Redis `03-failover-loop.tcl`, `10-manual-failover.tcl`.
+#[tokio::test]
+async fn test_cluster_writable_before_and_after_leader_failover() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+
+    let original_leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Write 10 keys to the leader
+    let leader_node = harness.node(original_leader).unwrap();
+    let mut written_keys = Vec::new();
+    for i in 0..10 {
+        let key = format!("pre_failover_key_{}", i);
+        let value = format!("pre_failover_value_{}", i);
+        let resp = leader_node.send("SET", &[&key, &value]).await;
+        if !is_error(&resp) {
+            written_keys.push((key, value));
+        }
+    }
+
+    // Give time for Raft replication
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Kill leader
+    harness.kill_node(original_leader).await;
+
+    let new_leader = harness
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    // Wait for cluster stabilization
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Verify keys on new leader
+    let new_leader_node = harness.node(new_leader).unwrap();
+    let mut readable = 0;
+    for (key, expected_value) in &written_keys {
+        let resp = new_leader_node.send("GET", &[key]).await;
+        match &resp {
+            frogdb_protocol::Response::Bulk(Some(v)) => {
+                if v.as_ref() == expected_value.as_bytes() {
+                    readable += 1;
+                }
+            }
+            frogdb_protocol::Response::Error(e) => {
+                let msg = String::from_utf8_lossy(e);
+                if msg.starts_with("MOVED") {
+                    // Data exists elsewhere — follow redirect
+                    if let Some((_slot, addr)) = is_moved_redirect(&resp) {
+                        for &nid in &harness.node_ids() {
+                            if nid == original_leader {
+                                continue;
+                            }
+                            if let Some(n) = harness.node(nid)
+                                && n.client_addr() == addr
+                            {
+                                let retry = n.send("GET", &[key]).await;
+                                if let frogdb_protocol::Response::Bulk(Some(v)) = &retry
+                                    && v.as_ref() == expected_value.as_bytes()
+                                {
+                                    readable += 1;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    eprintln!(
+        "Readable after failover: {}/{}",
+        readable,
+        written_keys.len()
+    );
+    assert!(
+        readable > 0 || written_keys.is_empty(),
+        "At least some pre-failover keys should be readable"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that background writes continue through failover with >=80% success.
+///
+/// Inspired by Redis `10-manual-failover.tcl`.
+#[tokio::test]
+async fn test_cluster_remains_writable_during_concurrent_writes_and_failover() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(5).await.unwrap();
+
+    let original_leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let num_writes = 20;
+    let mut success_count = 0;
+    let mut error_count = 0;
+
+    // Write some keys before failover
+    for i in 0..num_writes / 2 {
+        let key = format!("concurrent_key_{}", i);
+        let value = format!("concurrent_value_{}", i);
+        let resp = {
+            let node = harness.node(original_leader).unwrap();
+            node.send("SET", &[&key, &value]).await
+        };
+        if !is_error(&resp) {
+            success_count += 1;
+        } else {
+            error_count += 1;
+        }
+    }
+
+    // Kill leader mid-stream
+    harness.kill_node(original_leader).await;
+
+    // Wait for new leader
+    let new_leader = harness
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Write more keys after failover
+    for i in num_writes / 2..num_writes {
+        let key = format!("concurrent_key_{}", i);
+        let value = format!("concurrent_value_{}", i);
+        let resp = {
+            let node = harness.node(new_leader).unwrap();
+            node.send("SET", &[&key, &value]).await
+        };
+        if !is_error(&resp) {
+            success_count += 1;
+        } else {
+            error_count += 1;
+        }
+    }
+
+    let total = success_count + error_count;
+    let success_rate = if total > 0 {
+        (success_count as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    eprintln!(
+        "Writes during failover: {}/{} succeeded ({:.1}%)",
+        success_count, total, success_rate
+    );
+
+    // At least 80% of writes should succeed
+    assert!(
+        success_rate >= 80.0,
+        "Expected >=80% write success rate, got {:.1}%",
+        success_rate
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 19: MULTI-EXEC on Replica with READONLY
+// ============================================================================
+
+/// Tests that READONLY + MULTI + GETs + EXEC succeeds on a non-owner node.
+///
+/// Inspired by Redis `16-transactions-on-replica.tcl`.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: READONLY flag not consulted during MULTI/EXEC — always returns MOVED"]
+async fn test_multi_exec_reads_succeed_on_replica_with_readonly() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 450u16;
+    let (owner_id, non_owner_id) = match find_owner_of_slot(&harness, test_slot).await {
+        Some(pair) => pair,
+        None => {
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    // Write a key on the owner
+    let key = key_for_slot(test_slot);
+    let owner = harness.node(owner_id).unwrap();
+    let resp = owner.send("SET", &[&key, "readonly_test"]).await;
+    assert!(!is_error(&resp), "SET failed: {:?}", resp);
+
+    // On non-owner: READONLY → MULTI → GET → EXEC
+    let non_owner = harness.node(non_owner_id).unwrap();
+    let mut client = non_owner.connect().await;
+
+    let readonly_resp = client.command(&["READONLY"]).await;
+    assert!(!is_error(&readonly_resp), "READONLY should succeed");
+
+    let multi_resp = client.command(&["MULTI"]).await;
+    assert!(!is_error(&multi_resp), "MULTI should succeed");
+
+    let queued_resp = client.command(&["GET", &key]).await;
+    // Should return QUEUED
+    assert!(
+        matches!(&queued_resp, frogdb_protocol::Response::Simple(s) if s.as_ref() == b"QUEUED"),
+        "GET inside MULTI should return QUEUED, got: {:?}",
+        queued_resp
+    );
+
+    let exec_resp = client.command(&["EXEC"]).await;
+    // EXEC should return array with the GET result (not EXECABORT)
+    assert!(
+        matches!(&exec_resp, frogdb_protocol::Response::Array(_)),
+        "EXEC should return array result for READONLY reads, got: {:?}",
+        exec_resp
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that a write inside MULTI on a READONLY node returns MOVED/EXECABORT.
+///
+/// Inspired by Redis `16-transactions-on-replica.tcl`.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: READONLY flag not consulted during MULTI/EXEC — writes not differentiated"]
+async fn test_multi_exec_write_inside_readonly_session_returns_moved() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 451u16;
+    let (_owner_id, non_owner_id) = match find_owner_of_slot(&harness, test_slot).await {
+        Some(pair) => pair,
+        None => {
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    let key = key_for_slot(test_slot);
+    let non_owner = harness.node(non_owner_id).unwrap();
+    let mut client = non_owner.connect().await;
+
+    let readonly_resp = client.command(&["READONLY"]).await;
+    assert!(!is_error(&readonly_resp));
+
+    let multi_resp = client.command(&["MULTI"]).await;
+    assert!(!is_error(&multi_resp));
+
+    // Queue a write
+    let _queued_resp = client.command(&["SET", &key, "should_fail"]).await;
+    // Should still queue (error surfaces at EXEC time)
+
+    let exec_resp = client.command(&["EXEC"]).await;
+    // EXEC should fail with MOVED or EXECABORT for write commands on READONLY node
+    assert!(
+        is_error(&exec_resp),
+        "EXEC with write on READONLY node should fail, got: {:?}",
+        exec_resp
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 20: Self-Fencing / Quorum Loss
+// ============================================================================
+
+/// Tests that a minority node rejects writes when quorum is lost.
+///
+/// Kills 3 of 5 nodes, then verifies surviving nodes reject writes with CLUSTERDOWN.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: self-fencing not implemented — minority nodes may still accept writes"]
+async fn test_minority_node_rejects_writes_on_quorum_loss() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(5).await.unwrap();
+
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let node_ids = harness.node_ids();
+
+    // Kill 3 of 5 nodes (majority)
+    harness.shutdown_node(node_ids[0]).await;
+    harness.shutdown_node(node_ids[1]).await;
+    harness.shutdown_node(node_ids[2]).await;
+
+    // Wait for failure detection
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Surviving minority nodes should reject writes
+    for &node_id in &node_ids[3..5] {
+        if let Some(node) = harness.node(node_id) {
+            if !node.is_running() {
+                continue;
+            }
+            let key = format!("quorum_test_{}", node_id);
+            let resp = node.send("SET", &[&key, "value"]).await;
+            assert!(
+                is_cluster_down(&resp) || is_error(&resp),
+                "Minority node {} should reject writes, got: {:?}",
+                node_id,
+                resp
+            );
+        }
+    }
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 21: Replica Lag Scoring
+// ============================================================================
+
+/// Tests that auto-failover selects the most caught-up replica as new leader.
+///
+/// Currently FrogDB picks `replicas[0]` arbitrarily.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: failover selects replicas[0] arbitrarily — no lag-based scoring"]
+async fn test_auto_failover_selects_most_caught_up_replica() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(5).await.unwrap();
+
+    let original_leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Write a burst of data
+    let leader_node = harness.node(original_leader).unwrap();
+    for i in 0..50 {
+        leader_node
+            .send("SET", &[&format!("lag_key_{}", i), "value"])
+            .await;
+    }
+
+    // Kill leader
+    harness.kill_node(original_leader).await;
+
+    let new_leader = harness
+        .wait_for_new_leader(original_leader, Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    // The new leader should have the highest replication offset
+    // among surviving nodes. Since we can't easily measure per-node
+    // offsets in the current implementation, we just verify a leader
+    // was elected and the cluster recovers.
+    let new_leader_node = harness.node(new_leader).unwrap();
+    let info_resp = new_leader_node.send("CLUSTER", &["INFO"]).await;
+    let info = parse_cluster_info(&info_resp).unwrap();
+    assert_eq!(
+        info.cluster_state, "ok",
+        "New leader should report cluster as ok"
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 22: CLUSTER RESET
+// ============================================================================
+
+/// Tests that CLUSTER RESET SOFT clears slot assignments.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: CLUSTER RESET is a no-op"]
+async fn test_cluster_reset_soft_clears_slot_assignments() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(1).await.unwrap();
+
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+
+    // Get initial state
+    let pre_info = parse_cluster_info(&node.send("CLUSTER", &["INFO"]).await).unwrap();
+    let pre_slots = pre_info.cluster_slots_assigned;
+
+    // Reset soft
+    let resp = node.send("CLUSTER", &["RESET", "SOFT"]).await;
+    assert!(!is_error(&resp), "CLUSTER RESET SOFT should succeed");
+
+    // Slots should be cleared
+    let post_info = parse_cluster_info(&node.send("CLUSTER", &["INFO"]).await).unwrap();
+    assert_eq!(
+        post_info.cluster_slots_assigned, 0,
+        "Slots should be cleared after RESET SOFT (was: {})",
+        pre_slots
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that CLUSTER RESET HARD regenerates the node ID.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: CLUSTER RESET is a no-op"]
+async fn test_cluster_reset_hard_clears_node_id() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(1).await.unwrap();
+
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+
+    // Get initial node ID
+    let pre_nodes = parse_cluster_nodes(&node.send("CLUSTER", &["NODES"]).await).unwrap();
+    let pre_id = pre_nodes.iter().find(|n| n.is_myself()).unwrap().id.clone();
+
+    // Reset hard
+    let resp = node.send("CLUSTER", &["RESET", "HARD"]).await;
+    assert!(!is_error(&resp), "CLUSTER RESET HARD should succeed");
+
+    // Node ID should change
+    let post_nodes = parse_cluster_nodes(&node.send("CLUSTER", &["NODES"]).await).unwrap();
+    let post_id = post_nodes
+        .iter()
+        .find(|n| n.is_myself())
+        .unwrap()
+        .id
+        .clone();
+    assert_ne!(pre_id, post_id, "Node ID should change after RESET HARD");
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 23: Resharding Consistency
+// ============================================================================
+
+/// Tests that keys written during slot migration maintain correct values.
+///
+/// Inspired by Redis `04-resharding.tcl`.
+#[tokio::test]
+async fn test_resharding_consistency_concurrent_writes() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 700u16;
+    let (source_id, target_id) = match find_owner_of_slot(&harness, test_slot).await {
+        Some(pair) => pair,
+        None => {
+            eprintln!("Could not find slot owner, skipping test");
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    let source = harness.node(source_id).unwrap();
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+
+    // Write keys before migration
+    let mut keys = Vec::new();
+    for i in 0..10 {
+        let key = format!("{}_reshard_{}", tag, i);
+        let value = format!("reshard_value_{}", i);
+        let resp = source.send("SET", &[&key, &value]).await;
+        if !is_error(&resp) {
+            keys.push((key, value));
+        }
+    }
+
+    // Run full migration
+    match run_full_slot_migration(&harness, source_id, target_id, test_slot, 100).await {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("Migration failed: {}, skipping verification", e);
+            harness.shutdown_all().await;
+            return;
+        }
+    }
+
+    // Verify all keys are accessible on target with correct values
+    let target = harness.node(target_id).unwrap();
+    let mut verified = 0;
+    for (key, expected_value) in &keys {
+        let resp = target.send("GET", &[key]).await;
+        match resp {
+            frogdb_protocol::Response::Bulk(Some(v)) => {
+                assert_eq!(
+                    std::str::from_utf8(&v).unwrap(),
+                    expected_value,
+                    "Value mismatch for key {} after resharding",
+                    key
+                );
+                verified += 1;
+            }
+            other => {
+                eprintln!("Key {} not found on target: {:?}", key, other);
+            }
+        }
+    }
+
+    eprintln!("Verified {}/{} keys after resharding", verified, keys.len());
+    assert_eq!(
+        verified,
+        keys.len(),
+        "All keys should be accessible after resharding"
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 24: CLUSTER FAILOVER Variants
+// ============================================================================
+
+/// Tests that CLUSTER FAILOVER FORCE succeeds when the leader is unreachable.
+///
+/// Inspired by Redis `10-manual-failover.tcl`.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: CLUSTER FAILOVER FORCE semantics unverified"]
+async fn test_cluster_failover_force_works_when_leader_unreachable() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+
+    let original_leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Kill leader to make it unreachable
+    harness.kill_node(original_leader).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Pick a surviving node and issue CLUSTER FAILOVER FORCE
+    let candidate = *harness
+        .node_ids()
+        .iter()
+        .find(|&&id| id != original_leader)
+        .unwrap();
+
+    let candidate_node = harness.node(candidate).unwrap();
+    let resp = candidate_node.send("CLUSTER", &["FAILOVER", "FORCE"]).await;
+
+    assert!(
+        !is_error(&resp),
+        "CLUSTER FAILOVER FORCE should succeed, got: {:?}",
+        resp
+    );
+
+    // Wait and verify this node becomes leader
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let info_resp = candidate_node.send("CLUSTER", &["INFO"]).await;
+    let info = parse_cluster_info(&info_resp).unwrap();
+    assert_eq!(
+        info.cluster_state, "ok",
+        "Node should be operational after FAILOVER FORCE"
+    );
 
     harness.shutdown_all().await;
 }

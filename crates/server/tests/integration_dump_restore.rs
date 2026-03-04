@@ -248,3 +248,165 @@ async fn test_dump_restore_timeseries_round_trip() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Additional DUMP/RESTORE tests
+// ============================================================================
+
+/// Tests that RESTORE with REPLACE flag overwrites an existing key.
+#[tokio::test]
+async fn test_dump_restore_replace_overwrites_existing_key() {
+    let server = TestServer::start_standalone().await;
+
+    // Set original value and DUMP it
+    server.send("SET", &["{dr}replace", "original"]).await;
+    let dump_resp = server.send("DUMP", &["{dr}replace"]).await;
+    let payload = match &dump_resp {
+        Response::Bulk(Some(data)) => data.clone(),
+        other => panic!("DUMP should return bulk data, got: {other:?}"),
+    };
+
+    // Overwrite with a different value
+    server.send("SET", &["{dr}replace", "overwritten"]).await;
+
+    // RESTORE with REPLACE should succeed even though key exists
+    let restore_cmd = Bytes::from("RESTORE");
+    let key_bytes = Bytes::from("{dr}replace");
+    let ttl = Bytes::from("0");
+    let replace = Bytes::from("REPLACE");
+    let resp = server
+        .connect()
+        .await
+        .command_raw(&[&restore_cmd, &key_bytes, &ttl, &payload, &replace])
+        .await;
+    assert!(
+        matches!(resp, Response::Simple(ref s) if s.as_ref() == b"OK"),
+        "RESTORE with REPLACE should return OK, got: {resp:?}"
+    );
+
+    // Value should be restored to "original"
+    let get_resp = server.send("GET", &["{dr}replace"]).await;
+    assert_eq!(
+        unwrap_bulk(&get_resp),
+        b"original",
+        "RESTORE REPLACE should overwrite with original value"
+    );
+
+    server.shutdown().await;
+}
+
+/// Tests that RESTORE without REPLACE fails when key already exists (BUSYKEY).
+#[tokio::test]
+async fn test_dump_restore_without_replace_fails_on_existing_key() {
+    let server = TestServer::start_standalone().await;
+
+    // Set and DUMP a value
+    server.send("SET", &["{dr}busykey", "value1"]).await;
+    let dump_resp = server.send("DUMP", &["{dr}busykey"]).await;
+    let payload = match &dump_resp {
+        Response::Bulk(Some(data)) => data.clone(),
+        other => panic!("DUMP should return bulk data, got: {other:?}"),
+    };
+
+    // Key still exists — RESTORE without REPLACE should fail
+    let restore_cmd = Bytes::from("RESTORE");
+    let key_bytes = Bytes::from("{dr}busykey");
+    let ttl = Bytes::from("0");
+    let resp = server
+        .connect()
+        .await
+        .command_raw(&[&restore_cmd, &key_bytes, &ttl, &payload])
+        .await;
+    assert!(
+        is_error(&resp),
+        "RESTORE without REPLACE on existing key should error, got: {resp:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// Tests that RESTORE with a TTL argument sets expiry on the restored key.
+#[tokio::test]
+async fn test_dump_restore_preserves_ttl() {
+    let server = TestServer::start_standalone().await;
+
+    // Set and DUMP a value
+    server.send("SET", &["{dr}ttlkey", "ttl_value"]).await;
+    let dump_resp = server.send("DUMP", &["{dr}ttlkey"]).await;
+    let payload = match &dump_resp {
+        Response::Bulk(Some(data)) => data.clone(),
+        other => panic!("DUMP should return bulk data, got: {other:?}"),
+    };
+
+    // DELETE and RESTORE with TTL of 10000ms
+    server.send("DEL", &["{dr}ttlkey"]).await;
+
+    let restore_cmd = Bytes::from("RESTORE");
+    let key_bytes = Bytes::from("{dr}ttlkey");
+    let ttl = Bytes::from("10000"); // 10 seconds
+    let resp = server
+        .connect()
+        .await
+        .command_raw(&[&restore_cmd, &key_bytes, &ttl, &payload])
+        .await;
+    assert!(
+        matches!(resp, Response::Simple(ref s) if s.as_ref() == b"OK"),
+        "RESTORE with TTL should return OK, got: {resp:?}"
+    );
+
+    // Verify TTL is set
+    let pttl_resp = server.send("PTTL", &["{dr}ttlkey"]).await;
+    let pttl = unwrap_integer(&pttl_resp);
+    assert!(
+        pttl > 0 && pttl <= 10000,
+        "PTTL should be between 0 and 10000, got: {}",
+        pttl
+    );
+
+    // Verify value is correct
+    let get_resp = server.send("GET", &["{dr}ttlkey"]).await;
+    assert_eq!(unwrap_bulk(&get_resp), b"ttl_value");
+
+    server.shutdown().await;
+}
+
+/// Tests that DUMP on a non-existent key returns nil.
+#[tokio::test]
+async fn test_dump_nil_for_nonexistent_key() {
+    let server = TestServer::start_standalone().await;
+
+    let resp = server.send("DUMP", &["{dr}nonexistent"]).await;
+    assert!(
+        matches!(resp, Response::Bulk(None)),
+        "DUMP on non-existent key should return nil, got: {resp:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// Tests that integer-encoded strings round-trip correctly through DUMP/RESTORE.
+#[tokio::test]
+async fn test_dump_restore_integer_encoded_string() {
+    let server = TestServer::start_standalone().await;
+
+    // Set an integer-like string (Redis may encode this as an integer internally)
+    server.send("SET", &["{dr}intstr", "12345"]).await;
+    dump_delete_restore(&server, "{dr}intstr").await;
+
+    let resp = server.send("GET", &["{dr}intstr"]).await;
+    assert_eq!(
+        unwrap_bulk(&resp),
+        b"12345",
+        "Integer-encoded string should survive DUMP/RESTORE"
+    );
+
+    // Also verify it can be used as an integer
+    let incr_resp = server.send("INCR", &["{dr}intstr"]).await;
+    assert_eq!(
+        unwrap_integer(&incr_resp),
+        12346,
+        "Restored integer string should be incrementable"
+    );
+
+    server.shutdown().await;
+}

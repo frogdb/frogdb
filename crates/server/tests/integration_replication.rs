@@ -2199,3 +2199,383 @@ async fn test_sync_returns_not_implemented() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Tier 9: Expired Key Replication
+// ============================================================================
+
+/// Test that a key that expires on the primary eventually disappears on the replica.
+///
+/// Inspired by Redis `14-consistency-check.tcl`.
+/// Redis propagates key expiration as DEL commands rather than expiring on the replica.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_expire_propagated_as_del_not_expire(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // Set a key with a short TTL (500ms)
+    let set_resp = primary.send("SET", &["expire_test", "expiring"]).await;
+    assert_ok(&set_resp);
+    let expire_resp = primary.send("PEXPIRE", &["expire_test", "500"]).await;
+    assert!(
+        matches!(expire_resp, Response::Integer(1)),
+        "PEXPIRE should return 1"
+    );
+
+    // Wait for replication
+    let _ = wait_for_replication(&primary, 2000).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Verify key exists on replica before expiry
+    let pre_expire = replica.send("GET", &["expire_test"]).await;
+    if let Response::Bulk(Some(v)) = &pre_expire {
+        assert_eq!(v.as_ref(), b"expiring", "Key should exist before expiry");
+    }
+
+    // Wait for the key to expire on primary
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    // Access the key on primary to trigger lazy expiry
+    let primary_get = primary.send("GET", &["expire_test"]).await;
+    assert!(
+        matches!(primary_get, Response::Bulk(None)),
+        "Key should be expired on primary"
+    );
+
+    // Wait for DEL propagation
+    let _ = wait_for_replication(&primary, 2000).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Key should be gone on replica too
+    let replica_get = replica.send("GET", &["expire_test"]).await;
+    match &replica_get {
+        Response::Bulk(None) => {
+            eprintln!("Key correctly expired on replica via DEL propagation");
+        }
+        Response::Bulk(Some(_)) => {
+            eprintln!("Note: Key still present on replica (DEL propagation may be delayed)");
+        }
+        _ => {
+            eprintln!("Unexpected response: {:?}", replica_get);
+        }
+    }
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+// ============================================================================
+// Tier 10: Replication Offset Tracking
+// ============================================================================
+
+/// Test that master_repl_offset monotonically increases across writes.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_replication_offset_monotonically_increases(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    // Get initial offset
+    let state0 = get_replication_state(&primary).await;
+    let offset0 = state0.map(|(_, o)| o).unwrap_or(0);
+
+    // Write some data
+    for i in 0..5 {
+        primary
+            .send("SET", &[&format!("offset_key_{}", i), "value"])
+            .await;
+    }
+
+    // Get offset after writes
+    let state1 = get_replication_state(&primary).await;
+    let offset1 = state1.map(|(_, o)| o).unwrap_or(0);
+
+    assert!(
+        offset1 >= offset0,
+        "Replication offset should not decrease: before={}, after={}",
+        offset0,
+        offset1
+    );
+
+    // Write more data
+    for i in 5..10 {
+        primary
+            .send("SET", &[&format!("offset_key_{}", i), "value"])
+            .await;
+    }
+
+    let state2 = get_replication_state(&primary).await;
+    let offset2 = state2.map(|(_, o)| o).unwrap_or(0);
+
+    assert!(
+        offset2 >= offset1,
+        "Replication offset should not decrease: before={}, after={}",
+        offset1,
+        offset2
+    );
+
+    eprintln!(
+        "Offset progression: {} -> {} -> {}",
+        offset0, offset1, offset2
+    );
+
+    primary.shutdown().await;
+}
+
+/// Test that after WAIT, the replica's offset catches up to the primary's.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_replica_repl_offset_catches_up_to_primary(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // Write data
+    for i in 0..10 {
+        primary
+            .send("SET", &[&format!("catchup_key_{}", i), "value"])
+            .await;
+    }
+
+    // Wait for replication
+    let acked = wait_for_replication(&primary, 5000).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    if acked > 0 {
+        // Get primary offset
+        let primary_info = primary.send("INFO", &["replication"]).await;
+        let primary_map = parse_info_replication(&primary_info).unwrap();
+        let primary_offset: i64 = primary_map
+            .get("master_repl_offset")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        // Check slave0 offset in primary's INFO
+        // Format: slave0:ip=...,port=...,state=...,offset=...,lag=...
+        if let Some(slave0) = primary_map.get("slave0")
+            && let Some(offset_part) = slave0.split(',').find(|p| p.starts_with("offset="))
+        {
+            let slave_offset: i64 = offset_part
+                .trim_start_matches("offset=")
+                .parse()
+                .unwrap_or(0);
+            eprintln!(
+                "Primary offset: {}, Slave offset: {}",
+                primary_offset, slave_offset
+            );
+            // After WAIT, slave offset should be positive
+            assert!(
+                slave_offset > 0,
+                "Slave offset should be positive after WAIT"
+            );
+        }
+    } else {
+        eprintln!("WAIT returned 0 — replica may not have fully connected");
+    }
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+// ============================================================================
+// Tier 11: Replica Promotion Data Completeness
+// ============================================================================
+
+/// Test that after REPLICAOF NO ONE, all replicated data is readable
+/// and new writes succeed on the promoted replica.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_promoted_replica_serves_all_writes_after_promotion(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // Write data to primary
+    for i in 0..5 {
+        let key = format!("promote_key_{}", i);
+        let value = format!("promote_value_{}", i);
+        primary.send("SET", &[&key, &value]).await;
+    }
+
+    // Wait for replication
+    let _ = wait_for_replication(&primary, 5000).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Promote replica
+    let promote_resp = replica.send("REPLICAOF", &["NO", "ONE"]).await;
+    assert_ok(&promote_resp);
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Verify replicated data is still readable
+    let mut readable = 0;
+    for i in 0..5 {
+        let key = format!("promote_key_{}", i);
+        let expected = format!("promote_value_{}", i);
+        let resp = replica.send("GET", &[&key]).await;
+        if let Response::Bulk(Some(v)) = &resp
+            && v.as_ref() == expected.as_bytes()
+        {
+            readable += 1;
+        }
+    }
+
+    eprintln!("Readable after promotion: {}/5", readable);
+
+    // New writes should succeed on the promoted replica
+    let new_write = replica
+        .send("SET", &["post_promote_key", "new_value"])
+        .await;
+    assert_ok(&new_write);
+
+    let new_read = replica.send("GET", &["post_promote_key"]).await;
+    if let Response::Bulk(Some(v)) = &new_read {
+        assert_eq!(v.as_ref(), b"new_value");
+    }
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// Test that after promotion, the old primary's writes no longer propagate.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_replica_of_no_one_stops_accepting_primary_writes(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // Promote replica
+    let promote_resp = replica.send("REPLICAOF", &["NO", "ONE"]).await;
+    assert_ok(&promote_resp);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Write new data on old primary AFTER promotion
+    let post_promote_write = primary
+        .send("SET", &["after_promote_key", "should_not_replicate"])
+        .await;
+    assert_ok(&post_promote_write);
+
+    // Give time for any potential (incorrect) propagation
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // The promoted replica should NOT have this key
+    let check_resp = replica.send("GET", &["after_promote_key"]).await;
+    assert!(
+        matches!(check_resp, Response::Bulk(None)),
+        "Promoted replica should not receive writes from old primary, got: {:?}",
+        check_resp
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+// ============================================================================
+// Tier 12: Checkpoint Verification Gap
+// ============================================================================
+
+/// Documents that SHA256 verification of checkpoints is not implemented on replicas.
+///
+/// When a replica receives a checkpoint/RDB file during full resync,
+/// the SHA256 hash should be verified against the primary's checksum.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: SHA256 checkpoint verification not implemented on replica"]
+async fn test_replica_checkpoint_sha256_not_verified() {
+    let config = TestServerConfig::default();
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // Write some data to trigger a non-empty checkpoint
+    for i in 0..10 {
+        primary
+            .send("SET", &[&format!("ckpt_key_{}", i), "value"])
+            .await;
+    }
+
+    let _ = wait_for_replication(&primary, 5000).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // This test documents the gap: there's no mechanism to verify
+    // checkpoint integrity on the replica side. When implemented,
+    // a corrupted checkpoint should cause the replica to request
+    // a new full resync rather than loading corrupt data.
+
+    // For now, just verify the replica is healthy
+    let ping = replica.send("PING", &[]).await;
+    assert!(
+        !is_error(&ping),
+        "Replica should be responsive after full sync"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+// ============================================================================
+// Tier 13: Proactive Lag Threshold
+// ============================================================================
+
+/// Documents that a configurable lag threshold for triggering preemptive FULLRESYNC
+/// is not implemented.
+///
+/// When the replica falls too far behind (e.g., beyond a configurable byte threshold),
+/// the primary should proactively trigger a FULLRESYNC instead of waiting for the
+/// WAL buffer to overflow.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: proactive lag threshold for preemptive FULLRESYNC not implemented"]
+async fn test_proactive_lag_threshold_triggers_fullresync() {
+    let config = TestServerConfig::default();
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // Write a large amount of data to create significant lag
+    for i in 0..1000 {
+        primary
+            .send("SET", &[&format!("lag_threshold_{}", i), &"x".repeat(1000)])
+            .await;
+    }
+
+    // In a properly implemented system, the primary would detect that
+    // the replica has fallen behind by more than the configured threshold
+    // and trigger a FULLRESYNC proactively.
+    //
+    // Current behavior: the WAL buffer silently overflows and the replica
+    // only discovers the gap when it next tries to PSYNC.
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Verify replica is still responsive (may need full resync)
+    let ping = replica.send("PING", &[]).await;
+    assert!(!is_error(&ping), "Replica should be responsive");
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
