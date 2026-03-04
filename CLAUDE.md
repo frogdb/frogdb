@@ -37,6 +37,30 @@ The `spec/` directory contains design documentation. Consult it before making ar
 Run `just redis-compat` when changes modify command behavior, argument parsing, or error responses.
 This validates compatibility with the Redis protocol and expected command semantics.
 
+## Testing Strategy
+
+Run **targeted tests**, not the full suite, unless changes are truly cross-cutting.
+
+1. **Identify affected crates** from the files you modified.
+2. **Run crate-level tests** for those crates: `just test-crate <name>` (e.g., `just test-crate frogdb-server`).
+3. **Run individual tests** when iterating on a specific fix: `just test-one <name>`.
+4. **Run lint per-crate** when the full `just lint` is slow or has pre-existing failures in unrelated crates: `just lint-crate <name>`.
+5. **Full suite (`just test`)** only when changes span 3+ crates or modify shared interfaces (e.g., `frogdb-core` traits used everywhere).
+6. **`just redis-compat`** only when command behavior, argument parsing, or error responses change.
+7. **`just concurrency`** only when changes touch shard routing, transactions, or replication.
+
+### Crate → test mapping quick reference
+
+| Changed crate | Test command |
+|---|---|
+| `frogdb-server` | `just test-crate frogdb-server` |
+| `frogdb-core` | `just test-crate frogdb-core` (+ downstream crates if traits changed) |
+| `frogdb-telemetry` | `just test-crate frogdb-telemetry` |
+| `frogdb-commands` | `just test-crate frogdb-commands` |
+| `frogdb-protocol` | `just test-crate frogdb-protocol` |
+| `frogdb-persistence` | `just test-crate frogdb-persistence` |
+| Command behavior | `just redis-compat` |
+
 ## Agent Guidelines
 
 - **ALWAYS** ensure changed packages build, lint, and pass tests before finishing a task

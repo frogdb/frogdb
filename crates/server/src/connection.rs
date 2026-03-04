@@ -171,6 +171,16 @@ pub struct ConnectionHandler {
     resp3_buf: BytesMut,
 }
 
+/// Result of processing a single command frame.
+enum FrameAction {
+    /// Command processed normally, keep going.
+    Continue,
+    /// Connection should close (QUIT, PSYNC handoff, disconnect).
+    Break,
+    /// Response was skipped (ReplyMode::Off or skip_next_reply).
+    SkipResponse,
+}
+
 impl ConnectionHandler {
     /// Create a new connection handler using grouped dependencies.
     ///
@@ -420,56 +430,228 @@ impl ConnectionHandler {
         }
     }
 
-    /// Send multiple responses as a batch, flushing only once at the end.
-    ///
-    /// This reduces syscalls for commands that produce multiple responses
-    /// (e.g., SUBSCRIBE/UNSUBSCRIBE with multiple channels).
-    async fn send_responses_batch(&mut self, responses: Vec<Response>) -> std::io::Result<()> {
-        match self.state.protocol_version {
-            ProtocolVersion::Resp2 => {
-                let mut total_bytes = 0u64;
-                for response in responses {
-                    let wire = response.into_wire().expect(
-                        "Internal action in batch - should be intercepted by route_and_execute_with_transaction",
-                    );
-                    if matches!(wire, frogdb_protocol::WireResponse::NullArray) {
-                        // NullArray requires raw bytes - flush pending codec data first
-                        self.framed.flush().await.map_err(std::io::Error::other)?;
-                        const NULL_ARRAY_BYTES: &[u8] = b"*-1\r\n";
-                        total_bytes += NULL_ARRAY_BYTES.len() as u64;
-                        self.framed.get_mut().write_all(NULL_ARRAY_BYTES).await?;
-                        continue;
-                    }
-                    let frame = wire.to_resp2_frame();
-                    total_bytes += estimate_resp2_frame_size(&frame) as u64;
-                    self.framed
-                        .feed(frame)
-                        .await
-                        .map_err(std::io::Error::other)?;
+    /// Buffer a response without flushing (for write coalescing).
+    async fn feed_response(&mut self, response: Response) -> std::io::Result<()> {
+        let wire_response = response.into_wire().expect(
+            "Internal action reached feed_response - should be intercepted by route_and_execute_with_transaction"
+        );
+        self.feed_wire_response(wire_response).await
+    }
+
+    /// Buffer a wire response without flushing.
+    async fn feed_wire_response(
+        &mut self,
+        response: frogdb_protocol::WireResponse,
+    ) -> std::io::Result<()> {
+        if matches!(response, frogdb_protocol::WireResponse::NullArray) {
+            match self.state.protocol_version {
+                ProtocolVersion::Resp2 => {
+                    const NULL_ARRAY_BYTES: &[u8] = b"*-1\r\n";
+                    self.state
+                        .local_stats
+                        .add_bytes_sent(NULL_ARRAY_BYTES.len() as u64);
+                    return self.framed.get_mut().write_all(NULL_ARRAY_BYTES).await;
                 }
-                self.state.local_stats.add_bytes_sent(total_bytes);
-                self.framed.flush().await.map_err(std::io::Error::other)
-            }
-            ProtocolVersion::Resp3 => {
-                self.resp3_buf.clear();
-                for response in responses {
-                    let wire = response.into_wire().expect(
-                        "Internal action in batch - should be intercepted by route_and_execute_with_transaction",
-                    );
-                    let frame = wire.to_resp3_frame();
-                    redis_protocol::resp3::encode::complete::extend_encode(
-                        &mut self.resp3_buf,
-                        &frame,
-                    )
-                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                ProtocolVersion::Resp3 => {
+                    let frame = response.to_resp3_frame();
+                    let mut buf = BytesMut::new();
+                    redis_protocol::resp3::encode::complete::extend_encode(&mut buf, &frame)
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    self.state.local_stats.add_bytes_sent(buf.len() as u64);
+                    return self.framed.get_mut().write_all(&buf).await;
                 }
-                self.state
-                    .local_stats
-                    .add_bytes_sent(self.resp3_buf.len() as u64);
-                self.framed.get_mut().write_all(&self.resp3_buf).await?;
-                self.framed.get_mut().flush().await
             }
         }
+
+        match self.state.protocol_version {
+            ProtocolVersion::Resp2 => {
+                let frame = response.to_resp2_frame();
+                let frame_size = estimate_resp2_frame_size(&frame);
+                self.state.local_stats.add_bytes_sent(frame_size as u64);
+                self.framed.feed(frame).await.map_err(std::io::Error::other)
+            }
+            ProtocolVersion::Resp3 => {
+                let frame = response.to_resp3_frame();
+                // Don't clear resp3_buf here — accumulate across multiple feeds
+                redis_protocol::resp3::encode::complete::extend_encode(&mut self.resp3_buf, &frame)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                let encoded_len = self.resp3_buf.len() as u64;
+                self.state.local_stats.add_bytes_sent(encoded_len);
+                self.framed.get_mut().write_all(&self.resp3_buf).await?;
+                self.resp3_buf.clear();
+                Ok(())
+            }
+        }
+    }
+
+    /// Flush all buffered responses to the client.
+    async fn flush_responses(&mut self) -> std::io::Result<()> {
+        // Flush the RESP2 codec buffer and then the underlying stream
+        self.framed.flush().await.map_err(std::io::Error::other)?;
+        self.framed.get_mut().flush().await
+    }
+
+    /// Try to decode the next frame from the codec's internal read buffer
+    /// without issuing a read syscall. Returns `None` if no complete frame
+    /// is buffered.
+    fn try_next_frame(
+        &mut self,
+    ) -> Option<
+        Result<
+            redis_protocol::resp2::types::BytesFrame,
+            <Resp2 as tokio_util::codec::Decoder>::Error,
+        >,
+    > {
+        use futures::Stream;
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        match Pin::new(&mut self.framed).poll_next(&mut cx) {
+            Poll::Ready(item) => item,
+            Poll::Pending => None,
+        }
+    }
+
+    /// Process a single command frame: parse, execute, record metrics, and buffer the response.
+    ///
+    /// Uses `feed_response` instead of `send_response` so the caller can batch
+    /// multiple commands before a single `flush_responses()`.
+    async fn process_one_command(
+        &mut self,
+        frame: redis_protocol::resp2::types::BytesFrame,
+    ) -> FrameAction {
+        // Parse frame into command and wrap in Arc
+        let cmd = match ParsedCommand::try_from(frame) {
+            Ok(cmd) => Arc::new(cmd),
+            Err(e) => {
+                let _ = self
+                    .feed_response(Response::error(format!("ERR {}", e)))
+                    .await;
+                return FrameAction::Continue;
+            }
+        };
+
+        trace!(
+            conn_id = self.state.id,
+            cmd = %String::from_utf8_lossy(&cmd.name),
+            args = cmd.args.len(),
+            "Received command"
+        );
+
+        // Capture a single timestamp for timing, metrics, and idle tracking
+        let now = std::time::Instant::now();
+
+        // Update last command time for idle tracking
+        self.client_registry
+            .update_last_command_at(self.state.id, now);
+
+        // Track bytes received for this command
+        let cmd_bytes = estimate_command_size(&cmd);
+        self.state.local_stats.add_bytes_recv(cmd_bytes as u64);
+
+        // Handle QUIT specially (also clears transaction state)
+        if cmd.name.eq_ignore_ascii_case(b"QUIT") {
+            self.state.transaction = TransactionState::default();
+            let _ = self.feed_response(Response::ok()).await;
+            return FrameAction::Break;
+        }
+
+        // Compute the uppercase command name once for the entire pipeline
+        let cmd_name = cmd.name_uppercase_string();
+
+        // Wait if server is paused (for non-exempt commands)
+        self.wait_if_paused(&cmd_name).await;
+
+        // Start timing for both metrics and slowlog (reuse captured timestamp)
+        let timer = frogdb_telemetry::CommandTimer::with_start_time(
+            now,
+            cmd_name.clone(),
+            self.metrics_recorder.clone(),
+            self.band_tracker.clone(),
+        );
+
+        // Start request span for distributed tracing (if enabled)
+        let request_span = self
+            .shared_tracer
+            .as_ref()
+            .map(|t| t.start_request_span(&cmd_name, self.state.id));
+
+        // Route and execute (with transaction and pub/sub handling)
+        let responses = self
+            .route_and_execute_with_transaction(&cmd, &cmd_name)
+            .instrument(tracing::info_span!("cmd_execute", cmd = %cmd_name))
+            .await;
+
+        // Check for PSYNC_HANDOFF signal
+        if let Some(handoff_params) = Self::extract_psync_handoff(&responses) {
+            info!(
+                conn_id = self.state.id,
+                addr = %self.state.addr,
+                replication_id = %handoff_params.0,
+                offset = handoff_params.1,
+                "PSYNC handoff requested - will transfer connection to replication handler"
+            );
+            self.pending_psync_handoff = Some(handoff_params);
+            return FrameAction::Break;
+        }
+
+        // Calculate elapsed time in microseconds for slowlog
+        let elapsed_us = now.elapsed().as_micros() as u64;
+
+        // Record per-client command statistics
+        self.state.local_stats.record_command(&cmd_name, elapsed_us);
+
+        // Record metrics - check for errors in responses
+        let has_error = responses.iter().any(|r| matches!(r, Response::Error(_)));
+        if has_error {
+            timer.finish_with_error("command_error");
+            if let Some(ref span) = request_span {
+                span.set_error("command_error");
+            }
+        } else {
+            timer.finish();
+            if let Some(ref span) = request_span {
+                span.set_ok();
+            }
+        }
+
+        // End the request span
+        if let Some(span) = request_span {
+            span.end();
+        }
+
+        // Record causal profiling throughput progress point
+        #[cfg(feature = "causal-profile")]
+        tokio_coz::progress!("commands_processed");
+
+        // Log to slowlog if threshold exceeded and command not exempt
+        self.maybe_log_slow_query(&cmd, elapsed_us).await;
+
+        // Periodically sync local stats to the registry
+        self.maybe_sync_stats();
+
+        // Buffer response(s) based on reply mode
+        match self.state.reply_mode {
+            ReplyMode::On => {
+                if self.state.skip_next_reply {
+                    self.state.skip_next_reply = false;
+                    return FrameAction::SkipResponse;
+                }
+                // Feed responses into the write buffer without flushing
+                for response in responses {
+                    if self.feed_response(response).await.is_err() {
+                        return FrameAction::Break;
+                    }
+                }
+            }
+            ReplyMode::Off => {
+                return FrameAction::SkipResponse;
+            }
+        }
+
+        FrameAction::Continue
     }
 
     /// Run the connection handling loop.
@@ -486,9 +668,22 @@ impl ConnectionHandler {
 
                 // Handle pub/sub messages from shards
                 Some(pubsub_msg) = self.pubsub_rx.recv() => {
+                    // Buffer the first pub/sub message
                     let response = pubsub_msg.to_response_with_protocol(self.state.protocol_version);
-                    if self.send_response(response).await.is_err() {
+                    if self.feed_response(response).await.is_err() {
                         debug!(conn_id = self.state.id, "Failed to send pub/sub message");
+                        break;
+                    }
+                    // Drain additional pub/sub messages from the channel
+                    while let Ok(msg) = self.pubsub_rx.try_recv() {
+                        let response = msg.to_response_with_protocol(self.state.protocol_version);
+                        if self.feed_response(response).await.is_err() {
+                            break;
+                        }
+                    }
+                    // Single flush for all pub/sub messages
+                    if self.flush_responses().await.is_err() {
+                        debug!(conn_id = self.state.id, "Failed to flush pub/sub responses");
                         break;
                     }
                 }
@@ -513,143 +708,44 @@ impl ConnectionHandler {
                         }
                     };
 
-                    // Parse frame into command and wrap in Arc to avoid cloning
-                    // when dispatching to shard workers
-                    let cmd = match ParsedCommand::try_from(frame) {
-                        Ok(cmd) => Arc::new(cmd),
-                        Err(e) => {
-                            let _ = self.send_response(Response::error(format!("ERR {}", e))).await;
-                            continue;
-                        }
-                    };
-
-                    trace!(
-                        conn_id = self.state.id,
-                        cmd = %String::from_utf8_lossy(&cmd.name),
-                        args = cmd.args.len(),
-                        "Received command"
-                    );
-
-                    // Update last command time for idle tracking
-                    self.client_registry.update_last_command(self.state.id);
-
-                    // Track bytes received for this command
-                    let cmd_bytes = estimate_command_size(&cmd);
-                    self.state.local_stats.add_bytes_recv(cmd_bytes as u64);
-
-                    // Handle QUIT specially (also clears transaction state)
-                    if cmd.name.eq_ignore_ascii_case(b"QUIT") {
-                        // Clear transaction state before quitting
-                        self.state.transaction = TransactionState::default();
-                        let _ = self.send_response(Response::ok()).await;
-                        break;
+                    // Process first command (buffers response, no flush yet)
+                    let mut should_break = false;
+                    match self.process_one_command(frame).await {
+                        FrameAction::Break => should_break = true,
+                        FrameAction::Continue | FrameAction::SkipResponse => {}
                     }
 
-                    // Compute the uppercase command name once for the entire pipeline
-                    let cmd_name = cmd.name_uppercase_string();
-
-                    // Wait if server is paused (for non-exempt commands)
-                    self.wait_if_paused(&cmd_name).await;
-
-                    // Start timing for both metrics and slowlog
-                    let start_time = std::time::Instant::now();
-                    let timer = frogdb_telemetry::CommandTimer::with_band_tracker(
-                        cmd_name.clone(),
-                        self.metrics_recorder.clone(),
-                        self.band_tracker.clone(),
-                    );
-
-                    // Start request span for distributed tracing (if enabled)
-                    let request_span = self.shared_tracer.as_ref()
-                        .map(|t| t.start_request_span(&cmd_name, self.state.id));
-
-                    // Route and execute (with transaction and pub/sub handling)
-                    let responses = self
-                        .route_and_execute_with_transaction(&cmd, &cmd_name)
-                        .instrument(tracing::info_span!("cmd_execute", cmd = %cmd_name))
-                        .await;
-
-                    // Check for PSYNC_HANDOFF signal - this requires special handling
-                    // because we need to hand off the TCP connection to the replication handler
-                    if let Some(handoff_params) = Self::extract_psync_handoff(&responses) {
-                        info!(
-                            conn_id = self.state.id,
-                            addr = %self.state.addr,
-                            replication_id = %handoff_params.0,
-                            offset = handoff_params.1,
-                            "PSYNC handoff requested - will transfer connection to replication handler"
-                        );
-                        // Store params for handoff after the loop (where we have ownership of self)
-                        self.pending_psync_handoff = Some(handoff_params);
-                        break;
-                    }
-
-                    // Calculate elapsed time in microseconds for slowlog
-                    let elapsed_us = start_time.elapsed().as_micros() as u64;
-
-                    // Record per-client command statistics
-                    self.state.local_stats.record_command(&cmd_name, elapsed_us);
-
-                    // Record metrics - check for errors in responses
-                    let has_error = responses.iter().any(|r| matches!(r, Response::Error(_)));
-                    if has_error {
-                        timer.finish_with_error("command_error");
-                        // Mark span as error
-                        if let Some(ref span) = request_span {
-                            span.set_error("command_error");
-                        }
-                    } else {
-                        timer.finish();
-                        // Mark span as success
-                        if let Some(ref span) = request_span {
-                            span.set_ok();
-                        }
-                    }
-
-                    // End the request span
-                    if let Some(span) = request_span {
-                        span.end();
-                    }
-
-                    // Record causal profiling throughput progress point
-                    #[cfg(feature = "causal-profile")]
-                    tokio_coz::progress!("commands_processed");
-
-                    // Log to slowlog if threshold exceeded and command not exempt
-                    self.maybe_log_slow_query(&cmd, elapsed_us).await;
-
-                    // Periodically sync local stats to the registry
-                    self.maybe_sync_stats();
-
-                    // Send response(s) based on reply mode
-                    match self.state.reply_mode {
-                        ReplyMode::On => {
-                            // Check for SKIP mode
-                            if self.state.skip_next_reply {
-                                self.state.skip_next_reply = false;
-                                // Skip sending this response
-                            } else if responses.len() == 1 {
-                                if self.send_response(responses.into_iter().next().unwrap())
-                                    .instrument(tracing::info_span!("resp_write"))
-                                    .await
-                                    .is_err()
-                                {
-                                    debug!(conn_id = self.state.id, "Failed to send response");
+                    // Drain loop: process all complete frames already in the read buffer
+                    if !should_break {
+                        while let Some(frame_result) = self.try_next_frame() {
+                            let frame = match frame_result {
+                                Ok(frame) => frame,
+                                Err(e) => {
+                                    debug!(conn_id = self.state.id, error = %e, "Frame error in drain");
+                                    let _ = self.feed_response(
+                                        Response::error(format!("ERR {}", e))
+                                    ).await;
+                                    continue;
+                                }
+                            };
+                            match self.process_one_command(frame).await {
+                                FrameAction::Break => {
+                                    should_break = true;
                                     break;
                                 }
-                            } else if !responses.is_empty()
-                                && self.send_responses_batch(responses)
-                                    .instrument(tracing::info_span!("resp_write"))
-                                    .await
-                                    .is_err()
-                            {
-                                debug!(conn_id = self.state.id, "Failed to send batch response");
-                                break;
+                                FrameAction::Continue | FrameAction::SkipResponse => {}
                             }
                         }
-                        ReplyMode::Off => {
-                            // Don't send any replies
-                        }
+                    }
+
+                    // Single flush for all buffered responses
+                    if self.flush_responses().await.is_err() {
+                        debug!(conn_id = self.state.id, "Failed to flush responses");
+                        break;
+                    }
+
+                    if should_break {
+                        break;
                     }
                 }
             }

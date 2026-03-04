@@ -431,6 +431,14 @@ impl ClientRegistry {
         }
     }
 
+    /// Update a client's last command time with a pre-captured instant.
+    pub fn update_last_command_at(&self, id: u64, time: Instant) {
+        let mut clients = self.clients.write().unwrap();
+        if let Some(entry) = clients.get_mut(&id) {
+            entry.last_command_at = time;
+        }
+    }
+
     /// Update client flags.
     pub fn update_flags(&self, id: u64, flags: ClientFlags) {
         let mut clients = self.clients.write().unwrap();
