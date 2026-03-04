@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
@@ -80,6 +80,9 @@ pub struct ShardWorker {
 
     /// Replication broadcaster for streaming writes to replicas.
     pub(crate) replication_broadcaster: SharedBroadcaster,
+
+    /// Whether per-request tracing spans are enabled.
+    pub per_request_spans: Arc<AtomicBool>,
 }
 
 impl ShardWorker {
@@ -195,6 +198,7 @@ impl ShardWorker {
             function_registry: None,
             wait_queue: ShardWaitQueue::new(),
             replication_broadcaster,
+            per_request_spans: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -288,6 +292,7 @@ impl ShardWorker {
             function_registry: None,
             wait_queue: ShardWaitQueue::new(),
             replication_broadcaster,
+            per_request_spans: Arc::new(AtomicBool::new(false)),
         }
     }
 

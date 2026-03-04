@@ -164,8 +164,11 @@ pub struct Server {
 
 impl Server {
     /// Create a new server instance, binding all listeners from config.
-    pub async fn new(config: Config) -> Result<Self> {
-        Self::with_listeners(config, ServerListeners::default()).await
+    pub async fn new(
+        config: Config,
+        log_reload_handle: crate::runtime_config::LogReloadHandle,
+    ) -> Result<Self> {
+        Self::with_listeners(config, ServerListeners::default(), Some(log_reload_handle)).await
     }
 
     /// Create a new server instance, optionally accepting pre-bound listeners.
@@ -173,7 +176,11 @@ impl Server {
     /// If a pre-bound listener is provided in `listeners`, Server uses it
     /// directly instead of binding from config. This eliminates TOCTOU port
     /// races for cluster bus addresses.
-    pub async fn with_listeners(config: Config, listeners: ServerListeners) -> Result<Self> {
+    pub async fn with_listeners(
+        config: Config,
+        listeners: ServerListeners,
+        log_reload_handle: Option<crate::runtime_config::LogReloadHandle>,
+    ) -> Result<Self> {
         // Initialize metrics
         let health_checker = HealthChecker::new();
         let (metrics_recorder, prometheus_recorder): (
@@ -278,7 +285,11 @@ impl Server {
         let client_registry = Arc::new(ClientRegistry::new());
 
         // Create configuration manager
-        let config_manager = Arc::new(ConfigManager::new(&config));
+        let mut config_manager = ConfigManager::new(&config);
+        if let Some(handle) = log_reload_handle {
+            config_manager.set_log_reload_handle(handle);
+        }
+        let config_manager = Arc::new(config_manager);
 
         // Determine number of shards
         let num_shards = if config.server.num_shards == 0 {
@@ -741,6 +752,9 @@ impl Server {
             if let Some(ref detector) = failure_detector {
                 worker.set_quorum_checker(detector.clone());
             }
+
+            // Share the per-request spans toggle with shard workers
+            worker.per_request_spans = config_manager.per_request_spans_flag();
 
             let handle = spawn(async move {
                 worker.run().await;

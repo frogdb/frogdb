@@ -327,7 +327,9 @@ impl TestServer {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         // Construct server *before* spawning so we can read the bound addresses.
-        let server = Server::with_listeners(config, listeners).await.unwrap();
+        let server = Server::with_listeners(config, listeners, None)
+            .await
+            .unwrap();
         let port = server.local_addr().unwrap().port();
         let metrics_port = server
             .metrics_addr()

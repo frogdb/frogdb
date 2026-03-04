@@ -124,6 +124,9 @@ pub struct Acceptor {
 
     /// Optional primary replication handler for PSYNC connection handoff.
     primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
+
+    /// Whether per-request tracing spans are enabled.
+    per_request_spans: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Acceptor {
@@ -157,6 +160,7 @@ impl Acceptor {
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
+        let per_request_spans = config_manager.per_request_spans_flag();
         Self {
             listener,
             new_conn_senders,
@@ -185,6 +189,7 @@ impl Acceptor {
             raft,
             network_factory,
             primary_replication_handler,
+            per_request_spans,
         }
     }
 
@@ -265,6 +270,7 @@ impl Acceptor {
                         admin_enabled: self.admin_enabled,
                         hotshards_config: self.hotshards_config.clone(),
                         memory_diag_config: self.memory_diag_config.clone(),
+                        per_request_spans: self.per_request_spans.clone(),
                     };
                     let observability = ObservabilityDeps {
                         shared_tracer: self.shared_tracer.clone(),

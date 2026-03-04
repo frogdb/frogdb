@@ -452,10 +452,16 @@ impl ConnectionHandler {
         }
 
         // Normal execution
-        let response = self
-            .route_and_execute(cmd, cmd_name)
-            .instrument(tracing::info_span!("cmd_route"))
-            .await;
+        let response = if self
+            .per_request_spans
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.route_and_execute(cmd, cmd_name)
+                .instrument(tracing::info_span!("cmd_route"))
+                .await
+        } else {
+            self.route_and_execute(cmd, cmd_name).await
+        };
 
         // Handle internal action signals (blocking, raft, migrate)
         vec![self.handle_internal_action(response).await]

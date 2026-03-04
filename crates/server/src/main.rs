@@ -117,9 +117,9 @@ fn main() -> Result<()> {
 
     // Initialize logging (with SpanTracker layer when profiling)
     #[cfg(all(tokio_unstable, feature = "causal-profile"))]
-    config.init_logging_with_layer(profiler.tracing_layer())?;
+    let log_reload_handle = config.init_logging_with_layer(profiler.tracing_layer())?;
     #[cfg(not(all(tokio_unstable, feature = "causal-profile")))]
-    config.init_logging()?;
+    let log_reload_handle = config.init_logging()?;
 
     info!(config = %config.to_json(), "Starting FrogDB server");
 
@@ -145,7 +145,7 @@ fn main() -> Result<()> {
             profiler.start().await;
         }
 
-        let server = Server::new(config).await?;
+        let server = Server::new(config, log_reload_handle).await?;
         server.run().await
     })?;
 

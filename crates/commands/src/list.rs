@@ -467,8 +467,10 @@ impl Command for LrangeCommand {
         match ctx.store.get(key) {
             Some(value) => {
                 if let Some(list) = value.as_list() {
-                    let elements = list.range(start, stop);
-                    let results: Vec<Response> = elements.into_iter().map(Response::bulk).collect();
+                    let results: Vec<Response> = list
+                        .range_iter(start, stop)
+                        .map(|b| Response::bulk(b.clone()))
+                        .collect();
                     Ok(Response::Array(results))
                 } else {
                     Err(CommandError::WrongType)

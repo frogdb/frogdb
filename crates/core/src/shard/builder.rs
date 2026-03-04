@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 
 use tokio::sync::mpsc;
 
@@ -82,6 +82,7 @@ pub struct ShardWorkerBuilder {
     quorum_checker: Option<Arc<dyn QuorumChecker>>,
     enable_vll: bool,
     queue_depth: Option<Arc<AtomicUsize>>,
+    per_request_spans: Option<Arc<AtomicBool>>,
 }
 
 impl ShardWorkerBuilder {
@@ -110,6 +111,7 @@ impl ShardWorkerBuilder {
             quorum_checker: None,
             enable_vll: false,
             queue_depth: None,
+            per_request_spans: None,
         }
     }
 
@@ -219,6 +221,12 @@ impl ShardWorkerBuilder {
         self
     }
 
+    /// Set the per-request spans toggle (shared with connections and ConfigManager).
+    pub fn with_per_request_spans(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.per_request_spans = Some(flag);
+        self
+    }
+
     /// Set core dependencies from a bundle.
     pub fn with_core_deps(mut self, core: ShardCoreDeps) -> Self {
         self.shard_senders = Some(core.shard_senders);
@@ -314,6 +322,9 @@ impl ShardWorkerBuilder {
 
         if let Some(queue_depth) = self.queue_depth {
             worker.observability.queue_depth = queue_depth;
+        }
+        if let Some(per_request_spans) = self.per_request_spans {
+            worker.per_request_spans = per_request_spans;
         }
 
         // VLL initialization is handled separately via enable_vll() method on ShardWorker

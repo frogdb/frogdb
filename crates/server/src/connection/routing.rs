@@ -137,10 +137,17 @@ impl ConnectionHandler {
                     self.metrics_recorder.clone(),
                     self.state.id,
                 );
-                executor
-                    .execute(strategy.as_ref(), &cmd.args)
-                    .instrument(tracing::info_span!("scatter_gather"))
-                    .await
+                if self
+                    .per_request_spans
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    executor
+                        .execute(strategy.as_ref(), &cmd.args)
+                        .instrument(tracing::info_span!("scatter_gather"))
+                        .await
+                } else {
+                    executor.execute(strategy.as_ref(), &cmd.args).await
+                }
             }
             None => {
                 // Command doesn't support scatter-gather
@@ -287,9 +294,16 @@ impl ConnectionHandler {
         shard_id: usize,
         cmd: Arc<ParsedCommand>,
     ) -> Response {
-        self.execute_on_shard_inner(shard_id, cmd)
-            .instrument(tracing::info_span!("shard_roundtrip", shard_id))
-            .await
+        if self
+            .per_request_spans
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.execute_on_shard_inner(shard_id, cmd)
+                .instrument(tracing::info_span!("shard_roundtrip", shard_id))
+                .await
+        } else {
+            self.execute_on_shard_inner(shard_id, cmd).await
+        }
     }
 
     /// Inner implementation of shard execution (channel send + response wait).

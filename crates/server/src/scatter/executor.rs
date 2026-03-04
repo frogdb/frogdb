@@ -70,8 +70,11 @@ impl ScatterGatherExecutor {
         let txid = next_txid();
 
         // Phase 1: Send VllLockRequest to each shard (in sorted order for deadlock prevention)
-        let mut ready_receivers: Vec<(usize, oneshot::Receiver<ShardReadyResult>)> = Vec::new();
-        let mut execute_senders: Vec<(usize, oneshot::Sender<ExecuteSignal>)> = Vec::new();
+        let shard_count = partition.shard_keys.len();
+        let mut ready_receivers: Vec<(usize, oneshot::Receiver<ShardReadyResult>)> =
+            Vec::with_capacity(shard_count);
+        let mut execute_senders: Vec<(usize, oneshot::Sender<ExecuteSignal>)> =
+            Vec::with_capacity(shard_count);
 
         for (&shard_id, shard_key_list) in &partition.shard_keys {
             let (ready_tx, ready_rx) = oneshot::channel();
@@ -145,7 +148,8 @@ impl ScatterGatherExecutor {
         }
 
         // All ready - send execute signal and prepare to receive results
-        let mut result_receivers: Vec<(usize, oneshot::Receiver<PartialResult>)> = Vec::new();
+        let mut result_receivers: Vec<(usize, oneshot::Receiver<PartialResult>)> =
+            Vec::with_capacity(shard_count);
 
         for (shard_id, execute_tx) in execute_senders {
             // Send proceed signal
@@ -171,7 +175,8 @@ impl ScatterGatherExecutor {
         }
 
         // Phase 4: Gather results
-        let mut shard_results: HashMap<usize, HashMap<Bytes, Response>> = HashMap::new();
+        let mut shard_results: HashMap<usize, HashMap<Bytes, Response>> =
+            HashMap::with_capacity(shard_count);
 
         for (shard_id, rx) in result_receivers {
             match tokio::time::timeout(self.timeout, rx).await {
