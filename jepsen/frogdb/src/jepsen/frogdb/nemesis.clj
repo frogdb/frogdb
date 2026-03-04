@@ -249,6 +249,7 @@
 
 (defn partition-nemesis
   "Creates a nemesis that partitions nodes using iptables.
+   Detects cluster mode from test context for correct container naming.
 
    Supports operations:
    - {:f :partition :value :primary-isolated} - isolate primary (n1) from replicas
@@ -256,46 +257,55 @@
    - {:f :partition :value [:isolate node]} - isolate specific node
    - {:f :heal} - remove all partitions"
   []
-  (reify nemesis/Nemesis
-    (setup! [this test]
-      this)
+  (let [cluster-mode? (atom false)]
+    (reify nemesis/Nemesis
+      (setup! [this test]
+        ;; Detect cluster mode from test context
+        (reset! cluster-mode? (boolean (some #{:cluster-formation :leader-election
+                                               :slot-migration :cross-slot :key-routing}
+                                             [(keyword (:workload test))])))
+        this)
 
-    (invoke! [this test op]
-      (case (:f op)
-        :partition
-        (case (:value op)
-          :primary-isolated
-          (do
-            (info "Partitioning: isolating primary from replicas")
-            (frogdb-db/isolate-primary!)
-            (assoc op :value :primary-isolated))
+      (invoke! [this test op]
+        (let [cm? @cluster-mode?
+              all-nodes (if cm?
+                          (vec (keys frogdb-db/raft-cluster-node-ips))
+                          ["n1" "n2" "n3"])]
+          (case (:f op)
+            :partition
+            (case (:value op)
+              :primary-isolated
+              (do
+                (info "Partitioning: isolating primary from replicas")
+                (frogdb-db/isolate-primary! cm?)
+                (assoc op :value :primary-isolated))
 
-          :halves
-          (do
-            (info "Partitioning: splitting cluster into halves [n1,n2] vs [n3]")
-            (frogdb-db/partition-halves!)
-            (assoc op :value :halves))
+              :halves
+              (do
+                (info "Partitioning: splitting cluster into halves [n1,n2] vs [n3]")
+                (frogdb-db/partition-halves! cm?)
+                (assoc op :value :halves))
 
-          ;; Handle [:isolate node] pattern
-          (if (and (vector? (:value op))
-                   (= :isolate (first (:value op))))
-            (let [node (second (:value op))]
-              (info "Partitioning: isolating node" node)
-              (frogdb-db/partition-node! node (remove #{node} ["n1" "n2" "n3"]))
-              (assoc op :value [:isolated node]))
+              ;; Handle [:isolate node] pattern
+              (if (and (vector? (:value op))
+                       (= :isolate (first (:value op))))
+                (let [node (second (:value op))]
+                  (info "Partitioning: isolating node" node)
+                  (frogdb-db/partition-node! node (remove #{node} all-nodes) cm?)
+                  (assoc op :value [:isolated node]))
+                (do
+                  (warn "Unknown partition type:" (:value op))
+                  (assoc op :type :fail :error :unknown-partition-type))))
+
+            :heal
             (do
-              (warn "Unknown partition type:" (:value op))
-              (assoc op :type :fail :error :unknown-partition-type))))
+              (info "Healing all network partitions")
+              (frogdb-db/heal-all! cm?)
+              (assoc op :value :healed)))))
 
-        :heal
-        (do
-          (info "Healing all network partitions")
-          (frogdb-db/heal-all!)
-          (assoc op :value :healed))))
-
-    (teardown! [this test]
-      ;; Clean up any remaining partitions
-      (frogdb-db/heal-all!))))
+      (teardown! [this test]
+        ;; Clean up any remaining partitions
+        (frogdb-db/heal-all! @cluster-mode?)))))
 
 (defn partition-generator
   "Generator for network partition cycles.
