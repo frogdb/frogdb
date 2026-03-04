@@ -100,7 +100,7 @@ def discover_suites(redis_dir: Path, skip_units: list[str]) -> list[str]:
     content = test_helper.read_text()
 
     # Extract the Tcl list between "set ::all_tests {" and the closing "}"
-    match = re.search(r'set\s+::all_tests\s*\{([^}]+)\}', content)
+    match = re.search(r"set\s+::all_tests\s*\{([^}]+)\}", content)
     if not match:
         print("Error: Could not parse $::all_tests from test_helper.tcl")
         sys.exit(1)
@@ -108,13 +108,15 @@ def discover_suites(redis_dir: Path, skip_units: list[str]) -> list[str]:
     all_suites = match.group(1).split()
     skip_set = set(skip_units)
     suites = [
-        s for s in all_suites
-        if s not in skip_set
-        and not any(s.startswith(u + "/") for u in skip_set)
+        s
+        for s in all_suites
+        if s not in skip_set and not any(s.startswith(u + "/") for u in skip_set)
     ]
 
-    print(f"Discovered {len(all_suites)} total suites, {len(suites)} to run "
-          f"({len(all_suites) - len(suites)} skipped)")
+    print(
+        f"Discovered {len(all_suites)} total suites, {len(suites)} to run "
+        f"({len(all_suites) - len(suites)} skipped)"
+    )
     return suites
 
 
@@ -203,9 +205,7 @@ class FrogDBServer:
 
         # Write a minimal config file to set the data directory
         config_path = self.data_dir / "frogdb-test.toml"
-        config_path.write_text(
-            f"[persistence]\ndata_dir = \"{self.data_dir}\"\n"
-        )
+        config_path.write_text(f'[persistence]\ndata_dir = "{self.data_dir}"\n')
 
         self.process = subprocess.Popen(
             [
@@ -227,7 +227,7 @@ class FrogDBServer:
 
                 with socket.create_connection(("127.0.0.1", self.port), timeout=1):
                     return
-            except (ConnectionRefusedError, socket.timeout, OSError):
+            except (TimeoutError, ConnectionRefusedError, OSError):
                 time.sleep(0.1)
 
         # Check if process died
@@ -276,7 +276,7 @@ def parse_test_output(output: str) -> dict:
         if "[err]" in line.lower() or "[exception]" in line.lower():
             errors += 1
         # Capture failing test names from lines like "[err]: test name in ..."
-        err_match = re.match(r'\[err\]:\s*(.+?)(?:\s+in\s+|$)', line, re.IGNORECASE)
+        err_match = re.match(r"\[err\]:\s*(.+?)(?:\s+in\s+|$)", line, re.IGNORECASE)
         if err_match:
             failing_tests.append(err_match.group(1).strip())
 
@@ -298,12 +298,15 @@ def build_tcl_command(
     cmd = [
         tclsh,
         str(redis_dir / "tests" / "test_helper.tcl"),
-        "--host", "127.0.0.1",
-        "--port", str(port),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
         "--singledb",
         "--ignore-encoding",
         "--ignore-digest",
-        "--timeout", "30",
+        "--timeout",
+        "30",
     ]
 
     if skipfile.exists() and skipfile.stat().st_size > 0:
@@ -455,29 +458,28 @@ def print_summary(results: list[dict], elapsed: float) -> None:
     total_passed = sum(r.get("passed", 0) for r in results)
     total_failed = sum(r.get("failed", 0) for r in results)
     total_errors = sum(r.get("errors", 0) for r in results)
-    print(
-        f"{'TOTAL':<40} {'':<10} "
-        f"{total_passed:<6} {total_failed:<6} {total_errors:<6}"
-    )
+    print(f"{'TOTAL':<40} {'':<10} {total_passed:<6} {total_failed:<6} {total_errors:<6}")
 
     minutes, seconds = divmod(int(elapsed), 60)
     print(f"\nCompleted in {minutes}m {seconds}s")
-    print(f"  {len(pass_suites)} passed, {len(fail_suites)} failed, "
-          f"{len(timeout_suites)} timed out, {len(crash_suites)} crashed, "
-          f"{len(error_suites)} errors")
+    print(
+        f"  {len(pass_suites)} passed, {len(fail_suites)} failed, "
+        f"{len(timeout_suites)} timed out, {len(crash_suites)} crashed, "
+        f"{len(error_suites)} errors"
+    )
 
     if timeout_suites:
-        print(f"\nTIMEOUT suites (hung/deadlocked):")
+        print("\nTIMEOUT suites (hung/deadlocked):")
         for s in timeout_suites:
             print(f"  - {s}")
 
     if crash_suites:
-        print(f"\nCRASH suites (server died):")
+        print("\nCRASH suites (server died):")
         for s in crash_suites:
             print(f"  - {s}")
 
     if fail_suites:
-        print(f"\nFAIL suites (tests failed but completed):")
+        print("\nFAIL suites (tests failed but completed):")
         for s in fail_suites:
             print(f"  - {s}")
 
@@ -508,7 +510,9 @@ def update_skiplists(
         return
 
     with open(skiplist_path, "a") as f:
-        f.write("\n# =============================================================================\n")
+        f.write(
+            "\n# =============================================================================\n"
+        )
         f.write("# AUTO-DETECTED BY PER-SUITE RUNNER\n")
         f.write("# =============================================================================\n")
         for suite, comment in new_entries:
@@ -520,9 +524,7 @@ def update_skiplists(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run Redis compatibility tests against FrogDB"
-    )
+    parser = argparse.ArgumentParser(description="Run Redis compatibility tests against FrogDB")
     parser.add_argument(
         "--port",
         type=int,
@@ -540,10 +542,7 @@ def main() -> None:
         action="append",
         dest="only_tests",
         metavar="TEST",
-        help=(
-            "Run only the named test (or /regex/ pattern). "
-            "Requires --single. Can be repeated."
-        ),
+        help=("Run only the named test (or /regex/ pattern). Requires --single. Can be repeated."),
     )
     parser.add_argument(
         "--tags",
@@ -562,7 +561,8 @@ def main() -> None:
         help="Skip downloading Redis (use cached version)",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Verbose test output",
     )
@@ -647,8 +647,10 @@ def main() -> None:
             print(result["output"])
 
         status = result["status"]
-        print(f"\nResult: {status} — {result.get('passed', 0)} passed, "
-              f"{result.get('failed', 0)} failed, {result.get('errors', 0)} errors")
+        print(
+            f"\nResult: {status} — {result.get('passed', 0)} passed, "
+            f"{result.get('failed', 0)} failed, {result.get('errors', 0)} errors"
+        )
 
         sys.exit(0 if status == "PASS" else 1)
 
@@ -717,16 +719,18 @@ def main() -> None:
 
         except Exception as e:
             print(f"ERROR ({e})")
-            results.append({
-                "suite": suite,
-                "status": "ERROR",
-                "returncode": -1,
-                "output": str(e),
-                "passed": 0,
-                "failed": 0,
-                "errors": 0,
-                "failing_tests": [],
-            })
+            results.append(
+                {
+                    "suite": suite,
+                    "status": "ERROR",
+                    "returncode": -1,
+                    "output": str(e),
+                    "passed": 0,
+                    "failed": 0,
+                    "errors": 0,
+                    "failing_tests": [],
+                }
+            )
         finally:
             server.stop()
             if not args.keep_data:

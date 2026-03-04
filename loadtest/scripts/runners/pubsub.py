@@ -16,23 +16,25 @@ Features:
 import json
 import queue
 import struct
+import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from workload_loader import WorkloadConfig, CommandCategory
+from workload_loader import CommandCategory, WorkloadConfig
+
 from runners.base import (
-    BenchmarkRunner,
     BenchmarkResult,
+    BenchmarkRunner,
     CommandResult,
     register_runner,
 )
 
 try:
     import redis
+
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
@@ -164,15 +166,16 @@ class PubSubRunner(BenchmarkRunner):
         # Distribute channels across subscriber threads
         # Each subscriber handles a portion of channels
         total_subscriptions = min(num_channels * subscribers_per_channel, 100)
-        channels_per_thread = max(1, num_channels // max(1, total_subscriptions // subscribers_per_channel))
+        channels_per_thread = max(
+            1, num_channels // max(1, total_subscriptions // subscribers_per_channel)
+        )
 
         for i in range(min(total_subscriptions, 10)):  # Cap at 10 subscriber threads
             start_channel = (i * channels_per_thread) % num_channels
             end_channel = min(start_channel + channels_per_thread, num_channels)
 
             channel_names = [
-                f"{workload.keys.prefix}channel:{j}"
-                for j in range(start_channel, end_channel)
+                f"{workload.keys.prefix}channel:{j}" for j in range(start_channel, end_channel)
             ]
 
             thread = threading.Thread(
@@ -326,8 +329,12 @@ class PubSubRunner(BenchmarkRunner):
         # Add e2e summary if available
         if e2e_latencies:
             result.raw_output["e2e_messages_received"] = len(e2e_latencies)
-            result.raw_output["e2e_p50_latency_ms"] = result.commands["SUBSCRIBE_E2E"].p50_latency_ms
-            result.raw_output["e2e_p99_latency_ms"] = result.commands["SUBSCRIBE_E2E"].p99_latency_ms
+            result.raw_output["e2e_p50_latency_ms"] = result.commands[
+                "SUBSCRIBE_E2E"
+            ].p50_latency_ms
+            result.raw_output["e2e_p99_latency_ms"] = result.commands[
+                "SUBSCRIBE_E2E"
+            ].p99_latency_ms
 
         return result
 
@@ -340,7 +347,7 @@ def main():
     print(f"Available: {runner.is_available()}")
 
     if runner.is_available():
-        from workload_loader import WorkloadConfig, KeysConfig, PubSubConfig
+        from workload_loader import KeysConfig, PubSubConfig, WorkloadConfig
 
         workload = WorkloadConfig(
             name="test-pubsub",

@@ -109,14 +109,17 @@ bench:
 # Format code
 fmt:
     cargo fmt --all
+    uvx ruff format
 
 # Check formatting (CI)
 fmt-check:
     cargo fmt --all -- --check
+    uvx ruff format --check
 
 # Run clippy lints
 lint:
     {{dyld-env}} {{rocksdb-env}} cargo clippy --all-targets -- -D warnings
+    uvx ruff check
 
 # Run clippy lints for a specific crate
 lint-crate crate:

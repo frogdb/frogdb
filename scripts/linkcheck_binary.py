@@ -58,7 +58,9 @@ def main() -> None:
     print(f"Checking binary: {binary}")
 
     if platform.system() == "Darwin":
-        result = subprocess.run(["otool", "-L", str(binary)], capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            ["otool", "-L", str(binary)], capture_output=True, text=True, check=True
+        )
     else:
         result = subprocess.run(["ldd", str(binary)], capture_output=True, text=True, check=True)
 
@@ -77,7 +79,9 @@ def main() -> None:
         if lib_name in deps:
             print(f"  \u2713 Dynamically links {lib_name} (system {label})")
         else:
-            print(f"  \u2717 No dynamic {lib_name} link found — {label} is likely statically compiled")
+            print(
+                f"  \u2717 No dynamic {lib_name} link found — {label} is likely statically compiled"
+            )
             if required:
                 ok = False
 

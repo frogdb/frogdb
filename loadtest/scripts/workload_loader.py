@@ -32,29 +32,32 @@ import yaml
 
 class KeyPattern(Enum):
     """Key distribution patterns."""
-    UNIFORM = "uniform"     # Equal probability
-    GAUSSIAN = "gaussian"   # Bell curve (hot spot)
-    ZIPFIAN = "zipfian"     # Power law (80/20)
+
+    UNIFORM = "uniform"  # Equal probability
+    GAUSSIAN = "gaussian"  # Bell curve (hot spot)
+    ZIPFIAN = "zipfian"  # Power law (80/20)
     SEQUENTIAL = "sequential"  # Linear ordering
 
 
 class PersistenceMode(Enum):
     """Persistence modes."""
-    ASYNC = "async"         # No sync (max throughput)
-    PERIODIC = "periodic"   # Periodic sync (balanced)
-    SYNC = "sync"           # Every write synced
+
+    ASYNC = "async"  # No sync (max throughput)
+    PERIODIC = "periodic"  # Periodic sync (balanced)
+    SYNC = "sync"  # Every write synced
 
 
 class CommandCategory(Enum):
     """Command categories for routing to runners."""
-    STRING = "string"       # GET, SET, INCR, MGET, MSET, APPEND
-    HASH = "hash"           # HSET, HGET, HMSET, HMGET, HGETALL, HDEL
-    LIST = "list"           # LPUSH, RPUSH, LPOP, RPOP, LRANGE, LLEN
-    SET = "set"             # SADD, SMEMBERS, SINTER, SUNION, SISMEMBER
-    ZSET = "zset"           # ZADD, ZRANGE, ZRANK, ZSCORE, ZINCRBY
-    STREAM = "stream"       # XADD, XREAD, XRANGE, XLEN
-    PUBSUB = "pubsub"       # PUBLISH, SUBSCRIBE
-    GEO = "geo"             # GEOADD, GEORADIUS, GEODIST
+
+    STRING = "string"  # GET, SET, INCR, MGET, MSET, APPEND
+    HASH = "hash"  # HSET, HGET, HMSET, HMGET, HGETALL, HDEL
+    LIST = "list"  # LPUSH, RPUSH, LPOP, RPOP, LRANGE, LLEN
+    SET = "set"  # SADD, SMEMBERS, SINTER, SUNION, SISMEMBER
+    ZSET = "zset"  # ZADD, ZRANGE, ZRANK, ZSCORE, ZINCRBY
+    STREAM = "stream"  # XADD, XREAD, XRANGE, XLEN
+    PUBSUB = "pubsub"  # PUBLISH, SUBSCRIBE
+    GEO = "geo"  # GEOADD, GEORADIUS, GEODIST
 
 
 # Mapping from command names to categories
@@ -145,6 +148,7 @@ COMMAND_CATEGORIES: dict[str, CommandCategory] = {
 @dataclass
 class KeysConfig:
     """Key configuration."""
+
     pattern: KeyPattern = KeyPattern.UNIFORM
     space_size: int = 1_000_000
     prefix: str = ""
@@ -153,6 +157,7 @@ class KeysConfig:
 @dataclass
 class DataConfig:
     """Data configuration."""
+
     size_bytes: int = 128
     size_distribution: str = "fixed"  # fixed or random
     ttl_seconds: int = 0  # 0 = no TTL
@@ -161,6 +166,7 @@ class DataConfig:
 @dataclass
 class ConcurrencyConfig:
     """Concurrency configuration."""
+
     clients: int = 100
     threads: int = 4
     pipeline: int = 1
@@ -170,12 +176,14 @@ class ConcurrencyConfig:
 @dataclass
 class PersistenceConfig:
     """Persistence configuration."""
+
     mode: PersistenceMode = PersistenceMode.ASYNC
 
 
 @dataclass
 class TargetsConfig:
     """Performance target configuration."""
+
     ops_per_sec: int = 0
     p50_latency_ms: float = 0.0
     p95_latency_ms: float = 0.0
@@ -185,24 +193,28 @@ class TargetsConfig:
 @dataclass
 class HashConfig:
     """Hash-specific configuration."""
+
     fields_per_hash: int = 10
 
 
 @dataclass
 class ListConfig:
     """List-specific configuration."""
+
     max_length: int = 1000
 
 
 @dataclass
 class ZSetConfig:
     """Sorted Set-specific configuration."""
+
     members_per_set: int = 1000
 
 
 @dataclass
 class StreamConfig:
     """Stream-specific configuration."""
+
     fields_per_entry: int = 5
     max_len: int = 0  # 0 = unlimited
 
@@ -210,6 +222,7 @@ class StreamConfig:
 @dataclass
 class GeoConfig:
     """Geo-specific configuration."""
+
     points_per_index: int = 10000
     radius_km: float = 10.0
 
@@ -217,6 +230,7 @@ class GeoConfig:
 @dataclass
 class PubSubConfig:
     """Pub/Sub-specific configuration."""
+
     subscribers_per_channel: int = 10
     message_size_bytes: int = 128
 
@@ -224,6 +238,7 @@ class PubSubConfig:
 @dataclass
 class ClusterConfig:
     """Cluster-specific configuration."""
+
     enabled: bool = False
     nodes: int = 3
     hash_slots: int = 16384
@@ -235,6 +250,7 @@ class ClusterConfig:
 @dataclass
 class WorkloadConfig:
     """Complete workload configuration."""
+
     name: str
     description: str = ""
     scenario: str = ""
@@ -290,6 +306,7 @@ class WorkloadConfig:
 
         # memtier uses SET:GET ratio
         from math import gcd
+
         if get_pct == 0:
             return "1:0"
         if set_pct == 0:
@@ -301,10 +318,10 @@ class WorkloadConfig:
     def get_memtier_key_pattern(self) -> str:
         """Convert key pattern to memtier format."""
         pattern_map = {
-            KeyPattern.UNIFORM: "R",      # Random
-            KeyPattern.GAUSSIAN: "G",     # Gaussian
-            KeyPattern.ZIPFIAN: "R",      # memtier doesn't have Zipfian, use Random
-            KeyPattern.SEQUENTIAL: "S",   # Sequential
+            KeyPattern.UNIFORM: "R",  # Random
+            KeyPattern.GAUSSIAN: "G",  # Gaussian
+            KeyPattern.ZIPFIAN: "R",  # memtier doesn't have Zipfian, use Random
+            KeyPattern.SEQUENTIAL: "S",  # Sequential
         }
         p = pattern_map.get(self.keys.pattern, "R")
         return f"{p}:{p}"
@@ -312,6 +329,7 @@ class WorkloadConfig:
 
 class WorkloadValidationError(Exception):
     """Raised when workload validation fails."""
+
     pass
 
 
@@ -319,18 +337,18 @@ def _parse_key_pattern(value: str) -> KeyPattern:
     """Parse key pattern from string."""
     try:
         return KeyPattern(value.lower())
-    except ValueError:
+    except ValueError as err:
         valid = [p.value for p in KeyPattern]
-        raise WorkloadValidationError(f"Invalid key pattern: {value}. Valid: {valid}")
+        raise WorkloadValidationError(f"Invalid key pattern: {value}. Valid: {valid}") from err
 
 
 def _parse_persistence_mode(value: str) -> PersistenceMode:
     """Parse persistence mode from string."""
     try:
         return PersistenceMode(value.lower())
-    except ValueError:
+    except ValueError as err:
         valid = [m.value for m in PersistenceMode]
-        raise WorkloadValidationError(f"Invalid persistence mode: {value}. Valid: {valid}")
+        raise WorkloadValidationError(f"Invalid persistence mode: {value}. Valid: {valid}") from err
 
 
 def _parse_commands(commands: list[dict[str, Any]] | dict[str, Any]) -> dict[str, int]:
@@ -530,10 +548,13 @@ def list_workloads(workloads_dir: Path | None = None) -> list[str]:
     if not workloads_dir.exists():
         return []
 
-    return sorted([
-        f.stem for f in workloads_dir.glob("*.yaml")
-        if not f.name.startswith("_")  # Skip private files
-    ])
+    return sorted(
+        [
+            f.stem
+            for f in workloads_dir.glob("*.yaml")
+            if not f.name.startswith("_")  # Skip private files
+        ]
+    )
 
 
 def main() -> None:
@@ -586,6 +607,7 @@ def main() -> None:
         if args.json:
             # Convert dataclass to dict for JSON output
             from dataclasses import asdict
+
             output = asdict(config)
             # Convert enums to strings
             output["keys"]["pattern"] = config.keys.pattern.value
@@ -610,7 +632,7 @@ def main() -> None:
             # Show memtier config if applicable
             ratio = config.get_memtier_ratio()
             if ratio:
-                print(f"\nMemtier Config:")
+                print("\nMemtier Config:")
                 print(f"  Ratio: {ratio}")
                 print(f"  Key Pattern: {config.get_memtier_key_pattern()}")
 

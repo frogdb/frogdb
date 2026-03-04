@@ -13,20 +13,20 @@ STATUS: Implementation ready for when FrogDB clustering is available
 """
 
 import json
-import random
 import statistics
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from workload_loader import WorkloadConfig
 
 try:
-    import redis
-    from redis.cluster import RedisCluster, ClusterNode
+    import redis  # noqa: F401
+    from redis.cluster import ClusterNode, RedisCluster
+
     REDIS_CLUSTER_AVAILABLE = True
 except ImportError:
     REDIS_CLUSTER_AVAILABLE = False
@@ -35,6 +35,7 @@ except ImportError:
 @dataclass
 class SlotDistribution:
     """Hash slot distribution analysis."""
+
     total_slots: int = 16384
     nodes: int = 0
     slots_per_node: dict[str, int] = field(default_factory=dict)
@@ -47,6 +48,7 @@ class SlotDistribution:
 @dataclass
 class CrossSlotResult:
     """Results from cross-slot operation testing."""
+
     operation: str
     keys_count: int
     slots_accessed: int
@@ -58,6 +60,7 @@ class CrossSlotResult:
 @dataclass
 class ReplicationLagResult:
     """Replication lag measurement result."""
+
     primary_node: str
     replica_node: str
     lag_ms: float
@@ -67,6 +70,7 @@ class ReplicationLagResult:
 @dataclass
 class FailoverResult:
     """Failover recovery time measurement."""
+
     failed_node: str
     new_primary: str
     detection_time_ms: float
@@ -78,6 +82,7 @@ class FailoverResult:
 @dataclass
 class ClusterBenchmarkResult:
     """Complete cluster benchmark result."""
+
     workload_name: str
     timestamp: str
     cluster_nodes: list[str]
@@ -209,10 +214,7 @@ class ClusterBenchmarkRunner:
 
         if self._client is None:
             if self.startup_nodes:
-                nodes = [
-                    ClusterNode(n["host"], n["port"])
-                    for n in self.startup_nodes
-                ]
+                nodes = [ClusterNode(n["host"], n["port"]) for n in self.startup_nodes]
             elif self.nodes:
                 nodes = [ClusterNode(host, port) for host, port in self.nodes]
             else:
@@ -239,6 +241,7 @@ class ClusterBenchmarkRunner:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         from datetime import datetime
+
         result = ClusterBenchmarkResult(
             workload_name=workload.name,
             timestamp=datetime.now().isoformat(),
@@ -254,9 +257,7 @@ class ClusterBenchmarkRunner:
             result.slot_distribution = self._measure_slot_distribution(client)
 
         if cluster_config.measure_cross_slot_latency:
-            result.cross_slot_results = self._measure_cross_slot_latency(
-                client, workload
-            )
+            result.cross_slot_results = self._measure_cross_slot_latency(client, workload)
 
         # Replication lag measurement
         result.replication_lag = self._measure_replication_lag(client)
@@ -316,7 +317,7 @@ class ClusterBenchmarkRunner:
                 max_deviation = max(abs(c - perfect) for c in counts)
                 result.imbalance_pct = (max_deviation / perfect) * 100
 
-        except Exception as e:
+        except Exception:
             # Return empty result on error
             pass
 
@@ -359,22 +360,26 @@ class ClusterBenchmarkRunner:
         try:
             client.mget(same_slot_keys)
             latency = (time.perf_counter() - start) * 1000
-            results.append(CrossSlotResult(
-                operation="MGET",
-                keys_count=10,
-                slots_accessed=1,
-                latency_ms=latency,
-                success=True,
-            ))
+            results.append(
+                CrossSlotResult(
+                    operation="MGET",
+                    keys_count=10,
+                    slots_accessed=1,
+                    latency_ms=latency,
+                    success=True,
+                )
+            )
         except Exception as e:
-            results.append(CrossSlotResult(
-                operation="MGET",
-                keys_count=10,
-                slots_accessed=1,
-                latency_ms=0,
-                success=False,
-                error=str(e),
-            ))
+            results.append(
+                CrossSlotResult(
+                    operation="MGET",
+                    keys_count=10,
+                    slots_accessed=1,
+                    latency_ms=0,
+                    success=False,
+                    error=str(e),
+                )
+            )
 
         # Test 2: Two slots
         two_slot_keys = [
@@ -394,22 +399,26 @@ class ClusterBenchmarkRunner:
             # We catch this and note it
             client.mget(two_slot_keys)
             latency = (time.perf_counter() - start) * 1000
-            results.append(CrossSlotResult(
-                operation="MGET",
-                keys_count=10,
-                slots_accessed=2,
-                latency_ms=latency,
-                success=True,
-            ))
+            results.append(
+                CrossSlotResult(
+                    operation="MGET",
+                    keys_count=10,
+                    slots_accessed=2,
+                    latency_ms=latency,
+                    success=True,
+                )
+            )
         except Exception as e:
-            results.append(CrossSlotResult(
-                operation="MGET",
-                keys_count=10,
-                slots_accessed=2,
-                latency_ms=0,
-                success=False,
-                error=str(e),
-            ))
+            results.append(
+                CrossSlotResult(
+                    operation="MGET",
+                    keys_count=10,
+                    slots_accessed=2,
+                    latency_ms=0,
+                    success=False,
+                    error=str(e),
+                )
+            )
 
         # Test 3: Many slots (one key per ~1000 slots)
         many_slot_keys = [key_for_slot(i * 1000, ":key") for i in range(16)]
@@ -424,22 +433,26 @@ class ClusterBenchmarkRunner:
         try:
             client.mget(many_slot_keys)
             latency = (time.perf_counter() - start) * 1000
-            results.append(CrossSlotResult(
-                operation="MGET",
-                keys_count=16,
-                slots_accessed=16,
-                latency_ms=latency,
-                success=True,
-            ))
+            results.append(
+                CrossSlotResult(
+                    operation="MGET",
+                    keys_count=16,
+                    slots_accessed=16,
+                    latency_ms=latency,
+                    success=True,
+                )
+            )
         except Exception as e:
-            results.append(CrossSlotResult(
-                operation="MGET",
-                keys_count=16,
-                slots_accessed=16,
-                latency_ms=0,
-                success=False,
-                error=str(e),
-            ))
+            results.append(
+                CrossSlotResult(
+                    operation="MGET",
+                    keys_count=16,
+                    slots_accessed=16,
+                    latency_ms=0,
+                    success=False,
+                    error=str(e),
+                )
+            )
 
         return results
 
@@ -456,14 +469,13 @@ class ClusterBenchmarkRunner:
 
         try:
             # Get cluster nodes info
-            nodes_info = client.cluster_nodes()
+            _nodes_info = client.cluster_nodes()
 
             # Find primary-replica pairs
             # This is cluster-specific and depends on the cluster setup
             # For now, return empty - needs cluster topology parsing
-            pass
 
-        except Exception as e:
+        except Exception:
             # Replication lag measurement not supported
             pass
 
@@ -490,11 +502,13 @@ class ClusterBenchmarkRunner:
 
 def main():
     """Test the cluster runner."""
-    runner = ClusterBenchmarkRunner(nodes=[
-        ("localhost", 7000),
-        ("localhost", 7001),
-        ("localhost", 7002),
-    ])
+    runner = ClusterBenchmarkRunner(
+        nodes=[
+            ("localhost", 7000),
+            ("localhost", 7001),
+            ("localhost", 7002),
+        ]
+    )
 
     print(f"Runner: {runner.name} v{runner.version}")
     print(f"Available: {runner.is_available()}")

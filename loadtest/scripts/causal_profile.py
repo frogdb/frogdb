@@ -62,9 +62,7 @@ def run_causal_profile(
     # Server environment: disable persistence, enable causal profiling
     # Filter out FROGDB_SYSTEM_ROCKSDB — it's a build flag, not a server config key,
     # and figment rejects unknown FROGDB_* env vars.
-    server_env = {
-        k: v for k, v in os.environ.items() if k != "FROGDB_SYSTEM_ROCKSDB"
-    }
+    server_env = {k: v for k, v in os.environ.items() if k != "FROGDB_SYSTEM_ROCKSDB"}
     server_env["FROGDB_PERSISTENCE__ENABLED"] = "false"
     server_env["COZ_PROFILE"] = "1"
     if shards is not None:
@@ -100,10 +98,14 @@ def run_causal_profile(
             [
                 sys.executable,
                 str(Path(__file__).parent / "run_memtier.py"),
-                "-w", workload,
-                "--test-time", str(duration),
-                "-t", str(threads),
-                "-c", str(clients),
+                "-w",
+                workload,
+                "--test-time",
+                str(duration),
+                "-t",
+                str(threads),
+                "-c",
+                str(clients),
             ],
         )
 
@@ -138,7 +140,8 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "-w", "--workload",
+        "-w",
+        "--workload",
         choices=["read-heavy", "write-heavy", "mixed"],
         default="mixed",
         help="Workload preset",
@@ -150,13 +153,15 @@ def main():
         help="Load test duration in seconds (default: 90, enough for ~5 profiling spans)",
     )
     parser.add_argument(
-        "-t", "--threads",
+        "-t",
+        "--threads",
         type=int,
         default=4,
         help="Number of memtier threads",
     )
     parser.add_argument(
-        "-c", "--clients",
+        "-c",
+        "--clients",
         type=int,
         default=25,
         help="Clients per thread",

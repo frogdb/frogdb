@@ -7,30 +7,34 @@ data structures not well supported by memtier (hashes, lists, sorted sets, etc.)
 
 import json
 import random
-import statistics
 import string
 import time
 from abc import abstractmethod
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 try:
     import redis
+
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
 
 import sys
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from workload_loader import WorkloadConfig, CommandCategory
-from runners.base import BenchmarkRunner, BenchmarkResult, CommandResult
+from workload_loader import WorkloadConfig
+
+from runners.base import BenchmarkResult, BenchmarkRunner, CommandResult
 
 
 @dataclass
 class OperationStats:
     """Statistics for a single operation type."""
+
     command: str
     latencies_ms: list[float] = field(default_factory=list)
     errors: int = 0
@@ -98,7 +102,7 @@ class RedisPyRunner(BenchmarkRunner):
 
     def _generate_value(self, size_bytes: int) -> str:
         """Generate a random value of specified size."""
-        return ''.join(random.choices(string.ascii_letters + string.digits, k=size_bytes))
+        return "".join(random.choices(string.ascii_letters + string.digits, k=size_bytes))
 
     @abstractmethod
     def setup_data(self, client: Any, workload: WorkloadConfig, count: int) -> None:
@@ -189,14 +193,10 @@ class RedisPyRunner(BenchmarkRunner):
 
         if workload.concurrency.threads > 1:
             # Multi-threaded execution
-            self._run_threaded(
-                workload, weighted_ops, requests, stats
-            )
+            self._run_threaded(workload, weighted_ops, requests, stats)
         else:
             # Single-threaded execution
-            self._run_operations(
-                client, weighted_ops, workload, requests, stats, warmup=False
-            )
+            self._run_operations(client, weighted_ops, workload, requests, stats, warmup=False)
 
         duration = time.time() - start_time
 

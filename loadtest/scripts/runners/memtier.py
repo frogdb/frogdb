@@ -11,15 +11,16 @@ It supports various key patterns and operation ratios.
 import json
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from workload_loader import WorkloadConfig, CommandCategory
+from workload_loader import CommandCategory, WorkloadConfig
+
 from runners.base import (
-    BenchmarkRunner,
     BenchmarkResult,
+    BenchmarkRunner,
     CommandResult,
     register_runner,
 )
@@ -135,18 +136,29 @@ class MemtierRunner(BenchmarkRunner):
 
         cmd = [
             "memtier_benchmark",
-            "-s", self.host,
-            "-p", str(self.port),
-            "--threads", str(threads),
-            "--clients", str(clients_per_thread),
-            "--requests", str(requests_per_client),
-            "--data-size", str(workload.data.size_bytes),
-            "--ratio", ratio,
-            "--key-pattern", key_pattern,
-            "--key-maximum", str(workload.keys.space_size),
-            "--pipeline", str(workload.concurrency.pipeline),
+            "-s",
+            self.host,
+            "-p",
+            str(self.port),
+            "--threads",
+            str(threads),
+            "--clients",
+            str(clients_per_thread),
+            "--requests",
+            str(requests_per_client),
+            "--data-size",
+            str(workload.data.size_bytes),
+            "--ratio",
+            ratio,
+            "--key-pattern",
+            key_pattern,
+            "--key-maximum",
+            str(workload.keys.space_size),
+            "--pipeline",
+            str(workload.concurrency.pipeline),
             "--hide-histogram",
-            "--json-out-file", str(json_file),
+            "--json-out-file",
+            str(json_file),
         ]
 
         # Add key prefix if specified
@@ -156,9 +168,8 @@ class MemtierRunner(BenchmarkRunner):
         # Add rate limiting if specified
         if workload.concurrency.rate_limit_rps > 0:
             # memtier uses --rate-limiting in ops/sec per connection
-            ops_per_connection = (
-                workload.concurrency.rate_limit_rps //
-                (threads * clients_per_thread)
+            ops_per_connection = workload.concurrency.rate_limit_rps // (
+                threads * clients_per_thread
             )
             if ops_per_connection > 0:
                 cmd.extend(["--rate-limiting", str(ops_per_connection)])
@@ -253,7 +264,7 @@ def main():
         return
 
     # Test with a simple workload
-    from workload_loader import WorkloadConfig, KeysConfig, ConcurrencyConfig, DataConfig
+    from workload_loader import ConcurrencyConfig, DataConfig, KeysConfig, WorkloadConfig
 
     workload = WorkloadConfig(
         name="test-string",

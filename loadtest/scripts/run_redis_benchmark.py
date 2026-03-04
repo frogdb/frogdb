@@ -56,32 +56,49 @@ def main() -> None:
         add_help=False,
     )
     parser.add_argument("--help", action="help", help="Show this help message and exit")
-    parser.add_argument("-h", "--host", default="127.0.0.1",
-                        help="Server hostname (default: 127.0.0.1)")
-    parser.add_argument("-p", "--port", type=int, default=6379,
-                        help="Server port (default: 6379)")
-    parser.add_argument("-c", "--clients", type=int, default=50,
-                        help="Number of parallel connections (default: 50)")
-    parser.add_argument("-n", "--requests", type=int, default=100000,
-                        help="Total number of requests (default: 100000)")
-    parser.add_argument("-d", "--datasize", type=int, default=128,
-                        help="Data size in bytes for SET/GET (default: 128)")
-    parser.add_argument("-P", "--pipeline", type=int, default=1,
-                        help="Pipeline N requests (default: 1)")
-    parser.add_argument("-t", "--tests", default="",
-                        help="Comma-separated list of tests to run")
-    parser.add_argument("-w", "--workload", default="all",
-                        choices=["read-heavy", "write-heavy", "mixed", "all"],
-                        help="Predefined workload (default: all)")
-    parser.add_argument("--csv", action="store_true",
-                        help="Output in CSV format")
+    parser.add_argument(
+        "-h", "--host", default="127.0.0.1", help="Server hostname (default: 127.0.0.1)"
+    )
+    parser.add_argument("-p", "--port", type=int, default=6379, help="Server port (default: 6379)")
+    parser.add_argument(
+        "-c", "--clients", type=int, default=50, help="Number of parallel connections (default: 50)"
+    )
+    parser.add_argument(
+        "-n",
+        "--requests",
+        type=int,
+        default=100000,
+        help="Total number of requests (default: 100000)",
+    )
+    parser.add_argument(
+        "-d",
+        "--datasize",
+        type=int,
+        default=128,
+        help="Data size in bytes for SET/GET (default: 128)",
+    )
+    parser.add_argument(
+        "-P", "--pipeline", type=int, default=1, help="Pipeline N requests (default: 1)"
+    )
+    parser.add_argument("-t", "--tests", default="", help="Comma-separated list of tests to run")
+    parser.add_argument(
+        "-w",
+        "--workload",
+        default="all",
+        choices=["read-heavy", "write-heavy", "mixed", "all"],
+        help="Predefined workload (default: all)",
+    )
+    parser.add_argument("--csv", action="store_true", help="Output in CSV format")
 
     args = parser.parse_args()
 
     # Check if redis-benchmark is available
     if not shutil.which("redis-benchmark"):
         print("Error: redis-benchmark not found", file=sys.stderr)
-        print("Install it with: brew install redis (macOS) or apt install redis-tools (Ubuntu)", file=sys.stderr)
+        print(
+            "Install it with: brew install redis (macOS) or apt install redis-tools (Ubuntu)",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Determine tests to run
@@ -92,12 +109,18 @@ def main() -> None:
     # Build command arguments
     cmd_args = [
         "redis-benchmark",
-        "-h", args.host,
-        "-p", str(args.port),
-        "-c", str(args.clients),
-        "-n", str(args.requests),
-        "-d", str(args.datasize),
-        "-P", str(args.pipeline),
+        "-h",
+        args.host,
+        "-p",
+        str(args.port),
+        "-c",
+        str(args.clients),
+        "-n",
+        str(args.requests),
+        "-d",
+        str(args.datasize),
+        "-P",
+        str(args.pipeline),
     ]
 
     if tests:

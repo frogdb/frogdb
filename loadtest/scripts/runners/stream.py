@@ -7,13 +7,15 @@ Tool: redis-py
 Use cases: Event sourcing, audit logs, message queues, time-series data
 """
 
-from pathlib import Path
-from typing import Any, Callable
-
 import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from workload_loader import WorkloadConfig, CommandCategory
-from runners.base import register_runner, BenchmarkResult
+from workload_loader import CommandCategory, WorkloadConfig
+
+from runners.base import BenchmarkResult, register_runner
 from runners.redis_py_base import RedisPyRunner
 
 
@@ -47,14 +49,13 @@ class StreamRunner(RedisPyRunner):
 
         # Check if workload uses consumer group operations
         uses_consumer_groups = any(
-            cmd.upper() in ("XGROUP", "XREADGROUP", "XACK", "XPENDING")
-            for cmd in workload.commands
+            cmd.upper() in ("XGROUP", "XREADGROUP", "XACK", "XPENDING") for cmd in workload.commands
         )
 
         for i in range(min(count, 100)):
             key = self._generate_key(workload, i)
             # Add initial entries
-            for j in range(10):
+            for _j in range(10):
                 fields = {f"field{k}": f"value{k}" for k in range(fields_per_entry)}
                 client.xadd(key, fields)
 
@@ -180,7 +181,7 @@ def main():
     print(f"Available: {runner.is_available()}")
 
     if runner.is_available():
-        from workload_loader import WorkloadConfig, KeysConfig, StreamConfig
+        from workload_loader import KeysConfig, StreamConfig, WorkloadConfig
 
         workload = WorkloadConfig(
             name="test-stream",

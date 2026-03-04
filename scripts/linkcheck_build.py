@@ -140,7 +140,9 @@ def main() -> None:
     ok = True
 
     # RocksDB
-    if not check_crate(build_dir, "librocksdb-sys", CRATE_CHECKS["librocksdb-sys"], args.system_rocksdb):
+    if not check_crate(
+        build_dir, "librocksdb-sys", CRATE_CHECKS["librocksdb-sys"], args.system_rocksdb
+    ):
         ok = False
 
     # Snappy (output lives in librocksdb-sys)

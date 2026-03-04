@@ -73,7 +73,8 @@
       "Bash(samply load:*)",
       "Bash(head:*)",
       "Bash(just redis-compat:*)",
-      "WebFetch(domain:docs.docker.com)"
+      "WebFetch(domain:docs.docker.com)",
+      "Bash(uvx ruff:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

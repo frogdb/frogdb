@@ -153,7 +153,7 @@ class FrogDBServer:
                 with socket.create_connection(("127.0.0.1", self.port), timeout=1):
                     print(f"FrogDB is ready on port {self.port}")
                     return
-            except (ConnectionRefusedError, socket.timeout, OSError):
+            except (TimeoutError, ConnectionRefusedError, OSError):
                 time.sleep(0.1)
 
         # Check if process died
@@ -260,9 +260,7 @@ def run_redis_tests(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run Redis compatibility tests against FrogDB"
-    )
+    parser = argparse.ArgumentParser(description="Run Redis compatibility tests against FrogDB")
     parser.add_argument(
         "--port",
         type=int,
@@ -291,7 +289,8 @@ def main() -> None:
         help="Skip downloading Redis (use cached version)",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Verbose test output",
     )

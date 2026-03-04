@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 # Performance targets from OBSERVABILITY.md
 DEFAULT_TARGETS = {
     "get_p50_us": 100,
@@ -171,7 +170,9 @@ def generate_single_report(metrics: dict, name: str = "FrogDB") -> str:
         p95 = get_lat.get("p95_ms", 0)
         p99 = get_lat.get("p99_ms", 0)
         p999 = get_lat.get("p99.9_ms", 0)
-        lines.append(f"GET Latency:    p50={p50:.2f}ms  p95={p95:.2f}ms  p99={p99:.2f}ms  p99.9={p999:.2f}ms")
+        lines.append(
+            f"GET Latency:    p50={p50:.2f}ms  p95={p95:.2f}ms  p99={p99:.2f}ms  p99.9={p999:.2f}ms"
+        )
 
     # SET latency
     set_lat = metrics.get("set_latency", {})
@@ -180,7 +181,9 @@ def generate_single_report(metrics: dict, name: str = "FrogDB") -> str:
         p95 = set_lat.get("p95_ms", 0)
         p99 = set_lat.get("p99_ms", 0)
         p999 = set_lat.get("p99.9_ms", 0)
-        lines.append(f"SET Latency:    p50={p50:.2f}ms  p95={p95:.2f}ms  p99={p99:.2f}ms  p99.9={p999:.2f}ms")
+        lines.append(
+            f"SET Latency:    p50={p50:.2f}ms  p95={p95:.2f}ms  p99={p99:.2f}ms  p99.9={p999:.2f}ms"
+        )
 
     lines.append("")
     lines.append("Performance vs Targets:")
@@ -262,7 +265,7 @@ def generate_comparison_report(frogdb: dict, redis: dict) -> str:
     if ratio >= 1.0:
         lines.append(f"  FrogDB is {ratio:.2f}x FASTER than Redis")
     else:
-        lines.append(f"  FrogDB is {1/ratio:.2f}x SLOWER than Redis")
+        lines.append(f"  FrogDB is {1 / ratio:.2f}x SLOWER than Redis")
 
     # Compare p99 latencies
     if frogdb_get and redis_get:
@@ -273,16 +276,14 @@ def generate_comparison_report(frogdb: dict, redis: dict) -> str:
             if lat_ratio >= 1.0:
                 lines.append(f"  GET p99 latency: FrogDB is {lat_ratio:.2f}x LOWER")
             else:
-                lines.append(f"  GET p99 latency: FrogDB is {1/lat_ratio:.2f}x HIGHER")
+                lines.append(f"  GET p99 latency: FrogDB is {1 / lat_ratio:.2f}x HIGHER")
 
     lines.append("=" * 70)
     return "\n".join(lines)
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Parse and compare memtier_benchmark results"
-    )
+    parser = argparse.ArgumentParser(description="Parse and compare memtier_benchmark results")
     parser.add_argument(
         "--frogdb",
         type=Path,
@@ -325,10 +326,13 @@ def main():
         redis_metrics = extract_metrics(redis_data)
 
         if args.json:
-            output = json.dumps({
-                "frogdb": frogdb_metrics,
-                "redis": redis_metrics,
-            }, indent=2)
+            output = json.dumps(
+                {
+                    "frogdb": frogdb_metrics,
+                    "redis": redis_metrics,
+                },
+                indent=2,
+            )
         else:
             output = generate_comparison_report(frogdb_metrics, redis_metrics)
     else:

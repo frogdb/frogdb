@@ -7,13 +7,15 @@ Tool: redis-py
 Use cases: Tags, relationships, unique items, membership testing
 """
 
-from pathlib import Path
-from typing import Any, Callable
-
 import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from workload_loader import WorkloadConfig, CommandCategory
-from runners.base import register_runner, BenchmarkResult
+from workload_loader import CommandCategory, WorkloadConfig
+
+from runners.base import BenchmarkResult, register_runner
 from runners.redis_py_base import RedisPyRunner
 
 
@@ -121,7 +123,7 @@ def main():
     print(f"Available: {runner.is_available()}")
 
     if runner.is_available():
-        from workload_loader import WorkloadConfig, KeysConfig
+        from workload_loader import KeysConfig, WorkloadConfig
 
         workload = WorkloadConfig(
             name="test-set",

@@ -61,7 +61,7 @@ def check_connectivity(host: str, port: int) -> bool:
             s.settimeout(1)
             s.connect((host, port))
             return True
-    except (OSError, socket.timeout):
+    except (TimeoutError, OSError):
         return False
 
 
@@ -77,19 +77,30 @@ def run_memtier(
     """Run memtier_benchmark and capture output."""
     cmd = [
         "memtier_benchmark",
-        "-s", host,
-        "-p", str(port),
-        "--threads", "4",
-        "--clients", "25",
-        "--requests", str(requests),
-        "--data-size", "128",
-        "--ratio", ratio,
-        "--key-pattern", key_pattern,
-        "--key-maximum", "10000000",
-        "--pipeline", "1",
+        "-s",
+        host,
+        "-p",
+        str(port),
+        "--threads",
+        "4",
+        "--clients",
+        "25",
+        "--requests",
+        str(requests),
+        "--data-size",
+        "128",
+        "--ratio",
+        ratio,
+        "--key-pattern",
+        key_pattern,
+        "--key-maximum",
+        "10000000",
+        "--pipeline",
+        "1",
         "--hide-histogram",
         "--print-percentiles",
-        "--json-out-file", str(json_file),
+        "--json-out-file",
+        str(json_file),
     ]
 
     with open(txt_file, "w") as f:
@@ -108,17 +119,25 @@ def main() -> None:
         description="Compare FrogDB performance against real Redis",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--frogdb-port", type=int, default=6379,
-                        help="FrogDB port (default: 6379)")
-    parser.add_argument("--redis-port", type=int, default=6380,
-                        help="Redis port (default: 6380)")
-    parser.add_argument("-w", "--workload", default="mixed",
-                        choices=["read-heavy", "write-heavy", "mixed"],
-                        help="Workload preset (default: mixed)")
-    parser.add_argument("-n", "--requests", type=int, default=10000,
-                        help="Requests per client (default: 10000)")
-    parser.add_argument("-o", "--output", type=Path, default=default_output_dir,
-                        help=f"Output directory for results (default: {default_output_dir})")
+    parser.add_argument("--frogdb-port", type=int, default=6379, help="FrogDB port (default: 6379)")
+    parser.add_argument("--redis-port", type=int, default=6380, help="Redis port (default: 6380)")
+    parser.add_argument(
+        "-w",
+        "--workload",
+        default="mixed",
+        choices=["read-heavy", "write-heavy", "mixed"],
+        help="Workload preset (default: mixed)",
+    )
+    parser.add_argument(
+        "-n", "--requests", type=int, default=10000, help="Requests per client (default: 10000)"
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=default_output_dir,
+        help=f"Output directory for results (default: {default_output_dir})",
+    )
 
     args = parser.parse_args()
 
@@ -207,10 +226,14 @@ def main() -> None:
     if parse_script.exists():
         result = subprocess.run(
             [
-                sys.executable, str(parse_script),
-                "--frogdb", str(frogdb_json),
-                "--redis", str(redis_json),
-                "--output", str(comparison_file),
+                sys.executable,
+                str(parse_script),
+                "--frogdb",
+                str(frogdb_json),
+                "--redis",
+                str(redis_json),
+                "--output",
+                str(comparison_file),
             ],
             capture_output=True,
             text=True,

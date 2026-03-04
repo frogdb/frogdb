@@ -325,10 +325,14 @@ def generate_report(results: dict, cpus: int | None = None, isolated: bool = Fal
                 if ratio >= 1.0:
                     comparisons.append(f"- FrogDB is **{ratio:.2f}x** faster than {display_name}")
                 else:
-                    comparisons.append(f"- FrogDB is **{1/ratio:.2f}x** slower than {display_name}")
+                    comparisons.append(
+                        f"- FrogDB is **{1 / ratio:.2f}x** slower than {display_name}"
+                    )
             elif other_ops > 0 and frogdb_ops == 0:
                 display_name = data.get("name", name.capitalize())
-                comparisons.append(f"- FrogDB: no data available (comparison with {display_name} not possible)")
+                comparisons.append(
+                    f"- FrogDB: no data available (comparison with {display_name} not possible)"
+                )
 
         if comparisons:
             lines.append("### Performance Comparison")
@@ -436,7 +440,9 @@ def generate_report(results: dict, cpus: int | None = None, isolated: bool = Fal
         # Multi-threaded server notes
         lines.append("")
         lines.append("**Server thread configuration:**")
-        lines.append(f"- FrogDB: {cpus} shard(s)" if cpus > 1 else "- FrogDB: single shard (default)")
+        lines.append(
+            f"- FrogDB: {cpus} shard(s)" if cpus > 1 else "- FrogDB: single shard (default)"
+        )
         lines.append(f"- Dragonfly: {cpus} proactor thread(s)")
         lines.append("- Redis: single-threaded (no multi-threading support)")
         lines.append("- Valkey: single-threaded (no multi-threading support)")

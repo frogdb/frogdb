@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-
 # =============================================================================
 # Data Model
 # =============================================================================
@@ -42,12 +41,8 @@ class TopologyConfig:
 
 TOPOLOGY_CONFIGS: dict[Topology, TopologyConfig] = {
     Topology.SINGLE: TopologyConfig("jepsen/docker-compose.yml", ("n1",)),
-    Topology.REPLICATION: TopologyConfig(
-        "jepsen/frogdb/docker-compose.replication.yml", ()
-    ),
-    Topology.RAFT: TopologyConfig(
-        "jepsen/frogdb/docker-compose.raft-cluster.yml", ()
-    ),
+    Topology.REPLICATION: TopologyConfig("jepsen/frogdb/docker-compose.replication.yml", ()),
+    Topology.RAFT: TopologyConfig("jepsen/frogdb/docker-compose.raft-cluster.yml", ()),
 }
 
 
@@ -64,49 +59,204 @@ class TestDefinition:
 
 TESTS: tuple[TestDefinition, ...] = (
     # Single-node basic workloads
-    TestDefinition("register", "register", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
-    TestDefinition("counter", "counter", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
-    TestDefinition("append", "append", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
-    TestDefinition("transaction", "transaction", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
-    TestDefinition("queue", "queue", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
+    TestDefinition(
+        "register", "register", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
+    TestDefinition(
+        "counter", "counter", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
+    TestDefinition(
+        "append", "append", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
+    TestDefinition(
+        "transaction", "transaction", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
+    TestDefinition(
+        "queue", "queue", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
     TestDefinition("set", "set", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
     TestDefinition("hash", "hash", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
-    TestDefinition("sortedset", "sortedset", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
-    TestDefinition("expiry", "expiry", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
-    TestDefinition("blocking", "blocking", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")),
+    TestDefinition(
+        "sortedset", "sortedset", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
+    TestDefinition(
+        "expiry", "expiry", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
+    TestDefinition(
+        "blocking", "blocking", "none", 30, Topology.SINGLE, suites=("single", "crash", "all")
+    ),
     # Single-node crash workloads
     TestDefinition("crash", "register", "kill", 60, Topology.SINGLE, suites=("crash", "all")),
-    TestDefinition("counter-crash", "counter", "kill", 60, Topology.SINGLE, suites=("crash", "all")),
+    TestDefinition(
+        "counter-crash", "counter", "kill", 60, Topology.SINGLE, suites=("crash", "all")
+    ),
     TestDefinition("append-crash", "append", "kill", 60, Topology.SINGLE, suites=("crash", "all")),
-    TestDefinition("append-rapid", "append", "rapid-kill", 60, Topology.SINGLE, suites=("crash", "all")),
-    TestDefinition("transaction-crash", "transaction", "kill", 60, Topology.SINGLE, suites=("crash", "all")),
-    TestDefinition("sortedset-crash", "sortedset", "kill", 60, Topology.SINGLE, suites=("crash", "all")),
+    TestDefinition(
+        "append-rapid", "append", "rapid-kill", 60, Topology.SINGLE, suites=("crash", "all")
+    ),
+    TestDefinition(
+        "transaction-crash", "transaction", "kill", 60, Topology.SINGLE, suites=("crash", "all")
+    ),
+    TestDefinition(
+        "sortedset-crash", "sortedset", "kill", 60, Topology.SINGLE, suites=("crash", "all")
+    ),
     TestDefinition("expiry-crash", "expiry", "kill", 60, Topology.SINGLE, suites=("crash", "all")),
-    TestDefinition("expiry-rapid", "expiry", "rapid-kill", 60, Topology.SINGLE, suites=("crash", "all")),
-    TestDefinition("blocking-crash", "blocking", "kill", 60, Topology.SINGLE, suites=("crash", "all")),
+    TestDefinition(
+        "expiry-rapid", "expiry", "rapid-kill", 60, Topology.SINGLE, suites=("crash", "all")
+    ),
+    TestDefinition(
+        "blocking-crash", "blocking", "kill", 60, Topology.SINGLE, suites=("crash", "all")
+    ),
     # Single-node nemesis (standalone)
     TestDefinition("nemesis-pause", "register", "pause", 60, Topology.SINGLE),
     # Replication workloads
-    TestDefinition("replication", "replication", "none", 30, Topology.REPLICATION, suites=("replication", "all")),
+    TestDefinition(
+        "replication",
+        "replication",
+        "none",
+        30,
+        Topology.REPLICATION,
+        suites=("replication", "all"),
+    ),
     TestDefinition("lag", "lag", "none", 30, Topology.REPLICATION, suites=("replication", "all")),
-    TestDefinition("split-brain", "split-brain", "partition", 60, Topology.REPLICATION, suites=("replication", "all")),
-    TestDefinition("zombie", "zombie", "partition", 60, Topology.REPLICATION, suites=("replication", "all")),
-    TestDefinition("replication-chaos", "replication", "all-replication", 120, Topology.REPLICATION, suites=("replication", "all")),
+    TestDefinition(
+        "split-brain",
+        "split-brain",
+        "partition",
+        60,
+        Topology.REPLICATION,
+        suites=("replication", "all"),
+    ),
+    TestDefinition(
+        "zombie", "zombie", "partition", 60, Topology.REPLICATION, suites=("replication", "all")
+    ),
+    TestDefinition(
+        "replication-chaos",
+        "replication",
+        "all-replication",
+        120,
+        Topology.REPLICATION,
+        suites=("replication", "all"),
+    ),
     # Raft cluster core workloads
-    TestDefinition("cluster-formation", "cluster-formation", "none", 30, Topology.RAFT, cluster_flag=True, suites=("raft", "all")),
-    TestDefinition("leader-election", "leader-election", "none", 30, Topology.RAFT, cluster_flag=True, suites=("raft", "all")),
-    TestDefinition("slot-migration", "slot-migration", "none", 60, Topology.RAFT, cluster_flag=True, suites=("raft", "all")),
-    TestDefinition("cross-slot", "cross-slot", "none", 30, Topology.RAFT, cluster_flag=True, suites=("raft", "all")),
-    TestDefinition("key-routing", "key-routing", "none", 30, Topology.RAFT, cluster_flag=True, suites=("raft", "all")),
-    TestDefinition("leader-election-partition", "leader-election", "partition", 60, Topology.RAFT, cluster_flag=True, suites=("raft", "all")),
-    TestDefinition("key-routing-kill", "key-routing", "kill", 60, Topology.RAFT, cluster_flag=True, suites=("raft", "all")),
-    TestDefinition("slot-migration-partition", "slot-migration", "partition", 90, Topology.RAFT, cluster_flag=True, suites=("raft", "all")),
-    TestDefinition("raft-chaos", "key-routing", "raft-cluster", 120, Topology.RAFT, cluster_flag=True, suites=("raft", "all")),
+    TestDefinition(
+        "cluster-formation",
+        "cluster-formation",
+        "none",
+        30,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    TestDefinition(
+        "leader-election",
+        "leader-election",
+        "none",
+        30,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    TestDefinition(
+        "slot-migration",
+        "slot-migration",
+        "none",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    TestDefinition(
+        "cross-slot",
+        "cross-slot",
+        "none",
+        30,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    TestDefinition(
+        "key-routing",
+        "key-routing",
+        "none",
+        30,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    TestDefinition(
+        "leader-election-partition",
+        "leader-election",
+        "partition",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    TestDefinition(
+        "key-routing-kill",
+        "key-routing",
+        "kill",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    TestDefinition(
+        "slot-migration-partition",
+        "slot-migration",
+        "partition",
+        90,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    TestDefinition(
+        "raft-chaos",
+        "key-routing",
+        "raft-cluster",
+        120,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
     # Raft extended nemesis tests
-    TestDefinition("clock-skew", "register", "clock-skew", 60, Topology.RAFT, cluster_flag=True, suites=("raft-extended",)),
-    TestDefinition("disk-failure", "register", "disk-failure", 60, Topology.RAFT, cluster_flag=True, suites=("raft-extended",)),
-    TestDefinition("slow-network", "register", "slow-network", 60, Topology.RAFT, cluster_flag=True, suites=("raft-extended",)),
-    TestDefinition("memory-pressure", "register", "memory-pressure", 60, Topology.RAFT, cluster_flag=True, suites=("raft-extended",)),
+    TestDefinition(
+        "clock-skew",
+        "register",
+        "clock-skew",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft-extended",),
+    ),
+    TestDefinition(
+        "disk-failure",
+        "register",
+        "disk-failure",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft-extended",),
+    ),
+    TestDefinition(
+        "slow-network",
+        "register",
+        "slow-network",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft-extended",),
+    ),
+    TestDefinition(
+        "memory-pressure",
+        "register",
+        "memory-pressure",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft-extended",),
+    ),
 )
 
 TESTS_BY_NAME: dict[str, TestDefinition] = {t.name: t for t in TESTS}
@@ -190,9 +340,12 @@ def compose_cmd(root: Path, topology: Topology) -> list[str]:
     """Base docker compose command for a topology."""
     cfg = TOPOLOGY_CONFIGS[topology]
     return [
-        "docker", "compose",
-        "-p", COMPOSE_PROJECT,
-        "-f", str(root / cfg.compose_file),
+        "docker",
+        "compose",
+        "-p",
+        COMPOSE_PROJECT,
+        "-f",
+        str(root / cfg.compose_file),
     ]
 
 
@@ -252,11 +405,16 @@ def run_test(
     """Run a single Jepsen test and return the result with verdict."""
     tl = time_limit if time_limit is not None else test.time_limit
     cmd = [
-        "lein", "run", "test",
+        "lein",
+        "run",
+        "test",
         "--docker",
-        "--workload", test.workload,
-        "--nemesis", test.nemesis,
-        "--time-limit", str(tl),
+        "--workload",
+        test.workload,
+        "--nemesis",
+        test.nemesis,
+        "--time-limit",
+        str(tl),
     ]
     if test.cluster_flag:
         cmd.append("--cluster")
@@ -323,7 +481,10 @@ def generate_batch_edn(tests: list[TestDefinition], time_limit: int | None) -> s
     edn = "[" + "\n ".join(configs) + "]"
 
     f = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".edn", prefix="jepsen-batch-", delete=False,
+        mode="w",
+        suffix=".edn",
+        prefix="jepsen-batch-",
+        delete=False,
     )
     f.write(edn)
     f.close()
@@ -343,9 +504,12 @@ def run_test_batch(
     batch_path = generate_batch_edn(tests, time_limit)
 
     cmd = [
-        "lein", "run", "test-all",
+        "lein",
+        "run",
+        "test-all",
         "--docker",
-        "--batch-file", batch_path,
+        "--batch-file",
+        batch_path,
     ]
     cmd.extend(extra_args)
 
@@ -519,9 +683,7 @@ def cmd_run(args: argparse.Namespace, extra_args: list[str]) -> None:
         if result.returncode != 0:
             print(c.red("Cross-build failed."))
             sys.exit(1)
-        result = subprocess.run(
-            ["docker", "build", "-t", "frogdb:latest", "."], cwd=root
-        )
+        result = subprocess.run(["docker", "build", "-t", "frogdb:latest", "."], cwd=root)
         if result.returncode != 0:
             print(c.red("Docker build failed."))
             sys.exit(1)
@@ -572,25 +734,43 @@ def cmd_run(args: argparse.Namespace, extra_args: list[str]) -> None:
                     print(c.yellow(f"\n  {test.name}: UNKNOWN ({format_elapsed(result.elapsed)})"))
             else:
                 print(c.bold(f"\n{'=' * 72}"))
-                print(c.bold(
-                    f"  [{idx + 1}-{idx + len(group_tests)}/{total}]"
-                    f" {topo.value} batch ({len(group_tests)} tests)"
-                ))
+                print(
+                    c.bold(
+                        f"  [{idx + 1}-{idx + len(group_tests)}/{total}]"
+                        f" {topo.value} batch ({len(group_tests)} tests)"
+                    )
+                )
                 print(c.bold(f"{'=' * 72}"))
 
                 batch_results = run_test_batch(
-                    root, group_tests, args.time_limit, extra_args, c,
+                    root,
+                    group_tests,
+                    args.time_limit,
+                    extra_args,
+                    c,
                     stop_on_failure=args.stop_on_failure,
                 )
 
                 for result in batch_results:
                     idx += 1
                     if result.passed is True:
-                        print(c.green(f"\n  {result.test.name}: PASS ({format_elapsed(result.elapsed)})"))
+                        print(
+                            c.green(
+                                f"\n  {result.test.name}: PASS ({format_elapsed(result.elapsed)})"
+                            )
+                        )
                     elif result.passed is False:
-                        print(c.red(f"\n  {result.test.name}: FAIL ({format_elapsed(result.elapsed)})"))
+                        print(
+                            c.red(
+                                f"\n  {result.test.name}: FAIL ({format_elapsed(result.elapsed)})"
+                            )
+                        )
                     else:
-                        print(c.yellow(f"\n  {result.test.name}: UNKNOWN ({format_elapsed(result.elapsed)})"))
+                        print(
+                            c.yellow(
+                                f"\n  {result.test.name}: UNKNOWN ({format_elapsed(result.elapsed)})"
+                            )
+                        )
                 results.extend(batch_results)
 
             if args.stop_on_failure and any(r.passed is False for r in results):
@@ -647,9 +827,7 @@ def cmd_build(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     print(c.bold("Building Docker image..."))
-    result = subprocess.run(
-        ["docker", "build", "-t", "frogdb:latest", "."], cwd=root
-    )
+    result = subprocess.run(["docker", "build", "-t", "frogdb:latest", "."], cwd=root)
     if result.returncode != 0:
         print(c.red("Docker build failed."))
         sys.exit(1)
@@ -714,18 +892,23 @@ def main() -> None:
     p_run.add_argument("test", nargs="?", help="Test name to run")
     p_run.add_argument("--suite", help="Run a predefined test suite")
     p_run.add_argument(
-        "--build", action="store_true", default=False,
+        "--build",
+        action="store_true",
+        default=False,
         help="Build before running",
     )
     p_run.add_argument("--no-build", dest="build", action="store_false")
     p_run.add_argument(
-        "--teardown", action="store_true", default=False,
+        "--teardown",
+        action="store_true",
+        default=False,
         help="Tear down compose after running",
     )
     p_run.add_argument("--no-teardown", dest="teardown", action="store_false")
     p_run.add_argument("--time-limit", type=int, help="Override default time-limit")
     p_run.add_argument(
-        "--stop-on-failure", action="store_true",
+        "--stop-on-failure",
+        action="store_true",
         help="Abort suite on first failure",
     )
     p_run.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
@@ -734,7 +917,8 @@ def main() -> None:
     # --- list ---
     p_list = sub.add_parser("list", help="List available tests and suites")
     p_list.add_argument(
-        "--topology", choices=[t.value for t in Topology],
+        "--topology",
+        choices=[t.value for t in Topology],
         help="Filter by topology",
     )
 
@@ -748,7 +932,9 @@ def main() -> None:
     # --- down ---
     p_down = sub.add_parser("down", help="Tear down Docker Compose topology")
     p_down.add_argument(
-        "topology", nargs="?", choices=[t.value for t in Topology],
+        "topology",
+        nargs="?",
+        choices=[t.value for t in Topology],
         help="Omit to tear down all",
     )
 

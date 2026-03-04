@@ -56,7 +56,9 @@ def main() -> None:
         if platform.system() == "Darwin":
             print("Install with: brew install rocksdb snappy")
         else:
-            print("Install with: apt install librocksdb-dev libsnappy-dev  (or your distro's equivalent)")
+            print(
+                "Install with: apt install librocksdb-dev libsnappy-dev  (or your distro's equivalent)"
+            )
         sys.exit(1)
 
     print("All required libraries found.")
