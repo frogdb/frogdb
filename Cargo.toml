@@ -21,7 +21,6 @@ members = [
     "benches",
     "helm/helm-gen",
     "grafana/dashboard-gen",
-    "tools/workflow-gen",
     "crates/tokio-coz",
     "crates/test-harness",
     "crates/redis-regression",

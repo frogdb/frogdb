@@ -1,7 +1,7 @@
 # =============================================================================
 # GENERATED FILE - DO NOT EDIT DIRECTLY
 # =============================================================================
-# Source: tools/workflow-gen/src/workflows/
+# Source: tools/workflow-gen.py
 # Regenerate with: just workflow-gen
 # =============================================================================
 
@@ -111,20 +111,12 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: |-
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-workflow-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-workflow-
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+    - name: Install just
+      uses: extractions/setup-just@v2
     - name: Check workflow files are up to date
-      run: cargo run -p workflow-gen -- --check
+      run: just workflow-gen --check
   helm-lint:
     name: Helm Lint
     runs-on: self-hosted

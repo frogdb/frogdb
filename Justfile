@@ -355,7 +355,7 @@ dashboard-gen *args:
 
 # Generate GitHub Actions workflow files (pass --check to verify)
 workflow-gen *args:
-    {{dyld-env}} {{rocksdb-env}} cargo run -p workflow-gen -- {{args}}
+    uv run tools/workflow-gen.py {{args}}
 
 # =============================================================================
 # Generate All
