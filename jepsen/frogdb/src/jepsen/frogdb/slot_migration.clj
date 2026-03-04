@@ -34,8 +34,8 @@
 
 (defn get-slot-owner
   "Get the node that owns a particular slot."
-  [nodes docker-host? slot]
-  (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)
+  [nodes docker-host? slot base-port]
+  (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host? base-port)
         slots-info (cluster-db/cluster-slots conn)]
     (when slots-info
       (some (fn [slot-info]
@@ -73,9 +73,9 @@
 (defn start-slot-migration!
   "Start migrating a slot from source to dest node.
    Returns migration state or throws on error."
-  [nodes docker-host? slot source-node dest-node]
-  (let [source-conn (cluster-db/conn-for-raft-node source-node docker-host?)
-        dest-conn (cluster-db/conn-for-raft-node dest-node docker-host?)
+  [nodes docker-host? slot source-node dest-node base-port]
+  (let [source-conn (cluster-db/conn-for-raft-node source-node docker-host? base-port)
+        dest-conn (cluster-db/conn-for-raft-node dest-node docker-host? base-port)
         source-id (cluster-db/cluster-myid source-conn)
         dest-id (cluster-db/cluster-myid dest-conn)]
 
@@ -89,13 +89,13 @@
 
 (defn complete-slot-migration!
   "Complete a slot migration by setting the slot to the new owner on all nodes."
-  [nodes docker-host? slot dest-node]
-  (let [dest-conn (cluster-db/conn-for-raft-node dest-node docker-host?)
+  [nodes docker-host? slot dest-node base-port]
+  (let [dest-conn (cluster-db/conn-for-raft-node dest-node docker-host? base-port)
         dest-id (cluster-db/cluster-myid dest-conn)]
 
     ;; Set slot ownership on all nodes
     (doseq [node nodes]
-      (let [conn (cluster-db/conn-for-raft-node node docker-host?)]
+      (let [conn (cluster-db/conn-for-raft-node node docker-host? base-port)]
         (try+
           (cluster-db/cluster-setslot-node! conn slot dest-id)
           (catch Object e
@@ -105,17 +105,19 @@
 ;; Client Implementation
 ;; ===========================================================================
 
-(defrecord SlotMigrationClient [nodes docker-host? slot-mapping active-migration]
+(defrecord SlotMigrationClient [nodes docker-host? base-port slot-mapping active-migration]
   client/Client
 
   (open! [this test node]
     (let [docker? (get test :docker true)
-          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])]
+          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])
+          bp (get test :base-port cluster-db/default-base-port)]
       (info "Opening slot migration client")
       (assoc this
              :nodes all-nodes
              :docker-host? docker?
-             :slot-mapping (atom (cluster-client/create-slot-mapping all-nodes docker?))
+             :base-port bp
+             :slot-mapping (atom (cluster-client/create-slot-mapping all-nodes docker? bp))
              :active-migration (atom nil))))
 
   (setup! [this test]
@@ -126,13 +128,13 @@
       (case (:f op)
         :read-slot-owner
         (let [slot (:value op)
-              owner (get-slot-owner nodes docker-host? slot)]
+              owner (get-slot-owner nodes docker-host? slot base-port)]
           (assoc op :type :ok :value {:slot slot
                                        :owner (when owner (get-node-for-ip (:ip owner)))
                                        :details owner}))
 
         :read-slot-mapping
-        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)
+        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host? base-port)
               slots (cluster-db/cluster-slots conn)]
           (assoc op :type :ok :value (count slots)))
 
@@ -140,15 +142,15 @@
         (let [{:keys [slot source dest]} (:value op)]
           (if @active-migration
             (assoc op :type :fail :error :migration-already-active)
-            (let [migration (start-slot-migration! nodes docker-host? slot source dest)]
+            (let [migration (start-slot-migration! nodes docker-host? slot source dest base-port)]
               (reset! active-migration migration)
               (assoc op :type :ok :value {:slot slot :source source :dest dest}))))
 
         :migrate-keys
         (if-let [migration @active-migration]
           (let [{:keys [slot source-node dest-node]} migration
-                source-conn (cluster-db/conn-for-raft-node source-node docker-host?)
-                dest-info (get cluster-db/raft-cluster-host-ports dest-node)
+                source-conn (cluster-db/conn-for-raft-node source-node docker-host? base-port)
+                dest-info (get (cluster-db/raft-cluster-host-ports base-port) dest-node)
                 migrated (migrate-slot-keys! source-conn (:host dest-info) (:port dest-info) slot 5000)]
             (swap! active-migration assoc :keys-migrated migrated)
             (assoc op :type :ok :value {:keys-migrated migrated}))
@@ -157,21 +159,21 @@
         :finish-migration
         (if-let [migration @active-migration]
           (let [{:keys [slot dest-node]} migration]
-            (complete-slot-migration! nodes docker-host? slot dest-node)
+            (complete-slot-migration! nodes docker-host? slot dest-node base-port)
             (reset! active-migration nil)
             ;; Refresh slot mapping
-            (reset! slot-mapping (cluster-client/refresh-slot-mapping @slot-mapping (first nodes) docker-host?))
+            (reset! slot-mapping (cluster-client/refresh-slot-mapping @slot-mapping (first nodes) docker-host? base-port))
             (assoc op :type :ok :value {:slot slot :new-owner dest-node}))
           (assoc op :type :fail :error :no-active-migration))
 
         :abort-migration
         (if-let [migration @active-migration]
           (let [{:keys [slot source-node]} migration
-                source-conn (cluster-db/conn-for-raft-node source-node docker-host?)
+                source-conn (cluster-db/conn-for-raft-node source-node docker-host? base-port)
                 source-id (cluster-db/cluster-myid source-conn)]
             ;; Reset slot to source
             (doseq [node nodes]
-              (let [conn (cluster-db/conn-for-raft-node node docker-host?)]
+              (let [conn (cluster-db/conn-for-raft-node node docker-host? base-port)]
                 (try+
                   (cluster-db/cluster-setslot-node! conn slot source-id)
                   (catch Object _ nil))))
@@ -182,13 +184,13 @@
         :write
         (let [{:keys [key value]} (:value op)
               slot (cluster-client/slot-for-key key)]
-          (cluster-client/cluster-set slot-mapping key value docker-host? nodes)
+          (cluster-client/cluster-set slot-mapping key value docker-host? nodes base-port)
           (assoc op :type :ok :value {:key key :slot slot :written value}))
 
         :read
         (let [key (:value op)
               slot (cluster-client/slot-for-key key)
-              value (cluster-client/cluster-get slot-mapping key docker-host? nodes)]
+              value (cluster-client/cluster-get slot-mapping key docker-host? nodes base-port)]
           (assoc op :type :ok :value {:key key :slot slot :value (frogdb/parse-value value)})))
 
       (catch java.net.ConnectException e
@@ -211,10 +213,10 @@
     ;; Clean up any active migration
     (when-let [migration @active-migration]
       (let [{:keys [slot source-node]} migration
-            source-conn (cluster-db/conn-for-raft-node source-node docker-host?)
+            source-conn (cluster-db/conn-for-raft-node source-node docker-host? base-port)
             source-id (cluster-db/cluster-myid source-conn)]
         (doseq [node nodes]
-          (let [conn (cluster-db/conn-for-raft-node node docker-host?)]
+          (let [conn (cluster-db/conn-for-raft-node node docker-host? base-port)]
             (try+
               (cluster-db/cluster-setslot-node! conn slot source-id)
               (catch Object _ nil)))))))

@@ -42,34 +42,38 @@
 
 (defn get-all-masters
   "Get all nodes claiming to be masters."
-  [nodes docker-host?]
-  (for [node nodes
-        :let [conn (cluster-db/conn-for-raft-node node docker-host?)
-              nodes-info (try+
-                           (cluster-db/cluster-nodes conn)
-                           (catch Object _ nil))]
-        :when nodes-info
-        n nodes-info
-        :when (contains? (:flags n) "master")]
-    {:node node
-     :master-id (:id n)
-     :addr (:addr n)}))
+  ([nodes docker-host?]
+   (get-all-masters nodes docker-host? cluster-db/default-base-port))
+  ([nodes docker-host? base-port]
+   (for [node nodes
+         :let [conn (cluster-db/conn-for-raft-node node docker-host? base-port)
+               nodes-info (try+
+                            (cluster-db/cluster-nodes conn)
+                            (catch Object _ nil))]
+         :when nodes-info
+         n nodes-info
+         :when (contains? (:flags n) "master")]
+     {:node node
+      :master-id (:id n)
+      :addr (:addr n)})))
 
 ;; ===========================================================================
 ;; Client Implementation
 ;; ===========================================================================
 
-(defrecord LeaderElectionClient [nodes docker-host? slot-mapping leader-history]
+(defrecord LeaderElectionClient [nodes docker-host? base-port slot-mapping leader-history]
   client/Client
 
   (open! [this test node]
     (let [docker? (get test :docker true)
-          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])]
+          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])
+          bp (get test :base-port cluster-db/default-base-port)]
       (info "Opening leader election client")
       (assoc this
              :nodes all-nodes
              :docker-host? docker?
-             :slot-mapping (atom (cluster-client/create-slot-mapping all-nodes docker?))
+             :base-port bp
+             :slot-mapping (atom (cluster-client/create-slot-mapping all-nodes docker? bp))
              :leader-history (atom []))))
 
   (setup! [this test]
@@ -79,7 +83,7 @@
     (try+
       (case (:f op)
         :read-leader
-        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)
+        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host? base-port)
               leader (get-leader-info conn)]
           (when leader
             (swap! leader-history conj {:time (System/currentTimeMillis)
@@ -87,13 +91,13 @@
           (assoc op :type :ok :value leader))
 
         :read-all-masters
-        (let [masters (get-all-masters nodes docker-host?)]
+        (let [masters (get-all-masters nodes docker-host? base-port)]
           (assoc op :type :ok :value (vec masters)))
 
         :verify-single-leader
         ;; In Redis Cluster mode, every node with assigned slots is a "master".
         ;; We check from one node's perspective that the cluster view is consistent.
-        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host?)
+        (let [conn (cluster-db/conn-for-raft-node (first nodes) docker-host? base-port)
               nodes-info (try+
                            (cluster-db/cluster-nodes conn)
                            (catch Object _ nil))
@@ -111,12 +115,12 @@
         :write
         (let [key (str "jepsen-leader-" (rand-int 1000))
               value (rand-int 10000)]
-          (cluster-client/cluster-set slot-mapping key value docker-host? nodes)
+          (cluster-client/cluster-set slot-mapping key value docker-host? nodes base-port)
           (assoc op :type :ok :value {:key key :written value}))
 
         :read
         (let [key (str "jepsen-leader-" (rand-int 1000))
-              value (cluster-client/cluster-get slot-mapping key docker-host? nodes)]
+              value (cluster-client/cluster-get slot-mapping key docker-host? nodes base-port)]
           (assoc op :type :ok :value (frogdb/parse-value value))))
 
       (catch java.net.ConnectException e

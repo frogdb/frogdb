@@ -12,6 +12,7 @@ across single-node, replication, and Raft cluster topologies.
 
 import argparse
 import difflib
+import os
 import platform
 import shutil
 import subprocess
@@ -37,13 +38,39 @@ class Topology(Enum):
 class TopologyConfig:
     compose_file: str  # Relative to project root
     services: tuple[str, ...]  # Empty = start all services
+    node_count: int  # Number of nodes in the topology
+    has_bus_ports: bool = False  # Whether nodes expose cluster bus ports
 
+
+DEFAULT_BASE_PORT = 16379
+
+# Default base ports for parallel mode (non-conflicting ranges)
+PARALLEL_BASE_PORTS: dict["Topology", int] = {
+    Topology.SINGLE: 16379,
+    Topology.REPLICATION: 17379,
+    Topology.RAFT: 18379,
+}
 
 TOPOLOGY_CONFIGS: dict[Topology, TopologyConfig] = {
-    Topology.SINGLE: TopologyConfig("jepsen/docker-compose.yml", ("n1",)),
-    Topology.REPLICATION: TopologyConfig("jepsen/frogdb/docker-compose.replication.yml", ()),
-    Topology.RAFT: TopologyConfig("jepsen/frogdb/docker-compose.raft-cluster.yml", ()),
+    Topology.SINGLE: TopologyConfig("jepsen/docker-compose.yml", ("n1",), node_count=1),
+    Topology.REPLICATION: TopologyConfig(
+        "jepsen/frogdb/docker-compose.replication.yml", (), node_count=3
+    ),
+    Topology.RAFT: TopologyConfig(
+        "jepsen/frogdb/docker-compose.raft-cluster.yml", (), node_count=5, has_bus_ports=True
+    ),
 }
+
+
+def port_env_vars(topology: Topology, base_port: int) -> dict[str, str]:
+    """Compute per-node port environment variables for Docker Compose."""
+    cfg = TOPOLOGY_CONFIGS[topology]
+    env: dict[str, str] = {"FROGDB_BASE_PORT": str(base_port)}
+    for i in range(cfg.node_count):
+        env[f"FROGDB_PORT_N{i + 1}"] = str(base_port + i)
+        if cfg.has_bus_ports:
+            env[f"FROGDB_BUS_PORT_N{i + 1}"] = str(base_port + 10000 + i)
+    return env
 
 
 @dataclass(frozen=True)
@@ -336,37 +363,49 @@ def preflight(c: Color) -> None:
 COMPOSE_PROJECT = "jepsen-frogdb"
 
 
-def compose_cmd(root: Path, topology: Topology) -> list[str]:
+def compose_cmd(root: Path, topology: Topology, base_port: int = DEFAULT_BASE_PORT) -> list[str]:
     """Base docker compose command for a topology."""
     cfg = TOPOLOGY_CONFIGS[topology]
+    # Use a per-port project name so parallel topologies don't clash
+    project = f"{COMPOSE_PROJECT}-{base_port}" if base_port != DEFAULT_BASE_PORT else COMPOSE_PROJECT
     return [
         "docker",
         "compose",
         "-p",
-        COMPOSE_PROJECT,
+        project,
         "-f",
         str(root / cfg.compose_file),
     ]
 
 
-def compose_is_up(root: Path, topology: Topology) -> bool:
+def compose_env(topology: Topology, base_port: int = DEFAULT_BASE_PORT) -> dict[str, str]:
+    """Build the full environment for a compose subprocess."""
+    env = dict(os.environ)
+    env.update(port_env_vars(topology, base_port))
+    return env
+
+
+def compose_is_up(root: Path, topology: Topology, base_port: int = DEFAULT_BASE_PORT) -> bool:
     """Check if a topology's containers are already running."""
-    cmd = compose_cmd(root, topology) + ["ps", "--status=running", "-q"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    cmd = compose_cmd(root, topology, base_port) + ["ps", "--status=running", "-q"]
+    result = subprocess.run(cmd, capture_output=True, text=True, env=compose_env(topology, base_port))
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
-def compose_up(root: Path, topology: Topology, c: Color) -> None:
+def compose_up(
+    root: Path, topology: Topology, c: Color, base_port: int = DEFAULT_BASE_PORT
+) -> None:
     """Start containers for a topology and wait for healthy."""
-    if compose_is_up(root, topology):
-        print(c.dim(f"{topology.value} topology is already running."))
+    if compose_is_up(root, topology, base_port):
+        print(c.dim(f"{topology.value} topology is already running (port {base_port})."))
         return
     cfg = TOPOLOGY_CONFIGS[topology]
-    cmd = compose_cmd(root, topology) + ["up", "-d", "--wait"]
+    cmd = compose_cmd(root, topology, base_port) + ["up", "-d", "--wait"]
     if cfg.services:
         cmd.extend(cfg.services)
-    print(c.dim(f"Starting {topology.value} topology..."))
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    env = compose_env(topology, base_port)
+    print(c.dim(f"Starting {topology.value} topology (base port {base_port})..."))
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if result.returncode != 0:
         print(c.red(f"Failed to start {topology.value} topology:"))
         if result.stderr:
@@ -375,11 +414,14 @@ def compose_up(root: Path, topology: Topology, c: Color) -> None:
     print(c.green(f"{topology.value} topology is up and healthy."))
 
 
-def compose_down(root: Path, topology: Topology, c: Color) -> None:
+def compose_down(
+    root: Path, topology: Topology, c: Color, base_port: int = DEFAULT_BASE_PORT
+) -> None:
     """Tear down containers for a topology."""
-    cmd = compose_cmd(root, topology) + ["down", "-v"]
+    cmd = compose_cmd(root, topology, base_port) + ["down", "-v"]
+    env = compose_env(topology, base_port)
     print(c.dim(f"Tearing down {topology.value} topology..."))
-    subprocess.run(cmd, capture_output=True)
+    subprocess.run(cmd, capture_output=True, env=env)
 
 
 # =============================================================================
@@ -401,6 +443,7 @@ def run_test(
     time_limit: int | None,
     extra_args: list[str],
     c: Color,
+    base_port: int = DEFAULT_BASE_PORT,
 ) -> TestResult:
     """Run a single Jepsen test and return the result with verdict."""
     tl = time_limit if time_limit is not None else test.time_limit
@@ -415,6 +458,8 @@ def run_test(
         test.nemesis,
         "--time-limit",
         str(tl),
+        "--base-port",
+        str(base_port),
     ]
     if test.cluster_flag:
         cmd.append("--cluster")
@@ -464,7 +509,9 @@ def run_test(
         return TestResult(test, None, time.monotonic() - start, error="lein not found")
 
 
-def generate_batch_edn(tests: list[TestDefinition], time_limit: int | None) -> str:
+def generate_batch_edn(
+    tests: list[TestDefinition], time_limit: int | None, base_port: int = DEFAULT_BASE_PORT
+) -> str:
     """Generate an EDN batch file for test-all command. Returns the temp file path."""
     configs = []
     for t in tests:
@@ -473,6 +520,7 @@ def generate_batch_edn(tests: list[TestDefinition], time_limit: int | None) -> s
             f':workload "{t.workload}"',
             f':nemesis "{t.nemesis}"',
             f":time-limit {tl}",
+            f":base-port {base_port}",
         ]
         if t.cluster_flag:
             pairs.append(":cluster true")
@@ -499,9 +547,10 @@ def run_test_batch(
     c: Color,
     *,
     stop_on_failure: bool = False,
+    base_port: int = DEFAULT_BASE_PORT,
 ) -> list[TestResult]:
     """Run multiple Jepsen tests in a single JVM via the test-all command."""
-    batch_path = generate_batch_edn(tests, time_limit)
+    batch_path = generate_batch_edn(tests, time_limit, base_port)
 
     cmd = [
         "lein",
@@ -510,6 +559,8 @@ def run_test_batch(
         "--docker",
         "--batch-file",
         batch_path,
+        "--base-port",
+        str(base_port),
     ]
     cmd.extend(extra_args)
 
@@ -689,6 +740,16 @@ def cmd_run(args: argparse.Namespace, extra_args: list[str]) -> None:
             sys.exit(1)
 
     tests = resolve_tests(args.test, args.suite, c)
+    parallel = args.parallel
+    explicit_base_port: int | None = args.base_port
+
+    # Compute base port per topology
+    def base_port_for(topo: Topology) -> int:
+        if explicit_base_port is not None:
+            return explicit_base_port
+        if parallel:
+            return PARALLEL_BASE_PORTS[topo]
+        return DEFAULT_BASE_PORT
 
     # Group by topology, process in order: single -> replication -> raft
     topo_order = [Topology.SINGLE, Topology.REPLICATION, Topology.RAFT]
@@ -699,21 +760,34 @@ def cmd_run(args: argparse.Namespace, extra_args: list[str]) -> None:
     results: list[TestResult] = []
     total = len(tests)
     idx = 0
-    active_topology: Topology | None = None
+    active_topologies: set[Topology] = set()
 
     try:
+        if parallel:
+            # Start all topologies upfront with non-conflicting ports
+            for topo in topo_order:
+                if topo in groups:
+                    compose_up(root, topo, c, base_port_for(topo))
+                    active_topologies.add(topo)
+        active_topology: Topology | None = None
+
         for topo in topo_order:
             if topo not in groups:
                 continue
 
-            # Tear down previous topology before switching (port conflicts)
-            if active_topology is not None and active_topology != topo:
-                compose_down(root, active_topology, c)
-                active_topology = None
+            bp = base_port_for(topo)
 
-            if active_topology != topo:
-                compose_up(root, topo, c)
-                active_topology = topo
+            if not parallel:
+                # Sequential mode: tear down previous topology before switching
+                if active_topology is not None and active_topology != topo:
+                    compose_down(root, active_topology, c, base_port_for(active_topology))
+                    active_topologies.discard(active_topology)
+                    active_topology = None
+
+                if active_topology != topo:
+                    compose_up(root, topo, c, bp)
+                    active_topologies.add(topo)
+                    active_topology = topo
 
             group_tests = groups[topo]
             if len(group_tests) == 1:
@@ -723,7 +797,7 @@ def cmd_run(args: argparse.Namespace, extra_args: list[str]) -> None:
                 print(c.bold(f"  [{idx}/{total}] {test.name}"))
                 print(c.bold(f"{'=' * 72}"))
 
-                result = run_test(root, test, args.time_limit, extra_args, c)
+                result = run_test(root, test, args.time_limit, extra_args, c, base_port=bp)
                 results.append(result)
 
                 if result.passed is True:
@@ -749,6 +823,7 @@ def cmd_run(args: argparse.Namespace, extra_args: list[str]) -> None:
                     extra_args,
                     c,
                     stop_on_failure=args.stop_on_failure,
+                    base_port=bp,
                 )
 
                 for result in batch_results:
@@ -779,8 +854,9 @@ def cmd_run(args: argparse.Namespace, extra_args: list[str]) -> None:
     except KeyboardInterrupt:
         print(c.yellow("\n\nInterrupted."))
     finally:
-        if args.teardown and active_topology is not None:
-            compose_down(root, active_topology, c)
+        if args.teardown:
+            for topo in active_topologies:
+                compose_down(root, topo, c, base_port_for(topo))
 
     print_summary(results, c)
 
@@ -839,17 +915,19 @@ def cmd_up(args: argparse.Namespace) -> None:
     root = get_project_root()
     c = Color()
     topo = Topology(args.topology)
-    compose_up(root, topo, c)
+    bp = getattr(args, "base_port", None) or DEFAULT_BASE_PORT
+    compose_up(root, topo, c, bp)
 
 
 def cmd_down(args: argparse.Namespace) -> None:
     root = get_project_root()
     c = Color()
+    bp = getattr(args, "base_port", None) or DEFAULT_BASE_PORT
     if args.topology:
-        compose_down(root, Topology(args.topology), c)
+        compose_down(root, Topology(args.topology), c, bp)
     else:
         for topo in Topology:
-            compose_down(root, topo, c)
+            compose_down(root, topo, c, bp)
 
 
 def cmd_clean(args: argparse.Namespace) -> None:
@@ -912,6 +990,17 @@ def main() -> None:
         help="Abort suite on first failure",
     )
     p_run.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
+    p_run.add_argument(
+        "--base-port",
+        type=int,
+        default=None,
+        help=f"Base host port for Docker containers (default: {DEFAULT_BASE_PORT})",
+    )
+    p_run.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Run topologies in parallel with non-conflicting port ranges",
+    )
     p_run.add_argument("-v", "--verbose", action="store_true", help="Reserved")
 
     # --- list ---
@@ -928,6 +1017,9 @@ def main() -> None:
     # --- up ---
     p_up = sub.add_parser("up", help="Start Docker Compose topology")
     p_up.add_argument("topology", choices=[t.value for t in Topology])
+    p_up.add_argument(
+        "--base-port", type=int, default=None, help=f"Base host port (default: {DEFAULT_BASE_PORT})"
+    )
 
     # --- down ---
     p_down = sub.add_parser("down", help="Tear down Docker Compose topology")
@@ -936,6 +1028,9 @@ def main() -> None:
         nargs="?",
         choices=[t.value for t in Topology],
         help="Omit to tear down all",
+    )
+    p_down.add_argument(
+        "--base-port", type=int, default=None, help=f"Base host port (default: {DEFAULT_BASE_PORT})"
     )
 
     # --- clean ---

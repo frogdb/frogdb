@@ -96,54 +96,66 @@
 
 (defrecord SlotMapping [slots-to-nodes node-conns])
 
-;; Reverse map: Docker container IP -> "localhost:hostPort"
-;; CLUSTER SLOTS returns internal Docker IPs (e.g. 172.21.0.2:6379)
-;; but the Jepsen client runs on the Docker host and needs localhost:637x
-(def docker-ip-remap
-  (into {} (for [[node ip] cluster-db/raft-cluster-node-ips
-                 :let [{:keys [host port]} (get cluster-db/raft-cluster-host-ports node)]]
-             [ip (str host ":" port)])))
+(defn docker-ip-remap
+  "Reverse map: Docker container IP -> \"localhost:hostPort\".
+   CLUSTER SLOTS returns internal Docker IPs (e.g. 172.21.0.2:6379)
+   but the Jepsen client runs on the Docker host and needs localhost:port."
+  ([] (docker-ip-remap cluster-db/default-base-port))
+  ([base-port]
+   (let [host-ports (cluster-db/raft-cluster-host-ports base-port)]
+     (into {} (for [[node ip] cluster-db/raft-cluster-node-ips
+                    :let [{:keys [host port]} (get host-ports node)]]
+                [ip (str host ":" port)])))))
 
 (defn remap-addr
   "Remap an internal Docker IP:port to a host-reachable address.
-   E.g. '172.21.0.2:6379' -> 'localhost:6379'"
-  [addr]
-  (let [[ip _port] (str/split addr #":")]
-    (or (get docker-ip-remap ip) addr)))
+   E.g. '172.21.0.2:6379' -> 'localhost:16379'"
+  ([addr]
+   (remap-addr addr cluster-db/default-base-port))
+  ([addr base-port]
+   (let [[ip _port] (str/split addr #":")
+         ip-map (docker-ip-remap base-port)]
+     (or (get ip-map ip) addr))))
 
 (defn parse-cluster-slots
   "Parse CLUSTER SLOTS response into a slot->node map.
    Response format: [[start end [ip port node-id] [replica-ip replica-port replica-id] ...] ...]
    Remaps internal Docker IPs to host-reachable addresses."
-  [slots-response]
-  (when (seq slots-response)
-    (reduce (fn [acc slot-info]
-              (let [start (long (nth slot-info 0))
-                    end (long (nth slot-info 1))
-                    master-info (nth slot-info 2)
-                    raw-addr (str (nth master-info 0) ":" (nth master-info 1))
-                    master-addr (remap-addr raw-addr)]
-                (reduce (fn [m slot]
-                          (assoc m slot master-addr))
-                        acc
-                        (range start (inc end)))))
-            {}
-            slots-response)))
+  ([slots-response]
+   (parse-cluster-slots slots-response cluster-db/default-base-port))
+  ([slots-response base-port]
+   (when (seq slots-response)
+     (reduce (fn [acc slot-info]
+               (let [start (long (nth slot-info 0))
+                     end (long (nth slot-info 1))
+                     master-info (nth slot-info 2)
+                     raw-addr (str (nth master-info 0) ":" (nth master-info 1))
+                     master-addr (remap-addr raw-addr base-port)]
+                 (reduce (fn [m slot]
+                           (assoc m slot master-addr))
+                         acc
+                         (range start (inc end)))))
+             {}
+             slots-response))))
 
 (defn refresh-slot-mapping
   "Refresh the slot-to-node mapping from the cluster.
    Returns updated SlotMapping record."
-  [slot-mapping node docker-host?]
-  (let [conn (cluster-db/conn-for-raft-node node docker-host?)
-        slots-response (cluster-db/cluster-slots conn)
-        new-slots-to-nodes (parse-cluster-slots slots-response)]
-    (assoc slot-mapping :slots-to-nodes new-slots-to-nodes)))
+  ([slot-mapping node docker-host?]
+   (refresh-slot-mapping slot-mapping node docker-host? cluster-db/default-base-port))
+  ([slot-mapping node docker-host? base-port]
+   (let [conn (cluster-db/conn-for-raft-node node docker-host? base-port)
+         slots-response (cluster-db/cluster-slots conn)
+         new-slots-to-nodes (parse-cluster-slots slots-response base-port)]
+     (assoc slot-mapping :slots-to-nodes new-slots-to-nodes))))
 
 (defn create-slot-mapping
   "Create a new SlotMapping by querying cluster."
-  [nodes docker-host?]
-  (let [mapping (->SlotMapping {} {})]
-    (refresh-slot-mapping mapping (first nodes) docker-host?)))
+  ([nodes docker-host?]
+   (create-slot-mapping nodes docker-host? cluster-db/default-base-port))
+  ([nodes docker-host? base-port]
+   (let [mapping (->SlotMapping {} {})]
+     (refresh-slot-mapping mapping (first nodes) docker-host? base-port))))
 
 (defn get-node-for-slot
   "Get the node address (ip:port) for a slot from the mapping."
@@ -224,75 +236,79 @@
    - cmd-vec: Command as a vector, e.g., [\"GET\" \"mykey\"]
    - docker-host?: Whether running from Docker host
    - nodes: All cluster nodes (for slot mapping refresh)
+   - base-port: Base host port (default 16379)
 
    Returns: {:value <result>, :redirects <count>} or throws on error."
-  [slot-mapping-atom initial-node key cmd-vec docker-host? nodes]
-  (let [slot (when key (slot-for-key key))
-        initial-addr (or (when initial-node
-                           (let [info (get cluster-db/raft-cluster-host-ports initial-node)]
-                             (str (:host info) ":" (:port info))))
-                         (when slot
-                           (get-node-for-slot @slot-mapping-atom slot))
-                         ;; Fallback to first node
-                         (let [info (get cluster-db/raft-cluster-host-ports (first nodes))]
-                           (str (:host info) ":" (:port info))))]
-    (loop [addr initial-addr
-           redirects 0
-           asking? false]
-      (when (>= redirects max-redirects)
-        (throw+ {:type :too-many-redirects
-                 :redirects redirects
-                 :last-addr addr}))
+  ([slot-mapping-atom initial-node key cmd-vec docker-host? nodes]
+   (execute-with-redirect slot-mapping-atom initial-node key cmd-vec docker-host? nodes cluster-db/default-base-port))
+  ([slot-mapping-atom initial-node key cmd-vec docker-host? nodes base-port]
+   (let [slot (when key (slot-for-key key))
+         host-ports (cluster-db/raft-cluster-host-ports base-port)
+         initial-addr (or (when initial-node
+                            (let [info (get host-ports initial-node)]
+                              (str (:host info) ":" (:port info))))
+                          (when slot
+                            (get-node-for-slot @slot-mapping-atom slot))
+                          ;; Fallback to first node
+                          (let [info (get host-ports (first nodes))]
+                            (str (:host info) ":" (:port info))))]
+     (loop [addr initial-addr
+            redirects 0
+            asking? false]
+       (when (>= redirects max-redirects)
+         (throw+ {:type :too-many-redirects
+                  :redirects redirects
+                  :last-addr addr}))
 
-      (let [[host port-str] (str/split addr #":")
-            port (Integer/parseInt port-str)
-            conn (make-conn host port)
-            ;; Execute and capture result or redirect info
-            result-or-redirect
-            (try+
-              {:type :success
-               :value (if asking?
-                        (execute-asking conn cmd-vec)
-                        (wcar conn (car/redis-call cmd-vec)))}
-              (catch clojure.lang.ExceptionInfo e
-                (if-let [redirect (is-redirect-error? e)]
-                  (case (:type redirect)
-                    :moved
-                    (let [raw-addr (str (:host redirect) ":" (:port redirect))
-                          remapped-addr (remap-addr raw-addr)]
-                      (debug "MOVED redirect:" (:slot redirect) "->" raw-addr "(remapped:" remapped-addr ")")
-                      ;; Update slot mapping with remapped address
-                      (swap! slot-mapping-atom
-                             (fn [m] (assoc-in m [:slots-to-nodes (:slot redirect)]
-                                               remapped-addr)))
-                      {:type :redirect
-                       :addr remapped-addr
-                       :asking? false})
+       (let [[host port-str] (str/split addr #":")
+             port (Integer/parseInt port-str)
+             conn (make-conn host port)
+             ;; Execute and capture result or redirect info
+             result-or-redirect
+             (try+
+               {:type :success
+                :value (if asking?
+                         (execute-asking conn cmd-vec)
+                         (wcar conn (car/redis-call cmd-vec)))}
+               (catch clojure.lang.ExceptionInfo e
+                 (if-let [redirect (is-redirect-error? e)]
+                   (case (:type redirect)
+                     :moved
+                     (let [raw-addr (str (:host redirect) ":" (:port redirect))
+                           remapped-addr (remap-addr raw-addr base-port)]
+                       (debug "MOVED redirect:" (:slot redirect) "->" raw-addr "(remapped:" remapped-addr ")")
+                       ;; Update slot mapping with remapped address
+                       (swap! slot-mapping-atom
+                              (fn [m] (assoc-in m [:slots-to-nodes (:slot redirect)]
+                                                remapped-addr)))
+                       {:type :redirect
+                        :addr remapped-addr
+                        :asking? false})
 
-                    :ask
-                    (let [raw-addr (str (:host redirect) ":" (:port redirect))
-                          remapped-addr (remap-addr raw-addr)]
-                      (debug "ASK redirect:" (:slot redirect) "->" raw-addr "(remapped:" remapped-addr ")")
-                      {:type :redirect
-                       :addr remapped-addr
-                       :asking? true})
+                     :ask
+                     (let [raw-addr (str (:host redirect) ":" (:port redirect))
+                           remapped-addr (remap-addr raw-addr base-port)]
+                       (debug "ASK redirect:" (:slot redirect) "->" raw-addr "(remapped:" remapped-addr ")")
+                       {:type :redirect
+                        :addr remapped-addr
+                        :asking? true})
 
-                    :crossslot
-                    (throw+ {:type :crossslot
-                             :message "Keys in request don't hash to the same slot"})
+                     :crossslot
+                     (throw+ {:type :crossslot
+                              :message "Keys in request don't hash to the same slot"})
 
-                    :clusterdown
-                    (throw+ {:type :clusterdown
-                             :message "Cluster is down or unavailable"}))
-                  ;; Not a redirect error, rethrow
-                  (throw e))))]
-        ;; Handle result outside try block to allow recur
-        (case (:type result-or-redirect)
-          :success {:value (:value result-or-redirect)
-                    :redirects redirects}
-          :redirect (recur (:addr result-or-redirect)
-                           (inc redirects)
-                           (:asking? result-or-redirect)))))))
+                     :clusterdown
+                     (throw+ {:type :clusterdown
+                              :message "Cluster is down or unavailable"}))
+                   ;; Not a redirect error, rethrow
+                   (throw e))))]
+         ;; Handle result outside try block to allow recur
+         (case (:type result-or-redirect)
+           :success {:value (:value result-or-redirect)
+                     :redirects redirects}
+           :redirect (recur (:addr result-or-redirect)
+                            (inc redirects)
+                            (:asking? result-or-redirect))))))))
 
 ;; ===========================================================================
 ;; High-Level Cluster Operations
@@ -300,44 +316,54 @@
 
 (defn cluster-get
   "GET a key with automatic redirect handling."
-  [slot-mapping-atom key docker-host? nodes]
-  (:value (execute-with-redirect slot-mapping-atom nil key ["GET" key] docker-host? nodes)))
+  ([slot-mapping-atom key docker-host? nodes]
+   (cluster-get slot-mapping-atom key docker-host? nodes cluster-db/default-base-port))
+  ([slot-mapping-atom key docker-host? nodes base-port]
+   (:value (execute-with-redirect slot-mapping-atom nil key ["GET" key] docker-host? nodes base-port))))
 
 (defn cluster-set
   "SET a key with automatic redirect handling."
-  [slot-mapping-atom key value docker-host? nodes]
-  (:value (execute-with-redirect slot-mapping-atom nil key ["SET" key (str value)] docker-host? nodes)))
+  ([slot-mapping-atom key value docker-host? nodes]
+   (cluster-set slot-mapping-atom key value docker-host? nodes cluster-db/default-base-port))
+  ([slot-mapping-atom key value docker-host? nodes base-port]
+   (:value (execute-with-redirect slot-mapping-atom nil key ["SET" key (str value)] docker-host? nodes base-port))))
 
 (defn cluster-incr
   "INCR a key with automatic redirect handling."
-  [slot-mapping-atom key docker-host? nodes]
-  (:value (execute-with-redirect slot-mapping-atom nil key ["INCR" key] docker-host? nodes)))
+  ([slot-mapping-atom key docker-host? nodes]
+   (cluster-incr slot-mapping-atom key docker-host? nodes cluster-db/default-base-port))
+  ([slot-mapping-atom key docker-host? nodes base-port]
+   (:value (execute-with-redirect slot-mapping-atom nil key ["INCR" key] docker-host? nodes base-port))))
 
 (defn cluster-del
   "DEL a key with automatic redirect handling."
-  [slot-mapping-atom key docker-host? nodes]
-  (:value (execute-with-redirect slot-mapping-atom nil key ["DEL" key] docker-host? nodes)))
+  ([slot-mapping-atom key docker-host? nodes]
+   (cluster-del slot-mapping-atom key docker-host? nodes cluster-db/default-base-port))
+  ([slot-mapping-atom key docker-host? nodes base-port]
+   (:value (execute-with-redirect slot-mapping-atom nil key ["DEL" key] docker-host? nodes base-port))))
 
 ;; ===========================================================================
 ;; Jepsen Client Implementation
 ;; ===========================================================================
 
-(defrecord ClusterClient [slot-mapping nodes docker-host?]
+(defrecord ClusterClient [slot-mapping nodes docker-host? base-port]
   client/Client
 
   (open! [this test node]
     (let [docker? (get test :docker true)
-          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])]
+          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])
+          bp (get test :base-port cluster-db/default-base-port)]
       (info "Opening cluster client to" node "(docker-host?:" docker? ")")
       (assoc this
              :nodes all-nodes
              :docker-host? docker?
-             :slot-mapping (atom (create-slot-mapping all-nodes docker?)))))
+             :base-port bp
+             :slot-mapping (atom (create-slot-mapping all-nodes docker? bp)))))
 
   (setup! [this test]
     ;; Refresh slot mapping
     (when-let [mapping @slot-mapping]
-      (reset! slot-mapping (refresh-slot-mapping mapping (first nodes) docker-host?)))
+      (reset! slot-mapping (refresh-slot-mapping mapping (first nodes) docker-host? base-port)))
     this)
 
   (invoke! [this test op]
@@ -360,21 +386,23 @@
 ;; Register Operations for Cluster Mode
 ;; ===========================================================================
 
-(defrecord ClusterRegisterClient [slot-mapping nodes docker-host?]
+(defrecord ClusterRegisterClient [slot-mapping nodes docker-host? base-port]
   client/Client
 
   (open! [this test node]
     (let [docker? (get test :docker true)
-          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])]
+          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])
+          bp (get test :base-port cluster-db/default-base-port)]
       (info "Opening cluster register client to" node "(docker-host?:" docker? ")")
       (assoc this
              :nodes all-nodes
              :docker-host? docker?
-             :slot-mapping (atom (create-slot-mapping all-nodes docker?)))))
+             :base-port bp
+             :slot-mapping (atom (create-slot-mapping all-nodes docker? bp)))))
 
   (setup! [this test]
     (when slot-mapping
-      (reset! slot-mapping (refresh-slot-mapping @slot-mapping (first nodes) docker-host?)))
+      (reset! slot-mapping (refresh-slot-mapping @slot-mapping (first nodes) docker-host? base-port)))
     this)
 
   (invoke! [this test op]
@@ -382,22 +410,22 @@
       (let [key (str "jepsen-reg-" (get-in op [:value 0] 0))]
         (case (:f op)
           :read
-          (let [value (cluster-get slot-mapping key docker-host? nodes)]
+          (let [value (cluster-get slot-mapping key docker-host? nodes base-port)]
             (assoc op :type :ok :value (frogdb/parse-value value)))
 
           :write
           (do
-            (cluster-set slot-mapping key (:value op) docker-host? nodes)
+            (cluster-set slot-mapping key (:value op) docker-host? nodes base-port)
             (assoc op :type :ok))
 
           :cas
           (let [[expected new-value] (:value op)]
             ;; CAS requires WATCH which may not work well with redirects
             ;; For now, just do optimistic write if value matches
-            (let [current (frogdb/parse-value (cluster-get slot-mapping key docker-host? nodes))]
+            (let [current (frogdb/parse-value (cluster-get slot-mapping key docker-host? nodes base-port))]
               (if (= current expected)
                 (do
-                  (cluster-set slot-mapping key new-value docker-host? nodes)
+                  (cluster-set slot-mapping key new-value docker-host? nodes base-port)
                   (assoc op :type :ok))
                 (assoc op :type :fail))))))))
 

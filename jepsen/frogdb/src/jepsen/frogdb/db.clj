@@ -98,12 +98,18 @@
 
 (defn container-name
   "Get the Docker container name for a node.
-   Uses prefix 'frogdb-' for single/replication, 'frogdb-raft-' for cluster mode."
-  ([node] (container-name node false))
-  ([node cluster-mode?]
-   (if cluster-mode?
-     (str "frogdb-raft-" node)
-     (str "frogdb-" node))))
+   Uses topology to determine the prefix:
+   :single -> frogdb-single-, :replication -> frogdb-repl-, :raft -> frogdb-raft-
+   Boolean cluster-mode? is supported for backward compatibility."
+  ([node] (container-name node :single))
+  ([node topology-or-cluster?]
+   (cond
+     (= topology-or-cluster? true)  (str "frogdb-raft-" node)
+     (= topology-or-cluster? false) (str "frogdb-single-" node)
+     :else (case topology-or-cluster?
+             :single      (str "frogdb-single-" node)
+             :replication (str "frogdb-repl-" node)
+             :raft        (str "frogdb-raft-" node)))))
 
 ;; ===========================================================================
 ;; Local DB (No Docker)
@@ -146,7 +152,9 @@
   (reify db/DB
     (setup! [_ test node]
       (info "Setting up FrogDB on" node)
-      (let [container (container-name node)]
+      (let [topology (get test :topology :single)
+            base-port (get test :base-port client/default-base-port)
+            container (container-name node topology)]
         (info "Starting container for" node)
         (try+
           (docker-start container)
@@ -154,34 +162,34 @@
             (warn "Container start failed (may already be running):" (:message e))))
         ;; Wait for FrogDB to be ready
         (Thread/sleep 1000)
-        (client/wait-for-ready node :timeout-ms 30000)))
+        (client/wait-for-ready node :timeout-ms 30000 :base-port base-port)))
 
     (teardown! [_ test node]
       (info "Tearing down FrogDB on" node)
-      ;; Don't stop the container - leave it running for inspection
       nil)
 
     db/Kill
     (kill! [_ test node]
       (info "Killing FrogDB on" node)
-      (docker-hard-kill (container-name node)))
+      (docker-hard-kill (container-name node (get test :topology :single))))
 
     (start! [_ test node]
       (info "Starting FrogDB on" node)
-      ;; Restart the container
-      (let [container (container-name node)]
+      (let [topology (get test :topology :single)
+            base-port (get test :base-port client/default-base-port)
+            container (container-name node topology)]
         (docker-start container)
         (Thread/sleep 1000)
-        (client/wait-for-ready node :timeout-ms 30000)))
+        (client/wait-for-ready node :timeout-ms 30000 :base-port base-port)))
 
     db/Pause
     (pause! [_ test node]
       (info "Pausing FrogDB on" node)
-      (docker-pause-process (container-name node)))
+      (docker-pause-process (container-name node (get test :topology :single))))
 
     (resume! [_ test node]
       (info "Resuming FrogDB on" node)
-      (docker-resume-process (container-name node)))))
+      (docker-resume-process (container-name node (get test :topology :single))))))
 
 ;; ===========================================================================
 ;; Docker Replication Cluster DB
@@ -200,20 +208,21 @@
   (reify db/DB
     (setup! [_ test node]
       (info "Setting up FrogDB replication node" node)
-      (let [container (container-name node)]
+      (let [base-port (get test :base-port client/default-base-port)
+            container (container-name node :replication)]
         (try+
           (docker-start container)
           (catch Object e
             (warn "Container start failed (may already be running):" (:message e))))
         ;; Wait for FrogDB to be ready
         (Thread/sleep 1000)
-        (client/wait-for-ready node :timeout-ms 30000)))
+        (client/wait-for-ready node :timeout-ms 30000 :base-port base-port)))
 
     (teardown! [_ test node]
       (info "Tearing down FrogDB replication node" node)
       ;; Clear any iptables rules we may have added
       (try+
-        (docker-exec (container-name node) "iptables" "-F")
+        (docker-exec (container-name node :replication) "iptables" "-F")
         (catch Object _
           nil))
       nil)
@@ -221,23 +230,24 @@
     db/Kill
     (kill! [_ test node]
       (info "Killing FrogDB on" node)
-      (docker-hard-kill (container-name node)))
+      (docker-hard-kill (container-name node :replication)))
 
     (start! [_ test node]
       (info "Starting FrogDB on" node)
-      (let [container (container-name node)]
+      (let [base-port (get test :base-port client/default-base-port)
+            container (container-name node :replication)]
         (docker-start container)
         (Thread/sleep 1000)
-        (client/wait-for-ready node :timeout-ms 30000)))
+        (client/wait-for-ready node :timeout-ms 30000 :base-port base-port)))
 
     db/Pause
     (pause! [_ test node]
       (info "Pausing FrogDB on" node)
-      (docker-pause-process (container-name node)))
+      (docker-pause-process (container-name node :replication)))
 
     (resume! [_ test node]
       (info "Resuming FrogDB on" node)
-      (docker-resume-process (container-name node)))))
+      (docker-resume-process (container-name node :replication)))))
 
 ;; ===========================================================================
 ;; Network Partition Support (for replication-db)
@@ -259,10 +269,12 @@
 
 (defn partition-node!
   "Partition a node from specific other nodes using iptables.
-   Blocks both incoming and outgoing traffic to the target IPs."
-  ([node targets] (partition-node! node targets false))
-  ([node targets cluster-mode?]
-   (let [container (container-name node cluster-mode?)
+   Blocks both incoming and outgoing traffic to the target IPs.
+   topology can be :single, :replication, :raft, or boolean for backward compat."
+  ([node targets] (partition-node! node targets :replication))
+  ([node targets topology]
+   (let [cluster-mode? (or (= topology :raft) (= topology true))
+         container (container-name node topology)
          ip-map (if cluster-mode? raft-cluster-node-ips node-ips)]
      (doseq [target targets]
        (let [target-ip (get ip-map target)]
@@ -273,34 +285,35 @@
 
 (defn heal-partition!
   "Remove all iptables rules from a node, healing any partitions."
-  ([node] (heal-partition! node false))
-  ([node cluster-mode?]
-   (let [container (container-name node cluster-mode?)]
+  ([node] (heal-partition! node :replication))
+  ([node topology]
+   (let [container (container-name node topology)]
      (info "Healing partition on" node)
      (docker-exec container "iptables" "-F"))))
 
 (defn isolate-primary!
   "Isolate the primary (n1) from all replicas."
-  ([] (isolate-primary! false))
-  ([cluster-mode?]
-   (partition-node! "n1" ["n2" "n3"] cluster-mode?)
-   (partition-node! "n2" ["n1"] cluster-mode?)
-   (partition-node! "n3" ["n1"] cluster-mode?)))
+  ([] (isolate-primary! :replication))
+  ([topology]
+   (partition-node! "n1" ["n2" "n3"] topology)
+   (partition-node! "n2" ["n1"] topology)
+   (partition-node! "n3" ["n1"] topology)))
 
 (defn partition-halves!
   "Split cluster into two halves: [n1, n2] vs [n3]."
-  ([] (partition-halves! false))
-  ([cluster-mode?]
-   (partition-node! "n1" ["n3"] cluster-mode?)
-   (partition-node! "n2" ["n3"] cluster-mode?)
-   (partition-node! "n3" ["n1" "n2"] cluster-mode?)))
+  ([] (partition-halves! :replication))
+  ([topology]
+   (partition-node! "n1" ["n3"] topology)
+   (partition-node! "n2" ["n3"] topology)
+   (partition-node! "n3" ["n1" "n2"] topology)))
 
 (defn heal-all!
   "Heal partitions on all nodes."
-  ([] (heal-all! false))
-  ([cluster-mode?]
-   (let [nodes (if cluster-mode?
+  ([] (heal-all! :replication))
+  ([topology]
+   (let [cluster-mode? (or (= topology :raft) (= topology true))
+         nodes (if cluster-mode?
                  (keys raft-cluster-node-ips)
                  ["n1" "n2" "n3"])]
      (doseq [node nodes]
-       (heal-partition! node cluster-mode?)))))
+       (heal-partition! node topology)))))

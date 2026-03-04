@@ -89,73 +89,83 @@
 
 (defn find-slot-owner-conn
   "Find the node that owns a slot and return its connection."
-  [nodes docker-host? slot slot-mapping-atom]
-  (let [mapping @slot-mapping-atom
-        addr (cluster-client/get-node-for-slot mapping slot)]
-    (if addr
-      (let [[host port-str] (str/split addr #":")
-            port (Integer/parseInt port-str)]
-        (cluster-client/make-conn host port))
-      ;; Fallback: refresh and try again
-      (let [new-mapping (cluster-client/refresh-slot-mapping mapping (first nodes) docker-host?)]
-        (reset! slot-mapping-atom new-mapping)
-        (let [addr (cluster-client/get-node-for-slot new-mapping slot)
-              [host port-str] (str/split addr #":")
-              port (Integer/parseInt port-str)]
-          (cluster-client/make-conn host port))))))
+  ([nodes docker-host? slot slot-mapping-atom]
+   (find-slot-owner-conn nodes docker-host? slot slot-mapping-atom cluster-db/default-base-port))
+  ([nodes docker-host? slot slot-mapping-atom base-port]
+   (let [mapping @slot-mapping-atom
+         addr (cluster-client/get-node-for-slot mapping slot)]
+     (if addr
+       (let [[host port-str] (str/split addr #":")
+             port (Integer/parseInt port-str)]
+         (cluster-client/make-conn host port))
+       ;; Fallback: refresh and try again
+       (let [new-mapping (cluster-client/refresh-slot-mapping mapping (first nodes) docker-host? base-port)]
+         (reset! slot-mapping-atom new-mapping)
+         (let [addr (cluster-client/get-node-for-slot new-mapping slot)
+               [host port-str] (str/split addr #":")
+               port (Integer/parseInt port-str)]
+           (cluster-client/make-conn host port)))))))
 
 (defn cluster-multi-set!
   "Set multiple keys atomically in a cluster.
    Keys must all hash to the same slot (use hash tags)."
-  [nodes docker-host? slot-mapping-atom keys-values]
-  (let [keys (map first keys-values)
-        slot (cluster-client/slot-for-key (first keys))]
-    ;; Verify all keys are same slot
-    (when-not (keys-same-slot? keys)
-      (throw+ {:type :crossslot
-               :message "Keys don't hash to the same slot"}))
+  ([nodes docker-host? slot-mapping-atom keys-values]
+   (cluster-multi-set! nodes docker-host? slot-mapping-atom keys-values cluster-db/default-base-port))
+  ([nodes docker-host? slot-mapping-atom keys-values base-port]
+   (let [keys (map first keys-values)
+         slot (cluster-client/slot-for-key (first keys))]
+     ;; Verify all keys are same slot
+     (when-not (keys-same-slot? keys)
+       (throw+ {:type :crossslot
+                :message "Keys don't hash to the same slot"}))
 
-    (let [conn (find-slot-owner-conn nodes docker-host? slot slot-mapping-atom)]
-      (execute-multi-set! conn keys-values))))
+     (let [conn (find-slot-owner-conn nodes docker-host? slot slot-mapping-atom base-port)]
+       (execute-multi-set! conn keys-values)))))
 
 (defn cluster-multi-get
   "Get multiple keys atomically in a cluster.
    Keys must all hash to the same slot (use hash tags)."
-  [nodes docker-host? slot-mapping-atom keys]
-  (let [slot (cluster-client/slot-for-key (first keys))]
-    (when-not (keys-same-slot? keys)
-      (throw+ {:type :crossslot
-               :message "Keys don't hash to the same slot"}))
+  ([nodes docker-host? slot-mapping-atom keys]
+   (cluster-multi-get nodes docker-host? slot-mapping-atom keys cluster-db/default-base-port))
+  ([nodes docker-host? slot-mapping-atom keys base-port]
+   (let [slot (cluster-client/slot-for-key (first keys))]
+     (when-not (keys-same-slot? keys)
+       (throw+ {:type :crossslot
+                :message "Keys don't hash to the same slot"}))
 
-    (let [conn (find-slot-owner-conn nodes docker-host? slot slot-mapping-atom)]
-      (execute-multi-get conn keys))))
+     (let [conn (find-slot-owner-conn nodes docker-host? slot slot-mapping-atom base-port)]
+       (execute-multi-get conn keys)))))
 
 (defn cluster-atomic-transfer!
   "Atomically transfer between two keys in a cluster."
-  [nodes docker-host? slot-mapping-atom from-key to-key amount]
-  (when-not (keys-same-slot? [from-key to-key])
-    (throw+ {:type :crossslot
-             :message "Keys don't hash to the same slot"}))
+  ([nodes docker-host? slot-mapping-atom from-key to-key amount]
+   (cluster-atomic-transfer! nodes docker-host? slot-mapping-atom from-key to-key amount cluster-db/default-base-port))
+  ([nodes docker-host? slot-mapping-atom from-key to-key amount base-port]
+   (when-not (keys-same-slot? [from-key to-key])
+     (throw+ {:type :crossslot
+              :message "Keys don't hash to the same slot"}))
 
-  (let [slot (cluster-client/slot-for-key from-key)
-        conn (find-slot-owner-conn nodes docker-host? slot slot-mapping-atom)]
-    (execute-atomic-transfer! conn from-key to-key amount)))
+   (let [slot (cluster-client/slot-for-key from-key)
+         conn (find-slot-owner-conn nodes docker-host? slot slot-mapping-atom base-port)]
+     (execute-atomic-transfer! conn from-key to-key amount))))
 
 ;; ===========================================================================
 ;; Client Implementation
 ;; ===========================================================================
 
-(defrecord CrossSlotClient [nodes docker-host? slot-mapping]
+(defrecord CrossSlotClient [nodes docker-host? base-port slot-mapping]
   client/Client
 
   (open! [this test node]
     (let [docker? (get test :docker true)
-          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])]
+          all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])
+          bp (get test :base-port cluster-db/default-base-port)]
       (info "Opening cross-slot client")
       (assoc this
              :nodes all-nodes
              :docker-host? docker?
-             :slot-mapping (atom (cluster-client/create-slot-mapping all-nodes docker?)))))
+             :base-port bp
+             :slot-mapping (atom (cluster-client/create-slot-mapping all-nodes docker? bp)))))
 
   (setup! [this test]
     this)
@@ -168,7 +178,7 @@
               tagged-kvs (mapv (fn [[suffix value]]
                                  [(str "{" tag "}:" suffix) value])
                                keys-values)]
-          (cluster-multi-set! nodes docker-host? slot-mapping tagged-kvs)
+          (cluster-multi-set! nodes docker-host? slot-mapping tagged-kvs base-port)
           (assoc op :type :ok :value {:tag tag
                                        :keys-written (count tagged-kvs)
                                        :slot (cluster-client/slot-for-key (str "{" tag "}:x"))}))
@@ -176,7 +186,7 @@
         :hash-tag-read
         (let [{:keys [tag suffixes]} (:value op)
               keys (make-tagged-keys tag suffixes)
-              result (cluster-multi-get nodes docker-host? slot-mapping keys)]
+              result (cluster-multi-get nodes docker-host? slot-mapping keys base-port)]
           (assoc op :type :ok :value {:tag tag
                                        :values result
                                        :slot (cluster-client/slot-for-key (first keys))}))
@@ -187,7 +197,7 @@
           (if (keys-same-slot? keys)
             (assoc op :type :fail :error :keys-unexpectedly-same-slot)
             (try+
-              (cluster-multi-get nodes docker-host? slot-mapping keys)
+              (cluster-multi-get nodes docker-host? slot-mapping keys base-port)
               ;; If we get here, it didn't throw as expected
               (assoc op :type :fail :error :should-have-failed)
               (catch [:type :crossslot] e
@@ -197,7 +207,7 @@
         (let [{:keys [tag from-suffix to-suffix amount]} (:value op)
               from-key (str "{" tag "}:" from-suffix)
               to-key (str "{" tag "}:" to-suffix)
-              success? (cluster-atomic-transfer! nodes docker-host? slot-mapping from-key to-key amount)]
+              success? (cluster-atomic-transfer! nodes docker-host? slot-mapping from-key to-key amount base-port)]
           (if success?
             (assoc op :type :ok :value {:transferred amount})
             (assoc op :type :fail :error :insufficient-funds)))
@@ -213,12 +223,12 @@
 
         :single-write
         (let [{:keys [key value]} (:value op)]
-          (cluster-client/cluster-set slot-mapping key value docker-host? nodes)
+          (cluster-client/cluster-set slot-mapping key value docker-host? nodes base-port)
           (assoc op :type :ok :value {:key key :slot (cluster-client/slot-for-key key)}))
 
         :single-read
         (let [key (:value op)
-              value (cluster-client/cluster-get slot-mapping key docker-host? nodes)]
+              value (cluster-client/cluster-get slot-mapping key docker-host? nodes base-port)]
           (assoc op :type :ok :value {:key key
                                        :value (frogdb/parse-value value)
                                        :slot (cluster-client/slot-for-key key)}))
@@ -226,7 +236,7 @@
         ;; Generic read (used by final-reads phase) — delegates to single-read
         :read
         (let [key (or (:value op) (str "{jepsen-xslot}:a"))
-              value (cluster-client/cluster-get slot-mapping key docker-host? nodes)]
+              value (cluster-client/cluster-get slot-mapping key docker-host? nodes base-port)]
           (assoc op :type :ok :value {:key key
                                        :value (frogdb/parse-value value)
                                        :slot (cluster-client/slot-for-key key)})))
