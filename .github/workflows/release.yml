@@ -15,7 +15,7 @@ env:
 jobs:
   build-binaries:
     name: Build Release Binaries (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
+    runs-on: self-hosted
     strategy:
       matrix:
         include:
@@ -71,7 +71,7 @@ jobs:
     needs:
     - build-binaries
     name: Docker Release
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
       packages: write
@@ -129,7 +129,7 @@ jobs:
     needs:
     - docker
     name: Publish Helm Chart
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: write
       pages: write
@@ -174,7 +174,7 @@ jobs:
     - build-binaries
     - docker
     name: GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: write
     steps:
