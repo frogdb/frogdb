@@ -19,10 +19,10 @@ impl ShardWorker {
         protocol_version: ProtocolVersion,
     ) -> Response {
         let start = Instant::now();
-        let shard_label = self.shard_id.to_string();
+        let shard_label = self.identity.shard_id.to_string();
 
         // EVAL always loads the script (cache miss)
-        self.metrics_recorder.increment_counter(
+        self.observability.metrics_recorder.increment_counter(
             "frogdb_lua_scripts_cache_misses_total",
             1,
             &[("shard", &shard_label)],
@@ -31,7 +31,7 @@ impl ShardWorker {
         let executor = match &mut self.script_executor {
             Some(e) => e,
             None => {
-                self.metrics_recorder.increment_counter(
+                self.observability.metrics_recorder.increment_counter(
                     "frogdb_lua_scripts_errors_total",
                     1,
                     &[("shard", &shard_label), ("error", "not_available")],
@@ -44,29 +44,29 @@ impl ShardWorker {
         let mut ctx = CommandContext::with_cluster(
             store,
             &self.shard_senders,
-            self.shard_id,
-            self.num_shards,
+            self.identity.shard_id,
+            self.identity.num_shards,
             conn_id,
             protocol_version,
             None,
             None,
-            self.cluster_state.as_ref(),
-            self.node_id,
-            self.raft.as_ref(),
-            self.network_factory.as_ref(),
-            self.quorum_checker.as_ref().map(|q| q.as_ref()),
+            self.cluster.cluster_state.as_ref(),
+            self.cluster.node_id,
+            self.cluster.raft.as_ref(),
+            self.cluster.network_factory.as_ref(),
+            self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
         let result = executor.eval(script_source, keys, argv, &mut ctx, &self.registry);
         let elapsed = start.elapsed().as_secs_f64();
 
         // Record metrics
-        self.metrics_recorder.increment_counter(
+        self.observability.metrics_recorder.increment_counter(
             "frogdb_lua_scripts_total",
             1,
             &[("shard", &shard_label), ("type", "eval")],
         );
-        self.metrics_recorder.record_histogram(
+        self.observability.metrics_recorder.record_histogram(
             "frogdb_lua_scripts_duration_seconds",
             elapsed,
             &[("shard", &shard_label), ("type", "eval")],
@@ -75,7 +75,7 @@ impl ShardWorker {
         match result {
             Ok(response) => response,
             Err(e) => {
-                self.metrics_recorder.increment_counter(
+                self.observability.metrics_recorder.increment_counter(
                     "frogdb_lua_scripts_errors_total",
                     1,
                     &[("shard", &shard_label), ("error", "execution")],
@@ -95,12 +95,12 @@ impl ShardWorker {
         protocol_version: ProtocolVersion,
     ) -> Response {
         let start = Instant::now();
-        let shard_label = self.shard_id.to_string();
+        let shard_label = self.identity.shard_id.to_string();
 
         let executor = match &mut self.script_executor {
             Some(e) => e,
             None => {
-                self.metrics_recorder.increment_counter(
+                self.observability.metrics_recorder.increment_counter(
                     "frogdb_lua_scripts_errors_total",
                     1,
                     &[("shard", &shard_label), ("error", "not_available")],
@@ -113,17 +113,17 @@ impl ShardWorker {
         let mut ctx = CommandContext::with_cluster(
             store,
             &self.shard_senders,
-            self.shard_id,
-            self.num_shards,
+            self.identity.shard_id,
+            self.identity.num_shards,
             conn_id,
             protocol_version,
             None,
             None,
-            self.cluster_state.as_ref(),
-            self.node_id,
-            self.raft.as_ref(),
-            self.network_factory.as_ref(),
-            self.quorum_checker.as_ref().map(|q| q.as_ref()),
+            self.cluster.cluster_state.as_ref(),
+            self.cluster.node_id,
+            self.cluster.raft.as_ref(),
+            self.cluster.network_factory.as_ref(),
+            self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
         let result = executor.evalsha(script_sha, keys, argv, &mut ctx, &self.registry);
@@ -133,17 +133,17 @@ impl ShardWorker {
         match &result {
             Ok(_) => {
                 // EVALSHA success = cache hit
-                self.metrics_recorder.increment_counter(
+                self.observability.metrics_recorder.increment_counter(
                     "frogdb_lua_scripts_cache_hits_total",
                     1,
                     &[("shard", &shard_label)],
                 );
-                self.metrics_recorder.increment_counter(
+                self.observability.metrics_recorder.increment_counter(
                     "frogdb_lua_scripts_total",
                     1,
                     &[("shard", &shard_label), ("type", "evalsha")],
                 );
-                self.metrics_recorder.record_histogram(
+                self.observability.metrics_recorder.record_histogram(
                     "frogdb_lua_scripts_duration_seconds",
                     elapsed,
                     &[("shard", &shard_label), ("type", "evalsha")],
@@ -153,24 +153,24 @@ impl ShardWorker {
                 // Check if it's a NOSCRIPT error (cache miss) or execution error
                 let error_str = e.to_string();
                 if error_str.contains("NOSCRIPT") {
-                    self.metrics_recorder.increment_counter(
+                    self.observability.metrics_recorder.increment_counter(
                         "frogdb_lua_scripts_cache_misses_total",
                         1,
                         &[("shard", &shard_label)],
                     );
-                    self.metrics_recorder.increment_counter(
+                    self.observability.metrics_recorder.increment_counter(
                         "frogdb_lua_scripts_errors_total",
                         1,
                         &[("shard", &shard_label), ("error", "noscript")],
                     );
                 } else {
                     // Execution error after cache hit
-                    self.metrics_recorder.increment_counter(
+                    self.observability.metrics_recorder.increment_counter(
                         "frogdb_lua_scripts_cache_hits_total",
                         1,
                         &[("shard", &shard_label)],
                     );
-                    self.metrics_recorder.increment_counter(
+                    self.observability.metrics_recorder.increment_counter(
                         "frogdb_lua_scripts_errors_total",
                         1,
                         &[("shard", &shard_label), ("error", "execution")],

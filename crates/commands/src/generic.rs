@@ -12,8 +12,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy, MergeStrategy, ServerWideOp, Value, extract_hash_tag, shard_for_key,
-    slot_for_key,
+    ExecutionStrategy, MergeStrategy, ServerWideOp, Value, WalStrategy, extract_hash_tag,
+    shard_for_key, slot_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -70,6 +70,10 @@ impl Command for RenameCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::RenameKeys
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -135,6 +139,10 @@ impl Command for RenamenxCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::RenameKeys
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -246,6 +254,10 @@ impl Command for UnlinkCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::DeleteKeys
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -631,6 +643,10 @@ impl Command for CopyCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistDestination(1)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

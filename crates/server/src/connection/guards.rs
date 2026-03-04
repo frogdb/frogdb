@@ -165,11 +165,13 @@ impl ConnectionHandler {
         if matches!(cmd_name, "CLUSTER" | "PING" | "COMMAND" | "TIME" | "DEBUG") {
             return true;
         }
-        // Connection-level commands and scatter-gather commands are exempt
+        // Connection-level, scatter-gather, and server-wide commands are exempt
         self.registry.get_entry(cmd_name).is_some_and(|entry| {
             matches!(
                 entry.execution_strategy(),
-                ExecutionStrategy::ConnectionLevel(_) | ExecutionStrategy::ScatterGather { .. }
+                ExecutionStrategy::ConnectionLevel(_)
+                    | ExecutionStrategy::ScatterGather { .. }
+                    | ExecutionStrategy::ServerWide(_)
             )
         })
     }

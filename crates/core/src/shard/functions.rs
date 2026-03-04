@@ -75,17 +75,17 @@ impl ShardWorker {
         let mut ctx = CommandContext::with_cluster(
             store,
             &self.shard_senders,
-            self.shard_id,
-            self.num_shards,
+            self.identity.shard_id,
+            self.identity.num_shards,
             conn_id,
             protocol_version,
             None,
             None,
-            self.cluster_state.as_ref(),
-            self.node_id,
-            self.raft.as_ref(),
-            self.network_factory.as_ref(),
-            self.quorum_checker.as_ref().map(|q| q.as_ref()),
+            self.cluster.cluster_state.as_ref(),
+            self.cluster.node_id,
+            self.cluster.raft.as_ref(),
+            self.cluster.network_factory.as_ref(),
+            self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
         match executor.execute_function(

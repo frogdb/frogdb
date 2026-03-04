@@ -7,7 +7,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy,
-    KeyType, MergeStrategy,
+    KeyType, ServerWideOp,
 };
 use frogdb_protocol::Response;
 
@@ -57,9 +57,7 @@ impl Command for ScanCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ScatterGather {
-            merge: MergeStrategy::CursoredScan,
-        }
+        ExecutionStrategy::ServerWide(ServerWideOp::Scan)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -127,9 +125,7 @@ impl Command for KeysCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ScatterGather {
-            merge: MergeStrategy::CollectKeys,
-        }
+        ExecutionStrategy::ServerWide(ServerWideOp::Keys)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

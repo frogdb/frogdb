@@ -32,7 +32,7 @@ impl ShardWorker {
 
         if let Err(e) = self.wait_queue.register(entry) {
             tracing::warn!(
-                shard_id = self.shard_id,
+                shard_id = self.shard_id(),
                 conn_id = conn_id,
                 error = %e,
                 "Failed to register blocking wait"
@@ -41,15 +41,15 @@ impl ShardWorker {
             // The client will timeout.
         } else {
             tracing::debug!(
-                shard_id = self.shard_id,
+                shard_id = self.shard_id(),
                 conn_id,
                 keys_count,
                 "Client blocked on keys"
             );
 
             // Update blocked clients metric
-            let shard_label = self.shard_id.to_string();
-            self.metrics_recorder.record_gauge(
+            let shard_label = self.shard_id().to_string();
+            self.observability.metrics_recorder.record_gauge(
                 "frogdb_blocked_clients",
                 self.wait_queue.waiter_count() as f64,
                 &[("shard", &shard_label)],
@@ -62,15 +62,15 @@ impl ShardWorker {
         let removed = self.wait_queue.unregister(conn_id);
         if !removed.is_empty() {
             tracing::trace!(
-                shard_id = self.shard_id,
+                shard_id = self.shard_id(),
                 conn_id = conn_id,
                 count = removed.len(),
                 "Unregistered blocking waits on disconnect"
             );
 
             // Update blocked clients metric
-            let shard_label = self.shard_id.to_string();
-            self.metrics_recorder.record_gauge(
+            let shard_label = self.shard_id().to_string();
+            self.observability.metrics_recorder.record_gauge(
                 "frogdb_blocked_clients",
                 self.wait_queue.waiter_count() as f64,
                 &[("shard", &shard_label)],
@@ -84,11 +84,11 @@ impl ShardWorker {
         let expired = self.wait_queue.collect_expired(now);
 
         if !expired.is_empty() {
-            let shard_label = self.shard_id.to_string();
+            let shard_label = self.shard_id().to_string();
 
             for entry in expired {
                 tracing::trace!(
-                    shard_id = self.shard_id,
+                    shard_id = self.shard_id(),
                     conn_id = entry.conn_id,
                     "Blocking wait timed out"
                 );
@@ -97,7 +97,7 @@ impl ShardWorker {
                 let _ = entry.response_tx.send(Response::Null);
 
                 // Increment timeout counter
-                self.metrics_recorder.increment_counter(
+                self.observability.metrics_recorder.increment_counter(
                     "frogdb_blocked_timeout_total",
                     1,
                     &[("shard", &shard_label)],
@@ -105,7 +105,7 @@ impl ShardWorker {
             }
 
             // Update blocked clients gauge
-            self.metrics_recorder.record_gauge(
+            self.observability.metrics_recorder.record_gauge(
                 "frogdb_blocked_clients",
                 self.wait_queue.waiter_count() as f64,
                 &[("shard", &shard_label)],
@@ -279,7 +279,7 @@ impl ShardWorker {
 
             // Calculate wait duration (approximate since we don't track start time)
             tracing::debug!(
-                shard_id = self.shard_id,
+                shard_id = self.shard_id(),
                 conn_id = entry.conn_id,
                 "Blocked client unblocked"
             );
@@ -288,15 +288,15 @@ impl ShardWorker {
             let _ = entry.response_tx.send(response);
 
             // Increment satisfied counter
-            let shard_label = self.shard_id.to_string();
-            self.metrics_recorder.increment_counter(
+            let shard_label = self.shard_id().to_string();
+            self.observability.metrics_recorder.increment_counter(
                 "frogdb_blocked_satisfied_total",
                 1,
                 &[("shard", &shard_label)],
             );
 
             // Update blocked clients gauge
-            self.metrics_recorder.record_gauge(
+            self.observability.metrics_recorder.record_gauge(
                 "frogdb_blocked_clients",
                 self.wait_queue.waiter_count() as f64,
                 &[("shard", &shard_label)],
@@ -403,7 +403,7 @@ impl ShardWorker {
             };
 
             tracing::debug!(
-                shard_id = self.shard_id,
+                shard_id = self.shard_id(),
                 conn_id = entry.conn_id,
                 "Blocked client unblocked"
             );
@@ -412,15 +412,15 @@ impl ShardWorker {
             let _ = entry.response_tx.send(response);
 
             // Increment satisfied counter
-            let shard_label = self.shard_id.to_string();
-            self.metrics_recorder.increment_counter(
+            let shard_label = self.shard_id().to_string();
+            self.observability.metrics_recorder.increment_counter(
                 "frogdb_blocked_satisfied_total",
                 1,
                 &[("shard", &shard_label)],
             );
 
             // Update blocked clients gauge
-            self.metrics_recorder.record_gauge(
+            self.observability.metrics_recorder.record_gauge(
                 "frogdb_blocked_clients",
                 self.wait_queue.waiter_count() as f64,
                 &[("shard", &shard_label)],
@@ -495,7 +495,7 @@ impl ShardWorker {
             };
 
             tracing::debug!(
-                shard_id = self.shard_id,
+                shard_id = self.shard_id(),
                 conn_id = entry.conn_id,
                 "Blocked client unblocked"
             );
@@ -504,15 +504,15 @@ impl ShardWorker {
             let _ = entry.response_tx.send(response);
 
             // Increment satisfied counter
-            let shard_label = self.shard_id.to_string();
-            self.metrics_recorder.increment_counter(
+            let shard_label = self.shard_id().to_string();
+            self.observability.metrics_recorder.increment_counter(
                 "frogdb_blocked_satisfied_total",
                 1,
                 &[("shard", &shard_label)],
             );
 
             // Update blocked clients gauge
-            self.metrics_recorder.record_gauge(
+            self.observability.metrics_recorder.record_gauge(
                 "frogdb_blocked_clients",
                 self.wait_queue.waiter_count() as f64,
                 &[("shard", &shard_label)],

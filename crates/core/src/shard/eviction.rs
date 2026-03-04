@@ -9,10 +9,10 @@ use super::worker::ShardWorker;
 impl ShardWorker {
     /// Check if we're over the memory limit.
     fn is_over_memory_limit(&self) -> bool {
-        if self.memory_limit == 0 {
+        if self.eviction.memory_limit == 0 {
             return false;
         }
-        self.store.memory_used() as u64 > self.memory_limit
+        self.store.memory_used() as u64 > self.eviction.memory_limit
     }
 
     /// Check memory and evict if needed before a write operation.
@@ -21,7 +21,7 @@ impl ShardWorker {
     /// Returns Err(CommandError::OutOfMemory) if write should be rejected.
     pub(crate) fn check_memory_for_write(&mut self) -> Result<(), CommandError> {
         // No limit configured
-        if self.memory_limit == 0 {
+        if self.eviction.memory_limit == 0 {
             return Ok(());
         }
 
@@ -31,15 +31,15 @@ impl ShardWorker {
         }
 
         // Try to evict if policy allows
-        if self.eviction_config.policy == EvictionPolicy::NoEviction {
+        if self.eviction.config.policy == EvictionPolicy::NoEviction {
             tracing::warn!(
-                shard_id = self.shard_id,
+                shard_id = self.shard_id(),
                 memory_used = self.store.memory_used(),
-                memory_limit = self.memory_limit,
+                memory_limit = self.eviction.memory_limit,
                 "OOM rejected write"
             );
-            let shard_label = self.shard_id.to_string();
-            self.metrics_recorder.increment_counter(
+            let shard_label = self.shard_id().to_string();
+            self.observability.metrics_recorder.increment_counter(
                 "frogdb_eviction_oom_total",
                 1,
                 &[("shard", &shard_label)],
@@ -48,9 +48,9 @@ impl ShardWorker {
         }
 
         tracing::debug!(
-            shard_id = self.shard_id,
+            shard_id = self.shard_id(),
             memory_used = self.store.memory_used(),
-            memory_limit = self.memory_limit,
+            memory_limit = self.eviction.memory_limit,
             "Eviction triggered"
         );
 
@@ -64,18 +64,18 @@ impl ShardWorker {
             if !self.evict_one() {
                 // No more keys to evict
                 tracing::warn!(
-                    shard_id = self.shard_id,
-                    policy = %self.eviction_config.policy,
+                    shard_id = self.shard_id(),
+                    policy = %self.eviction.config.policy,
                     "No volatile keys for eviction"
                 );
                 tracing::warn!(
-                    shard_id = self.shard_id,
+                    shard_id = self.shard_id(),
                     memory_used = self.store.memory_used(),
-                    memory_limit = self.memory_limit,
+                    memory_limit = self.eviction.memory_limit,
                     "OOM rejected write"
                 );
-                let shard_label = self.shard_id.to_string();
-                self.metrics_recorder.increment_counter(
+                let shard_label = self.shard_id().to_string();
+                self.observability.metrics_recorder.increment_counter(
                     "frogdb_eviction_oom_total",
                     1,
                     &[("shard", &shard_label)],
@@ -87,13 +87,13 @@ impl ShardWorker {
         // Still over limit after max attempts
         if self.is_over_memory_limit() {
             tracing::warn!(
-                shard_id = self.shard_id,
+                shard_id = self.shard_id(),
                 memory_used = self.store.memory_used(),
-                memory_limit = self.memory_limit,
+                memory_limit = self.eviction.memory_limit,
                 "OOM rejected write"
             );
-            let shard_label = self.shard_id.to_string();
-            self.metrics_recorder.increment_counter(
+            let shard_label = self.shard_id().to_string();
+            self.observability.metrics_recorder.increment_counter(
                 "frogdb_eviction_oom_total",
                 1,
                 &[("shard", &shard_label)],
@@ -108,7 +108,7 @@ impl ShardWorker {
     ///
     /// Returns true if a key was evicted, false if no suitable key found.
     fn evict_one(&mut self) -> bool {
-        match self.eviction_config.policy {
+        match self.eviction.config.policy {
             EvictionPolicy::NoEviction => false,
             EvictionPolicy::AllkeysRandom => self.evict_random(false),
             EvictionPolicy::VolatileRandom => self.evict_random(true),
@@ -144,7 +144,7 @@ impl ShardWorker {
         self.sample_for_eviction(volatile_only);
 
         // Get worst candidate from pool
-        if let Some(candidate) = self.eviction_pool.pop_worst() {
+        if let Some(candidate) = self.eviction.pool.pop_worst() {
             self.delete_for_eviction(&candidate.key)
         } else {
             false
@@ -157,7 +157,7 @@ impl ShardWorker {
         self.sample_for_eviction_lfu(volatile_only);
 
         // Get worst candidate from pool
-        if let Some(candidate) = self.eviction_pool.pop_worst() {
+        if let Some(candidate) = self.eviction.pool.pop_worst() {
             self.delete_for_eviction(&candidate.key)
         } else {
             false
@@ -170,7 +170,7 @@ impl ShardWorker {
         self.sample_for_eviction_ttl();
 
         // Get worst candidate from pool
-        if let Some(candidate) = self.eviction_pool.pop_worst() {
+        if let Some(candidate) = self.eviction.pool.pop_worst() {
             self.delete_for_eviction(&candidate.key)
         } else {
             false
@@ -179,7 +179,7 @@ impl ShardWorker {
 
     /// Sample keys and add to eviction pool for LRU.
     fn sample_for_eviction(&mut self, volatile_only: bool) {
-        let samples = self.eviction_config.maxmemory_samples;
+        let samples = self.eviction.config.maxmemory_samples;
         let now = Instant::now();
 
         let keys = if volatile_only {
@@ -197,14 +197,14 @@ impl ShardWorker {
                     metadata.expires_at,
                     now,
                 );
-                self.eviction_pool.maybe_insert_lru(candidate);
+                self.eviction.pool.maybe_insert_lru(candidate);
             }
         }
     }
 
     /// Sample keys and add to eviction pool for LFU.
     fn sample_for_eviction_lfu(&mut self, volatile_only: bool) {
-        let samples = self.eviction_config.maxmemory_samples;
+        let samples = self.eviction.config.maxmemory_samples;
         let now = Instant::now();
 
         let keys = if volatile_only {
@@ -222,14 +222,14 @@ impl ShardWorker {
                     metadata.expires_at,
                     now,
                 );
-                self.eviction_pool.maybe_insert_lfu(candidate);
+                self.eviction.pool.maybe_insert_lfu(candidate);
             }
         }
     }
 
     /// Sample volatile keys and add to eviction pool for TTL.
     fn sample_for_eviction_ttl(&mut self) {
-        let samples = self.eviction_config.maxmemory_samples;
+        let samples = self.eviction.config.maxmemory_samples;
         let now = Instant::now();
 
         let keys = self.store.sample_volatile_keys(samples);
@@ -243,7 +243,7 @@ impl ShardWorker {
                     metadata.expires_at,
                     now,
                 );
-                self.eviction_pool.maybe_insert_ttl(candidate);
+                self.eviction.pool.maybe_insert_ttl(candidate);
             }
         }
     }
@@ -258,31 +258,31 @@ impl ShardWorker {
             .unwrap_or(0);
 
         // Remove from eviction pool
-        self.eviction_pool.remove(key);
+        self.eviction.pool.remove(key);
 
         // Delete the key
         if self.store.delete(key) {
             self.increment_version();
 
             // Record eviction metrics
-            let shard_label = self.shard_id.to_string();
-            let policy_label = self.eviction_config.policy.to_string();
-            self.metrics_recorder.increment_counter(
+            let shard_label = self.shard_id().to_string();
+            let policy_label = self.eviction.config.policy.to_string();
+            self.observability.metrics_recorder.increment_counter(
                 "frogdb_eviction_keys_total",
                 1,
                 &[("shard", &shard_label), ("policy", &policy_label)],
             );
-            self.metrics_recorder.increment_counter(
+            self.observability.metrics_recorder.increment_counter(
                 "frogdb_eviction_bytes_total",
                 memory_freed as u64,
                 &[("shard", &shard_label)],
             );
 
             tracing::debug!(
-                shard_id = self.shard_id,
+                shard_id = self.shard_id(),
                 key = %String::from_utf8_lossy(key),
                 memory_freed = memory_freed,
-                policy = %self.eviction_config.policy,
+                policy = %self.eviction.config.policy,
                 "Evicted key"
             );
 

@@ -292,28 +292,28 @@ impl ShardWorkerBuilder {
 
         // Apply optional configurations
         if let Some(rocks_store) = self.rocks_store {
-            worker.rocks_store = Some(rocks_store.clone());
+            worker.persistence.rocks_store = Some(rocks_store.clone());
             if let Some(wal_config) = self.wal_config {
                 let wal_writer = RocksWalWriter::new(
                     rocks_store,
-                    worker.shard_id,
+                    worker.shard_id(),
                     wal_config,
-                    worker.metrics_recorder.clone(),
+                    worker.observability.metrics_recorder.clone(),
                 );
-                worker.wal_writer = Some(wal_writer);
+                worker.persistence.wal_writer = Some(wal_writer);
             }
         }
 
-        worker.snapshot_coordinator = snapshot_coordinator;
+        worker.persistence.snapshot_coordinator = snapshot_coordinator;
         worker.function_registry = self.function_registry;
-        worker.cluster_state = self.cluster_state;
-        worker.node_id = self.node_id;
-        worker.raft = self.raft;
-        worker.network_factory = self.network_factory;
-        worker.quorum_checker = self.quorum_checker;
+        worker.cluster.cluster_state = self.cluster_state;
+        worker.cluster.node_id = self.node_id;
+        worker.cluster.raft = self.raft;
+        worker.cluster.network_factory = self.network_factory;
+        worker.cluster.quorum_checker = self.quorum_checker;
 
         if let Some(queue_depth) = self.queue_depth {
-            worker.queue_depth = queue_depth;
+            worker.observability.queue_depth = queue_depth;
         }
 
         // VLL initialization is handled separately via enable_vll() method on ShardWorker

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use frogdb_core::{ConnectionLevelOp, ExecutionStrategy};
+use frogdb_core::{ConnectionLevelOp, ExecutionStrategy, ServerWideOp};
 use frogdb_protocol::Response;
 use tracing::Instrument;
 
@@ -60,6 +60,7 @@ impl ConnectionHandler {
             ConnectionLevelOp::Transaction => ConnectionLevelHandler::Transaction,
             ConnectionLevelOp::ConnectionState => ConnectionLevelHandler::ConnectionState,
             ConnectionLevelOp::Replication => ConnectionLevelHandler::Replication,
+            ConnectionLevelOp::Persistence => ConnectionLevelHandler::Persistence,
         }
     }
 
@@ -113,10 +114,14 @@ impl ConnectionHandler {
                 self.dispatch_connection_state(cmd_name, args).await
             }
 
+            // Persistence handlers
+            ConnectionLevelHandler::Persistence => self.dispatch_persistence(cmd_name, args).await,
+
             // Cluster handlers - fall through to standard routing
             ConnectionLevelHandler::Cluster => None,
 
             // Replication handlers - fall through to standard routing
+            // PSYNC needs the full command for route_and_execute
             ConnectionLevelHandler::Replication => None,
         }
     }
@@ -254,6 +259,66 @@ impl ConnectionHandler {
         }
     }
 
+    /// Determine the server-wide operation for a command by looking up its
+    /// execution strategy in the registry.
+    fn server_wide_handler_for(&self, cmd_name: &str) -> Option<ServerWideOp> {
+        let entry = self.registry.get_entry(cmd_name)?;
+        match entry.execution_strategy() {
+            ExecutionStrategy::ServerWide(op) => Some(op.clone()),
+            _ => None,
+        }
+    }
+
+    /// Dispatch a server-wide command to its handler.
+    async fn dispatch_server_wide(&mut self, op: ServerWideOp, args: &[Bytes]) -> Vec<Response> {
+        let response = match op {
+            ServerWideOp::Scan => self.handle_scan(args).await,
+            ServerWideOp::Keys => self.handle_keys(args).await,
+            ServerWideOp::DbSize => self.handle_dbsize().await,
+            ServerWideOp::RandomKey => self.handle_randomkey().await,
+            ServerWideOp::FlushDb => self.handle_flushdb(args).await,
+            ServerWideOp::FlushAll => self.handle_flushall(args).await,
+            ServerWideOp::Migrate => self.handle_migrate(args).await,
+            ServerWideOp::Shutdown => self.handle_shutdown(args).await,
+        };
+        vec![response]
+    }
+
+    /// Handle internal action signals returned by commands.
+    ///
+    /// Some commands return special Response variants that signal the connection
+    /// handler to perform async operations (blocking waits, Raft consensus, migration).
+    async fn handle_internal_action(&mut self, response: Response) -> Response {
+        match response {
+            Response::BlockingNeeded { keys, timeout, op } => {
+                self.handle_blocking_wait(keys, timeout, op).await
+            }
+            Response::RaftNeeded {
+                op,
+                register_node,
+                unregister_node,
+            } => {
+                self.handle_raft_command(op, register_node, unregister_node)
+                    .await
+            }
+            Response::MigrateNeeded { args } => self.handle_migrate_command(args).await,
+            other => other,
+        }
+    }
+
+    /// Dispatch persistence commands.
+    async fn dispatch_persistence(
+        &mut self,
+        cmd_name: &str,
+        args: &[Bytes],
+    ) -> Option<Vec<Response>> {
+        match cmd_name {
+            "BGSAVE" => Some(vec![self.handle_bgsave(args)]),
+            "LASTSAVE" => Some(vec![self.handle_lastsave()]),
+            _ => None,
+        }
+    }
+
     /// Dispatch connection state commands.
     async fn dispatch_connection_state(
         &mut self,
@@ -262,6 +327,18 @@ impl ConnectionHandler {
     ) -> Option<Vec<Response>> {
         match cmd_name {
             "RESET" => Some(vec![self.handle_reset().await]),
+            "ASKING" => {
+                self.state.asking = true;
+                Some(vec![Response::ok()])
+            }
+            "READONLY" => {
+                self.state.readonly = true;
+                Some(vec![Response::ok()])
+            }
+            "READWRITE" => {
+                self.state.readonly = false;
+                Some(vec![Response::ok()])
+            }
             // In pubsub mode, PING format depends on protocol version:
             // RESP2: array ["pong", <message>]
             // RESP3: simple string "PONG" or the message argument
@@ -338,14 +415,6 @@ impl ConnectionHandler {
             return responses;
         }
 
-        // Handle persistence commands (need snapshot coordinator)
-        if cmd_name == "BGSAVE" {
-            return vec![self.handle_bgsave(&cmd.args)];
-        }
-        if cmd_name == "LASTSAVE" {
-            return vec![self.handle_lastsave()];
-        }
-
         // Handle PSYNC command - validates args and returns handoff signal
         // The actual handoff happens in the run() loop when it detects PSYNC_HANDOFF
         if cmd_name == "PSYNC" {
@@ -372,35 +441,9 @@ impl ConnectionHandler {
             return vec![self.queue_command(cmd)];
         }
 
-        // Handle server commands that need scatter-gather routing
-        match cmd_name {
-            "SCAN" => return vec![self.handle_scan(&cmd.args).await],
-            "KEYS" => return vec![self.handle_keys(&cmd.args).await],
-            "DBSIZE" => return vec![self.handle_dbsize().await],
-            "RANDOMKEY" => return vec![self.handle_randomkey().await],
-            "FLUSHDB" => return vec![self.handle_flushdb(&cmd.args).await],
-            "FLUSHALL" => return vec![self.handle_flushall(&cmd.args).await],
-            "MIGRATE" => return vec![self.handle_migrate(&cmd.args).await],
-            "SHUTDOWN" => return vec![self.handle_shutdown(&cmd.args).await],
-            _ => {}
-        }
-
-        // Handle ASKING command (sets connection flag)
-        if cmd_name == "ASKING" {
-            self.state.asking = true;
-            return vec![Response::ok()];
-        }
-
-        // Handle READONLY command (sets connection flag)
-        if cmd_name == "READONLY" {
-            self.state.readonly = true;
-            return vec![Response::ok()];
-        }
-
-        // Handle READWRITE command (clears readonly flag)
-        if cmd_name == "READWRITE" {
-            self.state.readonly = false;
-            return vec![Response::ok()];
+        // Server-wide commands (registry-driven: SCAN, KEYS, DBSIZE, RANDOMKEY, FLUSHDB, FLUSHALL, MIGRATE, SHUTDOWN)
+        if let Some(op) = self.server_wide_handler_for(cmd_name) {
+            return self.dispatch_server_wide(op, &cmd.args).await;
         }
 
         // Validate cluster slot ownership (returns CROSSSLOT/MOVED/ASK errors)
@@ -414,29 +457,7 @@ impl ConnectionHandler {
             .instrument(tracing::info_span!("cmd_route"))
             .await;
 
-        // Check if this is a blocking command that needs to wait
-        if let Response::BlockingNeeded { keys, timeout, op } = response {
-            return vec![self.handle_blocking_wait(keys, timeout, op).await];
-        }
-
-        // Check if this is a Raft cluster command that needs async execution
-        if let Response::RaftNeeded {
-            op,
-            register_node,
-            unregister_node,
-        } = response
-        {
-            return vec![
-                self.handle_raft_command(op, register_node, unregister_node)
-                    .await,
-            ];
-        }
-
-        // Check if this is a MIGRATE command that needs async execution
-        if let Response::MigrateNeeded { args } = response {
-            return vec![self.handle_migrate_command(args).await];
-        }
-
-        vec![response]
+        // Handle internal action signals (blocking, raft, migrate)
+        vec![self.handle_internal_action(response).await]
     }
 }

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
@@ -7,17 +7,70 @@ use tokio::sync::mpsc;
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
-use crate::eviction::EvictionConfig;
-use crate::persistence::RocksStore;
-use crate::persistence::SnapshotCoordinator;
+use crate::eviction::{EvictionConfig, EvictionPool};
+use crate::latency::LatencyMonitor;
+use crate::persistence::{RocksStore, RocksWalWriter, SnapshotCoordinator};
 use crate::registry::CommandRegistry;
 use crate::replication::SharedBroadcaster;
 use crate::scripting::ScriptingConfig;
+use crate::slowlog::SlowLog;
 
+use super::counters::OperationCounters;
 use super::message::{ScatterOp, ShardMessage};
 
 // ============================================================================
-// Dependency Groups for ShardWorker
+// ShardWorker Sub-Structs
+// ============================================================================
+
+/// Immutable shard identity.
+pub(crate) struct ShardIdentity {
+    pub shard_id: usize,
+    pub num_shards: usize,
+}
+
+/// Observability: metrics, slowlog, latency, counters, queue depth, peak memory.
+pub(crate) struct ShardObservability {
+    pub metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+    pub slowlog: SlowLog,
+    pub latency_monitor: LatencyMonitor,
+    pub operation_counters: OperationCounters,
+    pub queue_depth: Arc<AtomicUsize>,
+    pub peak_memory: u64,
+}
+
+/// Memory management: eviction config, pool, memory limit.
+pub(crate) struct ShardEviction {
+    pub config: EvictionConfig,
+    pub pool: EvictionPool,
+    pub memory_limit: u64,
+}
+
+/// RocksDB, WAL, snapshots.
+pub(crate) struct ShardPersistence {
+    pub rocks_store: Option<Arc<RocksStore>>,
+    pub wal_writer: Option<RocksWalWriter>,
+    pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+}
+
+/// VLL: intent table, tx queue, continuation lock.
+pub(crate) struct ShardVll {
+    pub intent_table: Option<crate::vll::IntentTable>,
+    pub tx_queue: Option<crate::TransactionQueue>,
+    pub continuation_lock: Option<crate::vll::ContinuationLock>,
+    pub pending_continuation_release: Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+/// Cluster: raft, cluster state, node ID, network factory, quorum checker.
+pub(crate) struct ShardCluster {
+    pub raft: Option<Arc<ClusterRaft>>,
+    pub cluster_state: Option<Arc<ClusterState>>,
+    pub node_id: Option<u64>,
+    pub network_factory: Option<Arc<ClusterNetworkFactory>>,
+    pub quorum_checker: Option<Arc<dyn QuorumChecker>>,
+}
+
+// ============================================================================
+// Dependency Groups for ShardWorkerBuilder
 // ============================================================================
 
 /// Core dependencies required for shard operation.
