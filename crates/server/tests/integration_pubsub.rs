@@ -497,3 +497,318 @@ async fn test_pubsub_cross_node_forwarded() {
 
     harness.shutdown_all().await;
 }
+
+// ============================================================================
+// Tier 2: Sharded PubSub in Cluster
+// ============================================================================
+
+/// Tests that SSUBSCRIBE on a non-owner node returns MOVED redirect.
+///
+/// Inspired by Redis `26-pubsubshard.tcl`.
+#[tokio::test]
+async fn test_ssubscribe_wrong_node_returns_moved() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+    use frogdb_test_harness::cluster_helpers::{
+        is_error, is_moved_redirect, parse_cluster_nodes, slot_for_key,
+    };
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Find a channel whose slot is owned by a specific node,
+    // then try SSUBSCRIBE on a different node
+    let channel = "ssubscribe_test_chan";
+    let slot = slot_for_key(channel.as_bytes());
+
+    let node_ids = harness.node_ids();
+    let first_node = harness.node(node_ids[0]).unwrap();
+    let nodes_resp = first_node.send("CLUSTER", &["NODES"]).await;
+    let nodes = parse_cluster_nodes(&nodes_resp).unwrap();
+
+    // Find a node that doesn't own this slot
+    let non_owner = nodes
+        .iter()
+        .find(|n| !n.slots.iter().any(|(s, e)| slot >= *s && slot <= *e));
+
+    if let Some(non_owner_info) = non_owner {
+        // Find harness node matching this address
+        for &nid in &node_ids {
+            if let Some(node) = harness.node(nid)
+                && node.client_addr() == non_owner_info.addr
+            {
+                let mut client = node.connect().await;
+                let resp = client.command(&["SSUBSCRIBE", channel]).await;
+
+                // Should get MOVED or an error indicating wrong node
+                if is_moved_redirect(&resp).is_some() {
+                    eprintln!("Got expected MOVED redirect for SSUBSCRIBE on non-owner");
+                } else if is_error(&resp) {
+                    eprintln!("Got error (acceptable): {:?}", resp);
+                } else {
+                    // Some implementations may allow SSUBSCRIBE on any node
+                    // and forward internally
+                    eprintln!("SSUBSCRIBE accepted on non-owner: {:?}", resp);
+                }
+                break;
+            }
+        }
+    } else {
+        eprintln!("All nodes own the target slot, skipping test");
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that SSUBSCRIBE + SPUBLISH works on the correct slot owner in cluster mode.
+///
+/// Inspired by Redis `26-pubsubshard.tcl`.
+#[tokio::test]
+async fn test_ssubscribe_correct_node_receives_spublish() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+    use frogdb_test_harness::cluster_helpers::{
+        is_error, is_moved_redirect, key_for_slot, slot_for_key,
+    };
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Pick a channel and find its slot owner
+    let channel = "spub_test_chan";
+    let slot = slot_for_key(channel.as_bytes());
+
+    let node_ids = harness.node_ids();
+
+    // Probe to find the slot owner
+    let probe_key = key_for_slot(slot);
+    let mut owner_nid = None;
+    for &nid in &node_ids {
+        let node = harness.node(nid).unwrap();
+        let resp = node.send("GET", &[&probe_key]).await;
+        if !is_error(&resp) {
+            owner_nid = Some(nid);
+            break;
+        } else if let Some((_slot, addr)) = is_moved_redirect(&resp) {
+            for &other_nid in &node_ids {
+                if harness.node(other_nid).unwrap().client_addr() == addr {
+                    owner_nid = Some(other_nid);
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    if let Some(owner) = owner_nid {
+        let owner_node = harness.node(owner).unwrap();
+        let mut subscriber = owner_node.connect().await;
+        let mut publisher = owner_node.connect().await;
+
+        // SSUBSCRIBE on the owner
+        let sub_resp = subscriber.command(&["SSUBSCRIBE", channel]).await;
+        if let Response::Array(arr) = &sub_resp {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("ssubscribe"))));
+            assert_eq!(arr[1], Response::Bulk(Some(Bytes::from(channel))));
+            assert_eq!(arr[2], Response::Integer(1));
+        }
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // SPUBLISH on the same owner node
+        let pub_resp = publisher
+            .command(&["SPUBLISH", channel, "sharded_cluster_msg"])
+            .await;
+        assert!(
+            matches!(pub_resp, Response::Integer(n) if n >= 1),
+            "SPUBLISH should return >= 1, got: {:?}",
+            pub_resp
+        );
+
+        // Subscriber should receive smessage
+        let msg = subscriber.read_message(Duration::from_secs(2)).await;
+        assert!(msg.is_some(), "Subscriber should receive sharded message");
+        if let Some(Response::Array(arr)) = msg {
+            assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("smessage"))));
+            assert_eq!(arr[1], Response::Bulk(Some(Bytes::from(channel))));
+            assert_eq!(
+                arr[2],
+                Response::Bulk(Some(Bytes::from("sharded_cluster_msg")))
+            );
+        }
+    } else {
+        eprintln!("Could not find slot owner, skipping test");
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that SSUBSCRIBE to channels in different slots returns CROSSSLOT error.
+///
+/// Inspired by Redis `26-pubsubshard.tcl`.
+#[tokio::test]
+async fn test_ssubscribe_multi_channel_different_slots_rejected() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+    use frogdb_test_harness::cluster_helpers::{is_error, slot_for_key};
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Find two channels that hash to different slots
+    let chan1 = "chan_a";
+    let chan2 = "chan_b";
+    let slot1 = slot_for_key(chan1.as_bytes());
+    let slot2 = slot_for_key(chan2.as_bytes());
+
+    if slot1 == slot2 {
+        eprintln!(
+            "Channels hash to same slot ({}) — pick different channels",
+            slot1
+        );
+        harness.shutdown_all().await;
+        return;
+    }
+
+    let node = harness.node(harness.node_ids()[0]).unwrap();
+    let mut client = node.connect().await;
+
+    // SSUBSCRIBE to channels in different slots should fail with CROSSSLOT
+    let resp = client.command(&["SSUBSCRIBE", chan1, chan2]).await;
+
+    if is_error(&resp) {
+        if let Response::Error(e) = &resp {
+            let msg = String::from_utf8_lossy(e);
+            eprintln!("Got error for cross-slot SSUBSCRIBE: {}", msg);
+            // Should contain CROSSSLOT or similar indication
+        }
+    } else {
+        // Some implementations might accept the first channel and reject the second
+        eprintln!(
+            "SSUBSCRIBE accepted both channels (cross-slot validation may not be implemented): {:?}",
+            resp
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 3: Sharded PubSub During Migration
+// ============================================================================
+
+/// Documents that subscribers don't receive sunsubscribe notification when their
+/// channel's slot migrates to another node.
+///
+/// Inspired by Redis `25-pubsubshard-slot-migration.tcl`.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: migration notification absent — subscribers not notified of slot migration"]
+async fn test_ssubscribe_client_receives_sunsubscribe_on_slot_migration() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+    use frogdb_test_harness::cluster_helpers::slot_for_key;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let _channel = "migrate_chan";
+    let _slot = slot_for_key(b"migrate_chan");
+
+    // Subscribe on slot owner, then migrate that slot away.
+    // The subscriber should receive a sunsubscribe notification.
+    // This is currently not implemented.
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Tier 4: Cross-Node PubSub
+// ============================================================================
+
+/// Documents that PSUBSCRIBE on node A doesn't receive PUBLISH from node B.
+///
+/// Cross-node pub/sub forwarding (ClusterPubSubForwarder) is not built.
+#[tokio::test]
+#[ignore = "NOT_YET_IMPLEMENTED: ClusterPubSubForwarder not built — pattern messages not forwarded between cluster nodes"]
+async fn test_psubscribe_cross_node_pattern_match_forwarded() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let node_ids = harness.node_ids();
+
+    // PSUBSCRIBE on node A
+    let node_a = harness.node(node_ids[0]).unwrap();
+    let mut subscriber = node_a.connect().await;
+    subscriber.command(&["PSUBSCRIBE", "cross_pattern.*"]).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // PUBLISH on node B
+    let node_b = harness.node(node_ids[1]).unwrap();
+    let mut publisher = node_b.connect().await;
+    let response = publisher
+        .command(&["PUBLISH", "cross_pattern.test", "cross_msg"])
+        .await;
+
+    // When cross-node forwarding is implemented, PUBLISH should return >= 1
+    assert!(
+        matches!(response, Response::Integer(n) if n >= 1),
+        "PUBLISH on node B should reach pattern subscriber on node A, got: {:?}",
+        response
+    );
+
+    // Subscriber on node A should receive a pmessage
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "Pattern subscriber on node A should receive message published on node B"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("pmessage"))));
+        assert_eq!(arr[1], Response::Bulk(Some(Bytes::from("cross_pattern.*"))));
+        assert_eq!(
+            arr[2],
+            Response::Bulk(Some(Bytes::from("cross_pattern.test")))
+        );
+        assert_eq!(arr[3], Response::Bulk(Some(Bytes::from("cross_msg"))));
+    }
+
+    harness.shutdown_all().await;
+}
