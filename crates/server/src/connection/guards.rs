@@ -12,6 +12,7 @@
 use bytes::Bytes;
 use frogdb_core::{CommandFlags, ConnectionLevelOp, ExecutionStrategy, slot_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
+use std::net::SocketAddr;
 use tracing::warn;
 
 use crate::connection::ConnectionHandler;
@@ -221,24 +222,14 @@ impl ConnectionHandler {
 
         match snapshot.slot_assignment.get(&first_slot) {
             Some(&owner) if owner == node_id => {
-                // We own this slot - check for migration
-                if let Some(migration) = snapshot.migrations.get(&first_slot) {
-                    // Slot is being migrated
-                    if !self.state.asking {
-                        // Client needs to follow the migration
-                        if let Some(target_node) = snapshot.nodes.get(&migration.target_node) {
-                            return Some(Response::error(format!(
-                                "ASK {} {}:{}",
-                                first_slot,
-                                target_node.addr.ip(),
-                                target_node.addr.port()
-                            )));
-                        }
-                    }
-                    // Clear ASKING flag after use
+                // We own this slot. During MIGRATING state (we are the source),
+                // Redis serves keys that still exist locally and only returns ASK
+                // for keys that have been migrated away. We let the command through
+                // here and convert nil responses to ASK in the dispatch layer.
+                if snapshot.migrations.contains_key(&first_slot) && self.state.asking {
                     self.state.asking = false;
                 }
-                None // We own it and no migration issues
+                None // We own it — execute locally
             }
             Some(&owner) => {
                 // Another node owns this slot — but check if we're the
@@ -291,5 +282,59 @@ impl ConnectionHandler {
                 )))
             }
         }
+    }
+
+    /// For a MIGRATING slot (we are the source), check if the command's response
+    /// indicates the key doesn't exist locally. If so, return an ASK redirect
+    /// so the client retries on the importing target.
+    ///
+    /// Redis behavior: during MIGRATING, existing keys are served locally;
+    /// missing keys (already migrated away) get `-ASK` redirect.
+    pub(crate) fn migrating_ask_for_nil(
+        &self,
+        cmd: &ParsedCommand,
+        response: &Response,
+    ) -> Option<Response> {
+        // Only relevant in cluster mode
+        let cluster_state = self.cluster_state.as_ref()?;
+        let node_id = self.node_id?;
+
+        // Check if response indicates "key not found"
+        if !Self::is_nil_response(response) {
+            return None;
+        }
+
+        // Get the first key's slot
+        let cmd_name_bytes = cmd.name_uppercase();
+        let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
+        let keys = if let Some(cmd_impl) = self.registry.get(&cmd_name) {
+            cmd_impl.keys(&cmd.args)
+        } else {
+            return None;
+        };
+        if keys.is_empty() {
+            return None;
+        }
+        let slot = slot_for_key(keys[0]);
+
+        // Check if we own this slot and it's in MIGRATING state
+        let snapshot = cluster_state.snapshot();
+        if let Some(&owner) = snapshot.slot_assignment.get(&slot)
+            && owner == node_id
+            && let Some(migration) = snapshot.migrations.get(&slot)
+            && let Some(target_node) = snapshot.nodes.get(&migration.target_node)
+        {
+            return Some(Self::ask_response(slot, target_node.addr));
+        }
+
+        None
+    }
+
+    fn is_nil_response(response: &Response) -> bool {
+        matches!(response, Response::Null | Response::Bulk(None))
+    }
+
+    fn ask_response(slot: u16, addr: SocketAddr) -> Response {
+        Response::error(format!("ASK {} {}:{}", slot, addr.ip(), addr.port()))
     }
 }

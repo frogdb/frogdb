@@ -64,7 +64,13 @@ impl SkipList {
         let head_node = Node {
             score: OrderedFloat(0.0),
             member: Bytes::new(),
-            levels: SmallVec::from_elem(Link { forward: NIL, span: 0 }, MAX_LEVEL),
+            levels: SmallVec::from_elem(
+                Link {
+                    forward: NIL,
+                    span: 0,
+                },
+                MAX_LEVEL,
+            ),
             backward: NIL,
         };
         Self {
@@ -91,7 +97,13 @@ impl SkipList {
         let node = Node {
             score,
             member,
-            levels: SmallVec::from_elem(Link { forward: NIL, span: 0 }, level),
+            levels: SmallVec::from_elem(
+                Link {
+                    forward: NIL,
+                    span: 0,
+                },
+                level,
+            ),
             backward: NIL,
         };
         if let Some(idx) = self.free.pop() {
@@ -174,8 +186,7 @@ impl SkipList {
 
             // span = (rank[0] + 1 is the new node's rank)
             // new node's span at level i = old_span - (rank[0] - rank[i])
-            self.node_mut(new_idx).levels[i].span =
-                old_span.saturating_sub(rank[0] - rank[i]);
+            self.node_mut(new_idx).levels[i].span = old_span.saturating_sub(rank[0] - rank[i]);
             self.node_mut(update[i]).levels[i].span = (rank[0] - rank[i]) + 1;
         }
 
@@ -252,8 +263,7 @@ impl SkipList {
                 // Combined span minus 1 for the removed node
                 self.node_mut(update[i]).levels[i].span =
                     (update_span + node_span).saturating_sub(1);
-                self.node_mut(update[i]).levels[i].forward =
-                    self.node(idx).levels[i].forward;
+                self.node_mut(update[i]).levels[i].forward = self.node(idx).levels[i].forward;
             } else {
                 self.node_mut(update[i]).levels[i].span =
                     self.node(update[i]).levels[i].span.saturating_sub(1);
@@ -554,10 +564,7 @@ mod tests {
         sl.insert(OrderedFloat(2.0), b("b"));
 
         let items: Vec<_> = sl.iter().map(|(s, m)| (s.0, m.as_ref())).collect();
-        assert_eq!(
-            items,
-            vec![(1.0, b"a" as &[u8]), (2.0, b"b"), (3.0, b"c")]
-        );
+        assert_eq!(items, vec![(1.0, b"a" as &[u8]), (2.0, b"b"), (3.0, b"c")]);
     }
 
     #[test]
@@ -659,10 +666,7 @@ mod tests {
         sl.insert(OrderedFloat(3.0), b("c"));
 
         let items: Vec<_> = sl.rev_iter().map(|(s, m)| (s.0, m.as_ref())).collect();
-        assert_eq!(
-            items,
-            vec![(3.0, b"c" as &[u8]), (2.0, b"b"), (1.0, b"a")]
-        );
+        assert_eq!(items, vec![(3.0, b"c" as &[u8]), (2.0, b"b"), (1.0, b"a")]);
     }
 
     #[test]
@@ -676,30 +680,21 @@ mod tests {
         // Check rank consistency
         for i in 0..1000 {
             assert_eq!(
-                sl.rank(
-                    OrderedFloat(i as f64),
-                    &Bytes::from(format!("m{:04}", i))
-                ),
+                sl.rank(OrderedFloat(i as f64), &Bytes::from(format!("m{:04}", i))),
                 Some(i)
             );
         }
 
         // Remove every other element
         for i in (0..1000).step_by(2) {
-            assert!(sl.remove(
-                OrderedFloat(i as f64),
-                &Bytes::from(format!("m{:04}", i))
-            ));
+            assert!(sl.remove(OrderedFloat(i as f64), &Bytes::from(format!("m{:04}", i))));
         }
         assert_eq!(sl.len(), 500);
 
         // Verify remaining elements have correct ranks
         for (rank, i) in (1..1000).step_by(2).enumerate() {
             assert_eq!(
-                sl.rank(
-                    OrderedFloat(i as f64),
-                    &Bytes::from(format!("m{:04}", i))
-                ),
+                sl.rank(OrderedFloat(i as f64), &Bytes::from(format!("m{:04}", i))),
                 Some(rank)
             );
         }
@@ -737,11 +732,7 @@ mod tests {
             .collect();
         assert_eq!(
             items,
-            vec![
-                (4.0, b"m4" as &[u8]),
-                (5.0, b"m5"),
-                (6.0, b"m6"),
-            ]
+            vec![(4.0, b"m4" as &[u8]), (5.0, b"m5"), (6.0, b"m6"),]
         );
     }
 

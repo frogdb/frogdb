@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::types::{ClusterError, NodeId, TypeConfig};
+use crate::types::{ClusterCommand, ClusterError, NodeId, TypeConfig};
 
 /// Simple error wrapper for network errors that implements std::error::Error.
 #[derive(Debug)]
@@ -43,6 +43,8 @@ pub enum ClusterRpcRequest {
     Vote(VoteRequest<NodeId>),
     /// InstallSnapshot RPC (leader to lagging followers).
     InstallSnapshot(InstallSnapshotRequest<TypeConfig>),
+    /// Forwarded client write (follower to leader).
+    ForwardedWrite(ClusterCommand),
 }
 
 /// RPC response types for cluster communication.
@@ -54,6 +56,8 @@ pub enum ClusterRpcResponse {
     Vote(VoteResponse<NodeId>),
     /// Response to InstallSnapshot.
     InstallSnapshot(InstallSnapshotResponse<NodeId>),
+    /// Response to ForwardedWrite.
+    ForwardedWrite(Result<(), String>),
     /// Error response.
     Error(String),
 }
@@ -156,6 +160,20 @@ impl ClusterNetwork {
             addr,
             connect_timeout_ms: 5000,
             request_timeout_ms: 10000,
+        }
+    }
+
+    /// Forward a write command to a remote node (typically the Raft leader).
+    pub async fn forward_write(&self, cmd: ClusterCommand) -> Result<(), ClusterError> {
+        let request = ClusterRpcRequest::ForwardedWrite(cmd);
+        match self.send_rpc(request).await? {
+            ClusterRpcResponse::ForwardedWrite(Ok(())) => Ok(()),
+            ClusterRpcResponse::ForwardedWrite(Err(msg)) => Err(ClusterError::NetworkError(
+                format!("forwarded write failed: {}", msg),
+            )),
+            _ => Err(ClusterError::NetworkError(
+                "unexpected response type for forwarded write".to_string(),
+            )),
         }
     }
 
@@ -328,6 +346,10 @@ pub async fn handle_rpc_request(
         ClusterRpcRequest::InstallSnapshot(req) => match raft.install_snapshot(req).await {
             Ok(resp) => ClusterRpcResponse::InstallSnapshot(resp),
             Err(e) => ClusterRpcResponse::Error(e.to_string()),
+        },
+        ClusterRpcRequest::ForwardedWrite(cmd) => match raft.client_write(cmd).await {
+            Ok(_) => ClusterRpcResponse::ForwardedWrite(Ok(())),
+            Err(e) => ClusterRpcResponse::ForwardedWrite(Err(e.to_string())),
         },
     }
 }
