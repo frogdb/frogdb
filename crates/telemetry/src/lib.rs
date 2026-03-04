@@ -212,6 +212,21 @@ impl CommandTimer {
         }
     }
 
+    /// Create a timer with a pre-captured start time, avoiding a redundant `Instant::now()` call.
+    pub fn with_start_time(
+        start: Instant,
+        command: String,
+        recorder: Arc<dyn MetricsRecorder>,
+        band_tracker: Option<Arc<LatencyBandTracker>>,
+    ) -> Self {
+        Self {
+            start,
+            command,
+            recorder,
+            band_tracker,
+        }
+    }
+
     /// Record the command completion (success).
     pub fn finish(self) {
         let elapsed = self.start.elapsed();
