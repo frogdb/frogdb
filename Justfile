@@ -57,39 +57,27 @@ alias c := check
 
 # Build debug
 build:
-    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo build
-    -cargo sweep --time 0
 
 # Build with full debug info (for lldb/gdb variable inspection)
 build-debug:
-    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} CARGO_PROFILE_DEV_DEBUG=2 cargo build
-    -cargo sweep --time 0
 
 # Build release
 release:
-    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo build --release
-    -cargo sweep --time 0
 
 # Run all tests
 test:
-    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo test --all
-    -cargo sweep --time 0
 
 # Run tests for a specific crate
 test-crate crate:
-    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo test -p {{crate}}
-    -cargo sweep --time 0
 
 # Run a specific test
 test-one name:
-    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo test {{name}} -- --nocapture
-    -cargo sweep --time 0
 
 # Run property-based tests (proptest)
 proptest:
@@ -97,10 +85,8 @@ proptest:
 
 # Run concurrency tests (Shuttle + Turmoil)
 concurrency:
-    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-core --features shuttle --test concurrency
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-server --features turmoil --test simulation
-    -cargo sweep --time 0
 
 # Run tokio-coz causal profiler tests (requires tokio_unstable)
 test-coz:
@@ -126,9 +112,7 @@ fmt-check:
 
 # Run clippy lints
 lint:
-    -cargo sweep --stamp
     {{dyld-env}} {{rocksdb-env}} cargo clippy --all-targets -- -D warnings
-    -cargo sweep --time 0
 
 # Run clippy lints for a specific crate
 lint-crate crate:
@@ -162,9 +146,22 @@ target-size:
 clean:
     cargo clean
 
-# Clean stale build artifacts, keeping only the latest build's (requires: cargo install cargo-sweep)
+# Clean stale build artifacts (keeps current build intact)
 clean-stale:
-    cargo sweep --time 0
+    @echo "Target directory size before:"
+    @du -sh target 2>/dev/null || true
+    # Remove stale librocksdb-sys from-source build dirs (1.7GB+ each), keeping the newest
+    @for dir in $(ls -dt target/debug/build/librocksdb-sys-*/ 2>/dev/null | tail -n +2); do \
+        size=$$(du -sm "$$dir" | cut -f1); \
+        if [ "$$size" -gt 100 ]; then \
+            echo "Removing stale rocksdb build: $$dir ($${size}MB)"; \
+            rm -rf "$$dir"; \
+        fi; \
+    done
+    # Sweep stale dep artifacts (not touched in 7 days)
+    -cargo sweep --time 7
+    @echo "Target directory size after:"
+    @du -sh target 2>/dev/null || true
 
 # Clean stale build artifacts across all worktrees (requires: cargo install cargo-sweep)
 clean-worktrees:
