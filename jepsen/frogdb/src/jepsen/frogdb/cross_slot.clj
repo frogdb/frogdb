@@ -49,43 +49,39 @@
 ;; ===========================================================================
 
 (defn execute-multi-set!
-  "Execute MULTI/EXEC to set multiple keys atomically.
+  "Set multiple keys atomically using Lua EVAL.
    All keys must be in the same slot."
   [conn keys-values]
-  (wcar conn
-    (car/multi)
-    (doseq [[k v] keys-values]
-      (car/set k (str v)))
-    (car/exec)))
+  (let [keys (mapv first keys-values)
+        vals (mapv (comp str second) keys-values)
+        n (count keys)
+        lua-script (str "for i=1," n " do redis.call('SET', KEYS[i], ARGV[i]) end return 'OK'")]
+    (wcar conn (apply car/eval lua-script n (concat keys vals)))))
 
 (defn execute-multi-get
-  "Execute MULTI/EXEC to get multiple keys atomically."
+  "Get multiple keys atomically using Lua EVAL."
   [conn keys]
-  (wcar conn
-    (car/multi)
-    (doseq [k keys]
-      (car/get k))
-    (let [results (car/exec)]
-      (zipmap keys (map frogdb/parse-value results)))))
+  (let [n (count keys)
+        lua-script (str "local r = {} for i=1," n " do r[i] = redis.call('GET', KEYS[i]) end return r")
+        results (wcar conn (apply car/eval lua-script n keys))]
+    (zipmap keys (map frogdb/parse-value results))))
 
 (defn execute-atomic-transfer!
-  "Atomically transfer amount from one key to another.
+  "Atomically transfer amount from one key to another using Lua EVAL.
    Both keys must be in the same slot."
   [conn from-key to-key amount]
-  (wcar conn
-    (car/watch from-key to-key)
-    (let [from-val (or (frogdb/parse-value (car/get from-key)) 0)
-          to-val (or (frogdb/parse-value (car/get to-key)) 0)]
-      (if (>= from-val amount)
-        (do
-          (car/multi)
-          (car/set from-key (str (- from-val amount)))
-          (car/set to-key (str (+ to-val amount)))
-          (let [result (car/exec)]
-            (boolean result)))
-        (do
-          (car/unwatch)
-          false)))))
+  (= 1 (wcar conn
+    (car/eval
+      (str "local from = tonumber(redis.call('GET', KEYS[1])) "
+           "local to = tonumber(redis.call('GET', KEYS[2])) "
+           "if from >= tonumber(ARGV[1]) then "
+           "  redis.call('SET', KEYS[1], tostring(from - tonumber(ARGV[1]))) "
+           "  redis.call('SET', KEYS[2], tostring(to + tonumber(ARGV[1]))) "
+           "  return 1 "
+           "else "
+           "  return 0 "
+           "end")
+      2 from-key to-key (str amount)))))
 
 ;; ===========================================================================
 ;; Cluster-Aware Multi Operations

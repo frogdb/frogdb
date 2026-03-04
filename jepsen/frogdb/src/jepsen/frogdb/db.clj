@@ -97,9 +97,13 @@
   (docker-kill-process container "KILL"))
 
 (defn container-name
-  "Get the Docker container name for a node."
-  [node]
-  (str "frogdb-" node))
+  "Get the Docker container name for a node.
+   Uses prefix 'frogdb-' for single/replication, 'frogdb-raft-' for cluster mode."
+  ([node] (container-name node false))
+  ([node cluster-mode?]
+   (if cluster-mode?
+     (str "frogdb-raft-" node)
+     (str "frogdb-" node))))
 
 ;; ===========================================================================
 ;; Local DB (No Docker)
@@ -256,38 +260,47 @@
 (defn partition-node!
   "Partition a node from specific other nodes using iptables.
    Blocks both incoming and outgoing traffic to the target IPs."
-  [node targets]
-  (let [container (container-name node)]
-    (doseq [target targets]
-      (let [target-ip (get node-ips target)]
-        (when target-ip
-          (info "Partitioning" node "from" target "(" target-ip ")")
-          (docker-exec container "iptables" "-A" "INPUT" "-s" target-ip "-j" "DROP")
-          (docker-exec container "iptables" "-A" "OUTPUT" "-d" target-ip "-j" "DROP"))))))
+  ([node targets] (partition-node! node targets false))
+  ([node targets cluster-mode?]
+   (let [container (container-name node cluster-mode?)
+         ip-map (if cluster-mode? raft-cluster-node-ips node-ips)]
+     (doseq [target targets]
+       (let [target-ip (get ip-map target)]
+         (when target-ip
+           (info "Partitioning" node "from" target "(" target-ip ")")
+           (docker-exec container "iptables" "-A" "INPUT" "-s" target-ip "-j" "DROP")
+           (docker-exec container "iptables" "-A" "OUTPUT" "-d" target-ip "-j" "DROP")))))))
 
 (defn heal-partition!
   "Remove all iptables rules from a node, healing any partitions."
-  [node]
-  (let [container (container-name node)]
-    (info "Healing partition on" node)
-    (docker-exec container "iptables" "-F")))
+  ([node] (heal-partition! node false))
+  ([node cluster-mode?]
+   (let [container (container-name node cluster-mode?)]
+     (info "Healing partition on" node)
+     (docker-exec container "iptables" "-F"))))
 
 (defn isolate-primary!
   "Isolate the primary (n1) from all replicas."
-  []
-  (partition-node! "n1" ["n2" "n3"])
-  (partition-node! "n2" ["n1"])
-  (partition-node! "n3" ["n1"]))
+  ([] (isolate-primary! false))
+  ([cluster-mode?]
+   (partition-node! "n1" ["n2" "n3"] cluster-mode?)
+   (partition-node! "n2" ["n1"] cluster-mode?)
+   (partition-node! "n3" ["n1"] cluster-mode?)))
 
 (defn partition-halves!
   "Split cluster into two halves: [n1, n2] vs [n3]."
-  []
-  (partition-node! "n1" ["n3"])
-  (partition-node! "n2" ["n3"])
-  (partition-node! "n3" ["n1" "n2"]))
+  ([] (partition-halves! false))
+  ([cluster-mode?]
+   (partition-node! "n1" ["n3"] cluster-mode?)
+   (partition-node! "n2" ["n3"] cluster-mode?)
+   (partition-node! "n3" ["n1" "n2"] cluster-mode?)))
 
 (defn heal-all!
   "Heal partitions on all nodes."
-  []
-  (doseq [node ["n1" "n2" "n3"]]
-    (heal-partition! node)))
+  ([] (heal-all! false))
+  ([cluster-mode?]
+   (let [nodes (if cluster-mode?
+                 (keys raft-cluster-node-ips)
+                 ["n1" "n2" "n3"])]
+     (doseq [node nodes]
+       (heal-partition! node cluster-mode?)))))
