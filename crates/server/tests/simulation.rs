@@ -9,23 +9,14 @@
 //!
 //! Run with: `cargo test -p frogdb-server --features turmoil --test simulation`
 //!
-//! ## Test Tiers
-//!
-//! - **Tier 1 (Quick)**: Core tests with quick delay combinations, run on every CI.
-//! - **Tier 2 (Failures)**: Failure mode tests with fixed delays, run on every CI.
-//! - **Tier 3 (Full)**: Full Cartesian product of all tests × delays × failure modes, run nightly or with `--ignored`.
-//!
 //! ## Running Specific Chaos Combinations
 //!
 //! ```bash
-//! # Run all Tier 1 tests
+//! # Run all simulation tests (including full matrix)
 //! cargo test -p frogdb-server --features turmoil --test simulation
 //!
 //! # Run a specific test with a specific chaos config
 //! cargo test -p frogdb-server --features turmoil --test simulation test_mset_mget_basic::scatter_delay_ms_50
-//!
-//! # Run full Tier 3 matrix (nightly)
-//! cargo test -p frogdb-server --features turmoil --test simulation -- --ignored
 //! ```
 
 #![cfg(feature = "turmoil")]
@@ -202,11 +193,10 @@ fn test_mset_mget_basic(#[case] scatter_delay_ms: u64, #[case] single_shard_dela
     sim.run().unwrap();
 }
 
-/// Full Cartesian product chaos test for MSET/MGET (Tier 3 - nightly).
+/// Full Cartesian product chaos test for MSET/MGET.
 ///
 /// This test runs with all combinations of scatter delays and single shard delays.
 #[rstest]
-#[ignore] // Run with --ignored for full matrix
 fn test_mset_mget_full_chaos_matrix(
     #[values(0, 50, 100, 250)] scatter_delay_ms: u64,
     #[values(0, 50, 100, 250)] single_shard_delay_ms: u64,
@@ -479,9 +469,8 @@ fn test_sharded_mset_mget_distribution(#[case] preset: ChaosPreset) {
     sim.run().unwrap();
 }
 
-/// Full matrix test for sharded MSET/MGET distribution (Tier 3 - nightly).
+/// Full matrix test for sharded MSET/MGET distribution.
 #[rstest]
-#[ignore]
 fn test_sharded_mset_mget_distribution_full_matrix(
     #[values(
         ChaosPreset::None,

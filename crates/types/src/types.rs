@@ -6,11 +6,13 @@ use rand::seq::SliceRandom;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::bloom::BloomFilterValue;
+use bitvec::prelude::*;
+
+use crate::bloom::{BloomFilterValue, BloomLayer};
 use crate::hyperloglog::HyperLogLogValue;
 use crate::json::JsonValue;
 use crate::skiplist::SkipList;
-use crate::timeseries::TimeSeriesValue;
+use crate::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
 use std::sync::atomic::{AtomicU8, Ordering as AtomicOrdering};
 
 /// Value types stored in FrogDB.
@@ -216,24 +218,85 @@ impl Value {
                 }
                 ("zset", Bytes::from(buf))
             }
-            Value::Stream(_) => {
-                // Streams are complex - for now return empty
-                // TODO: implement proper stream serialization
-                ("stream", Bytes::new())
+            Value::Stream(stream) => {
+                let mut buf = Vec::new();
+                let last_id = stream.last_id();
+                buf.extend_from_slice(&last_id.ms.to_le_bytes());
+                buf.extend_from_slice(&last_id.seq.to_le_bytes());
+                let entries = stream.to_vec();
+                buf.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+                for entry in &entries {
+                    buf.extend_from_slice(&entry.id.ms.to_le_bytes());
+                    buf.extend_from_slice(&entry.id.seq.to_le_bytes());
+                    buf.extend_from_slice(&(entry.fields.len() as u32).to_le_bytes());
+                    for (field, value) in &entry.fields {
+                        buf.extend_from_slice(&(field.len() as u32).to_le_bytes());
+                        buf.extend_from_slice(field);
+                        buf.extend_from_slice(&(value.len() as u32).to_le_bytes());
+                        buf.extend_from_slice(value);
+                    }
+                }
+                ("stream", Bytes::from(buf))
             }
-            Value::BloomFilter(_) => {
-                // Bloom filters have internal state that's hard to serialize simply
-                // TODO: implement proper bloom filter serialization
-                ("bloom", Bytes::new())
+            Value::BloomFilter(bf) => {
+                let mut buf = Vec::new();
+                buf.extend_from_slice(&bf.error_rate().to_le_bytes());
+                buf.extend_from_slice(&bf.expansion().to_le_bytes());
+                buf.push(u8::from(bf.is_non_scaling()));
+                buf.extend_from_slice(&(bf.layers().len() as u32).to_le_bytes());
+                for layer in bf.layers() {
+                    buf.extend_from_slice(&layer.k().to_le_bytes());
+                    buf.extend_from_slice(&layer.count().to_le_bytes());
+                    buf.extend_from_slice(&layer.capacity().to_le_bytes());
+                    buf.extend_from_slice(&(layer.size_bits() as u64).to_le_bytes());
+                    let bits_bytes = layer.bits_as_bytes();
+                    buf.extend_from_slice(&(bits_bytes.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(bits_bytes);
+                }
+                ("bloom", Bytes::from(buf))
             }
             Value::HyperLogLog(hll) => {
                 // Serialize the raw registers
                 ("hll", Bytes::from(hll.serialize()))
             }
-            Value::TimeSeries(_) => {
-                // Time series has complex state
-                // TODO: implement proper time series serialization
-                ("timeseries", Bytes::new())
+            Value::TimeSeries(ts) => {
+                let mut buf = Vec::new();
+                buf.extend_from_slice(&ts.retention_ms().to_le_bytes());
+                let dup_policy: u8 = match ts.duplicate_policy() {
+                    DuplicatePolicy::Block => 0,
+                    DuplicatePolicy::First => 1,
+                    DuplicatePolicy::Last => 2,
+                    DuplicatePolicy::Min => 3,
+                    DuplicatePolicy::Max => 4,
+                    DuplicatePolicy::Sum => 5,
+                };
+                buf.push(dup_policy);
+                buf.extend_from_slice(&(ts.chunk_size() as u32).to_le_bytes());
+                let labels = ts.labels();
+                buf.extend_from_slice(&(labels.len() as u32).to_le_bytes());
+                for (name, value) in labels {
+                    buf.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(name.as_bytes());
+                    buf.extend_from_slice(&(value.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(value.as_bytes());
+                }
+                let chunks = ts.chunks();
+                buf.extend_from_slice(&(chunks.len() as u32).to_le_bytes());
+                for chunk in chunks {
+                    buf.extend_from_slice(&chunk.start_time().to_le_bytes());
+                    buf.extend_from_slice(&chunk.end_time().to_le_bytes());
+                    buf.extend_from_slice(&chunk.sample_count().to_le_bytes());
+                    let data = chunk.data();
+                    buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(data);
+                }
+                let active = ts.active_samples();
+                buf.extend_from_slice(&(active.len() as u32).to_le_bytes());
+                for (&timestamp, &value) in active {
+                    buf.extend_from_slice(&timestamp.to_le_bytes());
+                    buf.extend_from_slice(&value.to_le_bytes());
+                }
+                ("timeseries", Bytes::from(buf))
             }
             Value::Json(j) => {
                 // Serialize JSON to string using serde_json
@@ -376,7 +439,241 @@ impl Value {
                 let json_value: serde_json::Value = serde_json::from_str(json_str).ok()?;
                 Some(Value::Json(JsonValue::new(json_value)))
             }
-            // Stream, bloom filter, and time series are not yet supported for cross-shard copy
+            b"stream" => {
+                let mut pos = 0;
+                if pos + 16 > data.len() {
+                    return None;
+                }
+                let last_ms = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                let last_seq = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                if pos + 4 > data.len() {
+                    return None;
+                }
+                let num_entries = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut stream = StreamValue::new();
+                for _ in 0..num_entries {
+                    if pos + 20 > data.len() {
+                        return None;
+                    }
+                    let ms = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    let seq = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    let num_fields =
+                        u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+
+                    let mut fields = Vec::with_capacity(num_fields);
+                    for _ in 0..num_fields {
+                        if pos + 4 > data.len() {
+                            return None;
+                        }
+                        let flen = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                        pos += 4;
+                        if pos + flen > data.len() {
+                            return None;
+                        }
+                        let field = Bytes::copy_from_slice(&data[pos..pos + flen]);
+                        pos += flen;
+                        if pos + 4 > data.len() {
+                            return None;
+                        }
+                        let vlen = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                        pos += 4;
+                        if pos + vlen > data.len() {
+                            return None;
+                        }
+                        let value = Bytes::copy_from_slice(&data[pos..pos + vlen]);
+                        pos += vlen;
+                        fields.push((field, value));
+                    }
+
+                    let id = StreamId::new(ms, seq);
+                    stream.add(StreamIdSpec::Explicit(id), fields).ok()?;
+                }
+
+                // Preserve last_id even if entries were deleted (stream tracks high-water mark)
+                let _ = last_ms;
+                let _ = last_seq;
+                Some(Value::Stream(stream))
+            }
+            b"bloom" => {
+                let mut pos = 0;
+                if pos + 8 > data.len() {
+                    return None;
+                }
+                let error_rate = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                if pos + 4 > data.len() {
+                    return None;
+                }
+                let expansion = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                pos += 4;
+                if pos + 1 > data.len() {
+                    return None;
+                }
+                let non_scaling = data[pos] != 0;
+                pos += 1;
+                if pos + 4 > data.len() {
+                    return None;
+                }
+                let num_layers = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut layers = Vec::with_capacity(num_layers);
+                for _ in 0..num_layers {
+                    if pos + 24 > data.len() {
+                        return None;
+                    }
+                    let k = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                    pos += 4;
+                    let count = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    let capacity = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    let size_bits =
+                        u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?) as usize;
+                    pos += 8;
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
+                    let byte_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    if pos + byte_len > data.len() {
+                        return None;
+                    }
+                    let raw_bytes = data[pos..pos + byte_len].to_vec();
+                    pos += byte_len;
+
+                    let mut bits = BitVec::<u8, Lsb0>::from_vec(raw_bytes);
+                    bits.truncate(size_bits);
+                    layers.push(BloomLayer::from_raw(bits, k, count, capacity));
+                }
+
+                Some(Value::BloomFilter(BloomFilterValue::from_raw(
+                    layers,
+                    error_rate,
+                    expansion,
+                    non_scaling,
+                )))
+            }
+            b"timeseries" => {
+                let mut pos = 0;
+                if pos + 8 > data.len() {
+                    return None;
+                }
+                let retention_ms = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                if pos + 1 > data.len() {
+                    return None;
+                }
+                let dup_policy = match data[pos] {
+                    0 => DuplicatePolicy::Block,
+                    1 => DuplicatePolicy::First,
+                    2 => DuplicatePolicy::Last,
+                    3 => DuplicatePolicy::Min,
+                    4 => DuplicatePolicy::Max,
+                    5 => DuplicatePolicy::Sum,
+                    _ => return None,
+                };
+                pos += 1;
+                if pos + 4 > data.len() {
+                    return None;
+                }
+                let chunk_size = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                if pos + 4 > data.len() {
+                    return None;
+                }
+                let num_labels = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut labels = Vec::with_capacity(num_labels);
+                for _ in 0..num_labels {
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
+                    let nlen = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    if pos + nlen > data.len() {
+                        return None;
+                    }
+                    let name = String::from_utf8(data[pos..pos + nlen].to_vec()).ok()?;
+                    pos += nlen;
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
+                    let vlen = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    if pos + vlen > data.len() {
+                        return None;
+                    }
+                    let value = String::from_utf8(data[pos..pos + vlen].to_vec()).ok()?;
+                    pos += vlen;
+                    labels.push((name, value));
+                }
+
+                if pos + 4 > data.len() {
+                    return None;
+                }
+                let num_chunks = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut chunks = Vec::with_capacity(num_chunks);
+                for _ in 0..num_chunks {
+                    if pos + 20 > data.len() {
+                        return None;
+                    }
+                    let start = i64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    let end = i64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    let count = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                    pos += 4;
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
+                    let dlen = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    if pos + dlen > data.len() {
+                        return None;
+                    }
+                    let cdata = data[pos..pos + dlen].to_vec();
+                    pos += dlen;
+                    chunks.push(CompressedChunk::from_raw(cdata, start, end, count));
+                }
+
+                if pos + 4 > data.len() {
+                    return None;
+                }
+                let num_active = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut active_samples = std::collections::BTreeMap::new();
+                for _ in 0..num_active {
+                    if pos + 16 > data.len() {
+                        return None;
+                    }
+                    let timestamp = i64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    let value = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    active_samples.insert(timestamp, value);
+                }
+
+                Some(Value::TimeSeries(TimeSeriesValue::from_raw(
+                    active_samples,
+                    chunks,
+                    labels,
+                    retention_ms,
+                    dup_policy,
+                    chunk_size,
+                )))
+            }
             _ => None,
         }
     }

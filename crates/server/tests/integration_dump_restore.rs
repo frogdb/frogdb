@@ -187,7 +187,6 @@ async fn test_dump_restore_hll_round_trip() {
 // ============================================================================
 
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: serialize_for_copy returns empty bytes for streams (types.rs:219)"]
 async fn test_dump_restore_stream_round_trip() {
     let server = TestServer::start_standalone().await;
 
@@ -209,7 +208,6 @@ async fn test_dump_restore_stream_round_trip() {
 }
 
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: serialize_for_copy returns empty bytes for bloom filters (types.rs:224)"]
 async fn test_dump_restore_bloom_filter_round_trip() {
     let server = TestServer::start_standalone().await;
 
@@ -230,7 +228,6 @@ async fn test_dump_restore_bloom_filter_round_trip() {
 }
 
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: serialize_for_copy returns empty bytes for timeseries (types.rs:233)"]
 async fn test_dump_restore_timeseries_round_trip() {
     let server = TestServer::start_standalone().await;
 

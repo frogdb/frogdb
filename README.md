@@ -81,8 +81,8 @@ just              # Show all available commands
 just build        # Build (debug)
 just release      # Build (release)
 just test         # Run all tests
-just test-crate frogdb-core  # Test a specific crate
-just test-one test_name      # Run a specific test
+just test frogdb-core        # Test a specific crate
+just test frogdb-core test_name  # Run a specific test
 just fmt          # Format code
 just fmt-check    # Check formatting (CI)
 just lint         # Run clippy lints
@@ -133,10 +133,10 @@ cargo run --release --bin frogdb-server -- --generate-config > frogdb.toml
 just test
 
 # Test a specific crate
-just test-crate frogdb-core
+just test frogdb-core
 
 # Run a specific test with output
-just test-one test_set_get
+just test frogdb-core test_set_get
 
 # Concurrency tests (using Shuttle for deterministic testing)
 just concurrency

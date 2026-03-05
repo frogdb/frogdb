@@ -20,7 +20,7 @@ impl Command for BfReserve {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(4)
+        Arity::AtLeast(3)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -136,7 +136,7 @@ impl Command for BfAdd {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Fixed(3)
+        Arity::Fixed(2)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -190,7 +190,7 @@ impl Command for BfMadd {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(3)
+        Arity::AtLeast(2)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -249,7 +249,7 @@ impl Command for BfExists {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Fixed(3)
+        Arity::Fixed(2)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -289,7 +289,7 @@ impl Command for BfMexists {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(3)
+        Arity::AtLeast(2)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -336,7 +336,7 @@ impl Command for BfInsert {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(5)
+        Arity::AtLeast(3)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -493,7 +493,7 @@ impl Command for BfInfo {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Range { min: 2, max: 3 }
+        Arity::Range { min: 1, max: 2 }
     }
 
     fn flags(&self) -> CommandFlags {
@@ -566,7 +566,7 @@ impl Command for BfCard {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Fixed(2)
+        Arity::Fixed(1)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -608,7 +608,7 @@ impl Command for BfScandump {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Fixed(3)
+        Arity::Fixed(2)
     }
 
     fn flags(&self) -> CommandFlags {
@@ -686,7 +686,7 @@ impl Command for BfLoadchunk {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Fixed(4)
+        Arity::Fixed(3)
     }
 
     fn flags(&self) -> CommandFlags {

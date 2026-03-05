@@ -691,13 +691,9 @@ release:
 test:
     cargo test --all
 
-# Run tests for a specific crate
-test-crate crate:
-    cargo test -p {{crate}}
-
-# Run a specific test
-test-one name:
-    cargo test {{name}} -- --nocapture
+# Run tests (optionally for a specific crate and/or matching a pattern)
+test crate="" pattern="":
+    cargo test {{ if crate != "" { "-p " + crate } else { "--all" } }} {{ if pattern != "" { pattern + " -- --nocapture" } else { "" } }}
 
 # Format code
 fmt:
@@ -744,7 +740,7 @@ doc:
 just              # Show available commands
 just build        # Build debug
 just test         # Run all tests
-just test-crate frogdb-core  # Test specific crate
+just test frogdb-core        # Test specific crate
 just check        # Run all CI checks
 just run          # Run server
 just run --port 6380  # Run with args
