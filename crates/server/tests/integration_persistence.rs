@@ -60,7 +60,7 @@ async fn test_data_survives_restart() {
 
     // List (LPUSH a b c → stored as [c, b, a])
     let list = unwrap_array(client.command(&["LRANGE", "list1", "0", "-1"]).await);
-    let vals: Vec<&[u8]> = list.iter().map(|r| unwrap_bulk(r)).collect();
+    let vals: Vec<&[u8]> = list.iter().map(unwrap_bulk).collect();
     assert_eq!(vals, vec![b"c", b"b", b"a"]);
 
     // Hash

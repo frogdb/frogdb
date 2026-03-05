@@ -657,12 +657,9 @@ impl ReplicaConnection {
 
     /// Read a simple +OK response.
     async fn read_ok_response(&mut self) -> io::Result<()> {
-        let line = timeout(
-            HANDSHAKE_TIMEOUT,
-            read_line_unbuffered(&mut self.stream),
-        )
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "handshake timeout"))??;
+        let line = timeout(HANDSHAKE_TIMEOUT, read_line_unbuffered(&mut self.stream))
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "handshake timeout"))??;
 
         let line = line.trim();
         if line == "+OK" {

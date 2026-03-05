@@ -2896,10 +2896,10 @@ async fn test_role_changes_after_replicaof(#[case] persistence: bool) {
 
     // Replica should report as slave
     let role_resp = replica.send("ROLE", &[]).await;
-    if let Response::Array(items) = &role_resp {
-        if let Response::Bulk(Some(role)) = &items[0] {
-            assert_eq!(role.as_ref(), b"slave", "Replica should report as slave");
-        }
+    if let Response::Array(items) = &role_resp
+        && let Response::Bulk(Some(role)) = &items[0]
+    {
+        assert_eq!(role.as_ref(), b"slave", "Replica should report as slave");
     }
 
     // Promote replica
@@ -2909,14 +2909,14 @@ async fn test_role_changes_after_replicaof(#[case] persistence: bool) {
 
     // Now it should report as master
     let role_resp2 = replica.send("ROLE", &[]).await;
-    if let Response::Array(items) = &role_resp2 {
-        if let Response::Bulk(Some(role)) = &items[0] {
-            assert_eq!(
-                role.as_ref(),
-                b"master",
-                "Promoted replica should report as master"
-            );
-        }
+    if let Response::Array(items) = &role_resp2
+        && let Response::Bulk(Some(role)) = &items[0]
+    {
+        assert_eq!(
+            role.as_ref(),
+            b"master",
+            "Promoted replica should report as master"
+        );
     }
 
     replica.shutdown().await;
@@ -3004,10 +3004,10 @@ async fn test_failover_with_write_load(#[case] persistence: bool) {
 
         // Check if replica acked
         let resp = primary.send("WAIT", &["1", "2000"]).await;
-        if let Some(n) = parse_integer(&resp) {
-            if n >= 1 {
-                acked_keys.push((key, value));
-            }
+        if let Some(n) = parse_integer(&resp)
+            && n >= 1
+        {
+            acked_keys.push((key, value));
         }
     }
 
@@ -3020,10 +3020,10 @@ async fn test_failover_with_write_load(#[case] persistence: bool) {
     let mut found = 0;
     for (key, expected) in &acked_keys {
         let resp = replica.send("GET", &[key]).await;
-        if let Response::Bulk(Some(v)) = &resp {
-            if v.as_ref() == expected.as_bytes() {
-                found += 1;
-            }
+        if let Response::Bulk(Some(v)) = &resp
+            && v.as_ref() == expected.as_bytes()
+        {
+            found += 1;
         }
     }
     assert_eq!(
@@ -3072,10 +3072,10 @@ async fn test_multiple_replicas_same_primary() {
         for i in 0..5 {
             let key = format!("{{mr}}key{}", i);
             let resp = replica.send("GET", &[&key]).await;
-            if let Response::Bulk(Some(v)) = &resp {
-                if v.as_ref() == format!("val{}", i).as_bytes() {
-                    found += 1;
-                }
+            if let Response::Bulk(Some(v)) = &resp
+                && v.as_ref() == format!("val{}", i).as_bytes()
+            {
+                found += 1;
             }
         }
         assert_eq!(
