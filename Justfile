@@ -44,17 +44,9 @@ cargo-sweep-install:
 default:
     @just --list
 
-# Type-check the workspace (no codegen, fastest error checking)
-check:
-    {{dyld-env}} {{rocksdb-env}} cargo check --all-targets
-
-# Type-check a specific crate
-check-crate crate:
-    {{dyld-env}} {{rocksdb-env}} cargo check -p {{crate}}
-
-# Type-check a specific crate including tests and integration tests
-check-crate-tests crate:
-    {{dyld-env}} {{rocksdb-env}} cargo check -p {{crate}} --all-targets
+# Type-check the workspace or a specific crate
+check crate="":
+    {{dyld-env}} {{rocksdb-env}} cargo check {{ if crate != "" { "-p " + crate } else { "" } }} --all-targets
 
 # Alias: short form of check
 alias c := check
@@ -71,26 +63,17 @@ build-debug:
 release:
     {{dyld-env}} {{rocksdb-env}} cargo build --release
 
-# Run all tests
-test:
-    {{dyld-env}} {{rocksdb-env}} cargo test --all
-
-# Run tests for a specific crate
-test-crate crate:
-    {{dyld-env}} {{rocksdb-env}} cargo test -p {{crate}}
-
-# Run a specific test in a crate
-test-one crate name:
-    {{dyld-env}} {{rocksdb-env}} cargo test -p {{crate}} {{name}} -- --nocapture
+# Run tests (optionally for a specific crate and/or matching a pattern)
+test crate="" pattern="":
+    {{dyld-env}} {{rocksdb-env}} cargo test {{ if crate != "" { "-p " + crate } else { "--all" } }} {{ if pattern != "" { pattern + " -- --nocapture" } else { "" } }}
 
 # Run concurrency tests (Shuttle + Turmoil)
 concurrency:
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-core --features shuttle --test concurrency
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-server --features turmoil --test simulation
 
-# Run the full test suite (unit + integration + concurrency + simulation + matrix)
+# Run the full test suite (unit + integration + concurrency + simulation)
 test-all: test concurrency
-    {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-server --features turmoil --test simulation -- --ignored
 
 # Run tokio-coz causal profiler tests (requires tokio_unstable)
 test-coz:
@@ -106,33 +89,39 @@ test-browser:
 bench:
     {{dyld-env}} {{rocksdb-env}} cargo bench -p frogdb-benches
 
-# Format code
-fmt:
-    cargo fmt --all
+# Format Rust code (optionally for a specific crate)
+fmt crate="":
+    cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }}
+
+# Check Rust formatting (CI)
+fmt-check crate="":
+    cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
+
+# Format Python code
+fmt-py:
     uvx ruff format
 
-# Check formatting (CI)
-fmt-check:
-    cargo fmt --all -- --check
+# Check Python formatting (CI)
+fmt-py-check:
     uvx ruff format --check
 
-# Run clippy lints
-lint:
-    {{dyld-env}} {{rocksdb-env}} cargo clippy --all-targets -- -D warnings
-    uvx ruff check
+# Run clippy lints (optionally for a specific crate)
+lint crate="":
+    {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
-# Run clippy lints for a specific crate
-lint-crate crate:
-    -cargo sweep --stamp
-    {{dyld-env}} {{rocksdb-env}} cargo clippy -p {{crate}} -- -D warnings
-    -cargo sweep --time 0
+# Run Python lints
+lint-py:
+    uvx ruff check
 
 # Run cargo-deny (license/security audit)
 deny:
     cargo deny check
 
 # Run all checks (CI)
-check-all: fmt-check lint deny test-all
+check-all: fmt-check fmt-py-check lint lint-py deny test-all generate-check
+
+# Alias: CI
+alias ci := check-all
 
 # Run the server (debug)
 run *args:

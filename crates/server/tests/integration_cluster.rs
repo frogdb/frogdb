@@ -5882,9 +5882,8 @@ async fn test_readwrite_restores_moved_redirects() {
 // Tier 14: Migration Type Coverage — Known-Gap Documentation
 // ============================================================================
 
-/// Documents that stream data is lost during migration (DUMP returns empty bytes).
+/// Verifies that stream data survives slot migration.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: DUMP serialization for streams returns empty bytes (types.rs:219)"]
 async fn test_e2e_migration_stream() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -5930,9 +5929,8 @@ async fn test_e2e_migration_stream() {
     harness.shutdown_all().await;
 }
 
-/// Documents that bloom filter data is lost during migration.
+/// Verifies that bloom filter data survives slot migration.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: DUMP serialization for bloom filters returns empty bytes (types.rs:224)"]
 async fn test_e2e_migration_bloom_filter() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -5974,9 +5972,8 @@ async fn test_e2e_migration_bloom_filter() {
     harness.shutdown_all().await;
 }
 
-/// Documents that timeseries data is lost during migration.
+/// Verifies that timeseries data survives slot migration.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: DUMP serialization for timeseries returns empty bytes (types.rs:233)"]
 async fn test_e2e_migration_timeseries() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
