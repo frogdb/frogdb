@@ -37,3 +37,4 @@ The `spec/` directory contains design documentation. Search/Consult it before ma
 - check that altered packages/tools build, lint, and pass tests before finishing a task
 - Prefer `just` commands over raw CLI tools
 - If a `just` command doesn't work for a task, we should fix it so it does
+- For sweeping mechanical changes (renaming identifiers, text substitution, etc.) with many instances, use text manipulation tools like `awk` or `sed` rather than editing files individually
