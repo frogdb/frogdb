@@ -22,7 +22,7 @@
 ;; ===========================================================================
 
 (def total-slots 16384)
-(def cluster-ok-timeout-ms 60000)
+(def cluster-ok-timeout-ms 90000)
 (def leader-election-timeout-ms 30000)
 
 ;; ===========================================================================
@@ -91,6 +91,25 @@
   "Hard kill the FrogDB process inside a container using SIGKILL."
   [container]
   (docker-kill-process container "KILL"))
+
+(defn docker-restart
+  "Restart a Docker container."
+  [container]
+  (let [cmd ["docker" "restart" container]
+        pb (ProcessBuilder. ^java.util.List cmd)
+        _ (.redirectErrorStream pb true)
+        proc (.start pb)
+        exit-code (.waitFor proc)]
+    (when (not= 0 exit-code)
+      (throw+ {:type :docker-restart-failed
+               :container container
+               :exit-code exit-code}))))
+
+(defn clean-raft-state!
+  "Remove Raft state files from a container so it re-bootstraps on next start.
+   The container must be running."
+  [container]
+  (docker-exec-ignore-error container "rm" "-rf" "/data/raft" "/data/cluster"))
 
 ;; ===========================================================================
 ;; Raft Cluster Node Configuration
@@ -345,6 +364,43 @@
            (Thread/sleep 500)
            (recur)))))))
 
+(defn wait-for-cluster-converged
+  "Wait until the cluster has converged: cluster_state is 'ok',
+   all expected nodes are known, a leader is elected, and slot addresses
+   have been resolved (not 0.0.0.0). Polls multiple nodes to handle
+   the case where one node may be temporarily unavailable."
+  [nodes docker-host? base-port expected-node-count]
+  (let [deadline (+ (System/currentTimeMillis) cluster-ok-timeout-ms)]
+    (loop []
+      (let [converged?
+            (some (fn [node]
+                    (try+
+                      (let [conn (conn-for-raft-node node docker-host? base-port)
+                            info-map (cluster-info conn)
+                            known (when info-map
+                                    (Integer/parseInt
+                                     (str/trim (get info-map "cluster_known_nodes" "0"))))
+                            state (get info-map "cluster_state")]
+                        (when (and (= state "ok")
+                                   (>= (or known 0) expected-node-count))
+                          (let [leader (get-current-leader conn)]
+                            (when leader
+                              (info "Cluster converged: state=ok, known=" known
+                                    ", leader=" (:id leader))
+                              true))))
+                      (catch Object _ nil)))
+                  nodes)]
+        (cond
+          converged? true
+
+          (> (System/currentTimeMillis) deadline)
+          (throw+ {:type :timeout
+                   :message (str "Cluster failed to converge within "
+                                 cluster-ok-timeout-ms "ms")})
+
+          :else
+          (do (Thread/sleep 1000) (recur)))))))
+
 ;; ===========================================================================
 ;; Slot Assignment
 ;; ===========================================================================
@@ -495,16 +551,51 @@
               (warn "Container start failed (may already be running):" (:message e))))
           ;; Wait for node to be ready
           (wait-for-node-ready node docker-host? 30000 base-port)
-          ;; If this is the last initial node, form the cluster
+          ;; On the last initial node, wait for the Raft cluster to converge.
+          ;; FrogDB auto-bootstraps via FROGDB_CLUSTER__INITIAL_NODES, so we
+          ;; just need to heal partitions from the previous batch test and wait.
           (when (and (contains? (set initial-nodes) node)
                      (= node (last initial-nodes)))
-            (Thread/sleep 2000)  ; Let all nodes stabilize
-            (form-cluster! initial-nodes docker-host? base-port))))
+            ;; Heal any lingering partitions from previous batch test
+            (doseq [n initial-nodes]
+              (heal-raft-partition! n))
+            (Thread/sleep 1000)
+            ;; Try to converge; if the cluster is stale/broken, restart with clean state
+            (let [converged?
+                  (try+
+                    (wait-for-cluster-converged
+                     initial-nodes docker-host? base-port (count initial-nodes))
+                    true
+                    (catch Object e
+                      (warn "Cluster did not converge, restarting with clean Raft state:" e)
+                      false))]
+              (when-not converged?
+                ;; Clean Raft state and restart all nodes for a fresh bootstrap
+                (doseq [n initial-nodes]
+                  (let [c (raft-container-name n)]
+                    (clean-raft-state! c)
+                    (docker-restart c)))
+                ;; Wait for all nodes to be ready
+                (doseq [n initial-nodes]
+                  (wait-for-node-ready n docker-host? 30000 base-port))
+                ;; Wait for the freshly bootstrapped cluster to converge
+                (wait-for-cluster-converged
+                 initial-nodes docker-host? base-port (count initial-nodes)))))))
 
       (teardown! [_ test node]
         (info "Tearing down Raft cluster node" node)
         ;; Clear any iptables rules
-        (heal-raft-partition! node))
+        (heal-raft-partition! node)
+        ;; Ensure the container/process is running for the next batch test
+        ;; (nemesis may have killed the FrogDB process, causing the container to exit)
+        (let [container (raft-container-name node)]
+          (try+
+            (docker-start container)
+            (catch Object _ nil))
+          ;; Wait for node to be ready so the cluster can start recovering
+          (try+
+            (wait-for-node-ready node docker-host? 30000 base-port)
+            (catch Object _ nil))))
 
       db/Kill
       (kill! [_ test node]

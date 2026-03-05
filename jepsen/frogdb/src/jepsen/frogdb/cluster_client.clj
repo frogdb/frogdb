@@ -109,13 +109,19 @@
 
 (defn remap-addr
   "Remap an internal Docker IP:port to a host-reachable address.
-   E.g. '172.21.0.2:6379' -> 'localhost:16379'"
+   E.g. '172.21.0.2:6379' -> 'localhost:16379'
+   Handles '0.0.0.0' by falling back to first node (n1)."
   ([addr]
    (remap-addr addr cluster-db/default-base-port))
   ([addr base-port]
    (let [[ip _port] (str/split addr #":")
          ip-map (docker-ip-remap base-port)]
-     (or (get ip-map ip) addr))))
+     (or (get ip-map ip)
+         ;; 0.0.0.0 means the server reported its bind address instead of
+         ;; a routable address. Fall back to n1; MOVED redirects will fix routing.
+         (when (= ip "0.0.0.0")
+           (get ip-map "172.21.0.2"))
+         addr))))
 
 (defn parse-cluster-slots
   "Parse CLUSTER SLOTS response into a slot->node map.

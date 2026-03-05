@@ -26,6 +26,7 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 | Replica-lag scoring | `crates/server/src/failure_detector.rs` | Auto-failover picks first available replica arbitrarily instead of scoring by replication lag | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#phase-4-failover-support--partial) |
 | Split-brain discarded-writes log | — | No `split_brain_discarded.log` for divergent writes after partition healing | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#45-split-brain-handling) |
 | DFLYMIGRATE streaming protocol | — | High-throughput streaming slot migration not implemented; only standard key-by-key MIGRATE exists | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#52-migration-protocol-commands-dflymigrate) |
+| Chaos / Jepsen / Turmoil cluster testing | `jepsen/frogdb/` | Jepsen test suite implemented (33 tests across single/replication/raft); see [Jepsen Test Status](#jepsen-test-status) below for current pass/fail breakdown | [ROADMAP.md](ROADMAP.md), [TESTING.md](TESTING.md) |
 
 ---
 
@@ -80,6 +81,40 @@ Items described in spec documentation as if implemented, but not present in the 
 |------|-------------|------|
 | Enhanced LATENCY DOCTOR | Correlation detection, SLOWLOG cross-reference, scatter-gather analysis | [ROADMAP.md](ROADMAP.md) |
 | Automated alert rule generation | `/alerts/prometheus` endpoint for generated alerting rules | [ROADMAP.md](ROADMAP.md) |
+
+---
+
+## Jepsen Test Status
+
+33 tests across three topologies. Tests marked **Expected Failure** detect real unimplemented features and will pass once the corresponding item above is implemented.
+
+### Single-node (19/19 PASS)
+
+All single-node tests pass.
+
+### Replication (2/5 PASS, 3 Expected Failure)
+
+| Test | Status | Root Cause | Cross-ref |
+|------|--------|-----------|-----------|
+| basic-replication | PASS | — | — |
+| failover | PASS | — | — |
+| split-brain | Expected Failure | Replicas accept writes — no READONLY enforcement. All nodes become writable masters during partition. | Replica READONLY enforcement (above) |
+| zombie | Expected Failure | No partition recovery / write rollback. Stale async writes persist after partition heals. | Replication-mode partition recovery (above) |
+| replication-chaos | Expected Failure | Reads observe older values during replication lag. Checker may be too strict for async replication under faults. | Proactive lag-threshold full-resync (above) |
+
+### Raft cluster (6/9 PASS, 3 Expected Failure)
+
+| Test | Status | Root Cause | Cross-ref |
+|------|--------|-----------|-----------|
+| cluster-formation | PASS | — | — |
+| leader-election | PASS | — | — |
+| key-routing | PASS | — | — |
+| leader-election-partition | PASS | — | — |
+| key-routing-kill | PASS | — | — |
+| raft-chaos | PASS | — | — |
+| slot-migration | Expected Failure | CLUSTER SETSLOT updates metadata but MIGRATE (actual key movement) is not implemented. | Slot migration doesn't move keys (above) |
+| slot-migration-partition | Expected Failure | Same as slot-migration + partition nemesis. | Slot migration doesn't move keys (above) |
+| cross-slot | Expected Failure | Slot balancing after clean restart leaves some slots unserved during `CLUSTERDOWN` windows; cross-slot balance checks fail. | Slot migration doesn't move keys (above) |
 
 ---
 
