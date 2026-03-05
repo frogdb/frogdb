@@ -79,18 +79,18 @@ test:
 test-crate crate:
     {{dyld-env}} {{rocksdb-env}} cargo test -p {{crate}}
 
-# Run a specific test
-test-one name:
-    {{dyld-env}} {{rocksdb-env}} cargo test {{name}} -- --nocapture
-
-# Run property-based tests (proptest)
-proptest:
-    {{dyld-env}} {{rocksdb-env}} cargo test proptest --all
+# Run a specific test in a crate
+test-one crate name:
+    {{dyld-env}} {{rocksdb-env}} cargo test -p {{crate}} {{name}} -- --nocapture
 
 # Run concurrency tests (Shuttle + Turmoil)
 concurrency:
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-core --features shuttle --test concurrency
     {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-server --features turmoil --test simulation
+
+# Run the full test suite (unit + integration + concurrency + simulation + matrix)
+test-all: test concurrency
+    {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-server --features turmoil --test simulation -- --ignored
 
 # Run tokio-coz causal profiler tests (requires tokio_unstable)
 test-coz:
@@ -132,7 +132,7 @@ deny:
     cargo deny check
 
 # Run all checks (CI)
-check-all: fmt-check lint deny test
+check-all: fmt-check lint deny test-all
 
 # Run the server (debug)
 run *args:

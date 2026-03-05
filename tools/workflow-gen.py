@@ -12,7 +12,8 @@ from pathlib import Path
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
-from ruamel.yaml.scalarstring import LiteralScalarString, SingleQuotedScalarString as SQ
+from ruamel.yaml.scalarstring import LiteralScalarString
+from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
 # =============================================================================
 # Constants
@@ -48,13 +49,10 @@ SETUP_JUST = "extractions/setup-just@v2"
 ZIG_VERSION = "0.11.0"
 HELM_VERSION = "v3.13.0"
 
-CARGO_CACHE_PATH = LiteralScalarString(
-    "~/.cargo/registry\n~/.cargo/git\ntarget"
-)
+CARGO_CACHE_PATH = LiteralScalarString("~/.cargo/registry\n~/.cargo/git\ntarget")
 
 HELM_REPO_URL = (
-    "https://${{ github.repository_owner }}.github.io"
-    "/${{ github.event.repository.name }}/helm"
+    "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/helm"
 )
 
 
@@ -95,9 +93,7 @@ def checkout_step(
     return s
 
 
-def rust_toolchain_step(
-    components: str | None = None, targets: str | None = None
-) -> CommentedMap:
+def rust_toolchain_step(components: str | None = None, targets: str | None = None) -> CommentedMap:
     s = CommentedMap()
     s["name"] = "Install Rust toolchain"
     s["uses"] = RUST_TOOLCHAIN
@@ -117,13 +113,8 @@ def cargo_cache_step(key_suffix: str) -> CommentedMap:
     s["uses"] = CACHE
     w = CommentedMap()
     w["path"] = CARGO_CACHE_PATH
-    w["key"] = (
-        f"${{{{ runner.os }}}}-cargo-{key_suffix}"
-        f"-${{{{ hashFiles('**/Cargo.lock') }}}}"
-    )
-    w["restore-keys"] = LiteralScalarString(
-        f"${{{{ runner.os }}}}-cargo-{key_suffix}-\n"
-    )
+    w["key"] = f"${{{{ runner.os }}}}-cargo-{key_suffix}-${{{{ hashFiles('**/Cargo.lock') }}}}"
+    w["restore-keys"] = LiteralScalarString(f"${{{{ runner.os }}}}-cargo-{key_suffix}-\n")
     s["with"] = w
     return s
 
@@ -134,13 +125,8 @@ def cargo_cache_matrix_step() -> CommentedMap:
     s["uses"] = CACHE
     w = CommentedMap()
     w["path"] = CARGO_CACHE_PATH
-    w["key"] = (
-        "${{ runner.os }}-cargo-${{ matrix.target }}"
-        "-${{ hashFiles('**/Cargo.lock') }}"
-    )
-    w["restore-keys"] = LiteralScalarString(
-        "${{ runner.os }}-cargo-${{ matrix.target }}-\n"
-    )
+    w["key"] = "${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}"
+    w["restore-keys"] = LiteralScalarString("${{ runner.os }}-cargo-${{ matrix.target }}-\n")
     s["with"] = w
     return s
 
@@ -207,8 +193,7 @@ def docker_build_push_step(cache: bool = False) -> CommentedMap:
     w["tags"] = "${{ steps.meta.outputs.tags }}"
     w["labels"] = "${{ steps.meta.outputs.labels }}"
     w["build-args"] = LiteralScalarString(
-        "BINARY_AMD64=binaries/amd64/frogdb-server\n"
-        "BINARY_ARM64=binaries/arm64/frogdb-server"
+        "BINARY_AMD64=binaries/amd64/frogdb-server\nBINARY_ARM64=binaries/arm64/frogdb-server"
     )
     if cache:
         w["cache-from"] = "type=gha"
@@ -236,9 +221,7 @@ def download_all_artifacts_step() -> CommentedMap:
     return s
 
 
-def upload_artifact_step(
-    name: str, path: str, retention_days: int = 7
-) -> CommentedMap:
+def upload_artifact_step(name: str, path: str, retention_days: int = 7) -> CommentedMap:
     s = CommentedMap()
     s["name"] = f"Upload {name}"
     s["uses"] = UPLOAD_ARTIFACT
@@ -344,78 +327,99 @@ def test_workflow() -> CommentedMap:
     w = workflow_base("Test", omap(CARGO_TERM_COLOR="always"))
     jobs = w["jobs"]
 
-    jobs["lint"] = simple_job("Lint", [
-        checkout_step(),
-        rust_toolchain_step(components="rustfmt, clippy"),
-        run_step("Check formatting", "cargo fmt --all -- --check"),
-        run_step(
-            "Run clippy",
-            "cargo clippy --all-targets --all-features -- -D warnings",
-        ),
-    ])
+    jobs["lint"] = simple_job(
+        "Lint",
+        [
+            checkout_step(),
+            rust_toolchain_step(components="rustfmt, clippy"),
+            run_step("Check formatting", "cargo fmt --all -- --check"),
+            run_step(
+                "Run clippy",
+                "cargo clippy --all-targets --all-features -- -D warnings",
+            ),
+        ],
+    )
 
-    jobs["unit-tests"] = simple_job("Unit Tests", [
-        checkout_step(),
-        rust_toolchain_step(),
-        cargo_cache_step("test"),
-        run_step("Run unit tests", "cargo test --all"),
-    ])
+    jobs["unit-tests"] = simple_job(
+        "Unit Tests",
+        [
+            checkout_step(),
+            rust_toolchain_step(),
+            cargo_cache_step("test"),
+            run_step("Run unit tests", "cargo test --all"),
+        ],
+    )
 
-    jobs["shuttle-tests"] = simple_job("Shuttle Concurrency Tests", [
-        checkout_step(),
-        rust_toolchain_step(),
-        cargo_cache_step("shuttle"),
-        run_step(
-            "Run Shuttle concurrency tests",
-            "cargo test -p frogdb-core --features shuttle --test concurrency",
-        ),
-    ])
+    jobs["shuttle-tests"] = simple_job(
+        "Shuttle Concurrency Tests",
+        [
+            checkout_step(),
+            rust_toolchain_step(),
+            cargo_cache_step("shuttle"),
+            run_step(
+                "Run Shuttle concurrency tests",
+                "cargo test -p frogdb-core --features shuttle --test concurrency",
+            ),
+        ],
+    )
 
-    jobs["turmoil-tests"] = simple_job("Turmoil Simulation Tests", [
-        checkout_step(),
-        rust_toolchain_step(),
-        cargo_cache_step("turmoil"),
-        run_step(
-            "Run Turmoil simulation tests",
-            "cargo test -p frogdb-server --features turmoil --test simulation",
-        ),
-    ])
+    jobs["turmoil-tests"] = simple_job(
+        "Turmoil Simulation Tests",
+        [
+            checkout_step(),
+            rust_toolchain_step(),
+            cargo_cache_step("turmoil"),
+            run_step(
+                "Run Turmoil simulation tests",
+                "cargo test -p frogdb-server --features turmoil --test simulation",
+            ),
+        ],
+    )
 
-    jobs["helm-gen-check"] = simple_job("Helm Generation Check", [
-        checkout_step(),
-        rust_toolchain_step(),
-        cargo_cache_step("helm"),
-        run_step(
-            "Check Helm files are up to date",
-            "cargo run -p helm-gen -- --check",
-        ),
-    ])
+    jobs["helm-gen-check"] = simple_job(
+        "Helm Generation Check",
+        [
+            checkout_step(),
+            rust_toolchain_step(),
+            cargo_cache_step("helm"),
+            run_step(
+                "Check Helm files are up to date",
+                "cargo run -p helm-gen -- --check",
+            ),
+        ],
+    )
 
     # Uses uv + just instead of Rust toolchain
-    jobs["workflow-gen-check"] = simple_job("Workflow Generation Check", [
-        checkout_step(),
-        omap(name="Install uv", uses=SETUP_UV),
-        omap(name="Install just", uses=SETUP_JUST),
-        run_step(
-            "Check workflow files are up to date",
-            "just workflow-gen --check",
-        ),
-    ])
+    jobs["workflow-gen-check"] = simple_job(
+        "Workflow Generation Check",
+        [
+            checkout_step(),
+            omap(name="Install uv", uses=SETUP_UV),
+            omap(name="Install just", uses=SETUP_JUST),
+            run_step(
+                "Check workflow files are up to date",
+                "just workflow-gen --check",
+            ),
+        ],
+    )
 
-    jobs["helm-lint"] = simple_job("Helm Lint", [
-        checkout_step(),
-        setup_helm_step(),
-        run_step("Lint Helm chart", "helm lint deploy/helm/frogdb"),
-        run_step(
-            "Template Helm chart",
-            "helm template frogdb deploy/helm/frogdb --debug",
-        ),
-        run_step(
-            "Template cluster preset",
-            "helm template frogdb deploy/helm/frogdb"
-            " -f deploy/helm/frogdb/values-cluster.yaml --debug",
-        ),
-    ])
+    jobs["helm-lint"] = simple_job(
+        "Helm Lint",
+        [
+            checkout_step(),
+            setup_helm_step(),
+            run_step("Lint Helm chart", "helm lint deploy/helm/frogdb"),
+            run_step(
+                "Template Helm chart",
+                "helm template frogdb deploy/helm/frogdb --debug",
+            ),
+            run_step(
+                "Template cluster preset",
+                "helm template frogdb deploy/helm/frogdb"
+                " -f deploy/helm/frogdb/values-cluster.yaml --debug",
+            ),
+        ],
+    )
 
     return w
 
@@ -434,52 +438,53 @@ def build_workflow() -> CommentedMap:
     build["name"] = "Build (${{ matrix.target }})"
     build["runs-on"] = "${{ matrix.os }}"
     build["strategy"] = matrix_strategy(list(LINUX_TARGETS))
-    build["steps"] = CommentedSeq([
-        checkout_step(),
-        rust_toolchain_step(targets="${{ matrix.target }}"),
-        # zigbuild handles glibc version differences for Linux cross-compilation
-        run_step("Install cargo-zigbuild", "cargo install cargo-zigbuild"),
-        setup_zig_step(),
-        cargo_cache_matrix_step(),
-        run_step(
-            "Build",
-            "cargo zigbuild --release --target ${{ matrix.target }}"
-            " --bin frogdb-server",
-        ),
-        upload_artifact_step(
-            "frogdb-server-${{ matrix.arch }}",
-            "target/${{ matrix.target }}/release/frogdb-server",
-        ),
-    ])
+    build["steps"] = CommentedSeq(
+        [
+            checkout_step(),
+            rust_toolchain_step(targets="${{ matrix.target }}"),
+            # zigbuild handles glibc version differences for Linux cross-compilation
+            run_step("Install cargo-zigbuild", "cargo install cargo-zigbuild"),
+            setup_zig_step(),
+            cargo_cache_matrix_step(),
+            run_step(
+                "Build",
+                "cargo zigbuild --release --target ${{ matrix.target }} --bin frogdb-server",
+            ),
+            upload_artifact_step(
+                "frogdb-server-${{ matrix.arch }}",
+                "target/${{ matrix.target }}/release/frogdb-server",
+            ),
+        ]
+    )
     jobs["build"] = build
 
     # Docker job — only on push to main
     docker = CommentedMap()
     docker["needs"] = CommentedSeq(["build"])
     # Only build Docker images on push to main, not for PRs
-    docker["if"] = (
-        "github.event_name == 'push' && github.ref == 'refs/heads/main'"
-    )
+    docker["if"] = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
     docker["name"] = "Docker Build"
     docker["runs-on"] = "ubuntu-latest"
     perms = CommentedMap()
     perms["contents"] = "read"
     perms["packages"] = "write"
     docker["permissions"] = perms
-    docker["steps"] = CommentedSeq([
-        checkout_step(),
-        download_artifact_step("frogdb-server-amd64", "binaries/amd64"),
-        download_artifact_step("frogdb-server-arm64", "binaries/arm64"),
-        setup_qemu_step(),
-        setup_buildx_step(),
-        docker_login_ghcr_step(),
-        docker_metadata_step(
-            "type=ref,event=branch\n"
-            "type=sha,prefix=\n"
-            "type=raw,value=latest,enable={{is_default_branch}}"
-        ),
-        docker_build_push_step(cache=True),
-    ])
+    docker["steps"] = CommentedSeq(
+        [
+            checkout_step(),
+            download_artifact_step("frogdb-server-amd64", "binaries/amd64"),
+            download_artifact_step("frogdb-server-arm64", "binaries/arm64"),
+            setup_qemu_step(),
+            setup_buildx_step(),
+            docker_login_ghcr_step(),
+            docker_metadata_step(
+                "type=ref,event=branch\n"
+                "type=sha,prefix=\n"
+                "type=raw,value=latest,enable={{is_default_branch}}"
+            ),
+            docker_build_push_step(cache=True),
+        ]
+    )
     jobs["docker"] = docker
 
     return w
@@ -499,44 +504,42 @@ def release_workflow() -> CommentedMap:
     build = CommentedMap()
     build["name"] = "Build Release Binaries (${{ matrix.target }})"
     build["runs-on"] = "${{ matrix.os }}"
-    build["strategy"] = matrix_strategy(
-        list(LINUX_TARGETS) + list(MACOS_TARGETS)
-    )
-    build["steps"] = CommentedSeq([
-        checkout_step(),
-        rust_toolchain_step(targets="${{ matrix.target }}"),
-        run_step_if(
-            "Install cargo-zigbuild (Linux)",
-            "runner.os == 'Linux'",
-            "cargo install cargo-zigbuild",
-        ),
-        setup_zig_step(if_cond="runner.os == 'Linux'"),
-        run_step_if(
-            "Build (Linux)",
-            "runner.os == 'Linux'",
-            "cargo zigbuild --release --target ${{ matrix.target }}"
-            " --bin frogdb-server",
-        ),
-        run_step_if(
-            "Build (macOS)",
-            "runner.os == 'macOS'",
-            "cargo build --release --target ${{ matrix.target }}"
-            " --bin frogdb-server",
-        ),
-        run_step(
-            "Create release archive",
-            LiteralScalarString(
-                "cd target/${{ matrix.target }}/release\n"
-                "tar -czvf ../../../frogdb-${{ github.ref_name }}"
-                "-${{ matrix.target }}.tar.gz"
-                " frogdb-server${{ matrix.ext }}"
+    build["strategy"] = matrix_strategy(list(LINUX_TARGETS) + list(MACOS_TARGETS))
+    build["steps"] = CommentedSeq(
+        [
+            checkout_step(),
+            rust_toolchain_step(targets="${{ matrix.target }}"),
+            run_step_if(
+                "Install cargo-zigbuild (Linux)",
+                "runner.os == 'Linux'",
+                "cargo install cargo-zigbuild",
             ),
-        ),
-        upload_artifact_step(
-            "frogdb-${{ matrix.target }}",
-            "frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz",
-        ),
-    ])
+            setup_zig_step(if_cond="runner.os == 'Linux'"),
+            run_step_if(
+                "Build (Linux)",
+                "runner.os == 'Linux'",
+                "cargo zigbuild --release --target ${{ matrix.target }} --bin frogdb-server",
+            ),
+            run_step_if(
+                "Build (macOS)",
+                "runner.os == 'macOS'",
+                "cargo build --release --target ${{ matrix.target }} --bin frogdb-server",
+            ),
+            run_step(
+                "Create release archive",
+                LiteralScalarString(
+                    "cd target/${{ matrix.target }}/release\n"
+                    "tar -czvf ../../../frogdb-${{ github.ref_name }}"
+                    "-${{ matrix.target }}.tar.gz"
+                    " frogdb-server${{ matrix.ext }}"
+                ),
+            ),
+            upload_artifact_step(
+                "frogdb-${{ matrix.target }}",
+                "frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz",
+            ),
+        ]
+    )
     jobs["build-binaries"] = build
 
     # Docker release
@@ -548,35 +551,33 @@ def release_workflow() -> CommentedMap:
     perms["contents"] = "read"
     perms["packages"] = "write"
     docker["permissions"] = perms
-    docker["steps"] = CommentedSeq([
-        checkout_step(),
-        download_artifact_step(
-            "frogdb-x86_64-unknown-linux-gnu", "binaries/amd64"
-        ),
-        download_artifact_step(
-            "frogdb-aarch64-unknown-linux-gnu", "binaries/arm64"
-        ),
-        run_step(
-            "Extract binaries",
-            LiteralScalarString(
-                "cd binaries/amd64 && tar -xzf *.tar.gz"
-                " && mv frogdb-server ../amd64-binary\n"
-                "cd ../arm64 && tar -xzf *.tar.gz"
-                " && mv frogdb-server ../arm64-binary\n"
-                "mv binaries/amd64-binary binaries/amd64/frogdb-server\n"
-                "mv binaries/arm64-binary binaries/arm64/frogdb-server"
+    docker["steps"] = CommentedSeq(
+        [
+            checkout_step(),
+            download_artifact_step("frogdb-x86_64-unknown-linux-gnu", "binaries/amd64"),
+            download_artifact_step("frogdb-aarch64-unknown-linux-gnu", "binaries/arm64"),
+            run_step(
+                "Extract binaries",
+                LiteralScalarString(
+                    "cd binaries/amd64 && tar -xzf *.tar.gz"
+                    " && mv frogdb-server ../amd64-binary\n"
+                    "cd ../arm64 && tar -xzf *.tar.gz"
+                    " && mv frogdb-server ../arm64-binary\n"
+                    "mv binaries/amd64-binary binaries/amd64/frogdb-server\n"
+                    "mv binaries/arm64-binary binaries/arm64/frogdb-server"
+                ),
             ),
-        ),
-        setup_qemu_step(),
-        setup_buildx_step(),
-        docker_login_ghcr_step(),
-        docker_metadata_step(
-            "type=semver,pattern={{version}}\n"
-            "type=semver,pattern={{major}}.{{minor}}\n"
-            "type=semver,pattern={{major}}"
-        ),
-        docker_build_push_step(cache=False),
-    ])
+            setup_qemu_step(),
+            setup_buildx_step(),
+            docker_login_ghcr_step(),
+            docker_metadata_step(
+                "type=semver,pattern={{version}}\n"
+                "type=semver,pattern={{major}}.{{minor}}\n"
+                "type=semver,pattern={{major}}"
+            ),
+            docker_build_push_step(cache=False),
+        ]
+    )
     jobs["docker"] = docker
 
     # Helm chart publishing
@@ -588,51 +589,51 @@ def release_workflow() -> CommentedMap:
     perms["contents"] = "write"
     perms["pages"] = "write"
     helm["permissions"] = perms
-    helm["steps"] = CommentedSeq([
-        checkout_step(fetch_depth=SQ("0")),
-        setup_helm_step(),
-        run_step(
-            "Package Helm chart",
-            LiteralScalarString(
-                "helm package deploy/helm/frogdb"
-                " --destination .helm-packages\n"
-                "helm repo index .helm-packages"
-                f" --url {HELM_REPO_URL}"
+    helm["steps"] = CommentedSeq(
+        [
+            checkout_step(fetch_depth=SQ("0")),
+            setup_helm_step(),
+            run_step(
+                "Package Helm chart",
+                LiteralScalarString(
+                    "helm package deploy/helm/frogdb"
+                    " --destination .helm-packages\n"
+                    "helm repo index .helm-packages"
+                    f" --url {HELM_REPO_URL}"
+                ),
             ),
-        ),
-        checkout_step(
-            name="Checkout gh-pages branch", ref="gh-pages", path="gh-pages"
-        ),
-        run_step(
-            "Update Helm repository",
-            LiteralScalarString(
-                "mkdir -p gh-pages/helm\n"
-                "cp .helm-packages/*.tgz gh-pages/helm/\n"
-                "# Merge index files\n"
-                "if [ -f gh-pages/helm/index.yaml ]; then\n"
-                "  helm repo index gh-pages/helm"
-                " --merge gh-pages/helm/index.yaml"
-                f" --url {HELM_REPO_URL}\n"
-                "else\n"
-                "  helm repo index gh-pages/helm"
-                f" --url {HELM_REPO_URL}\n"
-                "fi"
+            checkout_step(name="Checkout gh-pages branch", ref="gh-pages", path="gh-pages"),
+            run_step(
+                "Update Helm repository",
+                LiteralScalarString(
+                    "mkdir -p gh-pages/helm\n"
+                    "cp .helm-packages/*.tgz gh-pages/helm/\n"
+                    "# Merge index files\n"
+                    "if [ -f gh-pages/helm/index.yaml ]; then\n"
+                    "  helm repo index gh-pages/helm"
+                    " --merge gh-pages/helm/index.yaml"
+                    f" --url {HELM_REPO_URL}\n"
+                    "else\n"
+                    "  helm repo index gh-pages/helm"
+                    f" --url {HELM_REPO_URL}\n"
+                    "fi"
+                ),
             ),
-        ),
-        run_step(
-            "Commit and push",
-            LiteralScalarString(
-                "cd gh-pages\n"
-                'git config user.name "GitHub Actions"\n'
-                'git config user.email "actions@github.com"\n'
-                "git add helm/\n"
-                "git commit -m"
-                ' "Release Helm chart ${{ github.ref_name }}"'
-                ' || echo "No changes"\n'
-                "git push"
+            run_step(
+                "Commit and push",
+                LiteralScalarString(
+                    "cd gh-pages\n"
+                    'git config user.name "GitHub Actions"\n'
+                    'git config user.email "actions@github.com"\n'
+                    "git add helm/\n"
+                    "git commit -m"
+                    ' "Release Helm chart ${{ github.ref_name }}"'
+                    ' || echo "No changes"\n'
+                    "git push"
+                ),
             ),
-        ),
-    ])
+        ]
+    )
     jobs["helm"] = helm
 
     # GitHub Release
@@ -654,11 +655,13 @@ def release_workflow() -> CommentedMap:
     gh_w["generate_release_notes"] = SQ("true")
     gh_w["files"] = "artifacts/frogdb-*/*.tar.gz"
     gh_step["with"] = gh_w
-    release["steps"] = CommentedSeq([
-        checkout_step(),
-        download_all_artifacts_step(),
-        gh_step,
-    ])
+    release["steps"] = CommentedSeq(
+        [
+            checkout_step(),
+            download_all_artifacts_step(),
+            gh_step,
+        ]
+    )
     jobs["github-release"] = release
 
     return w
@@ -718,25 +721,16 @@ def check(output_dir: Path) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Generate GitHub Actions workflow files"
-    )
-    parser.add_argument(
-        "--output", default=".github/workflows", help="Output directory"
-    )
-    parser.add_argument(
-        "--check", action="store_true", help="Check files are up to date"
-    )
+    parser = argparse.ArgumentParser(description="Generate GitHub Actions workflow files")
+    parser.add_argument("--output", default=".github/workflows", help="Output directory")
+    parser.add_argument("--check", action="store_true", help="Check files are up to date")
     args = parser.parse_args()
 
     output_dir = Path(args.output)
 
     if args.check:
         if not check(output_dir):
-            print(
-                "\nWorkflow files are out of date."
-                " Run 'just workflow-gen' to regenerate."
-            )
+            print("\nWorkflow files are out of date. Run 'just workflow-gen' to regenerate.")
             sys.exit(1)
     else:
         generate(output_dir)

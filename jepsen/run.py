@@ -367,7 +367,9 @@ def compose_cmd(root: Path, topology: Topology, base_port: int = DEFAULT_BASE_PO
     """Base docker compose command for a topology."""
     cfg = TOPOLOGY_CONFIGS[topology]
     # Use a per-port project name so parallel topologies don't clash
-    project = f"{COMPOSE_PROJECT}-{base_port}" if base_port != DEFAULT_BASE_PORT else COMPOSE_PROJECT
+    project = (
+        f"{COMPOSE_PROJECT}-{base_port}" if base_port != DEFAULT_BASE_PORT else COMPOSE_PROJECT
+    )
     return [
         "docker",
         "compose",
@@ -388,7 +390,9 @@ def compose_env(topology: Topology, base_port: int = DEFAULT_BASE_PORT) -> dict[
 def compose_is_up(root: Path, topology: Topology, base_port: int = DEFAULT_BASE_PORT) -> bool:
     """Check if a topology's containers are already running."""
     cmd = compose_cmd(root, topology, base_port) + ["ps", "--status=running", "-q"]
-    result = subprocess.run(cmd, capture_output=True, text=True, env=compose_env(topology, base_port))
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, env=compose_env(topology, base_port)
+    )
     return result.returncode == 0 and bool(result.stdout.strip())
 
 

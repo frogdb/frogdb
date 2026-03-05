@@ -145,6 +145,7 @@ pub async fn real_frogdb_server(num_shards: usize) -> Result<(), BoxError> {
             num_shards,
             allow_cross_slot_standalone: true,
             scatter_gather_timeout_ms: 5000,
+            ..Default::default()
         },
         persistence: PersistenceConfig {
             enabled: false,

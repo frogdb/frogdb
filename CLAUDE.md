@@ -9,7 +9,7 @@ Run `just` with no arguments to see all available recipes. Common examples:
 ```bash
 just check-crate frogdb-core        # type-check a single crate
 just test-crate frogdb-server       # run tests for a specific crate
-just test-one test_publish          # run a specific test by name (with --nocapture)
+just test-one frogdb-server test_publish  # run a specific test by name (with --nocapture)
 just lint-crate frogdb-persistence  # clippy on a specific crate
 just fmt                            # format code
 just fmt-check                      # check formatting (CI)

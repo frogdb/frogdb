@@ -4541,17 +4541,17 @@ async fn send_cluster_cmd(
     let resp = node.send("CLUSTER", args).await;
 
     // If still redirected, follow it
-    if let Some(msg) = get_error_message(&resp) {
-        if msg.starts_with("REDIRECT ") {
-            let parts: Vec<&str> = msg.split_whitespace().collect();
-            if parts.len() >= 3 {
-                let leader_addr = parts[2];
-                for &nid in &harness.node_ids() {
-                    if let Some(n) = harness.node(nid) {
-                        if n.client_addr() == leader_addr {
-                            return n.send("CLUSTER", args).await;
-                        }
-                    }
+    if let Some(msg) = get_error_message(&resp)
+        && msg.starts_with("REDIRECT ")
+    {
+        let parts: Vec<&str> = msg.split_whitespace().collect();
+        if parts.len() >= 3 {
+            let leader_addr = parts[2];
+            for &nid in &harness.node_ids() {
+                if let Some(n) = harness.node(nid)
+                    && n.client_addr() == leader_addr
+                {
+                    return n.send("CLUSTER", args).await;
                 }
             }
         }
@@ -7756,7 +7756,7 @@ async fn test_multi_exec_cross_slot_returns_error() {
     let has_errors = is_error(&exec_resp)
         || is_error(&set1_resp)
         || is_error(&set2_resp)
-        || matches!(&exec_resp, frogdb_protocol::Response::Array(arr) if arr.iter().any(|r| is_error(r)));
+        || matches!(&exec_resp, frogdb_protocol::Response::Array(arr) if arr.iter().any(is_error));
 
     assert!(
         has_errors,
@@ -7838,10 +7838,10 @@ async fn test_cluster_data_survives_full_restart() {
         let key = format!("{}_persist{}", tag, i);
         let expected = format!("pval_{}", i);
         let resp = new_owner.send("GET", &[&key]).await;
-        if let frogdb_protocol::Response::Bulk(Some(v)) = &resp {
-            if v.as_ref() == expected.as_bytes() {
-                found += 1;
-            }
+        if let frogdb_protocol::Response::Bulk(Some(v)) = &resp
+            && v.as_ref() == expected.as_bytes()
+        {
+            found += 1;
         }
     }
     assert_eq!(
