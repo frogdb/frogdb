@@ -187,13 +187,13 @@
     (gen/cycle
       [(gen/sleep interval)
        (gen/once
-         (rand-nth
-           [;; Join a node
-            {:type :info :f :join}
-            ;; Leave a node
-            {:type :info :f :leave}
-            ;; Status check
-            {:type :info :f :membership-status}]))
+         (fn [] (rand-nth
+                  [;; Join a node
+                   {:type :info :f :join}
+                   ;; Leave a node
+                   {:type :info :f :leave}
+                   ;; Status check
+                   {:type :info :f :membership-status}])))
        (gen/sleep 5)])))
 
 ;; ===========================================================================

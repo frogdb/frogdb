@@ -130,19 +130,27 @@
 ;; Cluster Client
 ;; ===========================================================================
 
-(defrecord ClusterElleListAppendClient [nodes docker-host? base-port slot-mapping]
+(defrecord ClusterElleListAppendClient [conn nodes docker-host? base-port slot-mapping]
   client/Client
 
   (open! [this test node]
     (let [docker? (get test :docker true)
           all-nodes (or (:cluster-nodes test) ["n1" "n2" "n3"])
-          bp (get test :base-port cluster-db/default-base-port)]
-      (info "Opening cluster Elle list-append client to" node)
+          bp (get test :base-port cluster-db/default-base-port)
+          sm (atom (cluster-client/create-slot-mapping all-nodes docker? bp))
+          ;; Resolve the slot owner for {elle} keys and open a persistent conn
+          slot (cluster-client/slot-for-key "{elle}")
+          addr (cluster-client/get-node-for-slot @sm slot)
+          [host port-str] (when addr (clojure.string/split addr #":"))
+          port (when port-str (Integer/parseInt port-str))]
+      (info "Opening cluster Elle list-append client to" node
+            "(slot-owner:" addr ")")
       (assoc this
+             :conn (when host (cluster-client/make-conn-single host port))
              :nodes all-nodes
              :docker-host? docker?
              :base-port bp
-             :slot-mapping (atom (cluster-client/create-slot-mapping all-nodes docker? bp)))))
+             :slot-mapping sm)))
 
   (setup! [this test]
     (when slot-mapping
@@ -155,53 +163,58 @@
       ;; All {elle} keys route to the same slot, so find the owner and
       ;; execute there directly (MULTI/EXEC works on a single node).
       (let [txn (:value op)
-            slot (cluster-client/slot-for-key "{elle}")
-            mapping @slot-mapping
-            addr (cluster-client/get-node-for-slot mapping slot)]
-        (if-not addr
+            use-conn conn]
+        (if-not use-conn
           (assoc op :type :info :error :no-slot-owner)
-          (let [[host port-str] (clojure.string/split addr #":")
-                port (Integer/parseInt port-str)
-                conn (cluster-client/make-conn host port)]
-            (if (> (count txn) 1)
-              (try+
-                (let [results (exec-multi-ops conn txn)]
-                  (assoc op :type :ok :value results))
-                (catch [:type :txn-aborted] _
-                  (assoc op :type :info :error :txn-aborted))
-                (catch clojure.lang.ExceptionInfo e
-                  (if-let [redirect (cluster-client/is-redirect-error? e)]
-                    (case (:type redirect)
-                      :moved
-                      (let [raw-addr (str (:host redirect) ":" (:port redirect))
-                            remapped (cluster-client/remap-addr raw-addr base-port)]
-                        (swap! slot-mapping assoc-in [:slots-to-nodes (:slot redirect)] remapped)
-                        (assoc op :type :info :error :moved))
-                      :clusterdown
-                      (assoc op :type :info :error :clusterdown)
-                      (throw e))
-                    (throw e))))
-              (try+
-                (let [results (exec-single-op conn (first txn))]
-                  (assoc op :type :ok :value results))
-                (catch clojure.lang.ExceptionInfo e
-                  (if-let [redirect (cluster-client/is-redirect-error? e)]
-                    (case (:type redirect)
-                      :moved
-                      (let [raw-addr (str (:host redirect) ":" (:port redirect))
-                            remapped (cluster-client/remap-addr raw-addr base-port)]
-                        (swap! slot-mapping assoc-in [:slots-to-nodes (:slot redirect)] remapped)
-                        (assoc op :type :info :error :moved))
-                      :clusterdown
-                      (assoc op :type :info :error :clusterdown)
-                      (throw e))
-                    (throw e))))))))))
+          (if (> (count txn) 1)
+            (try+
+              (let [results (exec-multi-ops use-conn txn)]
+                (assoc op :type :ok :value results))
+              (catch [:type :txn-aborted] _
+                (assoc op :type :info :error :txn-aborted))
+              (catch clojure.lang.ExceptionInfo e
+                (if-let [redirect (cluster-client/is-redirect-error? e)]
+                  (case (:type redirect)
+                    :moved
+                    (let [raw-addr (str (:host redirect) ":" (:port redirect))
+                          remapped (cluster-client/remap-addr raw-addr base-port)]
+                      (swap! slot-mapping assoc-in [:slots-to-nodes (:slot redirect)] remapped)
+                      ;; Retry once with ad-hoc conn to the new owner
+                      (let [[h ps] (clojure.string/split remapped #":")
+                            fallback (cluster-client/make-conn h (Integer/parseInt ps))]
+                        (try+
+                          (let [results (exec-multi-ops fallback txn)]
+                            (assoc op :type :ok :value results))
+                          (catch [:type :txn-aborted] _
+                            (assoc op :type :info :error :txn-aborted)))))
+                    :clusterdown
+                    (assoc op :type :info :error :clusterdown)
+                    (throw e))
+                  (throw e))))
+            (try+
+              (let [results (exec-single-op use-conn (first txn))]
+                (assoc op :type :ok :value results))
+              (catch clojure.lang.ExceptionInfo e
+                (if-let [redirect (cluster-client/is-redirect-error? e)]
+                  (case (:type redirect)
+                    :moved
+                    (let [raw-addr (str (:host redirect) ":" (:port redirect))
+                          remapped (cluster-client/remap-addr raw-addr base-port)]
+                      (swap! slot-mapping assoc-in [:slots-to-nodes (:slot redirect)] remapped)
+                      (let [[h ps] (clojure.string/split remapped #":")
+                            fallback (cluster-client/make-conn h (Integer/parseInt ps))
+                            results (exec-single-op fallback (first txn))]
+                        (assoc op :type :ok :value results)))
+                    :clusterdown
+                    (assoc op :type :info :error :clusterdown)
+                    (throw e))
+                  (throw e)))))))))
 
   (teardown! [this test]
     nil)
 
   (close! [this test]
-    nil))
+    (frogdb/close-conn! conn)))
 
 ;; ===========================================================================
 ;; Workload

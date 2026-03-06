@@ -22,9 +22,7 @@
             [jepsen.util :as util]
             [jepsen.frogdb.db :as frogdb-db]
             [jepsen.frogdb.membership :as membership]
-            [slingshot.slingshot :refer [try+ throw+]])
-  (:import [java.lang ProcessBuilder]
-           [java.io BufferedReader InputStreamReader]))
+            [slingshot.slingshot :refer [try+ throw+]]))
 
 ;; ===========================================================================
 ;; Process Kill Nemesis
@@ -159,13 +157,13 @@
     (gen/cycle
       [(gen/sleep interval)
        (gen/once
-         (rand-nth (concat
-                     (repeat kill-weight [{:type :info :f :kill}
-                                         (gen/sleep 5)
-                                         {:type :info :f :start}])
-                     (repeat pause-weight [{:type :info :f :pause}
-                                          (gen/sleep 3)
-                                          {:type :info :f :resume}]))))])))
+         (fn [] (rand-nth (concat
+                            (repeat kill-weight [{:type :info :f :kill}
+                                                (gen/sleep 5)
+                                                {:type :info :f :start}])
+                            (repeat pause-weight [{:type :info :f :pause}
+                                                 (gen/sleep 3)
+                                                 {:type :info :f :resume}])))))])))
 
 (defn rapid-kill-generator
   "Rapid kill/restart cycles for stress testing durability.
@@ -323,35 +321,8 @@
        (gen/sleep 5)])))
 
 ;; ===========================================================================
-;; Docker Utilities for Nemeses
+;; Docker Utilities for Nemeses (delegated to db.clj)
 ;; ===========================================================================
-
-(defn docker-exec
-  "Execute a command in a Docker container.
-   Returns the output as a string, or throws on non-zero exit."
-  [container & args]
-  (let [cmd (into ["docker" "exec" container] args)
-        pb (ProcessBuilder. ^java.util.List cmd)
-        _ (.redirectErrorStream pb true)
-        proc (.start pb)
-        reader (BufferedReader. (InputStreamReader. (.getInputStream proc)))
-        output (str/join "\n" (line-seq reader))
-        exit-code (.waitFor proc)]
-    (when (not= 0 exit-code)
-      (throw+ {:type :docker-exec-failed
-               :container container
-               :command args
-               :exit-code exit-code
-               :output output}))
-    output))
-
-(defn docker-exec-ignore-error
-  "Execute a command in a Docker container, ignoring errors."
-  [container & args]
-  (try+
-    (apply docker-exec container args)
-    (catch Object _
-      nil)))
 
 (defn container-name
   "Get the container name for a node.
@@ -372,12 +343,12 @@
                      (str "+" offset-seconds)
                      (str offset-seconds))]
     ;; Write offset to /tmp/faketime in container
-    (docker-exec container "sh" "-c" (str "echo '" offset-str "' > /tmp/faketime"))))
+    (frogdb-db/docker-exec container "sh" "-c" (str "echo '" offset-str "' > /tmp/faketime"))))
 
 (defn clear-faketime-offset!
   "Clear the faketime offset file in a container."
   [container]
-  (docker-exec-ignore-error container "rm" "-f" "/tmp/faketime"))
+  (frogdb-db/docker-exec-ignore-error container "rm" "-f" "/tmp/faketime"))
 
 (defn skew-clock-via-date!
   "Skew the system clock using the date command (requires privileged container).
@@ -385,19 +356,19 @@
   [container delta-seconds]
   (let [direction (if (>= delta-seconds 0) "+" "-")
         abs-delta (Math/abs (long delta-seconds))]
-    (docker-exec container "date" "-s" (str direction (str abs-delta) " seconds"))))
+    (frogdb-db/docker-exec container "date" "-s" (str direction (str abs-delta) " seconds"))))
 
 (defn reset-clock-via-ntp!
   "Reset clock via NTP (if available) or by setting to host time."
   [container]
   ;; Try ntpdate first, fall back to syncing with host
   (try+
-    (docker-exec container "ntpdate" "-s" "pool.ntp.org")
+    (frogdb-db/docker-exec container "ntpdate" "-s" "pool.ntp.org")
     (catch Object _
       ;; Fallback: get current time and set it
       (let [now (System/currentTimeMillis)
             epoch-secs (quot now 1000)]
-        (docker-exec-ignore-error container "date" "-s" (str "@" epoch-secs))))))
+        (frogdb-db/docker-exec-ignore-error container "date" "-s" (str "@" epoch-secs))))))
 
 (defn clock-skew-nemesis
   "Creates a nemesis that skews clocks on nodes.
@@ -498,28 +469,28 @@
 (defn make-disk-readonly!
   "Make the /data directory read-only via remount."
   [container]
-  (docker-exec container "mount" "-o" "remount,ro" "/data"))
+  (frogdb-db/docker-exec container "mount" "-o" "remount,ro" "/data"))
 
 (defn make-disk-readwrite!
   "Restore the /data directory to read-write."
   [container]
-  (docker-exec container "mount" "-o" "remount,rw" "/data"))
+  (frogdb-db/docker-exec container "mount" "-o" "remount,rw" "/data"))
 
 (defn fill-disk!
   "Fill the disk by creating a large file."
   [container size-mb]
-  (docker-exec container "dd" "if=/dev/zero" "of=/data/jepsen-fill"
+  (frogdb-db/docker-exec container "dd" "if=/dev/zero" "of=/data/jepsen-fill"
                (str "bs=1M") (str "count=" size-mb)))
 
 (defn clear-disk-fill!
   "Remove the disk fill file."
   [container]
-  (docker-exec-ignore-error container "rm" "-f" "/data/jepsen-fill"))
+  (frogdb-db/docker-exec-ignore-error container "rm" "-f" "/data/jepsen-fill"))
 
 (defn corrupt-file!
   "Corrupt a specific file by writing random bytes to it."
   [container filepath]
-  (docker-exec container "dd" "if=/dev/urandom" (str "of=" filepath)
+  (frogdb-db/docker-exec container "dd" "if=/dev/urandom" (str "of=" filepath)
                "bs=1024" "count=1" "conv=notrunc"))
 
 (defn disk-failure-nemesis
@@ -644,31 +615,31 @@
 (defn add-network-delay!
   "Add network delay using tc/netem."
   [container delay-ms jitter-ms]
-  (docker-exec container "tc" "qdisc" "add" "dev" "eth0" "root" "netem"
+  (frogdb-db/docker-exec container "tc" "qdisc" "add" "dev" "eth0" "root" "netem"
                "delay" (str delay-ms "ms") (str jitter-ms "ms")))
 
 (defn add-packet-loss!
   "Add packet loss using tc/netem."
   [container loss-percent]
-  (docker-exec container "tc" "qdisc" "add" "dev" "eth0" "root" "netem"
+  (frogdb-db/docker-exec container "tc" "qdisc" "add" "dev" "eth0" "root" "netem"
                "loss" (str loss-percent "%")))
 
 (defn add-network-corruption!
   "Add packet corruption using tc/netem."
   [container corrupt-percent]
-  (docker-exec container "tc" "qdisc" "add" "dev" "eth0" "root" "netem"
+  (frogdb-db/docker-exec container "tc" "qdisc" "add" "dev" "eth0" "root" "netem"
                "corrupt" (str corrupt-percent "%")))
 
 (defn add-network-reorder!
   "Add packet reordering using tc/netem."
   [container reorder-percent delay-ms]
-  (docker-exec container "tc" "qdisc" "add" "dev" "eth0" "root" "netem"
+  (frogdb-db/docker-exec container "tc" "qdisc" "add" "dev" "eth0" "root" "netem"
                "delay" (str delay-ms "ms") "reorder" (str reorder-percent "%")))
 
 (defn remove-network-qdisc!
   "Remove all tc qdisc rules, restoring normal network."
   [container]
-  (docker-exec-ignore-error container "tc" "qdisc" "del" "dev" "eth0" "root"))
+  (frogdb-db/docker-exec-ignore-error container "tc" "qdisc" "del" "dev" "eth0" "root"))
 
 (defn slow-network-nemesis
   "Creates a nemesis that adds network latency and packet loss using tc/netem.
@@ -808,31 +779,31 @@
   "Start memory stress using stress-ng."
   [container bytes-mb]
   ;; Run stress-ng in background
-  (docker-exec container "sh" "-c"
+  (frogdb-db/docker-exec container "sh" "-c"
                (str "nohup stress-ng --vm 1 --vm-bytes " bytes-mb "M --vm-keep "
                     "--timeout 0 > /dev/null 2>&1 &")))
 
 (defn stop-memory-stress!
   "Stop any running stress-ng processes."
   [container]
-  (docker-exec-ignore-error container "pkill" "-9" "stress-ng"))
+  (frogdb-db/docker-exec-ignore-error container "pkill" "-9" "stress-ng"))
 
 (defn allocate-shm!
   "Allocate memory via /dev/shm."
   [container bytes-mb]
-  (docker-exec container "dd" "if=/dev/zero" "of=/dev/shm/jepsen-mem"
+  (frogdb-db/docker-exec container "dd" "if=/dev/zero" "of=/dev/shm/jepsen-mem"
                "bs=1M" (str "count=" bytes-mb)))
 
 (defn free-shm!
   "Free /dev/shm allocation."
   [container]
-  (docker-exec-ignore-error container "rm" "-f" "/dev/shm/jepsen-mem"))
+  (frogdb-db/docker-exec-ignore-error container "rm" "-f" "/dev/shm/jepsen-mem"))
 
 (defn trigger-oom-pressure!
   "Trigger OOM conditions by allocating most available memory."
   [container]
   ;; Get total memory and allocate 90% of it
-  (let [mem-info (docker-exec container "cat" "/proc/meminfo")
+  (let [mem-info (frogdb-db/docker-exec container "cat" "/proc/meminfo")
         total-line (first (filter #(str/starts-with? % "MemTotal:")
                                   (str/split-lines mem-info)))
         total-kb (when total-line
@@ -954,12 +925,12 @@
                 (doseq [f followers]
                   (let [container (container-name leader :raft)
                         target-ip (get raft-node-ips f)]
-                    (docker-exec-ignore-error container "iptables" "-A" "INPUT" "-s" target-ip "-j" "DROP")
-                    (docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" target-ip "-j" "DROP"))
+                    (frogdb-db/docker-exec-ignore-error container "iptables" "-A" "INPUT" "-s" target-ip "-j" "DROP")
+                    (frogdb-db/docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" target-ip "-j" "DROP"))
                   (let [container (container-name f :raft)
                         leader-ip (get raft-node-ips leader)]
-                    (docker-exec-ignore-error container "iptables" "-A" "INPUT" "-s" leader-ip "-j" "DROP")
-                    (docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" leader-ip "-j" "DROP"))))
+                    (frogdb-db/docker-exec-ignore-error container "iptables" "-A" "INPUT" "-s" leader-ip "-j" "DROP")
+                    (frogdb-db/docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" leader-ip "-j" "DROP"))))
               (assoc op :value :leader-isolated))
 
             :minority-isolated
@@ -971,12 +942,12 @@
                         maj majority]
                   (let [m-container (container-name m :raft)
                         maj-ip (get raft-node-ips maj)]
-                    (docker-exec-ignore-error m-container "iptables" "-A" "INPUT" "-s" maj-ip "-j" "DROP")
-                    (docker-exec-ignore-error m-container "iptables" "-A" "OUTPUT" "-d" maj-ip "-j" "DROP"))
+                    (frogdb-db/docker-exec-ignore-error m-container "iptables" "-A" "INPUT" "-s" maj-ip "-j" "DROP")
+                    (frogdb-db/docker-exec-ignore-error m-container "iptables" "-A" "OUTPUT" "-d" maj-ip "-j" "DROP"))
                   (let [maj-container (container-name maj :raft)
                         m-ip (get raft-node-ips m)]
-                    (docker-exec-ignore-error maj-container "iptables" "-A" "INPUT" "-s" m-ip "-j" "DROP")
-                    (docker-exec-ignore-error maj-container "iptables" "-A" "OUTPUT" "-d" m-ip "-j" "DROP"))))
+                    (frogdb-db/docker-exec-ignore-error maj-container "iptables" "-A" "INPUT" "-s" m-ip "-j" "DROP")
+                    (frogdb-db/docker-exec-ignore-error maj-container "iptables" "-A" "OUTPUT" "-d" m-ip "-j" "DROP"))))
               (assoc op :value :minority-isolated))
 
             :asymmetric
@@ -984,7 +955,7 @@
               (info "Partitioning: asymmetric (n1 can reach n2, but n2 cannot reach n1)")
               (let [container (container-name "n2" :raft)
                     target-ip (get raft-node-ips "n1")]
-                (docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" target-ip "-j" "DROP"))
+                (frogdb-db/docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" target-ip "-j" "DROP"))
               (assoc op :value :asymmetric))
 
             ;; Default: isolate a specific node
@@ -995,12 +966,12 @@
                 (doseq [other others]
                   (let [container (container-name node :raft)
                         other-ip (get raft-node-ips other)]
-                    (docker-exec-ignore-error container "iptables" "-A" "INPUT" "-s" other-ip "-j" "DROP")
-                    (docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" other-ip "-j" "DROP"))
+                    (frogdb-db/docker-exec-ignore-error container "iptables" "-A" "INPUT" "-s" other-ip "-j" "DROP")
+                    (frogdb-db/docker-exec-ignore-error container "iptables" "-A" "OUTPUT" "-d" other-ip "-j" "DROP"))
                   (let [other-container (container-name other :raft)
                         node-ip (get raft-node-ips node)]
-                    (docker-exec-ignore-error other-container "iptables" "-A" "INPUT" "-s" node-ip "-j" "DROP")
-                    (docker-exec-ignore-error other-container "iptables" "-A" "OUTPUT" "-d" node-ip "-j" "DROP")))
+                    (frogdb-db/docker-exec-ignore-error other-container "iptables" "-A" "INPUT" "-s" node-ip "-j" "DROP")
+                    (frogdb-db/docker-exec-ignore-error other-container "iptables" "-A" "OUTPUT" "-d" node-ip "-j" "DROP")))
                 (assoc op :value [:isolated node]))
               (do
                 (warn "Unknown partition type:" (:value op))
@@ -1011,13 +982,13 @@
             (info "Healing all Raft cluster partitions")
             (doseq [node (keys raft-node-ips)]
               (let [container (container-name node :raft)]
-                (docker-exec-ignore-error container "iptables" "-F")))
+                (frogdb-db/docker-exec-ignore-error container "iptables" "-F")))
             (assoc op :value :healed))))
 
       (teardown! [this test]
         (doseq [node (keys raft-node-ips)]
           (let [container (container-name node :raft)]
-            (docker-exec-ignore-error container "iptables" "-F")))))))
+            (frogdb-db/docker-exec-ignore-error container "iptables" "-F")))))))
 
 (defn raft-cluster-nemesis
   "Creates a combined nemesis for Raft cluster testing.
@@ -1054,31 +1025,31 @@
     (gen/cycle
       [(gen/sleep interval)
        (gen/once
-         (rand-nth
-           [;; Kill leader
-            [{:type :info :f :kill :value ["n1"]}
-             (gen/sleep 5)
-             {:type :info :f :start :value ["n1"]}]
-            ;; Partition leader
-            [{:type :info :f :partition :value :leader-isolated}
-             (gen/sleep 10)
-             {:type :info :f :heal}]
-            ;; Slow down nodes
-            [{:type :info :f :add-latency :value {:node "n2" :delay-ms 200 :jitter-ms 50}}
-             (gen/sleep 10)
-             {:type :info :f :network-heal :value "n2"}]
-            ;; Disk failure on follower
-            [{:type :info :f :disk-readonly :value "n3"}
-             (gen/sleep 10)
-             {:type :info :f :disk-recover :value "n3"}]
-            ;; Asymmetric partition
-            [{:type :info :f :partition :value :asymmetric}
-             (gen/sleep 10)
-             {:type :info :f :heal}]
-            ;; Pause a node
-            [{:type :info :f :pause :value ["n2"]}
-             (gen/sleep 5)
-             {:type :info :f :resume :value ["n2"]}]]))])))
+         (fn [] (rand-nth
+                  [;; Kill leader
+                   [{:type :info :f :kill :value ["n1"]}
+                    (gen/sleep 5)
+                    {:type :info :f :start :value ["n1"]}]
+                   ;; Partition leader
+                   [{:type :info :f :partition :value :leader-isolated}
+                    (gen/sleep 10)
+                    {:type :info :f :heal}]
+                   ;; Slow down nodes
+                   [{:type :info :f :add-latency :value {:node "n2" :delay-ms 200 :jitter-ms 50}}
+                    (gen/sleep 10)
+                    {:type :info :f :network-heal :value "n2"}]
+                   ;; Disk failure on follower
+                   [{:type :info :f :disk-readonly :value "n3"}
+                    (gen/sleep 10)
+                    {:type :info :f :disk-recover :value "n3"}]
+                   ;; Asymmetric partition
+                   [{:type :info :f :partition :value :asymmetric}
+                    (gen/sleep 10)
+                    {:type :info :f :heal}]
+                   ;; Pause a node
+                   [{:type :info :f :pause :value ["n2"]}
+                    (gen/sleep 5)
+                    {:type :info :f :resume :value ["n2"]}]])))])))
 
 ;; ===========================================================================
 ;; Replication Combined Nemesis
@@ -1106,29 +1077,29 @@
     (gen/cycle
       [(gen/sleep interval)
        (gen/once
-         (rand-nth
-           [;; Kill primary
-            [{:type :info :f :kill :value ["n1"]}
-             (gen/sleep 5)
-             {:type :info :f :start :value ["n1"]}]
-            ;; Partition primary
-            [{:type :info :f :partition :value :primary-isolated}
-             (gen/sleep 10)
-             {:type :info :f :heal}]
-            ;; Kill a replica
-            [{:type :info :f :kill :value ["n2"]}
-             (gen/sleep 5)
-             {:type :info :f :start :value ["n2"]}]
-            ;; Pause primary
-            [{:type :info :f :pause :value ["n1"]}
-             (gen/sleep 3)
-             {:type :info :f :resume :value ["n1"]}]]))])))
+         (fn [] (rand-nth
+                  [;; Kill primary
+                   [{:type :info :f :kill :value ["n1"]}
+                    (gen/sleep 5)
+                    {:type :info :f :start :value ["n1"]}]
+                   ;; Partition primary
+                   [{:type :info :f :partition :value :primary-isolated}
+                    (gen/sleep 10)
+                    {:type :info :f :heal}]
+                   ;; Kill a replica
+                   [{:type :info :f :kill :value ["n2"]}
+                    (gen/sleep 5)
+                    {:type :info :f :start :value ["n2"]}]
+                   ;; Pause primary
+                   [{:type :info :f :pause :value ["n1"]}
+                    (gen/sleep 3)
+                    {:type :info :f :resume :value ["n1"]}]])))])))
 
 ;; ===========================================================================
 ;; Nemesis Packages
 ;; ===========================================================================
 
-(defn partition
+(defn partition-pkg
   "Network partition nemesis package.
 
    Options:
@@ -1272,7 +1243,7 @@
     :kill (kill opts)
     :pause (pause opts)
     :rapid-kill (rapid-kill opts)
-    :partition (partition opts)
+    :partition (partition-pkg opts)
     :clock-skew (clock-skew opts)
     :disk-failure (disk-failure opts)
     :slow-network (slow-network opts)
