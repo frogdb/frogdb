@@ -3,6 +3,7 @@
 //! This module provides cross-field validation for configuration values,
 //! catching semantic errors that cannot be caught by serde alone.
 
+pub mod logging;
 pub mod memory;
 pub mod network;
 pub mod persistence;
@@ -138,6 +139,8 @@ pub fn run_all_validators(config: &Config) -> ValidationReport {
         // Memory validators
         Box::new(memory::EvictionPolicyWithoutLimitValidator),
         Box::new(memory::ShardCountVsCpusValidator),
+        // Logging validators
+        Box::new(logging::FileWithoutRotationValidator),
     ];
 
     let mut report = ValidationReport::new();
