@@ -10,7 +10,7 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 |------|-------|-------------|------|
 | Slot migration doesn't move keys | `crates/server/src/commands/cluster/` | CLUSTER SETSLOT updates metadata but actual key movement is not implemented | [ROADMAP.md](ROADMAP.md), [CLUSTER_PLAN.md](CLUSTER_PLAN.md) |
 | Proactive lag-threshold full-resync | `crates/replication/src/`, `crates/server/src/replication/primary.rs` | A FULLRESYNC does occur reactively when the broadcast buffer overflows (disconnect → reconnect → PSYNC). What's missing is a configurable lag threshold that triggers proactive FULLRESYNC before buffer overflow. | [ROADMAP.md](ROADMAP.md) |
-| Replica READONLY enforcement | `crates/server/src/connection/handlers/` | Replicas accept writes instead of returning `-READONLY` error. Jepsen split-brain test confirms replicas behave as writable masters in replication mode. | — |
+| ~~Replica READONLY enforcement~~ | `crates/server/src/connection/guards.rs` | **DONE** — Replicas now reject write commands with `-READONLY` error via `CommandFlags::WRITE` check in `run_pre_checks()`. | — |
 | Replication-mode partition recovery | `crates/replication/src/` | After a network partition heals, async writes to the old primary are not rolled back or fenced. Jepsen zombie test confirms stale writes survive partition healing. | — |
 
 ---
@@ -95,7 +95,7 @@ All single-node tests pass.
 |------|--------|-----------|-----------|
 | basic-replication | PASS | — | — |
 | failover | PASS | — | — |
-| split-brain | Expected Failure | Replicas accept writes — no READONLY enforcement. All nodes become writable masters during partition. | Replica READONLY enforcement (above) |
+| split-brain | Should Pass | Replicas now reject writes with `-READONLY`. | ~~Replica READONLY enforcement~~ (done) |
 | zombie | Expected Failure | No partition recovery / write rollback. Stale async writes persist after partition heals. | Replication-mode partition recovery (above) |
 | replication-chaos | Expected Failure | Reads observe older values during replication lag. Checker may be too strict for async replication under faults. | Proactive lag-threshold full-resync (above) |
 

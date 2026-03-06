@@ -156,6 +156,9 @@ pub struct ConnectionConfig {
 
     /// Whether per-request tracing spans are enabled (shared with ConfigManager).
     pub per_request_spans: Arc<AtomicBool>,
+
+    /// Whether this server is a replica (rejects write commands from clients).
+    pub is_replica: bool,
 }
 
 impl ConnectionConfig {
@@ -171,6 +174,7 @@ impl ConnectionConfig {
             hotshards_config: HotShardConfig::default(),
             memory_diag_config: MemoryDiagConfig::default(),
             per_request_spans: Arc::new(AtomicBool::new(false)),
+            is_replica: false,
         }
     }
 }

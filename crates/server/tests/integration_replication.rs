@@ -3224,3 +3224,71 @@ async fn test_wait_returns_correct_count_with_partial_ack() {
     replica1.shutdown().await;
     primary.shutdown().await;
 }
+
+// ============================================================================
+// Replica READONLY Enforcement
+// ============================================================================
+
+/// Test that replicas reject write commands with READONLY error while allowing reads.
+#[tokio::test]
+async fn test_replica_readonly_enforcement() {
+    let (primary, replica) =
+        start_primary_replica_pair(TestServerConfig::default()).await;
+
+    // Write commands should be rejected with READONLY error
+    let set_resp = replica.send("SET", &["key1", "value1"]).await;
+    assert!(is_error(&set_resp), "SET on replica should return error");
+    let err_msg = common::test_server::get_error_message(&set_resp).unwrap();
+    assert!(
+        err_msg.starts_with("READONLY"),
+        "Expected READONLY error, got: {}",
+        err_msg
+    );
+
+    let del_resp = replica.send("DEL", &["key1"]).await;
+    assert!(is_error(&del_resp), "DEL on replica should return error");
+    let err_msg = common::test_server::get_error_message(&del_resp).unwrap();
+    assert!(
+        err_msg.starts_with("READONLY"),
+        "Expected READONLY error, got: {}",
+        err_msg
+    );
+
+    let zadd_resp = replica.send("ZADD", &["zkey", "1", "member1"]).await;
+    assert!(is_error(&zadd_resp), "ZADD on replica should return error");
+    let err_msg = common::test_server::get_error_message(&zadd_resp).unwrap();
+    assert!(
+        err_msg.starts_with("READONLY"),
+        "Expected READONLY error, got: {}",
+        err_msg
+    );
+
+    // Read commands should work fine
+    let get_resp = replica.send("GET", &["nonexistent"]).await;
+    assert!(
+        !is_error(&get_resp),
+        "GET on replica should succeed, got: {:?}",
+        get_resp
+    );
+
+    let ping_resp = replica.send("PING", &[]).await;
+    assert_eq!(
+        parse_simple_string(&ping_resp),
+        Some("PONG"),
+        "PING on replica should return PONG"
+    );
+
+    let info_resp = replica.send("INFO", &["server"]).await;
+    assert!(
+        !is_error(&info_resp),
+        "INFO on replica should succeed, got: {:?}",
+        info_resp
+    );
+
+    // Writes through primary should still work
+    let primary_set = primary.send("SET", &["primary_key", "primary_value"]).await;
+    assert_ok(&primary_set);
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}

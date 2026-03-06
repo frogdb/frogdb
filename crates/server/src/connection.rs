@@ -174,6 +174,9 @@ pub struct ConnectionHandler {
 
     /// Whether per-request tracing spans are enabled (shared AtomicBool).
     per_request_spans: Arc<std::sync::atomic::AtomicBool>,
+
+    /// Whether this server is a replica (rejects write commands from clients).
+    is_replica: bool,
 }
 
 /// Result of processing a single command frame.
@@ -261,6 +264,7 @@ impl ConnectionHandler {
             pending_psync_handoff: None,
             resp3_buf: BytesMut::with_capacity(4096),
             per_request_spans: config.per_request_spans,
+            is_replica: config.is_replica,
         }
     }
 
@@ -336,6 +340,7 @@ impl ConnectionHandler {
             hotshards_config,
             memory_diag_config,
             per_request_spans: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            is_replica: false,
         };
         let observability = ObservabilityDeps {
             shared_tracer,

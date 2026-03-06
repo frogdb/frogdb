@@ -1293,6 +1293,7 @@ impl Server {
 
         // Create main acceptor (regular client connections)
         // When admin port is enabled, this acceptor blocks admin commands
+        let is_replica = self.config.replication.is_replica();
         let acceptor = Acceptor::new(
             self.listener,
             self.new_conn_senders.clone(),
@@ -1319,6 +1320,7 @@ impl Server {
             self.raft.clone(),
             self.network_factory.clone(),
             self.primary_replication_handler.clone(),
+            is_replica,
         );
 
         // Spawn main acceptor task
@@ -1356,6 +1358,7 @@ impl Server {
                 self.raft.clone(),
                 self.network_factory.clone(),
                 self.primary_replication_handler.clone(),
+                is_replica,
             );
 
             Some(spawn(async move {

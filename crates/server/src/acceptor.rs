@@ -127,6 +127,9 @@ pub struct Acceptor {
 
     /// Whether per-request tracing spans are enabled.
     per_request_spans: Arc<std::sync::atomic::AtomicBool>,
+
+    /// Whether this server is a replica (rejects write commands from clients).
+    is_replica: bool,
 }
 
 impl Acceptor {
@@ -158,6 +161,7 @@ impl Acceptor {
         raft: Option<Arc<ClusterRaft>>,
         network_factory: Option<Arc<ClusterNetworkFactory>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
+        is_replica: bool,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         let per_request_spans = config_manager.per_request_spans_flag();
@@ -190,6 +194,7 @@ impl Acceptor {
             network_factory,
             primary_replication_handler,
             per_request_spans,
+            is_replica,
         }
     }
 
@@ -271,6 +276,7 @@ impl Acceptor {
                         hotshards_config: self.hotshards_config.clone(),
                         memory_diag_config: self.memory_diag_config.clone(),
                         per_request_spans: self.per_request_spans.clone(),
+                        is_replica: self.is_replica,
                     };
                     let observability = ObservabilityDeps {
                         shared_tracer: self.shared_tracer.clone(),

@@ -103,6 +103,16 @@ impl ConnectionHandler {
             return Some(Response::error("NOAUTH Authentication required."));
         }
 
+        // Block write commands on replicas
+        if self.is_replica
+            && let Some(cmd_impl) = self.registry.get(cmd_name)
+            && cmd_impl.flags().contains(CommandFlags::WRITE)
+        {
+            return Some(Response::error(
+                "READONLY You can't write against a read only replica.",
+            ));
+        }
+
         // Block admin commands on regular port when admin port is enabled
         if self.admin_enabled
             && !self.is_admin
