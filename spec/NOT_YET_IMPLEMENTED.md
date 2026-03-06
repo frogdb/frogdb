@@ -35,10 +35,6 @@ Items described in spec documentation as if implemented, but not present in the 
 | DTrace/USDT probes                      | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Feature does not exist in Cargo.toml.                                                                                     | [DEBUGGING.md](DEBUGGING.md#dtrace-usdt-probes)                    |
 | DEBUG STRUCTSIZE                        | Show sizes of internal data structures                                                                                                                                                          | [types/SERVER.md](types/SERVER.md)                                 |
 | JSON.DEBUG                              | Debug info for JSON values                                                                                                                                                                      | [types/JSON.md](types/JSON.md)                                     |
-| ~~TS.MGET~~                             | ~~Multi-key get for time series~~                                                                                                                                                               | **DONE**                                                           |
-| ~~TS.MRANGE / TS.MREVRANGE~~            | ~~Multi-key range queries for time series~~                                                                                                                                                     | **DONE**                                                           |
-| ~~TS.QUERYINDEX~~                       | ~~Find time series keys by labels~~                                                                                                                                                             | **DONE**                                                           |
-| ~~TS.CREATERULE / TS.DELETERULE~~       | ~~Create/delete downsample rules for time series~~                                                                                                                                              | **DONE**                                                           |
 
 ---
 
@@ -114,6 +110,7 @@ All single-node tests pass.
 | Item                     | Files                       | Description                                                                                  | Spec                                                  |
 | ------------------------ | --------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | types.rs split (partial) | `crates/types/src/types.rs` | Core value types (String, List, Set, Hash, SortedSet, Stream) still in monolithic `types.rs` | [ROADMAP.md](ROADMAP.md#split-typesrs-partially-done) |
+| ~~Config magic numbers~~ | `crates/server/src/config/*.rs` | ~~Timeout values and sizes use inline literals instead of named constants~~ **DONE** — extracted to `pub const DEFAULT_*` in each module | [ROADMAP.md](ROADMAP.md#config-magic-numbers-low-effort) |
 
 ---
 
