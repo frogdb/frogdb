@@ -39,20 +39,30 @@ cargo flamegraph --profile profiling --bin frogdb-server
 
 **Async Task Profiling:**
 
-For profiling tokio task-level performance, use `tokio-metrics` and `tracing` spans to measure per-task busy/idle/scheduled timing and identify latency bottlenecks:
+For profiling tokio task-level performance, use `tokio-metrics` and `tracing` spans to measure per-task busy/idle/scheduled timing and identify latency bottlenecks.
+
+Instrumentation is split into two tiers:
+
+*Always-on (production)* — The instrumentation points themselves. These live in production code unconditionally. `tracing` spans compile to a single atomic load when no matching subscriber is active; `tokio-metrics` `TaskMonitor` wrappers add only lightweight atomic counters.
 
 | Tool | Crate | Use Case |
 |------|-------|----------|
 | tokio-metrics | `tokio-metrics` | Per-task busy/idle/scheduled timing via `TaskMonitor` |
 | tracing spans | `tracing` | Span-based latency analysis at task/operation granularity |
+
+- [ ] Add `tokio-metrics` `TaskMonitor` instrumentation for key task types (connection handler, shard operations, WAL writes)
+- [ ] Add `tracing` span instrumentation for critical request paths
+
+*Feature-gated (`profiling`)* — The subscriber layers that consume spans. These have non-trivial CPU/memory overhead and are compiled out by default behind a cargo feature flag (`--features profiling`), following the existing pattern in `crates/server/Cargo.toml` (cf. `causal-profile = ["dep:tokio-coz"]`).
+
+| Tool | Crate | Use Case |
+|------|-------|----------|
 | tracing-timing | `tracing-timing` | Latency histograms derived from tracing spans |
 | tracing-flame | `tracing-flame` | Async-aware flamegraphs — captures await/idle time, not just CPU |
 | tracing-tracy | `tracing-tracy` | Real-time interactive profiling via Tracy with nanosecond precision |
 
-- [ ] Add `tokio-metrics` `TaskMonitor` instrumentation for key task types (connection handler, shard operations, WAL writes)
-- [ ] Add `tracing` span instrumentation for critical request paths
 - [ ] Integrate `tracing-timing` for per-operation latency histograms
-- [ ] Add `tracing-flame` `FlameLayer` for async-aware flamegraph generation during profiling
+- [ ] Add `tracing-flame` `FlameLayer` for async-aware flamegraph generation
 - [ ] Evaluate `tracing-tracy` for interactive real-time profiling during development
 
 > **Research concept:** For causal profiling adapted to async runtimes, see [TOKIO_CAUSAL_PROFILER.md](../TOKIO_CAUSAL_PROFILER.md).
