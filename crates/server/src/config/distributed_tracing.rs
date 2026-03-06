@@ -53,8 +53,10 @@ fn default_service_name() -> String {
     "frogdb".to_string()
 }
 
+pub const DEFAULT_RECENT_TRACES_MAX: usize = 100;
+
 fn default_recent_traces_max() -> usize {
-    100
+    DEFAULT_RECENT_TRACES_MAX
 }
 
 impl Default for TracingConfig {

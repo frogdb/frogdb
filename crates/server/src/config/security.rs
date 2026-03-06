@@ -27,8 +27,10 @@ pub struct AclFileConfig {
     pub log_max_len: usize,
 }
 
+pub const DEFAULT_ACL_LOG_MAX_LEN: usize = 128;
+
 fn default_acl_log_max_len() -> usize {
-    128
+    DEFAULT_ACL_LOG_MAX_LEN
 }
 
 impl Default for AclFileConfig {

@@ -92,12 +92,15 @@ pub struct LoggingConfig {
     pub rotation: Option<RotationConfig>,
 }
 
+pub const DEFAULT_LOG_LEVEL: &str = "info";
+pub const DEFAULT_LOG_FORMAT: &str = "pretty";
+
 fn default_log_level() -> String {
-    "info".to_string()
+    DEFAULT_LOG_LEVEL.to_string()
 }
 
 fn default_log_format() -> String {
-    "pretty".to_string()
+    DEFAULT_LOG_FORMAT.to_string()
 }
 
 impl Default for LoggingConfig {
@@ -150,8 +153,8 @@ mod tests {
     #[test]
     fn test_logging_config_defaults() {
         let config = LoggingConfig::default();
-        assert_eq!(config.level, "info");
-        assert_eq!(config.format, "pretty");
+        assert_eq!(config.level, DEFAULT_LOG_LEVEL);
+        assert_eq!(config.format, DEFAULT_LOG_FORMAT);
         assert_eq!(config.output, LogOutput::Stdout);
         assert!(config.file_path.is_none());
         assert!(config.rotation.is_none());

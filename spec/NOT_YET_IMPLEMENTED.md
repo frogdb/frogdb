@@ -111,6 +111,7 @@ All single-node tests pass.
 | Item                     | Files                       | Description                                                                                  | Spec                                                  |
 | ------------------------ | --------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | types.rs split (partial) | `crates/types/src/types.rs` | Core value types (String, List, Set, Hash, SortedSet, Stream) still in monolithic `types.rs` | [ROADMAP.md](ROADMAP.md#split-typesrs-partially-done) |
+| ~~Config magic numbers~~ | `crates/server/src/config/*.rs` | ~~Timeout values and sizes use inline literals instead of named constants~~ **DONE** — extracted to `pub const DEFAULT_*` in each module | [ROADMAP.md](ROADMAP.md#config-magic-numbers-low-effort) |
 
 ---
 
