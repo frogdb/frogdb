@@ -49,8 +49,6 @@
 //! }
 //! ```
 
-pub mod migrate;
-
 use std::future::Future;
 
 /// Result of running a single phase of an operation.

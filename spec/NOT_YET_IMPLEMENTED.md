@@ -8,7 +8,7 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 
 | Item | Files | Description | Spec |
 |------|-------|-------------|------|
-| Slot migration doesn't move keys | `crates/server/src/commands/cluster/` | CLUSTER SETSLOT updates metadata but actual key movement is not implemented | [ROADMAP.md](ROADMAP.md), [CLUSTER_PLAN.md](CLUSTER_PLAN.md) |
+| ~~Slot migration doesn't move keys~~ | `crates/server/src/commands/cluster/` | **DONE** — Server-side MIGRATE was already fully implemented (scatter-gather DUMP/RESTORE/DELETE in `persistence.rs`). Fixed Jepsen test infrastructure: route SETSLOT through Raft leader with explicit source/target IDs, use Docker internal IPs for MIGRATE, removed dead `MigrateOperation` stub. | [ROADMAP.md](ROADMAP.md), [CLUSTER_PLAN.md](CLUSTER_PLAN.md) |
 | Proactive lag-threshold full-resync | `crates/replication/src/`, `crates/server/src/replication/primary.rs` | A FULLRESYNC does occur reactively when the broadcast buffer overflows (disconnect → reconnect → PSYNC). What's missing is a configurable lag threshold that triggers proactive FULLRESYNC before buffer overflow. | [ROADMAP.md](ROADMAP.md) |
 | ~~Replica READONLY enforcement~~ | `crates/server/src/connection/guards.rs` | **DONE** — Replicas now reject write commands with `-READONLY` error via `CommandFlags::WRITE` check in `run_pre_checks()`. | — |
 | Replication-mode partition recovery | `crates/replication/src/` | After a network partition heals, async writes to the old primary are not rolled back or fenced. Jepsen zombie test confirms stale writes survive partition healing. | — |
@@ -109,9 +109,9 @@ All single-node tests pass.
 | leader-election-partition | PASS | — | — |
 | key-routing-kill | PASS | — | — |
 | raft-chaos | PASS | — | — |
-| slot-migration | Expected Failure | CLUSTER SETSLOT updates metadata but MIGRATE (actual key movement) is not implemented. | Slot migration doesn't move keys (above) |
-| slot-migration-partition | Expected Failure | Same as slot-migration + partition nemesis. | Slot migration doesn't move keys (above) |
-| cross-slot | Expected Failure | Slot balancing after clean restart leaves some slots unserved during `CLUSTERDOWN` windows; cross-slot balance checks fail. | Slot migration doesn't move keys (above) |
+| slot-migration | Should Pass | Fixed Jepsen test infra: Raft-aware SETSLOT routing, Docker internal IPs for MIGRATE, explicit source/target IDs. | ~~Slot migration doesn't move keys~~ (done) |
+| slot-migration-partition | Should Pass | Same fixes as slot-migration; partition nemesis exercises existing Raft recovery. | ~~Slot migration doesn't move keys~~ (done) |
+| cross-slot | Expected Failure | Slot balancing after clean restart leaves some slots unserved during `CLUSTERDOWN` windows; cross-slot balance checks fail. | Separate cluster recovery issue |
 
 ---
 
