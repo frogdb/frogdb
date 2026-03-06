@@ -410,9 +410,14 @@ impl ConnectionHandler {
                 ProtocolVersion::Resp3 => {
                     let frame = response.to_resp3_frame();
                     self.resp3_buf.clear();
-                    redis_protocol::resp3::encode::complete::extend_encode(&mut self.resp3_buf, &frame)
-                        .map_err(|e| std::io::Error::other(e.to_string()))?;
-                    self.state.local_stats.add_bytes_sent(self.resp3_buf.len() as u64);
+                    redis_protocol::resp3::encode::complete::extend_encode(
+                        &mut self.resp3_buf,
+                        &frame,
+                    )
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    self.state
+                        .local_stats
+                        .add_bytes_sent(self.resp3_buf.len() as u64);
                     self.framed.get_mut().write_all(&self.resp3_buf).await?;
                     return self.framed.get_mut().flush().await;
                 }
@@ -469,9 +474,14 @@ impl ConnectionHandler {
                 ProtocolVersion::Resp3 => {
                     let frame = response.to_resp3_frame();
                     self.resp3_buf.clear();
-                    redis_protocol::resp3::encode::complete::extend_encode(&mut self.resp3_buf, &frame)
-                        .map_err(|e| std::io::Error::other(e.to_string()))?;
-                    self.state.local_stats.add_bytes_sent(self.resp3_buf.len() as u64);
+                    redis_protocol::resp3::encode::complete::extend_encode(
+                        &mut self.resp3_buf,
+                        &frame,
+                    )
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    self.state
+                        .local_stats
+                        .add_bytes_sent(self.resp3_buf.len() as u64);
                     self.framed.get_mut().write_all(&self.resp3_buf).await?;
                     self.resp3_buf.clear();
                     return Ok(());

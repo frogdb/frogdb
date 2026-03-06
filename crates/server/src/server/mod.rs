@@ -35,7 +35,8 @@ use crate::failure_detector::{
 use crate::latency_test::{self, LatencyTestResult};
 use crate::net::{TcpListener, spawn, tcp_listener_reusable};
 use crate::replication::{
-    PrimaryReplicationHandler, ReplicaCommandExecutor, ReplicaReplicationHandler, consume_frames,
+    LagThresholdConfig, PrimaryReplicationHandler, ReplicaCommandExecutor,
+    ReplicaReplicationHandler, consume_frames,
 };
 use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
 
@@ -453,11 +454,18 @@ impl Server {
             let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
             tracker.set_offset(repl_state.replication_offset);
 
+            let lag_config = LagThresholdConfig {
+                threshold_bytes: config.replication.replication_lag_threshold_bytes,
+                threshold_secs: config.replication.replication_lag_threshold_secs,
+                cooldown: Duration::from_secs(config.replication.fullresync_cooldown_secs),
+            };
+
             let handler = Arc::new(PrimaryReplicationHandler::new(
                 repl_state,
                 tracker.clone(),
                 rocks_store.clone(),
                 config.persistence.data_dir.clone(),
+                lag_config,
             ));
 
             // Store a reference for PSYNC connection handoff

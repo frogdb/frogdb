@@ -6,7 +6,7 @@ This document tracks the implementation progress of FrogDB. Each phase has speci
 
 **Implementation Gaps:**
 - [ ] Implement actual key movement during slot migration (CLUSTER SETSLOT updates metadata but doesn't move keys)
-- [ ] Implement auto full-resync trigger when replica lag exceeds threshold (currently only logs warning at primary.rs:451)
+- [x] Implement auto full-resync trigger when replica lag exceeds threshold
 
 **Goal**: Correctness testing for clustered operation.
 

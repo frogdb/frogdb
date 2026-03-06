@@ -8,7 +8,6 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 
 | Item | Files | Description | Spec |
 |------|-------|-------------|------|
-| Proactive lag-threshold full-resync | `crates/replication/src/`, `crates/server/src/replication/primary.rs` | A FULLRESYNC does occur reactively when the broadcast buffer overflows (disconnect → reconnect → PSYNC). What's missing is a configurable lag threshold that triggers proactive FULLRESYNC before buffer overflow. | [ROADMAP.md](ROADMAP.md) |
 | Replication-mode partition recovery | `crates/replication/src/` | After a network partition heals, async writes to the old primary are not rolled back or fenced. Jepsen zombie test confirms stale writes survive partition healing. | — |
 
 ---
@@ -90,7 +89,7 @@ All single-node tests pass.
 | failover | PASS | — | — |
 | split-brain | PASS | — | — |
 | zombie | Expected Failure | No partition recovery / write rollback. Stale async writes persist after partition heals. | Replication-mode partition recovery (above) |
-| replication-chaos | Expected Failure | Reads observe older values during replication lag. Checker may be too strict for async replication under faults. | Proactive lag-threshold full-resync (above) |
+| replication-chaos | Expected Failure | Reads observe older values during replication lag. Checker may be too strict for async replication under faults. | — |
 
 ### Raft cluster (8/9 PASS, 1 Expected Failure)
 
