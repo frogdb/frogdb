@@ -39,6 +39,14 @@
                :output output}))
     output))
 
+(defn docker-exec-ignore-error
+  "Execute a command in a Docker container, ignoring errors."
+  [container & args]
+  (try+
+    (apply docker-exec container args)
+    (catch Object _
+      nil)))
+
 (defn docker-exec-bg
   "Execute a command in a Docker container in the background.
    Does not wait for completion."
