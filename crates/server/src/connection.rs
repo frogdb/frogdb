@@ -48,8 +48,7 @@ use bytes::BytesMut;
 use frogdb_core::{
     AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
     CommandFlags, CommandRegistry, MetricsRecorder, PauseMode, PubSubMessage, PubSubSender,
-    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
-    command::QuorumChecker,
+    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry, command::QuorumChecker,
     persistence::SnapshotCoordinator,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};

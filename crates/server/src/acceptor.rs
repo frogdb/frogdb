@@ -5,8 +5,7 @@ use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use frogdb_core::{
     AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
     MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
-    command::QuorumChecker,
-    persistence::SnapshotCoordinator, shard::NewConnection,
+    command::QuorumChecker, persistence::SnapshotCoordinator, shard::NewConnection,
 };
 use frogdb_telemetry::{SharedTracer, metric_names};
 use std::sync::atomic::AtomicI64;

@@ -290,6 +290,19 @@ define_metrics! {
     histogram ScatterGatherShards("frogdb_scatter_gather_shards") {}
 
     // ========================================================================
+    // Split-Brain Metrics
+    // ========================================================================
+
+    /// Total split-brain events detected
+    counter SplitBrainEventsTotal("frogdb_split_brain_events_total") {}
+
+    /// Total operations discarded during split-brain recovery
+    counter SplitBrainOpsDiscardedTotal("frogdb_split_brain_ops_discarded_total") {}
+
+    /// Whether an unprocessed split-brain log file exists (1 = yes, 0 = no)
+    gauge SplitBrainRecoveryPending("frogdb_split_brain_recovery_pending") {}
+
+    // ========================================================================
     // Latency Metrics
     // ========================================================================
 

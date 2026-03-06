@@ -1462,9 +1462,7 @@ async fn test_debug_pubsub_limits_with_subscriptions() {
 
     // Use a second connection for DEBUG (first is in pub/sub mode)
     let mut debug_client = server.connect().await;
-    let response = debug_client
-        .command(&["DEBUG", "PUBSUB", "LIMITS"])
-        .await;
+    let response = debug_client.command(&["DEBUG", "PUBSUB", "LIMITS"]).await;
     let data = unwrap_bulk(&response);
     let content = String::from_utf8_lossy(data);
 

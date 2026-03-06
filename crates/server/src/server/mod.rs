@@ -37,7 +37,7 @@ use crate::latency_test::{self, LatencyTestResult};
 use crate::net::{TcpListener, spawn, tcp_listener_reusable};
 use crate::replication::{
     LagThresholdConfig, PrimaryReplicationHandler, ReplicaCommandExecutor,
-    ReplicaReplicationHandler, consume_frames,
+    ReplicaReplicationHandler, SplitBrainBufferConfig, consume_frames,
 };
 use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
 
@@ -476,6 +476,11 @@ impl Server {
                     threshold_secs: config.replication.replication_lag_threshold_secs,
                     cooldown: Duration::from_secs(config.replication.fullresync_cooldown_secs),
                 },
+                SplitBrainBufferConfig {
+                    enabled: config.replication.split_brain_log_enabled,
+                    max_entries: config.replication.split_brain_buffer_size,
+                    max_bytes: config.replication.split_brain_buffer_max_mb * 1024 * 1024,
+                },
             ));
 
             // Store a reference for PSYNC connection handoff
@@ -546,7 +551,14 @@ impl Server {
 
             // Initialize Raft state machine with cluster state
             let cluster = ClusterState::new();
-            let state_machine = ClusterStateMachine::with_state(cluster.clone());
+            let mut state_machine = ClusterStateMachine::with_state(cluster.clone());
+
+            // Enable demotion detection for split-brain logging
+            let demotion_rx = if config.replication.split_brain_log_enabled {
+                Some(state_machine.enable_demotion_detection(node_id))
+            } else {
+                None
+            };
 
             // Initialize Raft network factory
             let network_factory = ClusterNetworkFactory::new();
@@ -745,6 +757,82 @@ impl Server {
                                         "Failed to self-register after 30 attempts"
                                     );
                                 }
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Spawn split-brain demotion handler if enabled
+            if let Some(mut demotion_rx) = demotion_rx {
+                let data_dir = config.persistence.data_dir.clone();
+                let broadcaster: SharedBroadcaster = replication_broadcaster.clone();
+                let tracker = replication_tracker.clone();
+                let metrics = metrics_recorder.clone();
+                spawn(async move {
+                    while let Some(event) = demotion_rx.recv().await {
+                        tracing::warn!(
+                            demoted_node = event.demoted_node_id,
+                            new_primary = ?event.new_primary_id,
+                            epoch = event.epoch,
+                            "Split-brain demotion detected"
+                        );
+
+                        // Determine divergence boundary
+                        let min_acked = tracker
+                            .as_ref()
+                            .and_then(|t| t.min_acked_offset())
+                            .unwrap_or(0);
+                        let current = broadcaster.current_offset();
+
+                        if current > min_acked {
+                            let divergent = broadcaster.extract_divergent_writes(min_acked);
+                            if !divergent.is_empty() {
+                                let header =
+                                    frogdb_replication::split_brain_log::SplitBrainLogHeader {
+                                        timestamp: String::new(),
+                                        old_primary: format!("{:x}", event.demoted_node_id),
+                                        new_primary: event
+                                            .new_primary_id
+                                            .map(|id| format!("{:x}", id))
+                                            .unwrap_or_else(|| "unknown".to_string()),
+                                        epoch_old: event.epoch,
+                                        epoch_new: event.epoch.saturating_add(1),
+                                        seq_diverge_start: min_acked,
+                                        seq_diverge_end: current,
+                                        ops_discarded: divergent.len(),
+                                    };
+
+                                match frogdb_replication::split_brain_log::write_log(
+                                    &data_dir, header, &divergent,
+                                ) {
+                                    Ok(path) => {
+                                        tracing::warn!(
+                                            ops = divergent.len(),
+                                            path = %path.display(),
+                                            "Split-brain: {} divergent writes logged to {}",
+                                            divergent.len(),
+                                            path.display()
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            error = %e,
+                                            "Failed to write split-brain log"
+                                        );
+                                    }
+                                }
+
+                                frogdb_telemetry::definitions::SplitBrainEventsTotal::inc(
+                                    &*metrics,
+                                );
+                                frogdb_telemetry::definitions::SplitBrainOpsDiscardedTotal::inc_by(
+                                    &*metrics,
+                                    divergent.len() as u64,
+                                );
+                                frogdb_telemetry::definitions::SplitBrainRecoveryPending::set(
+                                    &*metrics, 1.0,
+                                );
                             }
                         }
                     }
@@ -1083,6 +1171,16 @@ impl Server {
     where
         F: std::future::Future<Output = ()>,
     {
+        // Check for pending split-brain logs and set metric
+        if frogdb_replication::split_brain_log::has_pending_logs(&self.config.persistence.data_dir)
+        {
+            warn!("Unprocessed split-brain log files found in data directory");
+            frogdb_telemetry::definitions::SplitBrainRecoveryPending::set(
+                &*self.metrics_recorder,
+                1.0,
+            );
+        }
+
         // Run startup latency test if configured
         if self.config.latency.startup_test {
             info!(

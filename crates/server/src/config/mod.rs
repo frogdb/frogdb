@@ -422,9 +422,7 @@ impl Config {
     ///
     /// Returns a reload handle and a logging guard. The guard keeps the
     /// non-blocking file writer alive; drop it to flush remaining logs.
-    pub fn init_logging(
-        &self,
-    ) -> Result<(crate::runtime_config::LogReloadHandle, LoggingGuard)> {
+    pub fn init_logging(&self) -> Result<(crate::runtime_config::LogReloadHandle, LoggingGuard)> {
         self.init_logging_inner::<tracing_subscriber::layer::Identity>(None)
     }
 
@@ -499,8 +497,8 @@ impl Config {
 
             Ok((
                 LogReloadHandle::new(Box::new(move |level: &str| {
-                    let filter = EnvFilter::try_new(level)
-                        .map_err(|e| format!("invalid EnvFilter: {e}"))?;
+                    let filter =
+                        EnvFilter::try_new(level).map_err(|e| format!("invalid EnvFilter: {e}"))?;
                     reload_handle
                         .reload(filter)
                         .map_err(|e| format!("reload failed: {e}"))
@@ -579,9 +577,7 @@ impl Config {
                 .create(true)
                 .append(true)
                 .open(file_path)
-                .with_context(|| {
-                    format!("failed to open log file '{}'", file_path.display())
-                })?;
+                .with_context(|| format!("failed to open log file '{}'", file_path.display()))?;
             Box::new(file)
         };
 
@@ -605,17 +601,13 @@ impl Config {
                 RollingConditionBasic::new().max_size(size * 1024 * 1024)
             }
             (RotationFrequency::Daily, 0) => RollingConditionBasic::new().daily(),
-            (RotationFrequency::Daily, size) => {
-                RollingConditionBasic::new()
-                    .daily()
-                    .max_size(size * 1024 * 1024)
-            }
+            (RotationFrequency::Daily, size) => RollingConditionBasic::new()
+                .daily()
+                .max_size(size * 1024 * 1024),
             (RotationFrequency::Hourly, 0) => RollingConditionBasic::new().hourly(),
-            (RotationFrequency::Hourly, size) => {
-                RollingConditionBasic::new()
-                    .hourly()
-                    .max_size(size * 1024 * 1024)
-            }
+            (RotationFrequency::Hourly, size) => RollingConditionBasic::new()
+                .hourly()
+                .max_size(size * 1024 * 1024),
         }
     }
 
@@ -1319,7 +1311,10 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .collect();
-        assert!(!files.is_empty(), "should have created at least one log file");
+        assert!(
+            !files.is_empty(),
+            "should have created at least one log file"
+        );
     }
 
     #[test]
