@@ -6,7 +6,9 @@ services:
     image: frogdb:latest
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: ${FROGDB_DOCKERFILE:-Dockerfile}
+      args:
+        BUILD_TARGET: debug
     container_name: frogdb-single-n1
     ports:
       - "${FROGDB_PORT_N1:-16379}:6379"

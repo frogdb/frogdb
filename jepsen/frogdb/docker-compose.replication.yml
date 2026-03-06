@@ -16,7 +16,9 @@ services:
     image: frogdb:latest
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: ${FROGDB_DOCKERFILE:-Dockerfile}
+      args:
+        BUILD_TARGET: debug
     container_name: frogdb-repl-n1
     hostname: n1
     ports:
@@ -44,7 +46,9 @@ services:
     image: frogdb:latest
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: ${FROGDB_DOCKERFILE:-Dockerfile}
+      args:
+        BUILD_TARGET: debug
     container_name: frogdb-repl-n2
     hostname: n2
     ports:
@@ -77,7 +81,9 @@ services:
     image: frogdb:latest
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: ${FROGDB_DOCKERFILE:-Dockerfile}
+      args:
+        BUILD_TARGET: debug
     container_name: frogdb-repl-n3
     hostname: n3
     ports:
