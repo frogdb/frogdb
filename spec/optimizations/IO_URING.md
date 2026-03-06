@@ -137,7 +137,85 @@ DragonflyDB claims 4.5x throughput over Valkey on identical hardware. FrogDB's s
 
 ---
 
-## 5. Potential Solutions
+## 5. Runtime Abstraction Feasibility
+
+Before committing to a solution, we need to understand how deeply Tokio is coupled to the codebase and how feasible a compile-time swappable runtime abstraction would be.
+
+### Tokio Coupling Inventory
+
+Quantified breakdown of Tokio API usage across the codebase:
+
+| Category | Usages | Files | Key Locations |
+|----------|--------|-------|---------------|
+| Spawning (`tokio::spawn`, `JoinHandle`) | 35 | 23 | acceptor.rs, primary.rs, cluster network |
+| Network I/O (`TcpListener`, `TcpStream`) | 132 | 23 | net.rs, connection.rs, acceptor.rs |
+| Channels (`mpsc`, `oneshot`, `broadcast`) | ~80 mpsc | 38 | shard/worker.rs, connection.rs, routing.rs |
+| Timers (`sleep`, `timeout`, `interval`) | 300 | 53 | VLL, cluster RPC, scatter-gather |
+| Codec (`Framed`, `AsyncRead/Write`) | 8 | 8 | connection.rs, replication |
+| Runtime macros (`#[tokio::test/main]`) | 956 | 79 | All test files |
+| Select (`tokio::select!`) | 6 | 6 | connection handler, shard event loop |
+| OpenRaft (`TokioRuntime`) | ~5 | ~5 | cluster crate |
+
+**Totals**: 1,447 direct `tokio::` references, 137 files affected, 1,276 async fns, 6,797 `.await` points.
+
+### Existing Abstraction Inventory
+
+The codebase already has abstraction layers that would serve as the foundation for a runtime swap:
+
+1. **Network abstraction** (`crates/server/src/net.rs`) — Feature-flag swapping `tokio::net` ↔ `turmoil::net` for `TcpListener`, `TcpStream`, plus conditional `tcp_listener_reusable()` implementation
+2. **Sync primitives** (`crates/types/src/sync.rs`) — Feature-flag swapping `std::sync` ↔ `shuttle::sync` for `Mutex`, `RwLock`, `Arc`, atomics (test-time only)
+3. **Store trait** (`crates/core/src/store/mod.rs`) — Pluggable storage backend
+4. **WAL writer trait** (`crates/types/src/traits/wal.rs`) — Pluggable durability
+5. **ACL checker trait** (`crates/acl/src/checker.rs`) — Pluggable auth
+6. **Command trait** (`crates/core/src/command.rs`) — I/O-agnostic command execution
+
+Key positive finding: most sync primitives use `std::sync`, NOT `tokio::sync`. Only channels and timers are tokio-specific.
+
+### Feature-Flag Strategy for Compile-Time Swapping
+
+The existing `cfg` pattern in `net.rs` and `sync.rs` extends naturally to a runtime choice:
+
+```rust
+// crates/server/src/net.rs (extended)
+#[cfg(all(feature = "tokio-runtime", feature = "turmoil"))]
+pub use turmoil::net::TcpListener;
+
+#[cfg(all(feature = "tokio-runtime", not(feature = "turmoil")))]
+pub use tokio::net::TcpListener;
+
+#[cfg(feature = "compio-runtime")]
+pub use compio::net::TcpListener;
+```
+
+Note: Turmoil and Shuttle only work with the `tokio-runtime` feature — they intercept Tokio's internals. This is fine: use tokio for dev/CI/simulation testing, compio for production Linux deployments.
+
+### Migration Difficulty by Component
+
+| Component | Files | Difficulty | Notes |
+|-----------|-------|------------|-------|
+| Channel architecture (mpsc/oneshot) | ~38 | **High** | Core shard communication; struct fields throughout |
+| Codec/Framing (Framed + AsyncRead/Write) | ~8 | **High** | Buffer ownership model mismatch (§3) |
+| OpenRaft runtime binding | ~5 | **High** | Upstream dependency on `TokioRuntime` |
+| Timer operations | ~53 | Medium | Mechanical but pervasive |
+| Network I/O (TcpListener/Stream) | ~23 | Medium | Already partially abstracted via `net.rs` |
+| Task spawning (spawn + JoinHandle) | ~23 | Medium | Signature differences (`Send` bounds) |
+| Test macros (`#[tokio::test]`) | ~79 | Low | Mechanical find-and-replace |
+
+### Two Approaches to Abstraction
+
+**1. Feature-flag re-exports** (extend current pattern)
+
+Zero overhead, type-safe, minimal maintenance. Works for types with compatible APIs (network, timers, spawning). Breaks down where APIs differ fundamentally (codec layer, buffer ownership).
+
+**2. Trait-based generic runtime** (`R: Runtime` parameter)
+
+Maximum flexibility but massive refactor. The generic parameter propagates through `ConnectionHandler<R>`, `ShardWorker<R>`, `Server<R>`, and every async fn touching I/O. Similar to openraft's `RaftRuntime` approach.
+
+**Recommendation**: Feature-flag re-exports for everything possible, with thin adapter types only where APIs are incompatible (primarily the codec layer). This matches the existing pattern in `net.rs` and `sync.rs`, avoids generic parameter pollution, and provides zero-cost abstraction.
+
+---
+
+## 6. Potential Solutions
 
 ### Option A: Full Runtime Replacement (compio)
 
@@ -267,7 +345,7 @@ Use the low-level `io-uring` crate for high-frequency syscalls only. Keep everyt
 
 ---
 
-## 6. Safety Concerns with io_uring in Rust
+## 7. Safety Concerns with io_uring in Rust
 
 Tonbo (a Rust database project) [documented safety issues](https://tonbo.io/blog/async-rust-is-not-safe-with-io-uring) with io_uring in async Rust:
 
@@ -285,7 +363,7 @@ These are engineering challenges, not blockers. Both monoio and compio handle th
 
 ---
 
-## 7. Testing Impact Matrix
+## 8. Testing Impact Matrix
 
 | Test Type | Option A (compio) | Option B (hybrid) | Option C (targeted) |
 |-----------|-------------------|-------------------|---------------------|
@@ -299,7 +377,7 @@ These are engineering challenges, not blockers. Both monoio and compio handle th
 
 ---
 
-## 8. Effort Estimates
+## 9. Effort Estimates
 
 | Approach | Scope | Estimated Effort | Performance Gain |
 |----------|-------|-----------------|------------------|
@@ -309,7 +387,7 @@ These are engineering challenges, not blockers. Both monoio and compio handle th
 
 ---
 
-## 9. Recommendation
+## 10. Recommendation
 
 **Short-term (next milestone):** Focus on other optimizations from the [INDEX.md](INDEX.md) spec that don't require runtime changes — Arc<Value> for reads (30-50% read improvement), WAL batching (2-5x write throughput), response buffer pools. These compound with the jemalloc + TCP_NODELAY + Arc<ParsedCommand> changes already landed.
 
@@ -319,7 +397,7 @@ These are engineering challenges, not blockers. Both monoio and compio handle th
 
 ---
 
-## 10. Open Questions for Future Work
+## 11. Open Questions for Future Work
 
 1. **What compio version to target?** Releases are frequent (every 1-2 months). Pin to a stable release and track upstream closely given single-maintainer risk.
 2. **How to handle cross-shard operations in thread-per-core?** Currently uses tokio mpsc. Compio has no built-in cross-thread channel — need crossbeam or flume.
