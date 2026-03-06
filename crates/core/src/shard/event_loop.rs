@@ -191,7 +191,7 @@ impl ShardWorker {
                             let _ = response_tx.send(stats);
                         }
                         ShardMessage::WalLagStats { response_tx } => {
-                            let stats = self.collect_wal_lag_stats().await;
+                            let stats = self.collect_wal_lag_stats();
                             let _ = response_tx.send(stats);
                         }
                         ShardMessage::ScanBigKeys { threshold_bytes, max_keys, response_tx } => {

@@ -134,6 +134,7 @@ mod integration {
                 mode: DurabilityMode::Async,
                 batch_size_threshold: 1024 * 1024,
                 batch_timeout_ms: 1000,
+                ..Default::default()
             },
             metrics,
         );

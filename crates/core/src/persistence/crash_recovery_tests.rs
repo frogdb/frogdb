@@ -1249,6 +1249,7 @@ mod async_wal {
             mode: DurabilityMode::Sync,
             batch_size_threshold: 4 * 1024 * 1024,
             batch_timeout_ms: 10,
+            ..Default::default()
         };
 
         let wal = super::super::wal::RocksWalWriter::new(rocks.clone(), 0, wal_config, metrics);
