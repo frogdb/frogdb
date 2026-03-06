@@ -356,6 +356,18 @@
   ([slot-mapping-atom key docker-host? nodes base-port]
    (:value (execute-with-redirect slot-mapping-atom nil key ["DEL" key] docker-host? nodes base-port))))
 
+(defn cluster-cas
+  "Atomic compare-and-swap via Lua EVAL with redirect handling.
+   Returns 1 if swapped, 0 if expected value didn't match."
+  ([slot-mapping-atom key expected new-value docker-host? nodes]
+   (cluster-cas slot-mapping-atom key expected new-value docker-host? nodes cluster-db/default-base-port))
+  ([slot-mapping-atom key expected new-value docker-host? nodes base-port]
+   (:value (execute-with-redirect slot-mapping-atom nil key
+             ["EVAL"
+              "if redis.call('GET',KEYS[1])==ARGV[1] then redis.call('SET',KEYS[1],ARGV[2]) return 1 else return 0 end"
+              "1" key (str expected) (str new-value)]
+             docker-host? nodes base-port))))
+
 ;; ===========================================================================
 ;; Jepsen Client Implementation
 ;; ===========================================================================
@@ -433,15 +445,11 @@
             (assoc op :type :ok))
 
           :cas
-          (let [[expected new-value] (:value op)]
-            ;; CAS requires WATCH which may not work well with redirects
-            ;; For now, just do optimistic write if value matches
-            (let [current (frogdb/parse-value (cluster-get slot-mapping key docker-host? nodes base-port))]
-              (if (= current expected)
-                (do
-                  (cluster-set slot-mapping key new-value docker-host? nodes base-port)
-                  (assoc op :type :ok))
-                (assoc op :type :fail))))))))
+          (let [[expected new-value] (:value op)
+                result (cluster-cas slot-mapping key expected new-value docker-host? nodes base-port)]
+            (if (= 1 result)
+              (assoc op :type :ok)
+              (assoc op :type :fail)))))))
 
   (teardown! [this test]
     nil)
