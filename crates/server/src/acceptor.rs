@@ -4,7 +4,7 @@ use anyhow::Result;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use frogdb_core::{
     AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
-    MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    MetricsRecorder, QuorumChecker, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
     persistence::SnapshotCoordinator, shard::NewConnection,
 };
 use frogdb_telemetry::{SharedTracer, metric_names};
@@ -130,6 +130,9 @@ pub struct Acceptor {
 
     /// Whether this server is a replica (rejects write commands from clients).
     is_replica: bool,
+
+    /// Optional quorum checker for self-fencing (rejects writes on quorum loss).
+    quorum_checker: Option<Arc<dyn QuorumChecker>>,
 }
 
 impl Acceptor {
@@ -162,6 +165,7 @@ impl Acceptor {
         network_factory: Option<Arc<ClusterNetworkFactory>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
         is_replica: bool,
+        quorum_checker: Option<Arc<dyn QuorumChecker>>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         let per_request_spans = config_manager.per_request_spans_flag();
@@ -195,6 +199,7 @@ impl Acceptor {
             primary_replication_handler,
             per_request_spans,
             is_replica,
+            quorum_checker,
         }
     }
 
@@ -264,6 +269,7 @@ impl Acceptor {
                         network_factory: self.network_factory.clone(),
                         replication_tracker: self.replication_tracker.clone(),
                         primary_replication_handler: self.primary_replication_handler.clone(),
+                        quorum_checker: self.quorum_checker.clone(),
                     };
                     let config = ConnectionConfig {
                         num_shards: self.shard_senders.len(),

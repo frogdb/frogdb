@@ -6719,7 +6719,6 @@ async fn test_multi_exec_write_inside_readonly_session_returns_moved() {
 ///
 /// Kills 3 of 5 nodes, then verifies surviving nodes reject writes with CLUSTERDOWN.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: self-fencing not implemented — minority nodes may still accept writes"]
 async fn test_minority_node_rejects_writes_on_quorum_loss() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(5).await.unwrap();

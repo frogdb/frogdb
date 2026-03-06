@@ -105,6 +105,7 @@ impl ConnectionHandlerBuilder {
     }
 
     /// Set cluster dependencies from individual parts.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_cluster_parts(
         mut self,
         cluster_state: Arc<ClusterState>,
@@ -113,6 +114,7 @@ impl ConnectionHandlerBuilder {
         network_factory: Arc<ClusterNetworkFactory>,
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
+        quorum_checker: Option<Arc<dyn frogdb_core::QuorumChecker>>,
     ) -> Self {
         self.cluster = ClusterDeps::cluster(
             cluster_state,
@@ -121,6 +123,7 @@ impl ConnectionHandlerBuilder {
             network_factory,
             replication_tracker,
             primary_replication_handler,
+            quorum_checker,
         );
         self
     }
