@@ -37,15 +37,12 @@
     (let [docker? (:docker test)
           base-port (get test :base-port frogdb/default-base-port)
           nodes (or (:nodes test) ["n1" "n2" "n3"])
-          all-conns (frogdb/all-node-conns nodes docker? base-port)
-          primary (frogdb/conn-for-node "n1" docker? base-port)
-          replicas [(frogdb/conn-for-node "n2" docker? base-port)
-                    (frogdb/conn-for-node "n3" docker? base-port)]]
+          all-conns (frogdb/all-node-conns-single nodes docker? base-port)]
       (info "Opening lag client (docker?:" docker? ", nodes:" nodes ")")
       (assoc this
              :conns all-conns
-             :primary-conn primary
-             :replica-conns replicas
+             :primary-conn (get all-conns "n1")
+             :replica-conns [(get all-conns "n2") (get all-conns "n3")]
              :docker-host? docker?
              :key-counter (atom 0))))
 
@@ -125,7 +122,7 @@
     nil)
 
   (close! [this test]
-    nil))
+    (doseq [[_ c] conns] (frogdb/close-conn! c))))
 
 (defn create-client
   "Create a new lag client."

@@ -225,6 +225,14 @@
           :port port
           :timeout-ms frogdb/default-timeout-ms}})
 
+(defn make-conn-single
+  "Like make-conn but with a dedicated single-connection pool."
+  [host port]
+  {:pool (frogdb/single-conn-pool-opts)
+   :spec {:host host
+          :port port
+          :timeout-ms frogdb/default-timeout-ms}})
+
 (defn execute-asking
   "Send ASKING command before executing a command (for ASK redirects)."
   [conn cmd-vec]

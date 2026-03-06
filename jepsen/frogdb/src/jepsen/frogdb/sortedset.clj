@@ -96,7 +96,7 @@
           base-port (get test :base-port frogdb/default-base-port)]
       (info "Opening sortedset client to" node "(docker-host?:" docker? ")")
       (assoc this
-             :conn (frogdb/conn-spec node frogdb/default-port docker? base-port)
+             :conn (frogdb/conn-spec-single node frogdb/default-port docker? base-port)
              :node node
              :docker-host? docker?)))
 
@@ -148,7 +148,7 @@
     nil)
 
   (close! [this test]
-    nil))
+    (frogdb/close-conn! conn)))
 
 (defn create-client
   "Create a new sorted set client."

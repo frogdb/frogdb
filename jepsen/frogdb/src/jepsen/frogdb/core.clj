@@ -29,6 +29,8 @@
             [jepsen.frogdb.split-brain :as split-brain]
             [jepsen.frogdb.transaction :as transaction]
             [jepsen.frogdb.zombie :as zombie]
+            ;; Elle workloads
+            [jepsen.frogdb.list-append :as list-append]
             ;; Raft cluster workloads
             [jepsen.frogdb.cluster-db :as cluster-db]
             [jepsen.frogdb.cluster-client :as cluster-client]
@@ -79,7 +81,9 @@
    :leader-election leader-election/workload
    :slot-migration slot-migration/workload
    :cross-slot cross-slot/workload
-   :key-routing key-routing/workload})
+   :key-routing key-routing/workload
+   ;; Elle workloads
+   :list-append list-append/workload})
 
 (defn get-workload
   "Get a workload by name with options."
@@ -194,8 +198,9 @@
     :default "none"
     :validate [#(contains? #{:none :kill :pause :rapid-kill :partition
                              :clock-skew :disk-failure :slow-network :memory-pressure
-                             :all :all-replication :raft-cluster} (keyword %))
-               "Must be one of: none, kill, pause, rapid-kill, partition, clock-skew, disk-failure, slow-network, memory-pressure, all, all-replication, raft-cluster"]]
+                             :all :all-replication :raft-cluster
+                             :raft-cluster-membership} (keyword %))
+               "Must be one of: none, kill, pause, rapid-kill, partition, clock-skew, disk-failure, slow-network, memory-pressure, all, all-replication, raft-cluster, raft-cluster-membership"]]
 
    ["-r" "--rate RATE" "Operations per second"
     :default 10

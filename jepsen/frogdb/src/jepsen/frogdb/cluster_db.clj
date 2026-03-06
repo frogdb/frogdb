@@ -160,6 +160,20 @@
              :port (:port resolved)
              :timeout-ms client/default-timeout-ms}})))
 
+(defn conn-for-raft-node-single
+  "Like conn-for-raft-node but with a dedicated single-connection pool."
+  ([node docker-host?]
+   (conn-for-raft-node-single node docker-host? default-base-port))
+  ([node docker-host? base-port]
+   (let [host-ports (raft-cluster-host-ports base-port)
+         resolved (if docker-host?
+                    (get host-ports node {:host node :port 6379})
+                    {:host node :port 6379})]
+     {:pool (client/single-conn-pool-opts)
+      :spec {:host (:host resolved)
+             :port (:port resolved)
+             :timeout-ms client/default-timeout-ms}})))
+
 ;; ===========================================================================
 ;; Cluster Commands
 ;; ===========================================================================

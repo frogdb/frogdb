@@ -36,14 +36,12 @@
     (let [docker? (:docker test)
           base-port (get test :base-port frogdb/default-base-port)
           nodes (or (:nodes test) ["n1" "n2" "n3"])
-          all-conns (frogdb/all-node-conns nodes docker? base-port)
-          primary (frogdb/conn-for-node "n1" docker? base-port)
-          replicas (map #(frogdb/conn-for-node % docker? base-port) ["n2" "n3"])]
+          all-conns (frogdb/all-node-conns-single nodes docker? base-port)]
       (info "Opening replication client (docker?:" docker? ", nodes:" nodes ")")
       (assoc this
              :conns all-conns
-             :primary-conn primary
-             :replica-conns replicas
+             :primary-conn (get all-conns "n1")
+             :replica-conns (map #(get all-conns %) ["n2" "n3"])
              :docker-host? docker?)))
 
   (setup! [this test]
@@ -97,7 +95,7 @@
     nil)
 
   (close! [this test]
-    nil))
+    (doseq [[_ c] conns] (frogdb/close-conn! c))))
 
 (defn create-client
   "Create a new replication client."
