@@ -131,5 +131,5 @@ These are documented design aspirations, not near-term work:
 | Item | Spec |
 |------|------|
 | Tiered storage backends (S3, DynamoDB, Azure, GCS) | [TIERED.md](TIERED.md) |
-| io_uring integration | [optimizations/IO_URING.md](optimizations/IO_URING.md) |
+| io_uring integration | [optimizations/ASYNC_RUNTIME.md](optimizations/ASYNC_RUNTIME.md) |
 | Dashtable (DragonflyDB-style hash table) | [STORAGE.md](STORAGE.md) |

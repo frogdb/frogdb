@@ -9,7 +9,7 @@ FrogDB's profiling under a 214K ops/sec write-heavy workload shows **86% of CPU 
 3. **Reducing context switches**: The kernel can process submissions without switching to userspace.
 4. **Multishot operations**: A single SQE can serve multiple accept() or recv() completions.
 
-**Expected improvement**: 30-50% throughput increase based on DragonflyDB benchmarks and [IO.md](IO.md) estimates. The optimizations spec already identifies this as a planned I/O optimization.
+**Expected improvement**: 30-50% throughput increase based on DragonflyDB benchmarks.
 
 **Target platform**: Linux 5.10+ for production. macOS remains the development platform with a tokio-based fallback.
 
@@ -411,7 +411,6 @@ These are engineering challenges, not blockers. Both monoio and compio handle th
 
 ## References
 
-- [IO.md](IO.md) — io_uring listed as an I/O optimization
 - [DragonflyDB shared-nothing architecture](https://github.com/dragonflydb/dragonfly/blob/main/docs/df-share-nothing.md)
 - [DragonflyDB vs Valkey threading comparison](https://www.dragonflydb.io/blog/why-threading-models-matter-dragonfly-vs-valkey)
 - [Apache Iggy's compio migration](https://iggy.apache.org/blogs/2025/11/17/websocket-io-uring/) — Most relevant case study: tokio→compio for a thread-per-core server
