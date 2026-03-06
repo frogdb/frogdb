@@ -134,6 +134,9 @@ pub struct Acceptor {
 
     /// Optional quorum checker for self-fencing (write rejection on quorum loss).
     quorum_checker: Option<Arc<dyn QuorumChecker>>,
+
+    /// Optional task monitor for connection handler tasks.
+    conn_monitor: Option<tokio_metrics::TaskMonitor>,
 }
 
 impl Acceptor {
@@ -167,6 +170,7 @@ impl Acceptor {
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
         is_replica: bool,
         quorum_checker: Option<Arc<dyn QuorumChecker>>,
+        conn_monitor: Option<tokio_metrics::TaskMonitor>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         let per_request_spans = config_manager.per_request_spans_flag();
@@ -201,6 +205,7 @@ impl Acceptor {
             per_request_spans,
             is_replica,
             quorum_checker,
+            conn_monitor,
         }
     }
 
@@ -294,7 +299,7 @@ impl Acceptor {
                     let metrics_recorder = self.metrics_recorder.clone();
                     let current_connections = self.current_connections.clone();
 
-                    spawn(async move {
+                    let conn_future = async move {
                         let handler = ConnectionHandler::from_deps(
                             socket,
                             addr,
@@ -319,7 +324,13 @@ impl Acceptor {
                             current as f64,
                             &[],
                         );
-                    });
+                    };
+
+                    if let Some(ref monitor) = self.conn_monitor {
+                        spawn(monitor.instrument(conn_future));
+                    } else {
+                        spawn(conn_future);
+                    }
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to accept connection");

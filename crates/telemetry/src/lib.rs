@@ -17,6 +17,7 @@ pub mod otlp;
 pub mod prometheus_recorder;
 pub mod status;
 pub mod system;
+pub mod task_monitors;
 pub mod tracing;
 pub mod typed;
 
@@ -36,6 +37,7 @@ pub use latency_bands::LatencyBandTracker;
 pub use prometheus_recorder::PrometheusRecorder;
 pub use status::{ServerStatus, StatusCollector, StatusCollectorConfig};
 pub use system::SystemMetricsCollector;
+pub use task_monitors::TaskMonitorRegistry;
 pub use tracing::{
     OtelTracer, RecentTraceEntry, RequestSpan, ScatterGatherSpan, SharedTracer, TracingStatus,
     create_tracer,

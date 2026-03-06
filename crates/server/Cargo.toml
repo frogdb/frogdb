@@ -13,6 +13,7 @@ path = "src/main.rs"
 shuttle = ["dep:shuttle", "frogdb-core/shuttle"]
 turmoil = ["dep:turmoil"]
 causal-profile = ["dep:tokio-coz"]
+profiling = ["dep:tracing-flame"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
@@ -48,6 +49,8 @@ hex.workspace = true
 shuttle = { workspace = true, optional = true }
 turmoil = { workspace = true, optional = true }
 tokio-coz = { workspace = true, optional = true }
+tokio-metrics = { workspace = true }
+tracing-flame = { workspace = true, optional = true }
 openraft.workspace = true
 axum.workspace = true
 tower.workspace = true

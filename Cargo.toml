@@ -136,6 +136,10 @@ openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 axum = "0.7"
 tower = "0.5"
 
+# Profiling
+tokio-metrics = "0.4"
+tracing-flame = "0.2"
+
 [profile.dev]
 split-debuginfo = "unpacked"
 debug = "line-tables-only"

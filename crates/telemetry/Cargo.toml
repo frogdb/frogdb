@@ -37,6 +37,9 @@ tracing = { workspace = true }
 dashmap = "6"
 parking_lot = "0.12"
 
+# Task-level profiling
+tokio-metrics = { workspace = true }
+
 # System info
 sysinfo = "0.33"
 
