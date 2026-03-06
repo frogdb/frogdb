@@ -17,7 +17,6 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 
 | Item | Files | Description | Spec |
 |------|-------|-------------|------|
-| Self-fencing | — | Active write rejection on quorum loss not explicitly implemented (Raft provides only implicit fencing) | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#43-self-fencing) |
 | Replica-lag scoring | `crates/server/src/failure_detector.rs` | Auto-failover picks first available replica arbitrarily instead of scoring by replication lag | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#phase-4-failover-support--partial) |
 | Split-brain discarded-writes log | — | No `split_brain_discarded.log` for divergent writes after partition healing | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#45-split-brain-handling) |
 | DFLYMIGRATE streaming protocol | — | High-throughput streaming slot migration not implemented; only standard key-by-key MIGRATE exists | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#52-migration-protocol-commands-dflymigrate) |

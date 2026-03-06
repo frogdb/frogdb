@@ -48,7 +48,8 @@ use bytes::BytesMut;
 use frogdb_core::{
     AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
     CommandFlags, CommandRegistry, MetricsRecorder, PauseMode, PubSubMessage, PubSubSender,
-    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry, persistence::SnapshotCoordinator,
+    QuorumChecker, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    persistence::SnapshotCoordinator,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use frogdb_telemetry::SharedTracer;
@@ -177,6 +178,9 @@ pub struct ConnectionHandler {
 
     /// Whether this server is a replica (rejects write commands from clients).
     is_replica: bool,
+
+    /// Optional quorum checker for self-fencing (rejects writes on quorum loss).
+    quorum_checker: Option<Arc<dyn QuorumChecker>>,
 }
 
 /// Result of processing a single command frame.
@@ -265,6 +269,7 @@ impl ConnectionHandler {
             resp3_buf: BytesMut::with_capacity(4096),
             per_request_spans: config.per_request_spans,
             is_replica: config.is_replica,
+            quorum_checker: cluster.quorum_checker,
         }
     }
 
@@ -330,6 +335,7 @@ impl ConnectionHandler {
             network_factory,
             replication_tracker,
             primary_replication_handler,
+            quorum_checker: None,
         };
         let config = ConnectionConfig {
             num_shards,

@@ -148,6 +148,10 @@ pub struct Server {
     /// Optional network factory for cluster node management.
     network_factory: Option<Arc<ClusterNetworkFactory>>,
 
+    /// Optional failure detector (only when cluster mode is enabled).
+    /// Used as a `QuorumChecker` for self-fencing on quorum loss.
+    failure_detector: Option<Arc<FailureDetector>>,
+
     /// Optional failure detector task handle (only when cluster mode is enabled).
     failure_detector_handle: Option<crate::net::JoinHandle<()>>,
 
@@ -921,6 +925,7 @@ impl Server {
             latency_baseline: None,
             band_tracker,
             network_factory,
+            failure_detector,
             failure_detector_handle,
             replica_handler,
             replica_frame_rx,
@@ -1294,6 +1299,10 @@ impl Server {
         // Create main acceptor (regular client connections)
         // When admin port is enabled, this acceptor blocks admin commands
         let is_replica = self.config.replication.is_replica();
+        let quorum_checker = self
+            .failure_detector
+            .clone()
+            .map(|d| d as Arc<dyn frogdb_core::QuorumChecker>);
         let acceptor = Acceptor::new(
             self.listener,
             self.new_conn_senders.clone(),
@@ -1321,6 +1330,7 @@ impl Server {
             self.network_factory.clone(),
             self.primary_replication_handler.clone(),
             is_replica,
+            quorum_checker.clone(),
         );
 
         // Spawn main acceptor task
@@ -1359,6 +1369,7 @@ impl Server {
                 self.network_factory.clone(),
                 self.primary_replication_handler.clone(),
                 is_replica,
+                quorum_checker.clone(),
             );
 
             Some(spawn(async move {

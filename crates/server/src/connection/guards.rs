@@ -113,6 +113,18 @@ impl ConnectionHandler {
             ));
         }
 
+        // Self-fencing: reject writes when cluster quorum is lost
+        if let Some(ref qc) = self.quorum_checker
+            && let Some(cmd_impl) = self.registry.get(cmd_name)
+            && cmd_impl.flags().contains(CommandFlags::WRITE)
+            && !self.is_fencing_exempt(cmd_name)
+            && !qc.has_quorum()
+        {
+            return Some(Response::error(
+                "CLUSTERDOWN The cluster is down (quorum lost)",
+            ));
+        }
+
         // Block admin commands on regular port when admin port is enabled
         if self.admin_enabled
             && !self.is_admin
@@ -167,6 +179,20 @@ impl ConnectionHandler {
         }
 
         None
+    }
+
+    /// Check if a command is exempt from self-fencing (quorum loss write rejection).
+    /// Infrastructure and connection-level commands are always allowed.
+    pub(crate) fn is_fencing_exempt(&self, cmd_name: &str) -> bool {
+        if matches!(cmd_name, "CLUSTER" | "PING" | "COMMAND" | "TIME" | "DEBUG") {
+            return true;
+        }
+        self.registry.get_entry(cmd_name).is_some_and(|entry| {
+            matches!(
+                entry.execution_strategy(),
+                ExecutionStrategy::ConnectionLevel(_)
+            )
+        })
     }
 
     /// Check if a command is exempt from slot validation in cluster mode.
