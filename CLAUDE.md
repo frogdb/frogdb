@@ -25,7 +25,7 @@ just concurrency                        # run Shuttle + Turmoil concurrency test
 
 - when running a single test, target the owning crate to avoid rebuilding the entire workspace: `just test frogdb-server test_name` or `cargo test -p frogdb-server test_name -- --nocapture`
 - `cargo test` accepts substring patterns (not regex) for test name filtering; use `cargo nextest run -E 'test(/pattern/)'` for regex
-- this project uses multiple git worktrees; to clean stale artifacts across all worktrees run `just clean-worktrees`
+- this project uses multiple git worktrees; to clean stale artifacts in the current worktree run `just clean-stale`
 - if theres a script/tool, create a Justfile target for it
 
 ## Design Documentation
