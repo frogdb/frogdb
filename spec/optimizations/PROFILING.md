@@ -1,6 +1,9 @@
 # Profiling Infrastructure
 
-**Build Profile** - Add to `Cargo.toml`:
+## Build Profiles
+
+A `profiling` Cargo profile is configured in the workspace `Cargo.toml`:
+
 ```toml
 [profile.profiling]
 inherits = "release"
@@ -8,15 +11,17 @@ debug = true
 strip = false
 ```
 
-**CPU Profiling Tools:**
+Build with `just build-profile`.
+
+## CPU Profiling (sampled)
 
 | Tool | Platform | Command |
 |------|----------|---------|
-| cargo-flamegraph | All | `cargo flamegraph --profile profiling --bin frogdb-server` |
-| samply | All | `samply record ./target/profiling/frogdb-server` |
-| perf | Linux | `perf record -g --call-graph dwarf ./target/profiling/frogdb-server` |
+| cargo-flamegraph | All | `just profile-flamegraph` |
+| samply | All | `just profile-samply` |
+| perf | Linux | `just profile-perf` |
 
-**Memory Profiling Tools:**
+## Memory Profiling
 
 | Tool | Platform | Use Case |
 |------|----------|----------|
@@ -24,49 +29,92 @@ strip = false
 | DHAT (valgrind) | Linux | Heap profiling |
 | jemalloc prof | All | Production heap profiling |
 
-**Profiling Workflow:**
+## tokio-metrics (always-on)
+
+Per-task busy/idle/scheduled timing via `TaskMonitor` wrappers. These add only lightweight atomic counters and are always compiled in.
+
+**Instrumented tasks:**
+
+| Task | Monitor name | Location |
+|------|-------------|----------|
+| Connection handlers | `connection` | `crates/server/src/acceptor.rs` |
+| Shard workers | `shard_worker` | `crates/server/src/server/mod.rs` |
+| WAL periodic sync | `wal_sync` | `crates/persistence/src/wal.rs` |
+
+**Registry:** `TaskMonitorRegistry` (`crates/telemetry/src/task_monitors.rs`) creates monitors and spawns a background collector that drains interval stats every 10 seconds into the Prometheus metrics recorder.
+
+**Exposed metrics** (label `task="<monitor name>"`):
+
+- `frogdb_task_instrumented_count` — tasks created in the interval
+- `frogdb_task_dropped_count` — tasks dropped in the interval
+- `frogdb_task_total_poll_duration_seconds` — total CPU time spent polling
+- `frogdb_task_total_scheduled_duration_seconds` — time waiting in the executor queue
+- `frogdb_task_total_idle_duration_seconds` — time spent awaiting I/O / timers
+- `frogdb_task_mean_poll_duration_seconds` — mean poll duration
+
+**Usage:**
 ```bash
-# 1. Build with debug symbols
-cargo build --profile profiling
-
-# 2. Start server and run workload
-./target/profiling/frogdb-server &
-redis-benchmark -h 127.0.0.1 -p 6379 -n 100000 -c 50 -t get,set
-
-# 3. Generate flamegraph
-cargo flamegraph --profile profiling --bin frogdb-server
+just run
+curl -s localhost:9090/metrics | grep frogdb_task_
 ```
 
-**Async Task Profiling:**
+## Tracing spans (always-on)
 
-For profiling tokio task-level performance, use `tokio-metrics` and `tracing` spans to measure per-task busy/idle/scheduled timing and identify latency bottlenecks.
+Span instrumentation for critical paths. Spans compile to a single atomic load when no matching subscriber is active.
 
-Instrumentation is split into two tiers:
+| Span | Location | Gate |
+|------|----------|------|
+| `wal_sync` | `crates/persistence/src/wal.rs` — periodic flush loop | Unconditional |
+| `snapshot_create` | `crates/persistence/src/snapshot.rs` — background snapshot task | Unconditional |
+| `shard_execute` | `crates/core/src/shard/event_loop.rs` — command execution | `per_request_spans` |
+| `shard_exec_txn` | `crates/core/src/shard/event_loop.rs` — transaction execution | `per_request_spans` |
+| `active_expiry` | `crates/core/src/shard/event_loop.rs` — TTL expiry sweep | `per_request_spans` |
 
-*Always-on (production)* — The instrumentation points themselves. These live in production code unconditionally. `tracing` spans compile to a single atomic load when no matching subscriber is active; `tokio-metrics` `TaskMonitor` wrappers add only lightweight atomic counters.
+Spans gated on `per_request_spans` are controlled at runtime via `CONFIG SET per-request-spans yes|no`.
 
-| Tool | Crate | Use Case |
-|------|-------|----------|
-| tokio-metrics | `tokio-metrics` | Per-task busy/idle/scheduled timing via `TaskMonitor` |
-| tracing spans | `tracing` | Span-based latency analysis at task/operation granularity |
+## tracing-flame (feature-gated)
 
-- [x] Add `tokio-metrics` `TaskMonitor` instrumentation for key task types (connection handler, shard workers, WAL sync)
-- [x] Add `tracing` span instrumentation for critical request paths (WAL sync, snapshots, active expiry, transactions)
+Async-aware flamegraphs that capture await/idle time in addition to CPU time. Compiled out by default behind `--features profiling`.
 
-*Feature-gated (`profiling`)* — The subscriber layers that consume spans. These have non-trivial CPU/memory overhead and are compiled out by default behind a cargo feature flag (`--features profiling`), following the existing pattern in `crates/server/Cargo.toml` (cf. `causal-profile = ["dep:tokio-coz"]`).
+**Build & run:**
+```bash
+just build-profiling
+just run-profiling
 
-| Tool | Crate | Use Case |
-|------|-------|----------|
-| tracing-timing | `tracing-timing` | Latency histograms derived from tracing spans |
-| tracing-flame | `tracing-flame` | Async-aware flamegraphs — captures await/idle time, not just CPU |
-| tracing-tracy | `tracing-tracy` | Real-time interactive profiling via Tracy with nanosecond precision |
+# Or with a custom output path:
+FROGDB_FLAME_OUTPUT=my-trace.folded just run-profiling
+```
 
-- ~Integrate `tracing-timing` for per-operation latency histograms~ — Skipped: redundant with existing Prometheus latency histograms via CommandTimer
-- [x] Add `tracing-flame` `FlameLayer` for async-aware flamegraph generation
-- ~Evaluate `tracing-tracy` for interactive real-time profiling during development~ — Skipped: requires Tracy GUI; samply and cargo-flamegraph cover interactive profiling
+**Generate flamegraph:**
+```bash
+# Run a workload
+redis-benchmark -h 127.0.0.1 -p 6379 -n 100000 -c 50 -t get,set
 
-> **Research concept:** For causal profiling adapted to async runtimes, see [TOKIO_CAUSAL_PROFILER.md](../TOKIO_CAUSAL_PROFILER.md).
-- [ ] Add `scan.rs` benchmark - SCAN with 10K, 100K, 1M keys
-- [ ] Add `large_values.rs` benchmark - GET/SET with 1KB, 10KB, 100KB values
-- [ ] Add `sorted_set_scale.rs` benchmark - ZADD/ZRANGE at large cardinalities
-- [ ] Extend `slowlog.rs` with latency histograms via `tracing-timing`
+# Stop server (Ctrl-C) — the FlushGuard writes the folded stack file on drop
+# Then convert to SVG:
+inferno-flamegraph < tracing-flame.folded > flamegraph.svg
+```
+
+The `FlameLayer` is set up in `crates/server/src/main.rs`, following the same `#[cfg(feature = "...")]` pattern as `causal-profile`.
+
+## Causal Profiling (tokio-coz)
+
+See [TOKIO_CAUSAL_PROFILER.md](../TOKIO_CAUSAL_PROFILER.md) for the async-adapted causal profiling design.
+
+```bash
+just build-causal
+just causal-profile
+```
+
+## Not integrated
+
+| Tool | Reason |
+|------|--------|
+| tracing-timing | Redundant with existing Prometheus latency histograms via `CommandTimer` |
+| tracing-tracy | Requires Tracy GUI; samply and cargo-flamegraph cover interactive profiling |
+
+## Benchmark TODOs
+
+- [ ] Add `scan.rs` benchmark — SCAN with 10K, 100K, 1M keys
+- [ ] Add `large_values.rs` benchmark — GET/SET with 1KB, 10KB, 100KB values
+- [ ] Add `sorted_set_scale.rs` benchmark — ZADD/ZRANGE at large cardinalities
