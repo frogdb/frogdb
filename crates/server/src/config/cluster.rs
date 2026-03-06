@@ -63,6 +63,12 @@ pub struct ClusterConfigSection {
     /// Number of consecutive failures before marking a node as FAIL (default: 5).
     #[serde(default = "default_fail_threshold")]
     pub fail_threshold: u32,
+
+    /// Reject write commands when this node cannot form a quorum with reachable nodes.
+    /// When enabled, writes return CLUSTERDOWN if quorum is lost, preventing
+    /// split-brain data divergence. Reads remain available. (default: true)
+    #[serde(default = "default_self_fence_on_quorum_loss")]
+    pub self_fence_on_quorum_loss: bool,
 }
 
 pub const DEFAULT_CLUSTER_BUS_ADDR: &str = "127.0.0.1:16379";
@@ -71,6 +77,10 @@ pub const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 250;
 pub const DEFAULT_CLUSTER_CONNECT_TIMEOUT_MS: u64 = 5000;
 pub const DEFAULT_CLUSTER_REQUEST_TIMEOUT_MS: u64 = 10000;
 pub const DEFAULT_FAIL_THRESHOLD: u32 = 5;
+
+fn default_self_fence_on_quorum_loss() -> bool {
+    true
+}
 
 fn default_cluster_bus_addr() -> String {
     DEFAULT_CLUSTER_BUS_ADDR.to_string()
@@ -115,6 +125,7 @@ impl Default for ClusterConfigSection {
             request_timeout_ms: default_cluster_request_timeout_ms(),
             auto_failover: false,
             fail_threshold: default_fail_threshold(),
+            self_fence_on_quorum_loss: default_self_fence_on_quorum_loss(),
         }
     }
 }

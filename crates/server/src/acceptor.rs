@@ -4,7 +4,8 @@ use anyhow::Result;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use frogdb_core::{
     AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
-    MetricsRecorder, QuorumChecker, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    command::QuorumChecker,
     persistence::SnapshotCoordinator, shard::NewConnection,
 };
 use frogdb_telemetry::{SharedTracer, metric_names};
@@ -131,7 +132,7 @@ pub struct Acceptor {
     /// Whether this server is a replica (rejects write commands from clients).
     is_replica: bool,
 
-    /// Optional quorum checker for self-fencing (rejects writes on quorum loss).
+    /// Optional quorum checker for self-fencing (write rejection on quorum loss).
     quorum_checker: Option<Arc<dyn QuorumChecker>>,
 }
 

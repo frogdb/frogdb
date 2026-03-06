@@ -31,7 +31,7 @@ This plan covers the implementation of FrogDB clustering as specified in the ROA
 
 ### What Needs to Be Built
 1. **DFLYMIGRATE Protocol** — High-throughput streaming slot migration (current migration uses key-by-key MIGRATE only)
-2. **Self-Fencing** — Active write rejection on quorum loss (Raft provides implicit fencing but no explicit self-fence mechanism)
+2. ~~**Self-Fencing**~~ — ✅ Implemented: writes rejected with CLUSTERDOWN when quorum lost (`self_fence_on_quorum_loss` config, default true)
 3. **Automated Failover Refinement** — Replica-lag scoring for promotion (current auto-failover picks first available replica arbitrarily)
 4. **Split-Brain Recovery** — Divergent-write logging and rollback (partial: Raft leader validation exists, but no `split_brain_discarded.log`)
 5. **Chaos Testing** — Jepsen/Turmoil-based distributed correctness testing for cluster scenarios
@@ -441,7 +441,7 @@ redis-cli -p 6379 MSET {user}:a val1 {user}:b val2
 ### Phase 4: Failover Support — ⚠️ PARTIAL
 **Goal**: Enable automatic and manual failover
 
-> **Status**: CLUSTER FAILOVER (graceful/FORCE/TAKEOVER) + Raft leader election + failure detector + quorum checking all implemented. Auto-failover exists but defaults off and lacks replica-lag scoring. Self-fencing not explicitly implemented (Raft provides implicit fencing). Split-brain discarded-writes log not implemented.
+> **Status**: CLUSTER FAILOVER (graceful/FORCE/TAKEOVER) + Raft leader election + failure detector + quorum checking all implemented. Auto-failover exists but defaults off and lacks replica-lag scoring. **Self-fencing implemented**: writes rejected with CLUSTERDOWN when quorum lost (`self_fence_on_quorum_loss` config, default true; check in `run_pre_checks`). Split-brain discarded-writes log not implemented.
 
 #### 4.1 Internal Role Commands (Admin API)
 **Files:** `crates/server/src/admin_api.rs`
@@ -693,8 +693,8 @@ Phase 3: Client Protocol ✅ COMPLETE
    └── MOVED, ASK, ASKING, READONLY, CROSSSLOT
          ↓
 Phase 4: Failover ⚠️ PARTIAL
-   └── ✅ CLUSTER FAILOVER, Raft leader election, failure detector, quorum checking
-   └── ❌ Self-fencing, split-brain discarded-writes log, replica-lag scoring
+   └── ✅ CLUSTER FAILOVER, Raft leader election, failure detector, quorum checking, self-fencing
+   └── ❌ Split-brain discarded-writes log, replica-lag scoring
          ↓
 Phase 5: Migration ⚠️ PARTIAL
    └── ✅ Raft migration metadata, CLUSTER SETSLOT, standard MIGRATE (DUMP/RESTORE)
@@ -714,6 +714,6 @@ Phase 6: Testing ⚠️ PARTIAL
 | 1 | ✅ | **High** | Working primary-replica replication | — |
 | 2 | ⚠️ | **Medium** | Raft topology, CLUSTER commands, admin API | Admin write endpoints (low priority — Raft commands suffice) |
 | 3 | ✅ | **Medium** | Redis Cluster client compatibility | — |
-| 4 | ⚠️ | **High** | Manual/automatic failover | Self-fencing, split-brain log, replica-lag scoring |
+| 4 | ⚠️ | **High** | Manual/automatic failover, self-fencing | Split-brain log, replica-lag scoring |
 | 5 | ⚠️ | **High** | Slot migration (metadata + standard MIGRATE) | DFLYMIGRATE streaming protocol |
 | 6 | ⚠️ | **Medium** | 212 integration tests | Chaos/Jepsen testing |

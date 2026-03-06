@@ -150,7 +150,6 @@ pub struct Server {
     network_factory: Option<Arc<ClusterNetworkFactory>>,
 
     /// Optional failure detector (only when cluster mode is enabled).
-    /// Used as a `QuorumChecker` for self-fencing on quorum loss.
     failure_detector: Option<Arc<FailureDetector>>,
 
     /// Optional failure detector task handle (only when cluster mode is enabled).
@@ -454,18 +453,16 @@ impl Server {
             let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
             tracker.set_offset(repl_state.replication_offset);
 
-            let lag_config = LagThresholdConfig {
-                threshold_bytes: config.replication.replication_lag_threshold_bytes,
-                threshold_secs: config.replication.replication_lag_threshold_secs,
-                cooldown: Duration::from_secs(config.replication.fullresync_cooldown_secs),
-            };
-
             let handler = Arc::new(PrimaryReplicationHandler::new(
                 repl_state,
                 tracker.clone(),
                 rocks_store.clone(),
                 config.persistence.data_dir.clone(),
-                lag_config,
+                LagThresholdConfig {
+                    threshold_bytes: config.replication.replication_lag_threshold_bytes,
+                    threshold_secs: config.replication.replication_lag_threshold_secs,
+                    cooldown: Duration::from_secs(config.replication.fullresync_cooldown_secs),
+                },
             ));
 
             // Store a reference for PSYNC connection handoff
@@ -1304,13 +1301,19 @@ impl Server {
             None
         };
 
+        // Create quorum checker for self-fencing (write rejection on quorum loss)
+        let quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>> =
+            if self.config.cluster.self_fence_on_quorum_loss {
+                self.failure_detector
+                    .clone()
+                    .map(|fd| fd as Arc<dyn frogdb_core::command::QuorumChecker>)
+            } else {
+                None
+            };
+
         // Create main acceptor (regular client connections)
         // When admin port is enabled, this acceptor blocks admin commands
         let is_replica = self.config.replication.is_replica();
-        let quorum_checker = self
-            .failure_detector
-            .clone()
-            .map(|d| d as Arc<dyn frogdb_core::QuorumChecker>);
         let acceptor = Acceptor::new(
             self.listener,
             self.new_conn_senders.clone(),

@@ -116,15 +116,17 @@ impl ConnectionHandlerBuilder {
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
         quorum_checker: Option<Arc<dyn frogdb_core::QuorumChecker>>,
     ) -> Self {
-        self.cluster = ClusterDeps::cluster(
-            cluster_state,
-            node_id,
-            raft,
-            network_factory,
-            replication_tracker,
-            primary_replication_handler,
+        self.cluster = ClusterDeps {
             quorum_checker,
-        );
+            ..ClusterDeps::cluster(
+                cluster_state,
+                node_id,
+                raft,
+                network_factory,
+                replication_tracker,
+                primary_replication_handler,
+            )
+        };
         self
     }
 
