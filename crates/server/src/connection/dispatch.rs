@@ -243,6 +243,8 @@ impl ConnectionHandler {
                     )])
                 }
             }
+            b"STRUCTSIZE" => Some(vec![self.handle_debug_structsize()]),
+            b"HELP" => Some(vec![self.handle_debug_help()]),
             b"VLL" => Some(vec![self.handle_debug_vll(args).await]),
             b"PUBSUB" => {
                 if args.len() > 1 && args[1].eq_ignore_ascii_case(b"LIMITS") {

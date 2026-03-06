@@ -33,8 +33,6 @@ Items described in spec documentation as if implemented, but not present in the 
 | Cluster pub/sub forwarding              | `ClusterPubSubForwarder` trait, `LocalOnlyForwarder`, `broadcast_to_cluster()`, `forward_to_slot_owner()` — entire cross-node pub/sub design (~440 lines). Current pub/sub is single-node only. | [PUBSUB.md](PUBSUB.md#cluster-mode)                                |
 | Blocking commands during slot migration | `on_slot_migration_key_transferred()` callback to send `-MOVED` to blocked clients during migration. `ShardWaitQueue` has no migration awareness.                                               | [BLOCKING.md](BLOCKING.md#cluster-mode-slot-migration-interaction) |
 | DTrace/USDT probes                      | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Feature does not exist in Cargo.toml.                                                                                     | [DEBUGGING.md](DEBUGGING.md#dtrace-usdt-probes)                    |
-| DEBUG STRUCTSIZE                        | Show sizes of internal data structures                                                                                                                                                          | [types/SERVER.md](types/SERVER.md)                                 |
-| JSON.DEBUG                              | Debug info for JSON values                                                                                                                                                                      | [types/JSON.md](types/JSON.md)                                     |
 
 ---
 

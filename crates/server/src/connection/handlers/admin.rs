@@ -234,6 +234,8 @@ impl AdminHandler {
         let help = vec![
             "DEBUG SLEEP <seconds>",
             "    Sleep for the specified number of seconds.",
+            "DEBUG STRUCTSIZE",
+            "    Show sizes of internal data structures.",
             "DEBUG HELP",
             "    Show this help.",
         ];

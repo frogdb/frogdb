@@ -13,6 +13,9 @@ const NIL: u32 = u32::MAX;
 const MAX_LEVEL: usize = 32;
 const P: f64 = 0.25;
 
+/// Size of a single skip list `Node` in bytes (exposed for DEBUG STRUCTSIZE).
+pub const NODE_SIZE: usize = std::mem::size_of::<Node>();
+
 /// Arena-indexed skip list with span-based O(log n) rank.
 #[derive(Debug, Clone)]
 pub struct SkipList {

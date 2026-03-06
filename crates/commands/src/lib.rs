@@ -308,4 +308,5 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(json::JsonClearCommand);
     registry.register(json::JsonToggleCommand);
     registry.register(json::JsonMergeCommand);
+    registry.register(json::JsonDebugCommand);
 }

@@ -37,6 +37,7 @@ pub use glob::glob_match;
 pub use hyperloglog::{HLL_DENSE_SIZE, HLL_REGISTERS, HyperLogLogValue};
 pub use json::{
     DEFAULT_JSON_MAX_DEPTH, DEFAULT_JSON_MAX_SIZE, JsonError, JsonLimits, JsonType, JsonValue,
+    estimate_json_size,
 };
 pub use sync::{LockError, MutexExt, RwLockExt};
 pub use timeseries::{

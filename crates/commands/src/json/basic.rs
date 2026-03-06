@@ -382,3 +382,75 @@ impl Command for JsonTypeCommand {
 
     impl_keys_first!();
 }
+
+// ============================================================================
+// JSON.DEBUG - Debug info for JSON values
+// ============================================================================
+
+pub struct JsonDebugCommand;
+
+impl Command for JsonDebugCommand {
+    fn name(&self) -> &'static str {
+        "JSON.DEBUG"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(1) // subcommand [key] [path]
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY | CommandFlags::FAST
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        if args.is_empty() {
+            return Err(CommandError::WrongArity {
+                command: "JSON.DEBUG",
+            });
+        }
+
+        let subcommand = String::from_utf8_lossy(&args[0]).to_uppercase();
+
+        match subcommand.as_str() {
+            "MEMORY" => {
+                if args.len() < 2 {
+                    return Err(CommandError::WrongArity {
+                        command: "JSON.DEBUG MEMORY",
+                    });
+                }
+                let key = &args[1];
+                let path = parse_path(args.get(2));
+
+                let json = get_json!(ctx, key);
+
+                let sizes = json
+                    .debug_memory(&path)
+                    .map_err(json_error_to_command_error)?;
+                if sizes.is_empty() {
+                    return Ok(Response::null());
+                }
+
+                Ok(single_or_multi(sizes, |s| Response::Integer(s as i64)))
+            }
+            "HELP" => Ok(Response::Array(vec![
+                Response::bulk("JSON.DEBUG MEMORY <key> [path]"),
+                Response::bulk("    Report memory usage of a JSON value."),
+                Response::bulk("JSON.DEBUG HELP"),
+                Response::bulk("    Show this help."),
+            ])),
+            _ => Err(CommandError::InvalidArgument {
+                message: format!("unknown JSON.DEBUG subcommand '{}'", subcommand),
+            }),
+        }
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        let subcommand = String::from_utf8_lossy(args.first().map(|b| b.as_ref()).unwrap_or(b""))
+            .to_uppercase();
+        if subcommand == "MEMORY" && args.len() >= 2 {
+            vec![args[1].as_ref()]
+        } else {
+            vec![]
+        }
+    }
+}
