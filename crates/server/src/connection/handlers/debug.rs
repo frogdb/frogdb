@@ -2,6 +2,7 @@
 //!
 //! This module handles DEBUG subcommands:
 //! - DEBUG SLEEP - Sleep without blocking the shard
+//! - DEBUG STRUCTSIZE - Show sizes of internal data structures
 //! - DEBUG TRACING STATUS - Show tracing status
 //! - DEBUG TRACING RECENT - Show recent traces
 //! - DEBUG VLL - Show VLL queue info
@@ -9,9 +10,14 @@
 //! - DEBUG BUNDLE GENERATE - Generate a diagnostic bundle
 //! - DEBUG BUNDLE LIST - List available bundles
 
+use std::mem;
 use std::time::Duration;
 
 use bytes::Bytes;
+use frogdb_core::{
+    BloomFilterValue, HashValue, HyperLogLogValue, JsonValue, KeyMetadata, ListValue, SetValue,
+    SortedSetValue, StreamValue, StringValue, TimeSeriesValue, Value,
+};
 use frogdb_protocol::Response;
 
 use crate::connection::ConnectionHandler;
@@ -43,6 +49,57 @@ impl ConnectionHandler {
         tokio::time::sleep(Duration::from_millis(duration_ms)).await;
 
         Response::ok()
+    }
+
+    /// Handle DEBUG HELP command.
+    pub(crate) fn handle_debug_help(&self) -> Response {
+        let help = vec![
+            "DEBUG SLEEP <seconds>",
+            "    Sleep for the specified number of seconds.",
+            "DEBUG STRUCTSIZE",
+            "    Show sizes of internal data structures.",
+            "DEBUG TRACING STATUS",
+            "    Show tracing configuration and status.",
+            "DEBUG TRACING RECENT [count]",
+            "    Show recent trace entries.",
+            "DEBUG VLL [shard_id]",
+            "    Show VLL queue info.",
+            "DEBUG PUBSUB LIMITS",
+            "    Show pub/sub subscription usage vs limits.",
+            "DEBUG BUNDLE GENERATE [DURATION <seconds>]",
+            "    Generate a diagnostic bundle.",
+            "DEBUG BUNDLE LIST",
+            "    List available diagnostic bundles.",
+            "DEBUG OBJECT <key>",
+            "    Inspect key internals.",
+            "DEBUG HASHING <key> [key ...]",
+            "    Show hash slot and shard for keys.",
+            "DEBUG HELP",
+            "    Show this help.",
+        ];
+        Response::Array(help.into_iter().map(Response::bulk).collect())
+    }
+
+    /// Handle DEBUG STRUCTSIZE command - show sizes of internal data structures.
+    pub(crate) fn handle_debug_structsize(&self) -> Response {
+        let pairs = [
+            ("bits", usize::BITS as usize),
+            ("value", mem::size_of::<Value>()),
+            ("string", mem::size_of::<StringValue>()),
+            ("list", mem::size_of::<ListValue>()),
+            ("set", mem::size_of::<SetValue>()),
+            ("hash", mem::size_of::<HashValue>()),
+            ("sortedset", mem::size_of::<SortedSetValue>()),
+            ("stream", mem::size_of::<StreamValue>()),
+            ("json", mem::size_of::<JsonValue>()),
+            ("bloom", mem::size_of::<BloomFilterValue>()),
+            ("hll", mem::size_of::<HyperLogLogValue>()),
+            ("timeseries", mem::size_of::<TimeSeriesValue>()),
+            ("skiplistnode", frogdb_core::skiplist::NODE_SIZE),
+            ("metadata", mem::size_of::<KeyMetadata>()),
+        ];
+        let output: Vec<String> = pairs.iter().map(|(k, v)| format!("{}:{}", k, v)).collect();
+        Response::Bulk(Some(Bytes::from(output.join(" "))))
     }
 
     /// Handle DEBUG TRACING STATUS command.

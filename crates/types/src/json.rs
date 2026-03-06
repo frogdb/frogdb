@@ -182,6 +182,12 @@ impl JsonValue {
         self.cached_size + mem::size_of::<Self>()
     }
 
+    /// Estimate memory usage of JSON values at a given path (for JSON.DEBUG MEMORY).
+    pub fn debug_memory(&self, path: &str) -> Result<Vec<usize>, JsonError> {
+        let values = self.get(path)?;
+        Ok(values.into_iter().map(estimate_json_size).collect())
+    }
+
     /// Serialize to bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(&self.data).unwrap_or_default()
@@ -751,7 +757,7 @@ impl JsonValue {
 }
 
 /// Estimate the memory size of a JSON value.
-fn estimate_json_size(data: &JsonData) -> usize {
+pub fn estimate_json_size(data: &JsonData) -> usize {
     match data {
         JsonData::Null => 1,
         JsonData::Bool(_) => 1,

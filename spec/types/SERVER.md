@@ -21,7 +21,7 @@ N/A - Server commands do not operate on data types.
 | LASTSAVE | O(1) | Get timestamp of last successful save |
 | DEBUG SLEEP | O(1) | Sleep for duration |
 | DEBUG OBJECT | O(1) | Inspect key internals |
-| DEBUG STRUCTSIZE | O(1) | Show struct sizes **[Not Yet Implemented]** |
+| DEBUG STRUCTSIZE | O(1) | Show struct sizes |
 | DEBUG RELOAD | O(N) | Reload server **[Not Planned]** (intentionally omitted) |
 
 ---
@@ -144,7 +144,7 @@ Administrative commands for debugging. **Warning:** DEBUG commands are for devel
 |---------|-------------|
 | `DEBUG SLEEP <seconds>` | Sleep for duration (blocks the connection) |
 | `DEBUG OBJECT <key>` | Inspect key internals |
-| `DEBUG STRUCTSIZE` | Show struct sizes **[Not Yet Implemented]** |
+| `DEBUG STRUCTSIZE` | Show struct sizes |
 | `DEBUG RELOAD` | Reload server **[Not Planned]** (intentionally omitted) |
 
 #### DEBUG SLEEP

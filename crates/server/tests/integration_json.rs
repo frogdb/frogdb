@@ -726,3 +726,135 @@ async fn test_json_type_key() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// JSON.DEBUG tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_json_debug_help() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["JSON.DEBUG", "HELP"]).await;
+    match response {
+        Response::Array(entries) => {
+            assert!(!entries.is_empty(), "HELP should return entries");
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_json_debug_memory_root() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Set up a JSON document
+    client
+        .command(&[
+            "JSON.SET",
+            "{k}doc",
+            "$",
+            r#"{"a":1,"b":[1,2,3],"c":"hello"}"#,
+        ])
+        .await;
+
+    // JSON.DEBUG MEMORY on root path
+    let response = client
+        .command(&["JSON.DEBUG", "MEMORY", "{k}doc", "$"])
+        .await;
+    match response {
+        Response::Integer(size) => {
+            assert!(size > 0, "Memory size should be positive, got {}", size);
+        }
+        _ => panic!("Expected integer response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_json_debug_memory_nested_path() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "JSON.SET",
+            "{k}doc",
+            "$",
+            r#"{"a":1,"b":[1,2,3],"c":"hello"}"#,
+        ])
+        .await;
+
+    // JSON.DEBUG MEMORY on nested array
+    let response = client
+        .command(&["JSON.DEBUG", "MEMORY", "{k}doc", "$.b"])
+        .await;
+    match response {
+        Response::Integer(size) => {
+            assert!(size > 0, "Memory size should be positive, got {}", size);
+        }
+        _ => panic!("Expected integer response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_json_debug_memory_default_path() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["JSON.SET", "{k}doc", "$", r#"{"x":42}"#])
+        .await;
+
+    // Omit path — should default to "$"
+    let response = client
+        .command(&["JSON.DEBUG", "MEMORY", "{k}doc"])
+        .await;
+    match response {
+        Response::Integer(size) => {
+            assert!(size > 0, "Memory size should be positive, got {}", size);
+        }
+        _ => panic!("Expected integer response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_json_debug_memory_nonexistent_key() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["JSON.DEBUG", "MEMORY", "{k}nokey", "$"])
+        .await;
+    assert_eq!(response, Response::Bulk(None), "Non-existent key should return null");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_json_debug_memory_wrong_type() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Set a string key, not JSON
+    client.command(&["SET", "{k}strkey", "hello"]).await;
+
+    let response = client
+        .command(&["JSON.DEBUG", "MEMORY", "{k}strkey", "$"])
+        .await;
+    match response {
+        Response::Error(_) => {} // Expected WRONGTYPE error
+        _ => panic!("Expected error for wrong type, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}

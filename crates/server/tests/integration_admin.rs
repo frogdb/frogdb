@@ -1508,3 +1508,94 @@ async fn test_debug_pubsub_limits_unknown_subcommand() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// DEBUG STRUCTSIZE tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_debug_structsize() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["DEBUG", "STRUCTSIZE"]).await;
+    let bulk = unwrap_bulk(&response);
+    let output = std::str::from_utf8(bulk).expect("valid UTF-8");
+
+    // Should contain key:value pairs separated by spaces
+    let pairs: Vec<&str> = output.split(' ').collect();
+    assert!(
+        pairs.len() >= 10,
+        "Expected at least 10 struct size pairs, got {}: {}",
+        pairs.len(),
+        output
+    );
+
+    // Verify expected keys are present
+    let expected_keys = [
+        "bits",
+        "value",
+        "string",
+        "list",
+        "set",
+        "hash",
+        "sortedset",
+        "stream",
+        "json",
+        "bloom",
+        "hll",
+        "timeseries",
+        "skiplistnode",
+        "metadata",
+    ];
+    for key in &expected_keys {
+        assert!(
+            output.contains(&format!("{}:", key)),
+            "Missing key '{}' in output: {}",
+            key,
+            output
+        );
+    }
+
+    // Verify bits:64 on 64-bit platforms
+    assert!(
+        output.contains("bits:64"),
+        "Expected bits:64, got: {}",
+        output
+    );
+
+    // Verify all values are positive integers
+    for pair in &pairs {
+        let parts: Vec<&str> = pair.splitn(2, ':').collect();
+        assert_eq!(parts.len(), 2, "Invalid pair format: {}", pair);
+        let val: usize = parts[1]
+            .parse()
+            .unwrap_or_else(|_| panic!("Invalid number in pair: {}", pair));
+        assert!(val > 0, "Expected positive size for {}", parts[0]);
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_help_includes_structsize() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["DEBUG", "HELP"]).await;
+    let entries = unwrap_array(response);
+
+    let help_text: Vec<String> = entries
+        .iter()
+        .map(|r| String::from_utf8_lossy(unwrap_bulk(r)).to_string())
+        .collect();
+    let combined = help_text.join("\n");
+
+    assert!(
+        combined.contains("STRUCTSIZE"),
+        "DEBUG HELP should mention STRUCTSIZE: {:?}",
+        combined
+    );
+
+    server.shutdown().await;
+}
