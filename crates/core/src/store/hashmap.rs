@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
+use crate::LabelIndex;
 use crate::glob::glob_match;
 use crate::noop::ExpiryIndex;
 use crate::shard::slot_for_key;
@@ -31,6 +32,7 @@ struct Entry {
 pub struct HashMapStore {
     data: HashMap<Bytes, Entry>,
     expiry_index: ExpiryIndex,
+    label_index: LabelIndex,
     memory_used: usize,
     /// Number of changes since last save (for INFO persistence rdb_changes_since_last_save).
     dirty: u64,
@@ -42,6 +44,7 @@ impl HashMapStore {
         Self {
             data: HashMap::new(),
             expiry_index: ExpiryIndex::new(),
+            label_index: LabelIndex::new(),
             memory_used: 0,
             dirty: 0,
         }
@@ -54,6 +57,7 @@ impl HashMapStore {
         Self {
             data: HashMap::new(),
             expiry_index,
+            label_index: LabelIndex::new(),
             memory_used: 0,
             dirty: 0,
         }
@@ -71,6 +75,11 @@ impl HashMapStore {
         // Update expiry index if key has expiry
         if let Some(expires_at) = metadata.expires_at {
             self.expiry_index.set(key.clone(), expires_at);
+        }
+
+        // Update label index for TimeSeries values
+        if let Value::TimeSeries(ref ts) = value {
+            self.label_index.add(key.clone(), ts.labels());
         }
 
         let entry = Entry {
@@ -102,6 +111,7 @@ impl HashMapStore {
                 self.memory_used = self.memory_used.saturating_sub(size);
             }
             self.expiry_index.remove(key);
+            self.label_index.remove(key);
             return true;
         }
         false
@@ -130,6 +140,14 @@ impl Store for HashMapStore {
             None
         };
 
+        // Update label index for TimeSeries values
+        if let Value::TimeSeries(ref ts) = value {
+            self.label_index.add(key.clone(), ts.labels());
+        } else {
+            // If overwriting a TS key with non-TS, remove from label index
+            self.label_index.remove(&key);
+        }
+
         self.memory_used += new_size;
 
         let entry = Entry {
@@ -153,6 +171,7 @@ impl Store for HashMapStore {
             }
             self.memory_used = self.memory_used.saturating_sub(size);
             self.expiry_index.remove(key);
+            self.label_index.remove(key);
             true
         } else {
             false
@@ -239,6 +258,7 @@ impl Store for HashMapStore {
     fn clear(&mut self) {
         self.data.clear();
         self.expiry_index = ExpiryIndex::new();
+        self.label_index = LabelIndex::new();
         self.memory_used = 0;
     }
 
@@ -505,6 +525,14 @@ impl Store for HashMapStore {
 
     fn increment_dirty(&mut self, count: u64) {
         self.dirty = self.dirty.wrapping_add(count);
+    }
+
+    fn ts_label_index(&self) -> Option<&LabelIndex> {
+        Some(&self.label_index)
+    }
+
+    fn ts_label_index_mut(&mut self) -> Option<&mut LabelIndex> {
+        Some(&mut self.label_index)
     }
 }
 

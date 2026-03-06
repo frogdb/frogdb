@@ -486,4 +486,10 @@ pub enum ScatterOp {
     /// DUMP operation for MIGRATE - serialize keys with full metadata.
     /// Returns serialized data compatible with Redis RESTORE command.
     Dump,
+    /// TS.QUERYINDEX - query label index across all shards.
+    TsQueryIndex { args: Vec<Bytes> },
+    /// TS.MGET - label index query + get_last per match.
+    TsMget { args: Vec<Bytes> },
+    /// TS.MRANGE / TS.MREVRANGE - label index query + range per match.
+    TsMrange { args: Vec<Bytes>, reverse: bool },
 }

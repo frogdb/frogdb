@@ -77,6 +77,14 @@ pub enum ServerWideOp {
     Shutdown,
     /// MIGRATE: move keys between servers.
     Migrate,
+    /// TS.QUERYINDEX: query time series by label filter across all shards.
+    TsQueryIndex,
+    /// TS.MGET: get latest sample from multiple time series matching filters.
+    TsMget,
+    /// TS.MRANGE: range query across multiple time series matching filters.
+    TsMrange,
+    /// TS.MREVRANGE: reverse range query across multiple time series matching filters.
+    TsMrevrange,
 }
 
 /// Operations handled at the connection level (not routed to shards).

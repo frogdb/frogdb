@@ -46,6 +46,7 @@ use bytes::Bytes;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::LabelIndex;
 use crate::noop::ExpiryIndex;
 use crate::types::{
     HashValue, KeyMetadata, KeyType, ListValue, SetOptions, SetResult, SetValue, SortedSetValue,
@@ -403,5 +404,19 @@ pub trait Store: Send {
     /// Increment the dirty counter by the given amount.
     fn increment_dirty(&mut self, count: u64) {
         let _ = count;
+    }
+
+    // ========================================================================
+    // TimeSeries label index
+    // ========================================================================
+
+    /// Access the label index for TS.QUERYINDEX / TS.MGET / TS.MRANGE lookups.
+    fn ts_label_index(&self) -> Option<&LabelIndex> {
+        None
+    }
+
+    /// Mutably access the label index (for TS.ALTER label updates).
+    fn ts_label_index_mut(&mut self) -> Option<&mut LabelIndex> {
+        None
     }
 }

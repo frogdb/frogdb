@@ -43,6 +43,8 @@ pub struct DownsampleRule {
     pub bucket_duration_ms: i64,
     /// Aggregation type.
     pub aggregation: Aggregation,
+    /// Tracks which bucket we're currently accumulating. None = no samples yet.
+    pub current_bucket_start: Option<i64>,
 }
 
 impl DownsampleRule {
@@ -52,7 +54,13 @@ impl DownsampleRule {
             dest_key,
             bucket_duration_ms,
             aggregation,
+            current_bucket_start: None,
         }
+    }
+
+    /// Returns the bucket start for a given timestamp.
+    pub fn bucket_for(&self, timestamp: i64) -> i64 {
+        (timestamp / self.bucket_duration_ms) * self.bucket_duration_ms
     }
 }
 

@@ -40,10 +40,10 @@ Items described in spec documentation as if implemented, but not present in the 
 | DTrace/USDT probes | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Feature does not exist in Cargo.toml. | [DEBUGGING.md](DEBUGGING.md#dtrace-usdt-probes) |
 | DEBUG STRUCTSIZE | Show sizes of internal data structures | [types/SERVER.md](types/SERVER.md) |
 | JSON.DEBUG | Debug info for JSON values | [types/JSON.md](types/JSON.md) |
-| TS.MGET | Multi-key get for time series | [types/TIMESERIES.md](types/TIMESERIES.md) |
-| TS.MRANGE / TS.MREVRANGE | Multi-key range queries for time series | [types/TIMESERIES.md](types/TIMESERIES.md) |
-| TS.QUERYINDEX | Find time series keys by labels | [types/TIMESERIES.md](types/TIMESERIES.md) |
-| TS.CREATERULE / TS.DELETERULE | Create/delete downsample rules for time series | [types/TIMESERIES.md](types/TIMESERIES.md) |
+| ~~TS.MGET~~ | ~~Multi-key get for time series~~ | **DONE** |
+| ~~TS.MRANGE / TS.MREVRANGE~~ | ~~Multi-key range queries for time series~~ | **DONE** |
+| ~~TS.QUERYINDEX~~ | ~~Find time series keys by labels~~ | **DONE** |
+| ~~TS.CREATERULE / TS.DELETERULE~~ | ~~Create/delete downsample rules for time series~~ | **DONE** |
 
 ---
 

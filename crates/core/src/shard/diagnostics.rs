@@ -191,6 +191,14 @@ impl ShardWorker {
             ScatterOp::CopySet { .. } => "COPYSET".to_string(),
             ScatterOp::RandomKey => "RANDOMKEY".to_string(),
             ScatterOp::Dump => "DUMP".to_string(),
+            ScatterOp::TsQueryIndex { .. } => "TS.QUERYINDEX".to_string(),
+            ScatterOp::TsMget { .. } => "TS.MGET".to_string(),
+            ScatterOp::TsMrange { reverse, .. } => if *reverse {
+                "TS.MREVRANGE"
+            } else {
+                "TS.MRANGE"
+            }
+            .to_string(),
         }
     }
 

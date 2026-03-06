@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 use crate::timeseries::aggregation::{Aggregation, aggregate_by_bucket};
 use crate::timeseries::chunk::CompressedChunk;
+use crate::timeseries::downsample::{DownsampleError, DownsampleRule};
 
 /// Default chunk size (samples before compression).
 pub const DEFAULT_CHUNK_SIZE: usize = 256;
@@ -90,6 +91,8 @@ pub struct TimeSeriesValue {
     total_samples: u64,
     /// Last timestamp added.
     last_timestamp: Option<i64>,
+    /// Downsampling rules attached to this source key.
+    rules: Vec<DownsampleRule>,
 }
 
 impl TimeSeriesValue {
@@ -104,6 +107,7 @@ impl TimeSeriesValue {
             chunk_size: DEFAULT_CHUNK_SIZE,
             total_samples: 0,
             last_timestamp: None,
+            rules: Vec::new(),
         }
     }
 
@@ -123,6 +127,7 @@ impl TimeSeriesValue {
             chunk_size: chunk_size.max(1),
             total_samples: 0,
             last_timestamp: None,
+            rules: Vec::new(),
         }
     }
 
@@ -152,6 +157,7 @@ impl TimeSeriesValue {
             chunk_size,
             total_samples,
             last_timestamp,
+            rules: Vec::new(),
         }
     }
 
@@ -470,6 +476,35 @@ impl TimeSeriesValue {
     /// Set the chunk size.
     pub fn set_chunk_size(&mut self, size: usize) {
         self.chunk_size = size.max(1);
+    }
+
+    /// Get the downsampling rules.
+    pub fn rules(&self) -> &[DownsampleRule] {
+        &self.rules
+    }
+
+    /// Get mutable access to the downsampling rules.
+    pub fn rules_mut(&mut self) -> &mut Vec<DownsampleRule> {
+        &mut self.rules
+    }
+
+    /// Add a downsampling rule. Errors if a rule to the same dest_key already exists.
+    pub fn add_rule(&mut self, rule: DownsampleRule) -> Result<(), DownsampleError> {
+        if self.rules.iter().any(|r| r.dest_key == rule.dest_key) {
+            return Err(DownsampleError::RuleAlreadyExists);
+        }
+        self.rules.push(rule);
+        Ok(())
+    }
+
+    /// Remove a downsampling rule by destination key.
+    pub fn remove_rule(&mut self, dest_key: &[u8]) -> Result<(), DownsampleError> {
+        let initial_len = self.rules.len();
+        self.rules.retain(|r| r.dest_key.as_ref() != dest_key);
+        if self.rules.len() == initial_len {
+            return Err(DownsampleError::RuleNotFound);
+        }
+        Ok(())
     }
 
     /// Get the total number of samples.

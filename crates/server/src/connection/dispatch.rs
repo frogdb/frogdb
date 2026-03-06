@@ -280,6 +280,10 @@ impl ConnectionHandler {
             ServerWideOp::FlushAll => self.handle_flushall(args).await,
             ServerWideOp::Migrate => self.handle_migrate(args).await,
             ServerWideOp::Shutdown => self.handle_shutdown(args).await,
+            ServerWideOp::TsQueryIndex => self.handle_ts_queryindex(args).await,
+            ServerWideOp::TsMget => self.handle_ts_mget(args).await,
+            ServerWideOp::TsMrange => self.handle_ts_mrange(args, false).await,
+            ServerWideOp::TsMrevrange => self.handle_ts_mrange(args, true).await,
         };
         vec![response]
     }

@@ -576,3 +576,578 @@ async fn test_ts_filter_by_value() {
 
     server.shutdown().await;
 }
+
+// =============================================================================
+// TS.QUERYINDEX tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_ts_queryindex() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    // Create series with labels
+    client
+        .command(&[
+            "TS.CREATE",
+            "temp:kitchen",
+            "LABELS",
+            "location",
+            "kitchen",
+            "type",
+            "temperature",
+        ])
+        .await;
+    client
+        .command(&[
+            "TS.CREATE",
+            "temp:bedroom",
+            "LABELS",
+            "location",
+            "bedroom",
+            "type",
+            "temperature",
+        ])
+        .await;
+    client
+        .command(&[
+            "TS.CREATE",
+            "humidity:kitchen",
+            "LABELS",
+            "location",
+            "kitchen",
+            "type",
+            "humidity",
+        ])
+        .await;
+
+    // Query by single filter
+    let response = client.command(&["TS.QUERYINDEX", "location=kitchen"]).await;
+    match response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 2);
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    // Query by type
+    let response = client.command(&["TS.QUERYINDEX", "type=temperature"]).await;
+    match response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 2);
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ts_queryindex_empty() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["TS.CREATE", "temp", "LABELS", "location", "kitchen"])
+        .await;
+
+    // No matches
+    let response = client.command(&["TS.QUERYINDEX", "location=garage"]).await;
+    match response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 0);
+        }
+        _ => panic!("Expected empty array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ts_queryindex_multiple_filters() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "TS.CREATE",
+            "s1",
+            "LABELS",
+            "location",
+            "kitchen",
+            "type",
+            "temp",
+        ])
+        .await;
+    client
+        .command(&[
+            "TS.CREATE",
+            "s2",
+            "LABELS",
+            "location",
+            "kitchen",
+            "type",
+            "humidity",
+        ])
+        .await;
+    client
+        .command(&[
+            "TS.CREATE",
+            "s3",
+            "LABELS",
+            "location",
+            "bedroom",
+            "type",
+            "temp",
+        ])
+        .await;
+
+    // AND logic: both filters must match
+    let response = client
+        .command(&["TS.QUERYINDEX", "location=kitchen", "type=temp"])
+        .await;
+    match response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            if let Response::Bulk(Some(key)) = &arr[0] {
+                assert_eq!(&**key, b"s1");
+            }
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+// =============================================================================
+// TS.MGET tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_ts_mget() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["TS.CREATE", "temp:a", "LABELS", "type", "temperature"])
+        .await;
+    client
+        .command(&["TS.CREATE", "temp:b", "LABELS", "type", "temperature"])
+        .await;
+
+    client.command(&["TS.ADD", "temp:a", "1000", "25.5"]).await;
+    client.command(&["TS.ADD", "temp:b", "1000", "22.3"]).await;
+
+    let response = client
+        .command(&["TS.MGET", "FILTER", "type=temperature"])
+        .await;
+    match response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 2);
+            // Each entry is [key, labels, [timestamp, value]]
+            for entry in &arr {
+                if let Response::Array(parts) = entry {
+                    assert_eq!(parts.len(), 3);
+                    // parts[0] is key
+                    assert!(matches!(&parts[0], Response::Bulk(Some(_))));
+                    // parts[2] is sample (array of [ts, val])
+                    assert!(matches!(&parts[2], Response::Array(_)));
+                }
+            }
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ts_mget_withlabels() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "TS.CREATE",
+            "temp",
+            "LABELS",
+            "location",
+            "kitchen",
+            "type",
+            "temp",
+        ])
+        .await;
+    client.command(&["TS.ADD", "temp", "1000", "25.0"]).await;
+
+    let response = client
+        .command(&["TS.MGET", "WITHLABELS", "FILTER", "location=kitchen"])
+        .await;
+    match response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            if let Response::Array(parts) = &arr[0] {
+                // parts[1] is labels array
+                if let Response::Array(labels) = &parts[1] {
+                    assert_eq!(labels.len(), 2); // location + type
+                }
+            }
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ts_mget_selected_labels() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "TS.CREATE",
+            "temp",
+            "LABELS",
+            "location",
+            "kitchen",
+            "type",
+            "temp",
+            "sensor",
+            "DHT22",
+        ])
+        .await;
+    client.command(&["TS.ADD", "temp", "1000", "25.0"]).await;
+
+    let response = client
+        .command(&[
+            "TS.MGET",
+            "SELECTED_LABELS",
+            "location",
+            "sensor",
+            "FILTER",
+            "location=kitchen",
+        ])
+        .await;
+    match response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            if let Response::Array(parts) = &arr[0]
+                && let Response::Array(labels) = &parts[1]
+            {
+                assert_eq!(labels.len(), 2); // only location + sensor
+            }
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+// =============================================================================
+// TS.MRANGE / TS.MREVRANGE tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_ts_mrange() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["TS.CREATE", "temp:a", "LABELS", "type", "temp"])
+        .await;
+    client
+        .command(&["TS.CREATE", "temp:b", "LABELS", "type", "temp"])
+        .await;
+
+    for i in 0..5 {
+        let ts = (1000 + i * 100).to_string();
+        let val = format!("{}.0", i + 1);
+        client.command(&["TS.ADD", "temp:a", &ts, &val]).await;
+        client
+            .command(&["TS.ADD", "temp:b", &ts, &format!("{}.0", (i + 1) * 10)])
+            .await;
+    }
+
+    let response = client
+        .command(&["TS.MRANGE", "-", "+", "FILTER", "type=temp"])
+        .await;
+    match response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 2); // two series
+            for entry in &arr {
+                if let Response::Array(parts) = entry {
+                    assert_eq!(parts.len(), 3); // [key, labels, samples]
+                    if let Response::Array(samples) = &parts[2] {
+                        assert_eq!(samples.len(), 5);
+                    }
+                }
+            }
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ts_mrange_with_aggregation() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["TS.CREATE", "temp", "LABELS", "type", "temp"])
+        .await;
+
+    // Add 10 samples at 100ms intervals
+    for i in 0..10 {
+        let ts = (1000 + i * 100).to_string();
+        let val = format!("{}.0", (i + 1) * 10);
+        client.command(&["TS.ADD", "temp", &ts, &val]).await;
+    }
+
+    // Aggregate with AVG in 500ms buckets
+    let response = client
+        .command(&[
+            "TS.MRANGE",
+            "1000",
+            "1900",
+            "AGGREGATION",
+            "AVG",
+            "500",
+            "FILTER",
+            "type=temp",
+        ])
+        .await;
+    match response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1); // one series
+            if let Response::Array(parts) = &arr[0]
+                && let Response::Array(samples) = &parts[2]
+            {
+                assert_eq!(samples.len(), 2); // 2 buckets
+            }
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ts_mrevrange() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["TS.CREATE", "temp", "LABELS", "type", "temp"])
+        .await;
+
+    client.command(&["TS.ADD", "temp", "1000", "10.0"]).await;
+    client.command(&["TS.ADD", "temp", "2000", "20.0"]).await;
+    client.command(&["TS.ADD", "temp", "3000", "30.0"]).await;
+
+    let response = client
+        .command(&["TS.MREVRANGE", "-", "+", "FILTER", "type=temp"])
+        .await;
+    match response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            if let Response::Array(parts) = &arr[0]
+                && let Response::Array(samples) = &parts[2]
+            {
+                assert_eq!(samples.len(), 3);
+                // First should be 3000 (reversed)
+                if let Response::Array(first) = &samples[0] {
+                    assert_eq!(first[0], Response::Integer(3000));
+                }
+            }
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+// =============================================================================
+// TS.CREATERULE / TS.DELETERULE tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_ts_createrule() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client.command(&["TS.CREATE", "source"]).await;
+    client.command(&["TS.CREATE", "dest"]).await;
+
+    let response = client
+        .command(&[
+            "TS.CREATERULE",
+            "source",
+            "dest",
+            "AGGREGATION",
+            "AVG",
+            "5000",
+        ])
+        .await;
+    assert_eq!(response, Response::ok());
+
+    // Verify via TS.INFO
+    let response = client.command(&["TS.INFO", "source"]).await;
+    match response {
+        Response::Array(arr) => {
+            let mut found_rules = false;
+            for chunk in arr.chunks(2) {
+                if let Response::Bulk(Some(key)) = &chunk[0]
+                    && &**key == b"rules"
+                {
+                    found_rules = true;
+                    if let Response::Array(rules) = &chunk[1] {
+                        assert_eq!(rules.len(), 1);
+                    }
+                }
+            }
+            assert!(found_rules, "Should find rules in INFO");
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ts_createrule_duplicate() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client.command(&["TS.CREATE", "source"]).await;
+    client.command(&["TS.CREATE", "dest"]).await;
+
+    client
+        .command(&[
+            "TS.CREATERULE",
+            "source",
+            "dest",
+            "AGGREGATION",
+            "AVG",
+            "5000",
+        ])
+        .await;
+
+    // Duplicate should error
+    let response = client
+        .command(&[
+            "TS.CREATERULE",
+            "source",
+            "dest",
+            "AGGREGATION",
+            "SUM",
+            "5000",
+        ])
+        .await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ts_deleterule() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client.command(&["TS.CREATE", "source"]).await;
+    client.command(&["TS.CREATE", "dest"]).await;
+
+    client
+        .command(&[
+            "TS.CREATERULE",
+            "source",
+            "dest",
+            "AGGREGATION",
+            "AVG",
+            "5000",
+        ])
+        .await;
+
+    let response = client.command(&["TS.DELETERULE", "source", "dest"]).await;
+    assert_eq!(response, Response::ok());
+
+    // Verify removed via TS.INFO
+    let response = client.command(&["TS.INFO", "source"]).await;
+    match response {
+        Response::Array(arr) => {
+            for chunk in arr.chunks(2) {
+                if let Response::Bulk(Some(key)) = &chunk[0]
+                    && &**key == b"rules"
+                    && let Response::Array(rules) = &chunk[1]
+                {
+                    assert_eq!(rules.len(), 0);
+                }
+            }
+        }
+        _ => panic!("Expected array response"),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ts_deleterule_nonexistent() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client.command(&["TS.CREATE", "source"]).await;
+
+    let response = client
+        .command(&["TS.DELETERULE", "source", "nonexistent"])
+        .await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ts_createrule_inline_downsample() {
+    let server = start_server().await;
+    let mut client = server.connect().await;
+
+    client.command(&["TS.CREATE", "source"]).await;
+    client.command(&["TS.CREATE", "dest"]).await;
+
+    // Create rule: AVG over 1000ms buckets
+    client
+        .command(&[
+            "TS.CREATERULE",
+            "source",
+            "dest",
+            "AGGREGATION",
+            "AVG",
+            "1000",
+        ])
+        .await;
+
+    // Add samples in first bucket (0-999)
+    client.command(&["TS.ADD", "source", "0", "10.0"]).await;
+    client.command(&["TS.ADD", "source", "500", "20.0"]).await;
+
+    // Cross bucket boundary — this should trigger aggregation of bucket 0
+    client.command(&["TS.ADD", "source", "1000", "30.0"]).await;
+
+    // Dest should have one aggregated sample for bucket 0: avg(10, 20) = 15
+    let response = client.command(&["TS.RANGE", "dest", "-", "+"]).await;
+    match response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            if let Response::Array(sample) = &arr[0] {
+                assert_eq!(sample[0], Response::Integer(0)); // bucket start
+                if let Response::Bulk(Some(b)) = &sample[1] {
+                    let val: f64 = std::str::from_utf8(b).unwrap().parse().unwrap();
+                    assert!((val - 15.0).abs() < 0.001, "Expected 15.0, got {}", val);
+                }
+            }
+        }
+        _ => panic!("Expected array response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
