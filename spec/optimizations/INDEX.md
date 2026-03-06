@@ -7,12 +7,9 @@ This document details comprehensive performance profiling and optimization strat
 | Document | Description |
 |----------|-------------|
 | [PROFILING.md](PROFILING.md) | Build profiles, CPU/memory profiling tools, async task profiling, benchmarks |
-| [QUICK_WINS.md](QUICK_WINS.md) | Low-effort, high-impact optimizations (jemalloc, caching, pre-sizing) |
-| [MEMORY.md](MEMORY.md) | Response buffer pools, arena allocator |
-| [IO.md](IO.md) | io_uring integration |
-| [IO_URING.md](IO_URING.md) | Completion-based I/O deep dive: runtime comparison (compio vs monoio vs glommio), migration options, safety concerns |
-| [DATA_STRUCTURES.md](DATA_STRUCTURES.md) | Streaming SCAN, skip list |
-| [CONCURRENCY.md](CONCURRENCY.md) | Lock-free WAL, pub/sub zero-copy, connection pooling |
+| [MEMORY.md](MEMORY.md) | Arena allocator |
+| [ASYNC_RUNTIME.md](ASYNC_RUNTIME.md) | Async runtime strategy: io_uring, completion-based I/O, runtime comparison (compio vs monoio vs glommio), migration options, abstraction feasibility |
+| [CONCURRENCY.md](CONCURRENCY.md) | Lock-free WAL, connection pooling |
 | [ADVANCED.md](ADVANCED.md) | SIMD pattern matching, vectored I/O |
 | [SINGLE_SHARD.md](SINGLE_SHARD.md) | Three-tier single-shard mode optimizations |
 
