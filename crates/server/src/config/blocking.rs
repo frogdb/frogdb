@@ -16,12 +16,15 @@ pub struct BlockingConfig {
     pub max_blocked_connections: usize,
 }
 
+pub const DEFAULT_MAX_WAITERS_PER_KEY: usize = 10000;
+pub const DEFAULT_MAX_BLOCKED_CONNECTIONS: usize = 50000;
+
 fn default_max_waiters_per_key() -> usize {
-    10000
+    DEFAULT_MAX_WAITERS_PER_KEY
 }
 
 fn default_max_blocked_connections() -> usize {
-    50000
+    DEFAULT_MAX_BLOCKED_CONNECTIONS
 }
 
 impl Default for BlockingConfig {

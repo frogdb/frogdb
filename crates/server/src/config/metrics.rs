@@ -41,8 +41,11 @@ fn default_metrics_bind() -> String {
     "0.0.0.0".to_string()
 }
 
+pub const DEFAULT_METRICS_PORT: u16 = 9090;
+pub const DEFAULT_OTLP_INTERVAL_SECS: u64 = 15;
+
 fn default_metrics_port() -> u16 {
-    9090
+    DEFAULT_METRICS_PORT
 }
 
 fn default_otlp_endpoint() -> String {
@@ -50,7 +53,7 @@ fn default_otlp_endpoint() -> String {
 }
 
 fn default_otlp_interval_secs() -> u64 {
-    15
+    DEFAULT_OTLP_INTERVAL_SECS
 }
 
 impl Default for MetricsConfig {
@@ -99,10 +102,10 @@ mod tests {
         let config = MetricsConfig::default();
         assert!(config.enabled);
         assert_eq!(config.bind, "0.0.0.0");
-        assert_eq!(config.port, 9090);
+        assert_eq!(config.port, DEFAULT_METRICS_PORT);
         assert!(!config.otlp_enabled);
         assert_eq!(config.otlp_endpoint, "http://localhost:4317");
-        assert_eq!(config.otlp_interval_secs, 15);
+        assert_eq!(config.otlp_interval_secs, DEFAULT_OTLP_INTERVAL_SECS);
     }
 
     #[test]

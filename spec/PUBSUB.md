@@ -739,7 +739,7 @@ channel2
 :25        # 25 subscribers
 ```
 
-**DEBUG Command for Limits:** **[Not Yet Implemented]**
+**DEBUG Command for Limits:**
 
 ```
 DEBUG PUBSUB LIMITS
@@ -762,7 +762,7 @@ shard_unique_patterns: 234/10000
 | `frogdb_pubsub_subscription_limit_errors_total` | Times limit was hit |
 | `frogdb_pubsub_unique_channels_total` | Unique channel names with subscribers |
 
-**Graceful Degradation:** **[Not Yet Implemented]** (80%/90% warning thresholds are not yet implemented; 100% limit enforcement is implemented)
+**Graceful Degradation:** **[Partially Implemented]** (80% per-connection and 90% per-shard warning thresholds are implemented; per-shard 100% enforcement is not yet implemented)
 
 When approaching limits:
 

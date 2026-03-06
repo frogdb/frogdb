@@ -5,6 +5,7 @@
 //! - DEBUG TRACING STATUS - Show tracing status
 //! - DEBUG TRACING RECENT - Show recent traces
 //! - DEBUG VLL - Show VLL queue info
+//! - DEBUG PUBSUB LIMITS - Show pub/sub subscription usage vs limits
 //! - DEBUG BUNDLE GENERATE - Generate a diagnostic bundle
 //! - DEBUG BUNDLE LIST - List available bundles
 
@@ -239,6 +240,69 @@ impl ConnectionHandler {
         }
 
         Response::Bulk(Some(Bytes::from(lines.join("\n"))))
+    }
+
+    /// Handle DEBUG PUBSUB LIMITS command.
+    ///
+    /// Reports per-connection and per-shard subscription usage against configured maximums.
+    pub(crate) async fn handle_debug_pubsub_limits(&self) -> Response {
+        use frogdb_core::pubsub::{
+            MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
+            MAX_TOTAL_SUBSCRIPTIONS_PER_SHARD, MAX_UNIQUE_CHANNELS_PER_SHARD,
+            MAX_UNIQUE_PATTERNS_PER_SHARD,
+        };
+        use tokio::sync::oneshot;
+
+        // Connection-level counts
+        let conn_subscriptions = self.state.pubsub.subscriptions.len();
+        let conn_patterns = self.state.pubsub.patterns.len();
+
+        // Shard-level counts from shard 0 (broadcast pub/sub coordinator)
+        let (response_tx, response_rx) = oneshot::channel();
+        let send_result = self.shard_senders[0]
+            .send(frogdb_core::shard::ShardMessage::GetPubSubLimitsInfo { response_tx })
+            .await;
+
+        let (shard_total, shard_channels, shard_patterns) = if send_result.is_ok() {
+            let timeout = std::time::Duration::from_secs(5);
+            match tokio::time::timeout(timeout, response_rx).await {
+                Ok(Ok(info)) => (
+                    info.total_subscriptions,
+                    info.unique_channels,
+                    info.unique_patterns,
+                ),
+                _ => {
+                    return Response::error("ERR timeout waiting for shard pub/sub info");
+                }
+            }
+        } else {
+            return Response::error("ERR failed to query shard pub/sub info");
+        };
+
+        let lines = [
+            format!(
+                "connection_subscriptions: {}/{}",
+                conn_subscriptions, MAX_SUBSCRIPTIONS_PER_CONNECTION
+            ),
+            format!(
+                "connection_patterns: {}/{}",
+                conn_patterns, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION
+            ),
+            format!(
+                "shard_total_subscriptions: {}/{}",
+                shard_total, MAX_TOTAL_SUBSCRIPTIONS_PER_SHARD
+            ),
+            format!(
+                "shard_unique_channels: {}/{}",
+                shard_channels, MAX_UNIQUE_CHANNELS_PER_SHARD
+            ),
+            format!(
+                "shard_unique_patterns: {}/{}",
+                shard_patterns, MAX_UNIQUE_PATTERNS_PER_SHARD
+            ),
+        ];
+
+        Response::Bulk(Some(Bytes::from(lines.join("\r\n"))))
     }
 
     /// Handle DEBUG BUNDLE GENERATE [DURATION <seconds>] command.

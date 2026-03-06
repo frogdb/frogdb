@@ -1407,3 +1407,104 @@ async fn test_debug_vll_with_pending_ops() {
 
     server.shutdown().await;
 }
+
+// =========================================================================
+// DEBUG PUBSUB LIMITS tests
+// =========================================================================
+
+#[tokio::test]
+async fn test_debug_pubsub_limits() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Call DEBUG PUBSUB LIMITS with no subscriptions
+    let response = client.command(&["DEBUG", "PUBSUB", "LIMITS"]).await;
+    let data = unwrap_bulk(&response);
+    let content = String::from_utf8_lossy(data);
+
+    // Verify all expected lines are present with 0 usage
+    assert!(
+        content.contains("connection_subscriptions: 0/10000"),
+        "Expected connection_subscriptions: 0/10000, got: {}",
+        content
+    );
+    assert!(
+        content.contains("connection_patterns: 0/1000"),
+        "Expected connection_patterns: 0/1000, got: {}",
+        content
+    );
+    assert!(
+        content.contains("shard_total_subscriptions: 0/1000000"),
+        "Expected shard_total_subscriptions: 0/1000000, got: {}",
+        content
+    );
+    assert!(
+        content.contains("shard_unique_channels: 0/100000"),
+        "Expected shard_unique_channels: 0/100000, got: {}",
+        content
+    );
+    assert!(
+        content.contains("shard_unique_patterns: 0/10000"),
+        "Expected shard_unique_patterns: 0/10000, got: {}",
+        content
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_pubsub_limits_with_subscriptions() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Subscribe to a channel
+    client.command(&["SUBSCRIBE", "mychannel"]).await;
+
+    // Use a second connection for DEBUG (first is in pub/sub mode)
+    let mut debug_client = server.connect().await;
+    let response = debug_client
+        .command(&["DEBUG", "PUBSUB", "LIMITS"])
+        .await;
+    let data = unwrap_bulk(&response);
+    let content = String::from_utf8_lossy(data);
+
+    // The debug_client has 0 subscriptions, but shard should show 1
+    assert!(
+        content.contains("connection_subscriptions: 0/10000"),
+        "Debug client should have 0 subscriptions, got: {}",
+        content
+    );
+    assert!(
+        content.contains("shard_total_subscriptions: 1/1000000"),
+        "Expected shard_total_subscriptions: 1/1000000, got: {}",
+        content
+    );
+    assert!(
+        content.contains("shard_unique_channels: 1/100000"),
+        "Expected shard_unique_channels: 1/100000, got: {}",
+        content
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_pubsub_limits_unknown_subcommand() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["DEBUG", "PUBSUB", "BOGUS"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("Unknown DEBUG PUBSUB subcommand"),
+                "Expected unknown subcommand error, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}

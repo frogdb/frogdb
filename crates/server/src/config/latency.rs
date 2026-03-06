@@ -21,12 +21,15 @@ pub struct LatencyConfig {
     pub warning_threshold_us: u64,
 }
 
+pub const DEFAULT_LATENCY_TEST_DURATION_SECS: u64 = 5;
+pub const DEFAULT_LATENCY_WARNING_THRESHOLD_US: u64 = 2000;
+
 fn default_latency_test_duration_secs() -> u64 {
-    5
+    DEFAULT_LATENCY_TEST_DURATION_SECS
 }
 
 fn default_latency_warning_threshold_us() -> u64 {
-    2000 // 2ms
+    DEFAULT_LATENCY_WARNING_THRESHOLD_US
 }
 
 impl Default for LatencyConfig {

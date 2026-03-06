@@ -24,20 +24,25 @@ pub struct StatusConfig {
     pub durability_lag_critical_ms: u64,
 }
 
+pub const DEFAULT_MEMORY_WARNING_PERCENT: u8 = 90;
+pub const DEFAULT_CONNECTION_WARNING_PERCENT: u8 = 90;
+pub const DEFAULT_DURABILITY_LAG_WARNING_MS: u64 = 5000;
+pub const DEFAULT_DURABILITY_LAG_CRITICAL_MS: u64 = 30000;
+
 fn default_memory_warning_percent() -> u8 {
-    90
+    DEFAULT_MEMORY_WARNING_PERCENT
 }
 
 fn default_connection_warning_percent() -> u8 {
-    90
+    DEFAULT_CONNECTION_WARNING_PERCENT
 }
 
 fn default_durability_lag_warning_ms() -> u64 {
-    5000 // 5 seconds
+    DEFAULT_DURABILITY_LAG_WARNING_MS
 }
 
 fn default_durability_lag_critical_ms() -> u64 {
-    30000 // 30 seconds
+    DEFAULT_DURABILITY_LAG_CRITICAL_MS
 }
 
 impl Default for StatusConfig {
@@ -80,16 +85,20 @@ pub struct HotShardsConfig {
     pub default_period_secs: u64,
 }
 
+pub const DEFAULT_HOT_THRESHOLD_PERCENT: f64 = 20.0;
+pub const DEFAULT_WARM_THRESHOLD_PERCENT: f64 = 15.0;
+pub const DEFAULT_HOTSHARDS_PERIOD_SECS: u64 = 10;
+
 fn default_hot_threshold_percent() -> f64 {
-    20.0
+    DEFAULT_HOT_THRESHOLD_PERCENT
 }
 
 fn default_warm_threshold_percent() -> f64 {
-    15.0
+    DEFAULT_WARM_THRESHOLD_PERCENT
 }
 
 fn default_hotshards_period_secs() -> u64 {
-    10
+    DEFAULT_HOTSHARDS_PERIOD_SECS
 }
 
 impl Default for HotShardsConfig {

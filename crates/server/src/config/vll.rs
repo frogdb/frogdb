@@ -28,24 +28,30 @@ pub struct VllConfig {
     pub max_continuation_lock_ms: u64,
 }
 
+pub const DEFAULT_VLL_MAX_QUEUE_DEPTH: usize = 10000;
+pub const DEFAULT_VLL_LOCK_ACQUISITION_TIMEOUT_MS: u64 = 4000;
+pub const DEFAULT_VLL_PER_SHARD_LOCK_TIMEOUT_MS: u64 = 2000;
+pub const DEFAULT_VLL_TIMEOUT_CHECK_INTERVAL_MS: u64 = 100;
+pub const DEFAULT_VLL_MAX_CONTINUATION_LOCK_MS: u64 = 65000;
+
 fn default_vll_max_queue_depth() -> usize {
-    10000
+    DEFAULT_VLL_MAX_QUEUE_DEPTH
 }
 
 fn default_vll_lock_acquisition_timeout_ms() -> u64 {
-    4000
+    DEFAULT_VLL_LOCK_ACQUISITION_TIMEOUT_MS
 }
 
 fn default_vll_per_shard_lock_timeout_ms() -> u64 {
-    2000
+    DEFAULT_VLL_PER_SHARD_LOCK_TIMEOUT_MS
 }
 
 fn default_vll_timeout_check_interval_ms() -> u64 {
-    100
+    DEFAULT_VLL_TIMEOUT_CHECK_INTERVAL_MS
 }
 
 fn default_vll_max_continuation_lock_ms() -> u64 {
-    65000
+    DEFAULT_VLL_MAX_CONTINUATION_LOCK_MS
 }
 
 impl Default for VllConfig {

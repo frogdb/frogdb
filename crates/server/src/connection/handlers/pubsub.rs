@@ -41,6 +41,18 @@ impl ConnectionHandler {
             return vec![Response::error("ERR max subscriptions reached")];
         }
 
+        // 80% warning threshold
+        let threshold_80 = MAX_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5;
+        if new_count >= threshold_80 && !self.state.pubsub.warned_sub_80 {
+            self.state.pubsub.warned_sub_80 = true;
+            tracing::warn!(
+                conn_id = self.state.id,
+                current = new_count,
+                limit = MAX_SUBSCRIPTIONS_PER_CONNECTION,
+                "Connection approaching channel subscription limit (80%)"
+            );
+        }
+
         let mut responses = Vec::with_capacity(args.len());
 
         // Fan out to all shards for broadcast subscriptions
@@ -123,6 +135,11 @@ impl ConnectionHandler {
             ]));
         }
 
+        // Reset 80% warning if below threshold
+        if self.state.pubsub.subscriptions.len() < MAX_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5 {
+            self.state.pubsub.warned_sub_80 = false;
+        }
+
         responses
     }
 
@@ -138,6 +155,18 @@ impl ConnectionHandler {
         let new_count = self.state.pubsub.patterns.len() + args.len();
         if new_count > MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION {
             return vec![Response::error("ERR max pattern subscriptions reached")];
+        }
+
+        // 80% warning threshold
+        let threshold_80 = MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5;
+        if new_count >= threshold_80 && !self.state.pubsub.warned_pattern_80 {
+            self.state.pubsub.warned_pattern_80 = true;
+            tracing::warn!(
+                conn_id = self.state.id,
+                current = new_count,
+                limit = MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
+                "Connection approaching pattern subscription limit (80%)"
+            );
         }
 
         let mut responses = Vec::with_capacity(args.len());
@@ -213,6 +242,11 @@ impl ConnectionHandler {
             ]));
         }
 
+        // Reset 80% warning if below threshold
+        if self.state.pubsub.patterns.len() < MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5 {
+            self.state.pubsub.warned_pattern_80 = false;
+        }
+
         responses
     }
 
@@ -253,6 +287,18 @@ impl ConnectionHandler {
         let new_count = self.state.pubsub.sharded_subscriptions.len() + args.len();
         if new_count > MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION {
             return vec![Response::error("ERR max sharded subscriptions reached")];
+        }
+
+        // 80% warning threshold
+        let threshold_80 = MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5;
+        if new_count >= threshold_80 && !self.state.pubsub.warned_sharded_80 {
+            self.state.pubsub.warned_sharded_80 = true;
+            tracing::warn!(
+                conn_id = self.state.id,
+                current = new_count,
+                limit = MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
+                "Connection approaching sharded subscription limit (80%)"
+            );
         }
 
         let mut responses = Vec::with_capacity(args.len());
@@ -336,6 +382,13 @@ impl ConnectionHandler {
                 Response::bulk(channel.clone()),
                 Response::Integer(count as i64),
             ]));
+        }
+
+        // Reset 80% warning if below threshold
+        if self.state.pubsub.sharded_subscriptions.len()
+            < MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5
+        {
+            self.state.pubsub.warned_sharded_80 = false;
         }
 
         responses

@@ -263,6 +263,17 @@ pub struct VllKeyIntentInfo {
     pub lock_state: String,
 }
 
+/// Pub/Sub limits info for a shard.
+#[derive(Debug, Clone, Default)]
+pub struct PubSubLimitsInfo {
+    /// Total subscriptions across all connections on this shard.
+    pub total_subscriptions: usize,
+    /// Number of unique channels with at least one subscriber.
+    pub unique_channels: usize,
+    /// Number of unique patterns with at least one subscriber.
+    pub unique_patterns: usize,
+}
+
 /// Result from executing a transaction.
 #[derive(Debug)]
 pub enum TransactionResult {

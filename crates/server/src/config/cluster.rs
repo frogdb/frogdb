@@ -65,8 +65,15 @@ pub struct ClusterConfigSection {
     pub fail_threshold: u32,
 }
 
+pub const DEFAULT_CLUSTER_BUS_ADDR: &str = "127.0.0.1:16379";
+pub const DEFAULT_ELECTION_TIMEOUT_MS: u64 = 1000;
+pub const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 250;
+pub const DEFAULT_CLUSTER_CONNECT_TIMEOUT_MS: u64 = 5000;
+pub const DEFAULT_CLUSTER_REQUEST_TIMEOUT_MS: u64 = 10000;
+pub const DEFAULT_FAIL_THRESHOLD: u32 = 5;
+
 fn default_cluster_bus_addr() -> String {
-    "127.0.0.1:16379".to_string()
+    DEFAULT_CLUSTER_BUS_ADDR.to_string()
 }
 
 fn default_cluster_data_dir() -> std::path::PathBuf {
@@ -74,23 +81,23 @@ fn default_cluster_data_dir() -> std::path::PathBuf {
 }
 
 fn default_election_timeout_ms() -> u64 {
-    1000
+    DEFAULT_ELECTION_TIMEOUT_MS
 }
 
 fn default_heartbeat_interval_ms() -> u64 {
-    250
+    DEFAULT_HEARTBEAT_INTERVAL_MS
 }
 
 fn default_cluster_connect_timeout_ms() -> u64 {
-    5000
+    DEFAULT_CLUSTER_CONNECT_TIMEOUT_MS
 }
 
 fn default_cluster_request_timeout_ms() -> u64 {
-    10000
+    DEFAULT_CLUSTER_REQUEST_TIMEOUT_MS
 }
 
 fn default_fail_threshold() -> u32 {
-    5
+    DEFAULT_FAIL_THRESHOLD
 }
 
 impl Default for ClusterConfigSection {

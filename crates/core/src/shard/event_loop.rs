@@ -111,6 +111,7 @@ impl ShardWorker {
                         }
                         ShardMessage::ConnectionClosed { conn_id } => {
                             self.subscriptions.remove_connection(conn_id);
+                            self.subscriptions.reset_thresholds_if_needed();
                         }
 
                         // Scripting message handlers
@@ -273,6 +274,15 @@ impl ShardWorker {
 
                         ShardMessage::GetVllQueueInfo { response_tx } => {
                             let info = self.collect_vll_queue_info();
+                            let _ = response_tx.send(info);
+                        }
+
+                        ShardMessage::GetPubSubLimitsInfo { response_tx } => {
+                            let info = super::types::PubSubLimitsInfo {
+                                total_subscriptions: self.subscriptions.total_subscription_count(),
+                                unique_channels: self.subscriptions.unique_channel_count(),
+                                unique_patterns: self.subscriptions.unique_pattern_count(),
+                            };
                             let _ = response_tx.send(info);
                         }
 

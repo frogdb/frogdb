@@ -70,12 +70,22 @@ fn default_durability_mode() -> String {
     "periodic".to_string()
 }
 
+pub const DEFAULT_SYNC_INTERVAL_MS: u64 = 1000;
+pub const DEFAULT_WRITE_BUFFER_SIZE_MB: usize = 64;
+pub const DEFAULT_BLOCK_CACHE_SIZE_MB: usize = 256;
+pub const DEFAULT_BLOOM_FILTER_BITS: i32 = 10;
+pub const DEFAULT_MAX_WRITE_BUFFER_NUMBER: i32 = 4;
+pub const DEFAULT_BATCH_SIZE_THRESHOLD_KB: usize = 4096;
+pub const DEFAULT_BATCH_TIMEOUT_MS: u64 = 10;
+pub const DEFAULT_SNAPSHOT_INTERVAL_SECS: u64 = 3600;
+pub const DEFAULT_MAX_SNAPSHOTS: usize = 5;
+
 fn default_sync_interval_ms() -> u64 {
-    1000
+    DEFAULT_SYNC_INTERVAL_MS
 }
 
 fn default_write_buffer_size_mb() -> usize {
-    64
+    DEFAULT_WRITE_BUFFER_SIZE_MB
 }
 
 fn default_compression() -> String {
@@ -83,15 +93,15 @@ fn default_compression() -> String {
 }
 
 fn default_block_cache_size_mb() -> usize {
-    256
+    DEFAULT_BLOCK_CACHE_SIZE_MB
 }
 
 fn default_bloom_filter_bits() -> i32 {
-    10
+    DEFAULT_BLOOM_FILTER_BITS
 }
 
 fn default_max_write_buffer_number() -> i32 {
-    4
+    DEFAULT_MAX_WRITE_BUFFER_NUMBER
 }
 
 fn default_compaction_rate_limit_mb() -> u64 {
@@ -99,11 +109,11 @@ fn default_compaction_rate_limit_mb() -> u64 {
 }
 
 fn default_batch_size_threshold_kb() -> usize {
-    4096 // 4MB
+    DEFAULT_BATCH_SIZE_THRESHOLD_KB
 }
 
 fn default_batch_timeout_ms() -> u64 {
-    10
+    DEFAULT_BATCH_TIMEOUT_MS
 }
 
 impl Default for PersistenceConfig {
@@ -176,11 +186,11 @@ fn default_snapshot_dir() -> PathBuf {
 }
 
 fn default_snapshot_interval_secs() -> u64 {
-    3600 // 1 hour
+    DEFAULT_SNAPSHOT_INTERVAL_SECS
 }
 
 fn default_max_snapshots() -> usize {
-    5
+    DEFAULT_MAX_SNAPSHOTS
 }
 
 impl Default for SnapshotConfig {
