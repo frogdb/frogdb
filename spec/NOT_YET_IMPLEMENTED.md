@@ -8,9 +8,7 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 
 | Item | Files | Description | Spec |
 |------|-------|-------------|------|
-| ~~Slot migration doesn't move keys~~ | `crates/server/src/commands/cluster/` | **DONE** — Server-side MIGRATE was already fully implemented (scatter-gather DUMP/RESTORE/DELETE in `persistence.rs`). Fixed Jepsen test infrastructure: route SETSLOT through Raft leader with explicit source/target IDs, use Docker internal IPs for MIGRATE, removed dead `MigrateOperation` stub. | [ROADMAP.md](ROADMAP.md), [CLUSTER_PLAN.md](CLUSTER_PLAN.md) |
 | Proactive lag-threshold full-resync | `crates/replication/src/`, `crates/server/src/replication/primary.rs` | A FULLRESYNC does occur reactively when the broadcast buffer overflows (disconnect → reconnect → PSYNC). What's missing is a configurable lag threshold that triggers proactive FULLRESYNC before buffer overflow. | [ROADMAP.md](ROADMAP.md) |
-| ~~Replica READONLY enforcement~~ | `crates/server/src/connection/guards.rs` | **DONE** — Replicas now reject write commands with `-READONLY` error via `CommandFlags::WRITE` check in `run_pre_checks()`. | — |
 | Replication-mode partition recovery | `crates/replication/src/` | After a network partition heals, async writes to the old primary are not rolled back or fenced. Jepsen zombie test confirms stale writes survive partition healing. | — |
 
 ---
@@ -40,10 +38,6 @@ Items described in spec documentation as if implemented, but not present in the 
 | DTrace/USDT probes | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Feature does not exist in Cargo.toml. | [DEBUGGING.md](DEBUGGING.md#dtrace-usdt-probes) |
 | DEBUG STRUCTSIZE | Show sizes of internal data structures | [types/SERVER.md](types/SERVER.md) |
 | JSON.DEBUG | Debug info for JSON values | [types/JSON.md](types/JSON.md) |
-| ~~TS.MGET~~ | ~~Multi-key get for time series~~ | **DONE** |
-| ~~TS.MRANGE / TS.MREVRANGE~~ | ~~Multi-key range queries for time series~~ | **DONE** |
-| ~~TS.QUERYINDEX~~ | ~~Find time series keys by labels~~ | **DONE** |
-| ~~TS.CREATERULE / TS.DELETERULE~~ | ~~Create/delete downsample rules for time series~~ | **DONE** |
 
 ---
 
@@ -83,23 +77,23 @@ Items described in spec documentation as if implemented, but not present in the 
 
 ## Jepsen Test Status
 
-33 tests across three topologies. Tests marked **Expected Failure** detect real unimplemented features and will pass once the corresponding item above is implemented.
+33 tests across three topologies (30 PASS, 3 Expected Failure). Tests marked **Expected Failure** detect real unimplemented features and will pass once the corresponding item above is implemented.
 
 ### Single-node (19/19 PASS)
 
 All single-node tests pass.
 
-### Replication (2/5 PASS, 3 Expected Failure)
+### Replication (3/5 PASS, 2 Expected Failure)
 
 | Test | Status | Root Cause | Cross-ref |
 |------|--------|-----------|-----------|
 | basic-replication | PASS | — | — |
 | failover | PASS | — | — |
-| split-brain | Should Pass | Replicas now reject writes with `-READONLY`. | ~~Replica READONLY enforcement~~ (done) |
+| split-brain | PASS | — | — |
 | zombie | Expected Failure | No partition recovery / write rollback. Stale async writes persist after partition heals. | Replication-mode partition recovery (above) |
 | replication-chaos | Expected Failure | Reads observe older values during replication lag. Checker may be too strict for async replication under faults. | Proactive lag-threshold full-resync (above) |
 
-### Raft cluster (6/9 PASS, 3 Expected Failure)
+### Raft cluster (8/9 PASS, 1 Expected Failure)
 
 | Test | Status | Root Cause | Cross-ref |
 |------|--------|-----------|-----------|
@@ -109,8 +103,8 @@ All single-node tests pass.
 | leader-election-partition | PASS | — | — |
 | key-routing-kill | PASS | — | — |
 | raft-chaos | PASS | — | — |
-| slot-migration | Should Pass | Fixed Jepsen test infra: Raft-aware SETSLOT routing, Docker internal IPs for MIGRATE, explicit source/target IDs. | ~~Slot migration doesn't move keys~~ (done) |
-| slot-migration-partition | Should Pass | Same fixes as slot-migration; partition nemesis exercises existing Raft recovery. | ~~Slot migration doesn't move keys~~ (done) |
+| slot-migration | PASS | — | — |
+| slot-migration-partition | PASS | — | — |
 | cross-slot | Expected Failure | Slot balancing after clean restart leaves some slots unserved during `CLUSTERDOWN` windows; cross-slot balance checks fail. | Separate cluster recovery issue |
 
 ---
