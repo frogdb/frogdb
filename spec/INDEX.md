@@ -304,7 +304,7 @@ FrogDB uses a layered configuration approach:
 
 1. **Startup configuration** via [Figment](https://docs.rs/figment): CLI > environment variables (`FROGDB_` prefix) > TOML file > defaults
 2. **Runtime configuration** via Redis-compatible `CONFIG SET/GET` commands
-3. **TLS certificate hot-reloading** via file watching (future feature)
+3. **TLS certificate hot-reloading** via file watching (see [TLS.md](TLS.md))
 
 **Key design decisions:**
 - TOML format (modern, structured) rather than redis.conf
@@ -399,7 +399,8 @@ These sources document how similar systems handle edge cases and can be consulte
 | [TESTING.md](TESTING.md) | Test strategy |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Symptom-driven diagnosis runbooks |
 | [OBSERVABILITY.md](OBSERVABILITY.md) | Metrics, logging, tracing |
-| [CONFIGURATION.md](CONFIGURATION.md) | Configuration system, CONFIG commands, TLS hot-reload |
+| [CONFIGURATION.md](CONFIGURATION.md) | Configuration system, CONFIG commands |
+| [TLS.md](TLS.md) | TLS encryption, mTLS, certificate hot-reloading |
 | [FAILURE_MODES.md](FAILURE_MODES.md) | Error handling, recovery |
 | [CONSISTENCY.md](CONSISTENCY.md) | Consistency guarantees |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Docker, K8s deployment |

@@ -61,7 +61,7 @@ Items described in spec documentation as if implemented, but not present in the 
 |------|-------------|------|
 | Client tracking / client-side caching | CLIENT TRACKING — complex feature with high memory overhead | [COMPATIBILITY.md](COMPATIBILITY.md#not-yet-implemented) |
 | File log output with rotation | `tracing-appender` integration for non-blocking file writes — stdout/stderr only today | [OBSERVABILITY.md](OBSERVABILITY.md) |
-| TLS certificate hot-reload | Certificate hot-reloading via file watching | [CONFIGURATION.md](CONFIGURATION.md) |
+| TLS (full implementation) | Server TLS, mTLS, hot-reloading, replication TLS, cluster bus TLS | [TLS.md](TLS.md) |
 | Rolling upgrade (cluster mode) | Only single-node upgrade documented | [DEPLOYMENT.md](DEPLOYMENT.md) |
 
 ---

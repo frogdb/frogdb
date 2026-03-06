@@ -1,6 +1,6 @@
 # FrogDB Configuration
 
-This document covers FrogDB's configuration system, including startup configuration, runtime configuration via CONFIG commands, and future TLS certificate hot-reloading.
+This document covers FrogDB's configuration system, including startup configuration and runtime configuration via CONFIG commands. For TLS configuration, see [TLS.md](TLS.md).
 
 ## Overview
 
@@ -8,7 +8,7 @@ FrogDB uses a layered configuration approach:
 
 1. **Startup configuration** via Figment (CLI > env vars > TOML file > defaults)
 2. **Runtime configuration** via `CONFIG SET/GET` commands (Redis-compatible)
-3. **TLS certificate hot-reloading** via file watching and signals (future)
+3. **TLS certificate hot-reloading** via file watching and signals (see [TLS.md](TLS.md))
 
 ### Design Decisions
 
@@ -18,7 +18,7 @@ FrogDB uses a layered configuration approach:
 | Native env var support | `FROGDB_` prefix - more like DragonflyDB than Redis/Valkey |
 | CONFIG SET/GET | Full Redis compatibility for runtime changes |
 | No CONFIG REWRITE | Simpler implementation; runtime changes are transient |
-| TLS hot-reload (future) | Differentiating feature for operational ease |
+| TLS hot-reload | Differentiating feature — see [TLS.md](TLS.md) |
 
 ### Comparison with Prior Art
 
@@ -333,7 +333,7 @@ This table lists ALL configuration parameters with mutability and side effects.
 | `num_shards` | Data distribution is fixed at startup; changing requires data migration |
 | `allow_cross_slot_standalone` | Affects command routing logic deeply embedded in execution |
 | `dir`, `dbfilename` | Changing paths mid-operation would orphan existing data |
-| `tls-*` | TLS contexts are expensive to recreate; requires connection termination |
+| `tls-*` | TLS parameters are immutable; cert changes use hot-reloading (see [TLS.md](TLS.md)) |
 | `tcp-backlog` | OS socket option set at bind time |
 | `unixsocket` | Unix socket created at startup |
 
@@ -633,76 +633,9 @@ impl ConfigError {
 
 ---
 
-## TLS Certificate Hot-Reloading
+## TLS
 
-### Motivation
-
-Certificates often have short expiration (90 days, 30 days) due to security policies. Hot-reloading avoids downtime during certificate rotation.
-
-**Note:** This is a differentiating feature - neither Redis, Valkey, nor DragonflyDB support TLS hot-reloading natively.
-
-### Implementation Approaches
-
-#### 1. File Watching (inotify/kqueue)
-
-- Watch cert/key files for modification
-- On change: validate new certs, atomically swap TLS context
-- **Pros:** Automatic, no operator action needed
-- **Cons:** Platform-specific, may miss rapid changes
-
-#### 2. Signal-Based (SIGUSR1)
-
-- Send signal to trigger cert reload
-- **Pros:** Explicit, works with any deployment
-- **Cons:** Requires operator/automation to trigger
-
-#### 3. Command-Based
-
-- Add `DEBUG RELOAD-CERTS` or similar command
-- **Pros:** Can be called via redis-cli
-- **Cons:** Requires connection, ACL considerations
-
-### Recommended Design
-
-Support both file watching (default) and signal-based reload:
-
-```rust
-pub struct TlsManager {
-    /// Current TLS acceptor (swapped atomically)
-    acceptor: Arc<ArcSwap<TlsAcceptor>>,
-
-    /// Watcher for cert file changes (optional)
-    watcher: Option<notify::RecommendedWatcher>,
-
-    /// Paths to cert files
-    cert_path: PathBuf,
-    key_path: PathBuf,
-}
-
-impl TlsManager {
-    /// Reload certificates from configured paths
-    pub fn reload_certs(&self) -> Result<(), TlsError> {
-        let new_config = load_tls_config(&self.cert_path, &self.key_path)?;
-        let new_acceptor = TlsAcceptor::from(new_config);
-        self.acceptor.store(Arc::new(new_acceptor));
-        info!("TLS certificates reloaded successfully");
-        Ok(())
-    }
-}
-```
-
-### Configuration
-
-```toml
-[tls]
-enabled = true
-cert_file = "/path/to/cert.pem"
-key_file = "/path/to/key.pem"
-
-# Hot-reload options (future)
-watch_certs = true          # Enable file watching
-reload_signal = "SIGUSR1"   # Signal to trigger reload
-```
+TLS configuration and certificate hot-reloading are specified in [TLS.md](TLS.md).
 
 ---
 
