@@ -5,10 +5,12 @@
 //! - Sharded Pub/Sub (SSUBSCRIBE, SPUBLISH)
 //! - Pattern subscriptions (PSUBSCRIBE)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
+use frogdb_types::traits::MetricsRecorder;
 use tokio::sync::mpsc;
 
 /// Connection ID type.
@@ -25,6 +27,15 @@ pub const MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION: usize = 1_000;
 
 /// Maximum sharded subscriptions per connection.
 pub const MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION: usize = 10_000;
+
+/// Maximum total subscriptions per shard (all connections combined).
+pub const MAX_TOTAL_SUBSCRIPTIONS_PER_SHARD: usize = 1_000_000;
+
+/// Maximum unique channels per shard.
+pub const MAX_UNIQUE_CHANNELS_PER_SHARD: usize = 100_000;
+
+/// Maximum unique patterns per shard.
+pub const MAX_UNIQUE_PATTERNS_PER_SHARD: usize = 10_000;
 
 /// Messages delivered to subscribers.
 #[derive(Debug, Clone)]
@@ -352,6 +363,12 @@ pub struct ShardSubscriptions {
     pattern_subs: Vec<(Bytes, GlobPattern, ConnId, PubSubSender)>,
     /// Sharded channel -> (ConnId -> Sender).
     sharded_subs: HashMap<Bytes, HashMap<ConnId, PubSubSender>>,
+    /// Whether the 90% total subscription threshold warning has been emitted.
+    warned_total_90: bool,
+    /// Whether the 90% unique channel threshold warning has been emitted.
+    warned_channels_90: bool,
+    /// Whether the 90% unique pattern threshold warning has been emitted.
+    warned_patterns_90: bool,
 }
 
 impl ShardSubscriptions {
@@ -631,6 +648,119 @@ impl ShardSubscriptions {
                 (ch.clone(), count)
             })
             .collect()
+    }
+
+    // =========================================================================
+    // Shard-level threshold monitoring
+    // =========================================================================
+
+    /// Total subscription count across all types (channel + pattern + sharded).
+    pub fn total_subscription_count(&self) -> usize {
+        let channel_total: usize = self.channel_subs.values().map(|m| m.len()).sum();
+        let sharded_total: usize = self.sharded_subs.values().map(|m| m.len()).sum();
+        channel_total + self.pattern_subs.len() + sharded_total
+    }
+
+    /// Number of unique broadcast channels with at least one subscriber.
+    pub fn unique_channel_count(&self) -> usize {
+        self.channel_subs.len()
+    }
+
+    /// Number of unique patterns across all connections.
+    pub fn unique_pattern_count(&self) -> usize {
+        self.pattern_subs
+            .iter()
+            .map(|(p, _, _, _)| p)
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
+    /// Check shard-level 90% thresholds after a subscribe operation.
+    /// Logs a warning and emits a metric for each threshold crossed.
+    pub fn check_thresholds_after_subscribe(
+        &mut self,
+        shard_id: usize,
+        metrics: &Arc<dyn MetricsRecorder>,
+    ) {
+        if self.warned_total_90 && self.warned_channels_90 && self.warned_patterns_90 {
+            return;
+        }
+
+        let total_threshold = MAX_TOTAL_SUBSCRIPTIONS_PER_SHARD * 9 / 10;
+        if !self.warned_total_90 {
+            let total = self.total_subscription_count();
+            if total >= total_threshold {
+                self.warned_total_90 = true;
+                tracing::warn!(
+                    shard_id,
+                    current = total,
+                    limit = MAX_TOTAL_SUBSCRIPTIONS_PER_SHARD,
+                    "Shard approaching total subscription limit (90%)"
+                );
+                metrics.increment_counter(
+                    "frogdb_pubsub_shard_limit_warnings_total",
+                    1,
+                    &[("type", "total_subscriptions")],
+                );
+            }
+        }
+
+        let channel_threshold = MAX_UNIQUE_CHANNELS_PER_SHARD * 9 / 10;
+        if !self.warned_channels_90 {
+            let channels = self.unique_channel_count();
+            if channels >= channel_threshold {
+                self.warned_channels_90 = true;
+                tracing::warn!(
+                    shard_id,
+                    current = channels,
+                    limit = MAX_UNIQUE_CHANNELS_PER_SHARD,
+                    "Shard approaching unique channel limit (90%)"
+                );
+                metrics.increment_counter(
+                    "frogdb_pubsub_shard_limit_warnings_total",
+                    1,
+                    &[("type", "unique_channels")],
+                );
+            }
+        }
+
+        let pattern_threshold = MAX_UNIQUE_PATTERNS_PER_SHARD * 9 / 10;
+        if !self.warned_patterns_90 {
+            let patterns = self.unique_pattern_count();
+            if patterns >= pattern_threshold {
+                self.warned_patterns_90 = true;
+                tracing::warn!(
+                    shard_id,
+                    current = patterns,
+                    limit = MAX_UNIQUE_PATTERNS_PER_SHARD,
+                    "Shard approaching unique pattern limit (90%)"
+                );
+                metrics.increment_counter(
+                    "frogdb_pubsub_shard_limit_warnings_total",
+                    1,
+                    &[("type", "unique_patterns")],
+                );
+            }
+        }
+    }
+
+    /// Reset threshold warning flags if counts have dropped below 90%.
+    pub fn reset_thresholds_if_needed(&mut self) {
+        if self.warned_total_90
+            && self.total_subscription_count() < MAX_TOTAL_SUBSCRIPTIONS_PER_SHARD * 9 / 10
+        {
+            self.warned_total_90 = false;
+        }
+        if self.warned_channels_90
+            && self.unique_channel_count() < MAX_UNIQUE_CHANNELS_PER_SHARD * 9 / 10
+        {
+            self.warned_channels_90 = false;
+        }
+        if self.warned_patterns_90
+            && self.unique_pattern_count() < MAX_UNIQUE_PATTERNS_PER_SHARD * 9 / 10
+        {
+            self.warned_patterns_90 = false;
+        }
     }
 }
 
@@ -935,5 +1065,79 @@ mod tests {
             }
             _ => panic!("Expected array response"),
         }
+    }
+
+    // =========================================================================
+    // Counting and threshold tests
+    // =========================================================================
+
+    #[test]
+    fn test_total_subscription_count() {
+        let mut subs = ShardSubscriptions::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        assert_eq!(subs.total_subscription_count(), 0);
+
+        // 2 channel subs on ch1 (conn 1 and 2), 1 on ch2 = 3
+        subs.subscribe(Bytes::from_static(b"ch1"), 1, tx.clone());
+        subs.subscribe(Bytes::from_static(b"ch1"), 2, tx.clone());
+        subs.subscribe(Bytes::from_static(b"ch2"), 1, tx.clone());
+        assert_eq!(subs.total_subscription_count(), 3);
+
+        // 1 pattern sub
+        subs.psubscribe(Bytes::from_static(b"news.*"), 1, tx.clone());
+        assert_eq!(subs.total_subscription_count(), 4);
+
+        // 1 sharded sub
+        subs.ssubscribe(Bytes::from_static(b"orders"), 1, tx.clone());
+        assert_eq!(subs.total_subscription_count(), 5);
+    }
+
+    #[test]
+    fn test_unique_channel_count() {
+        let mut subs = ShardSubscriptions::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        assert_eq!(subs.unique_channel_count(), 0);
+
+        subs.subscribe(Bytes::from_static(b"ch1"), 1, tx.clone());
+        subs.subscribe(Bytes::from_static(b"ch1"), 2, tx.clone()); // same channel
+        assert_eq!(subs.unique_channel_count(), 1);
+
+        subs.subscribe(Bytes::from_static(b"ch2"), 1, tx.clone());
+        assert_eq!(subs.unique_channel_count(), 2);
+    }
+
+    #[test]
+    fn test_unique_pattern_count() {
+        let mut subs = ShardSubscriptions::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        assert_eq!(subs.unique_pattern_count(), 0);
+
+        // Same pattern from two connections = 1 unique pattern
+        subs.psubscribe(Bytes::from_static(b"news.*"), 1, tx.clone());
+        subs.psubscribe(Bytes::from_static(b"news.*"), 2, tx.clone());
+        assert_eq!(subs.unique_pattern_count(), 1);
+
+        subs.psubscribe(Bytes::from_static(b"weather.*"), 1, tx.clone());
+        assert_eq!(subs.unique_pattern_count(), 2);
+    }
+
+    #[test]
+    fn test_threshold_reset() {
+        let mut subs = ShardSubscriptions::new();
+
+        // Manually set flags
+        subs.warned_total_90 = true;
+        subs.warned_channels_90 = true;
+        subs.warned_patterns_90 = true;
+
+        // With no subscriptions, all are below 90% — should reset
+        subs.reset_thresholds_if_needed();
+
+        assert!(!subs.warned_total_90);
+        assert!(!subs.warned_channels_90);
+        assert!(!subs.warned_patterns_90);
     }
 }

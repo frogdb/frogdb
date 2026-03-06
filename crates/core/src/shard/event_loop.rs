@@ -111,6 +111,7 @@ impl ShardWorker {
                         }
                         ShardMessage::ConnectionClosed { conn_id } => {
                             self.subscriptions.remove_connection(conn_id);
+                            self.subscriptions.reset_thresholds_if_needed();
                         }
 
                         // Scripting message handlers
