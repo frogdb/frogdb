@@ -75,6 +75,7 @@ impl CrashTestHarness {
             mode: DurabilityMode::Sync,
             batch_size_threshold: 4 * 1024 * 1024,
             batch_timeout_ms: 10,
+            ..Default::default()
         };
         Self::with_config(wal_config, RocksConfig::default(), 4)
     }
@@ -85,6 +86,7 @@ impl CrashTestHarness {
             mode: DurabilityMode::Periodic { interval_ms },
             batch_size_threshold: 4 * 1024 * 1024,
             batch_timeout_ms: 10,
+            ..Default::default()
         };
         Self::with_config(wal_config, RocksConfig::default(), 4)
     }
@@ -95,6 +97,7 @@ impl CrashTestHarness {
             mode: DurabilityMode::Async,
             batch_size_threshold: 4 * 1024 * 1024,
             batch_timeout_ms: 10,
+            ..Default::default()
         };
         Self::with_config(wal_config, RocksConfig::default(), 4)
     }

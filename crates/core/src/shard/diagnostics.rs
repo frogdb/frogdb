@@ -50,9 +50,9 @@ impl ShardWorker {
     }
 
     /// Collect WAL lag statistics for this shard.
-    pub(crate) async fn collect_wal_lag_stats(&self) -> WalLagStatsResponse {
+    pub(crate) fn collect_wal_lag_stats(&self) -> WalLagStatsResponse {
         if let Some(ref wal_writer) = self.persistence.wal_writer {
-            let lag_stats = wal_writer.lag_stats().await;
+            let lag_stats = wal_writer.lag_stats();
             WalLagStatsResponse {
                 shard_id: self.shard_id(),
                 persistence_enabled: true,

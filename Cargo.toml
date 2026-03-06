@@ -95,6 +95,7 @@ turmoil = { version = "0.6" }
 
 # Persistence
 rocksdb = { version = "0.24", default-features = false, features = ["multi-threaded-cf", "lz4", "snappy", "zstd"] }
+flume = "0.11"
 tempfile = "3"
 
 # Lua scripting

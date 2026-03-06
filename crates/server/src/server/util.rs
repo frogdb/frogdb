@@ -75,6 +75,7 @@ pub fn build_wal_config(config: &PersistenceConfig) -> WalConfig {
         mode,
         batch_size_threshold: config.batch_size_threshold_kb * 1024,
         batch_timeout_ms: config.batch_timeout_ms,
+        ..Default::default()
     }
 }
 
