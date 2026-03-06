@@ -1,0 +1,1392 @@
+2026-02-22 23:54:41,125{GMT}	INFO	[jepsen test runner] jepsen.core: Test version 4a7760395f3d9033cc6c7a477c6947e5d983eb25 (plus uncommitted changes)
+2026-02-22 23:54:41,126{GMT}	INFO	[jepsen test runner] jepsen.core: Command line:
+lein run test --docker --workload zombie --nemesis partition --time-limit 60
+2026-02-22 23:54:41,161{GMT}	INFO	[jepsen test runner] jepsen.core: Running test:
+{:remote
+ #jepsen.control.retry.Remote{:remote #jepsen.control.scp.Remote{:cmd-remote #jepsen.control.sshj.SSHJRemote{:concurrency-limit 6,
+                                                                                                             :conn-spec nil,
+                                                                                                             :client nil,
+                                                                                                             :semaphore nil},
+                                                                 :conn-spec nil},
+                              :conn nil}
+ :concurrency 5
+ :cluster false
+ :db
+ #object[jepsen.frogdb.db$replication_db$reify__9900
+         "0x6ee88669"
+         "jepsen.frogdb.db$replication_db$reify__9900@6ee88669"]
+ :leave-db-running? false
+ :name "frogdb-zombie-partition-docker-replication"
+ :logging-json? false
+ :independent false
+ :start-time
+ #object[org.joda.time.DateTime "0x1c791c14" "2026-02-22T23:54:41.089-05:00"]
+ :docker true
+ :net
+ #object[jepsen.net$reify__12635 "0xc24e06a" "jepsen.net$reify__12635@c24e06a"]
+ :client
+ #jepsen.frogdb.zombie.ZombieClient{:conns nil,
+                                    :primary-conn nil,
+                                    :docker-host? nil}
+ :barrier
+ #object[java.util.concurrent.CyclicBarrier
+         "0x1926e42e"
+         "java.util.concurrent.CyclicBarrier@1926e42e"]
+ :ssh {:dummy? true}
+ :rate 10
+ :checker
+ #object[jepsen.checker$compose$reify__10552
+         "0x6fa38b67"
+         "jepsen.checker$compose$reify__10552@6fa38b67"]
+ :argv
+ ("test"
+  "--docker"
+  "--workload"
+  "zombie"
+  "--nemesis"
+  "partition"
+  "--time-limit"
+  "60")
+ :nemesis
+ #unprintable "jepsen.frogdb.nemesis$partition_nemesis$reify__11056@3b6ea33b"
+ :nodes ["n1" "n2" "n3"]
+ :test-count 1
+ :replication false
+ :cluster-nodes ["n1" "n2" "n3"]
+ :generator
+ #object[jepsen.util.Forgettable
+         "0x2bc41531"
+         ((jepsen.generator.Synchronize
+           {:gen (jepsen.generator.TimeLimit
+                  {:limit 60000000000,
+                   :cutoff nil,
+                   :gen (jepsen.generator.Any
+                         {:gens [(jepsen.generator.OnThreads
+                                  {:f #{:nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x56d5311e"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@56d5311e"],
+                                   :gen (jepsen.generator.Cycle
+                                         {:remaining -1,
+                                          :original-gen [{:type :sleep,
+                                                          :value 10}
+                                                         {:type :info,
+                                                          :f :partition,
+                                                          :value :primary-isolated}
+                                                         {:type :sleep,
+                                                          :value 10}
+                                                         {:type :info, :f :heal}
+                                                         {:type :sleep,
+                                                          :value 5}],
+                                          :gen [{:type :sleep, :value 10}
+                                                {:type :info,
+                                                 :f :partition,
+                                                 :value :primary-isolated}
+                                                {:type :sleep, :value 10}
+                                                {:type :info, :f :heal}
+                                                {:type :sleep, :value 5}]})})
+                                 (jepsen.generator.OnThreads
+                                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x66a81c48"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@66a81c48"],
+                                   :gen (jepsen.generator.Stagger
+                                         {:dt 200000000,
+                                          :next-time nil,
+                                          :gen (jepsen.generator.Mix
+                                                {:i 2,
+                                                 :gens [#object[jepsen.frogdb.zombie$generator$fn__12684
+                                                                "0x60880394"
+                                                                "jepsen.frogdb.zombie$generator$fn__12684@60880394"]
+                                                        #object[jepsen.frogdb.zombie$generator$fn__12686
+                                                                "0x482b6acc"
+                                                                "jepsen.frogdb.zombie$generator$fn__12686@482b6acc"]
+                                                        #object[jepsen.frogdb.zombie$generator$fn__12688
+                                                                "0x3709ef16"
+                                                                "jepsen.frogdb.zombie$generator$fn__12688@3709ef16"]]})})})]})})})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Recovering from faults..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #{:nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x1165efe3"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@1165efe3"],
+                   :gen (jepsen.generator.Limit
+                         {:remaining 1, :gen {:type :info, :f :heal}})})})
+          (jepsen.generator.Synchronize {:gen {:type :sleep, :value 5}})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Final reads..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x3151caf8"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@3151caf8"],
+                   :gen (jepsen.generator.Stagger
+                         {:dt 200000000,
+                          :next-time nil,
+                          :gen (jepsen.generator.Limit
+                                {:remaining 10,
+                                 :gen (jepsen.generator.Repeat
+                                       {:remaining -1, :gen {:f :read}})})})})}))]
+ :interval 10
+ :os
+ #object[jepsen.frogdb.core$reify__14064
+         "0x744d556f"
+         "jepsen.frogdb.core$reify__14064@744d556f"]
+ :time-limit 60
+ :workload "zombie"
+ :local false}
+
+2026-02-22 23:54:42,419{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS setup for n1 (no-op)
+2026-02-22 23:54:42,419{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS setup for n3 (no-op)
+2026-02-22 23:54:42,419{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS setup for n2 (no-op)
+2026-02-22 23:54:42,419{GMT}	INFO	[jepsen test runner] jepsen.db: Tearing down DB
+2026-02-22 23:54:42,420{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB replication node n1
+2026-02-22 23:54:42,421{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Tearing down FrogDB replication node n2
+2026-02-22 23:54:42,421{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Tearing down FrogDB replication node n3
+2026-02-22 23:54:42,498{GMT}	INFO	[jepsen test runner] jepsen.db: Setting up DB
+2026-02-22 23:54:42,498{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Setting up FrogDB replication node n3
+2026-02-22 23:54:42,498{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Setting up FrogDB replication node n2
+2026-02-22 23:54:42,498{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Setting up FrogDB replication node n1
+2026-02-22 23:54:43,600{GMT}	INFO	[jepsen test runner] jepsen.core: Relative time begins now
+2026-02-22 23:54:43,602{GMT}	INFO	[jepsen node n2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:43,602{GMT}	INFO	[jepsen node n3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:43,602{GMT}	INFO	[jepsen node n1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:43,602{GMT}	INFO	[jepsen node n2] jepsen.frogdb.zombie: Setting up zombie test key jepsen-zombie
+2026-02-22 23:54:43,602{GMT}	INFO	[jepsen node n3] jepsen.frogdb.zombie: Setting up zombie test key jepsen-zombie
+2026-02-22 23:54:43,602{GMT}	INFO	[jepsen node n1] jepsen.frogdb.zombie: Setting up zombie test key jepsen-zombie
+2026-02-22 23:54:44,118{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-quorum	nil
+2026-02-22 23:54:44,119{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:44,123{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:44,224{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-async	3
+2026-02-22 23:54:44,224{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:44,226{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-async	3
+2026-02-22 23:54:44,308{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-durable	6
+2026-02-22 23:54:44,309{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:44,376{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-quorum	nil
+2026-02-22 23:54:44,377{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:44,381{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:44,549{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-quorum	nil
+2026-02-22 23:54:44,550{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:44,552{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:44,666{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-async	9
+2026-02-22 23:54:44,668{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-async	9
+2026-02-22 23:54:44,841{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-async	12
+2026-02-22 23:54:44,844{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-async	12
+2026-02-22 23:54:45,010{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-quorum	nil
+2026-02-22 23:54:45,014{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:45,198{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-async	15
+2026-02-22 23:54:45,200{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-async	15
+2026-02-22 23:54:45,374{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-async	18
+2026-02-22 23:54:45,376{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-async	18
+2026-02-22 23:54:45,500{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-quorum	nil
+2026-02-22 23:54:45,504{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:45,681{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-async	21
+2026-02-22 23:54:45,682{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-async	21
+2026-02-22 23:54:45,783{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-async	24
+2026-02-22 23:54:45,784{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-async	24
+2026-02-22 23:54:45,984{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-quorum	nil
+2026-02-22 23:54:45,988{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:46,119{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-async	27
+2026-02-22 23:54:46,121{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-async	27
+2026-02-22 23:54:46,130{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-durable	30
+2026-02-22 23:54:46,164{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-quorum	nil
+2026-02-22 23:54:46,168{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:46,180{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-durable	33
+2026-02-22 23:54:46,269{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-async	35
+2026-02-22 23:54:46,272{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-async	35
+2026-02-22 23:54:46,317{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:info	:write-durable	6	:sync-timeout
+2026-02-22 23:54:46,379{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-quorum	nil
+2026-02-22 23:54:46,384{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:46,485{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:read-quorum	nil
+2026-02-22 23:54:46,486{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:46,489{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:46,489{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-durable	38
+2026-02-22 23:54:46,594{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-quorum	nil
+2026-02-22 23:54:46,599{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:46,684{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-durable	41
+2026-02-22 23:54:46,860{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:write-async	43
+2026-02-22 23:54:46,864{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:ok	:write-async	43
+2026-02-22 23:54:46,885{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:write-async	49
+2026-02-22 23:54:46,887{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:ok	:write-async	49
+2026-02-22 23:54:46,942{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:write-async	53
+2026-02-22 23:54:46,943{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:ok	:write-async	53
+2026-02-22 23:54:47,123{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:read-quorum	nil
+2026-02-22 23:54:47,127{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:47,277{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:write-async	58
+2026-02-22 23:54:47,279{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:ok	:write-async	58
+2026-02-22 23:54:47,333{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:read-quorum	nil
+2026-02-22 23:54:47,337{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:47,527{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:write-async	64
+2026-02-22 23:54:47,530{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:ok	:write-async	64
+2026-02-22 23:54:47,695{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:write-async	68
+2026-02-22 23:54:47,697{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:ok	:write-async	68
+2026-02-22 23:54:47,784{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:write-durable	72
+2026-02-22 23:54:48,136{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:info	:write-durable	30	:sync-timeout
+2026-02-22 23:54:48,136{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:invoke	:read-quorum	nil
+2026-02-22 23:54:48,136{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:48,140{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:48,185{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:info	:write-durable	33	:sync-timeout
+2026-02-22 23:54:48,228{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:invoke	:read-quorum	nil
+2026-02-22 23:54:48,228{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:48,232{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:48,406{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:invoke	:read-quorum	nil
+2026-02-22 23:54:48,410{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:48,439{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:invoke	:write-async	75
+2026-02-22 23:54:48,441{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:ok	:write-async	75
+2026-02-22 23:54:48,497{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:info	:write-durable	38	:sync-timeout
+2026-02-22 23:54:48,563{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:invoke	:read-quorum	nil
+2026-02-22 23:54:48,568{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:48,592{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:invoke	:read-quorum	nil
+2026-02-22 23:54:48,595{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:48,689{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:info	:write-durable	41	:sync-timeout
+2026-02-22 23:54:48,719{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:invoke	:write-durable	79
+2026-02-22 23:54:48,723{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:invoke	:write-durable	81
+2026-02-22 23:54:48,916{GMT}	INFO	[jepsen worker 1] jepsen.util: 6	:invoke	:write-durable	83
+2026-02-22 23:54:48,916{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:49,056{GMT}	INFO	[jepsen worker 2] jepsen.util: 7	:invoke	:write-durable	85
+2026-02-22 23:54:49,057{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:49,788{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:info	:write-durable	72	:sync-timeout
+2026-02-22 23:54:49,788{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-quorum	nil
+2026-02-22 23:54:49,789{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:49,793{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:49,990{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:write-async	92
+2026-02-22 23:54:49,991{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:write-async	92
+2026-02-22 23:54:50,084{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:write-async	95
+2026-02-22 23:54:50,085{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:write-async	95
+2026-02-22 23:54:50,154{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:write-async	99
+2026-02-22 23:54:50,156{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:write-async	99
+2026-02-22 23:54:50,275{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:write-async	103
+2026-02-22 23:54:50,276{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:write-async	103
+2026-02-22 23:54:50,455{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-quorum	nil
+2026-02-22 23:54:50,460{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:50,463{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-quorum	nil
+2026-02-22 23:54:50,465{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:50,605{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:write-async	107
+2026-02-22 23:54:50,608{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:write-async	107
+2026-02-22 23:54:50,697{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-quorum	nil
+2026-02-22 23:54:50,702{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:50,726{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:info	:write-durable	79	:sync-timeout
+2026-02-22 23:54:50,726{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:info	:write-durable	81	:sync-timeout
+2026-02-22 23:54:50,786{GMT}	INFO	[jepsen worker 0] jepsen.util: 10	:invoke	:read-quorum	nil
+2026-02-22 23:54:50,786{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:50,790{GMT}	INFO	[jepsen worker 0] jepsen.util: 10	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:50,915{GMT}	INFO	[jepsen worker 0] jepsen.util: 10	:invoke	:write-durable	110
+2026-02-22 23:54:50,920{GMT}	INFO	[jepsen worker 1] jepsen.util: 6	:info	:write-durable	83	:sync-timeout
+2026-02-22 23:54:50,960{GMT}	INFO	[jepsen worker 1] jepsen.util: 11	:invoke	:write-durable	113
+2026-02-22 23:54:50,961{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:51,063{GMT}	INFO	[jepsen worker 2] jepsen.util: 7	:info	:write-durable	85	:sync-timeout
+2026-02-22 23:54:51,104{GMT}	INFO	[jepsen worker 2] jepsen.util: 12	:invoke	:read-quorum	nil
+2026-02-22 23:54:51,104{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:51,106{GMT}	INFO	[jepsen worker 2] jepsen.util: 12	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:51,108{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-quorum	nil
+2026-02-22 23:54:51,109{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:51,169{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-quorum	nil
+2026-02-22 23:54:51,169{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:51,173{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:51,220{GMT}	INFO	[jepsen worker 2] jepsen.util: 12	:invoke	:write-durable	116
+2026-02-22 23:54:51,413{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-quorum	nil
+2026-02-22 23:54:51,417{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:51,438{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:write-async	119
+2026-02-22 23:54:51,439{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:write-async	119
+2026-02-22 23:54:51,451{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-quorum	nil
+2026-02-22 23:54:51,455{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:51,637{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-quorum	nil
+2026-02-22 23:54:51,641{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:51,800{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-quorum	nil
+2026-02-22 23:54:51,805{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:51,978{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-quorum	nil
+2026-02-22 23:54:51,982{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:52,150{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:write-durable	122
+2026-02-22 23:54:52,259{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:write-async	124
+2026-02-22 23:54:52,261{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:write-async	124
+2026-02-22 23:54:52,455{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:write-durable	129
+2026-02-22 23:54:52,923{GMT}	INFO	[jepsen worker 0] jepsen.util: 10	:info	:write-durable	110	:sync-timeout
+2026-02-22 23:54:52,923{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:write-async	492
+2026-02-22 23:54:52,924{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:52,925{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:ok	:write-async	492
+2026-02-22 23:54:52,963{GMT}	INFO	[jepsen worker 1] jepsen.util: 11	:info	:write-durable	113	:sync-timeout
+2026-02-22 23:54:52,966{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:write-async	497
+2026-02-22 23:54:52,966{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:ok	:write-async	497
+2026-02-22 23:54:52,967{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:write-async	500
+2026-02-22 23:54:52,969{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:ok	:write-async	500
+2026-02-22 23:54:53,168{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:read-quorum	nil
+2026-02-22 23:54:53,170{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:53,225{GMT}	INFO	[jepsen worker 2] jepsen.util: 12	:info	:write-durable	116	:sync-timeout
+2026-02-22 23:54:53,274{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-quorum	nil
+2026-02-22 23:54:53,275{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:53,278{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:53,413{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:read-quorum	nil
+2026-02-22 23:54:53,413{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:53,418{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:53,466{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:read-quorum	nil
+2026-02-22 23:54:53,470{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:53,655{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:write-async	503
+2026-02-22 23:54:53,656{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:ok	:write-async	503
+2026-02-22 23:54:53,783{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:read-quorum	nil
+2026-02-22 23:54:53,787{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:53,952{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:write-durable	506
+2026-02-22 23:54:54,123{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:partition	:primary-isolated
+2026-02-22 23:54:54,123{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Partitioning: isolating primary from replicas
+2026-02-22 23:54:54,123{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n1 from n2 ( 172.20.0.3 )
+2026-02-22 23:54:54,124{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:write-async	510
+2026-02-22 23:54:54,126{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:ok	:write-async	510
+2026-02-22 23:54:54,157{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:info	:write-durable	122	:sync-timeout
+2026-02-22 23:54:54,163{GMT}	INFO	[jepsen worker 3] jepsen.util: 18	:invoke	:write-async	514
+2026-02-22 23:54:54,163{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:54,165{GMT}	INFO	[jepsen worker 3] jepsen.util: 18	:ok	:write-async	514
+2026-02-22 23:54:54,199{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-quorum	nil
+2026-02-22 23:54:54,202{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:54,222{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:write-async	517
+2026-02-22 23:54:54,223{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:write-async	517
+2026-02-22 23:54:54,246{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:write-async	520
+2026-02-22 23:54:54,246{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:write-async	520
+2026-02-22 23:54:54,316{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n1 from n3 ( 172.20.0.4 )
+2026-02-22 23:54:54,412{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-quorum	nil
+2026-02-22 23:54:54,413{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:54,458{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n2 from n1 ( 172.20.0.2 )
+2026-02-22 23:54:54,463{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:info	:write-durable	129	:sync-timeout
+2026-02-22 23:54:54,496{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:read-quorum	nil
+2026-02-22 23:54:54,497{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:54,580{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n3 from n1 ( 172.20.0.2 )
+2026-02-22 23:54:54,595{GMT}	INFO	[jepsen worker 3] jepsen.util: 18	:invoke	:write-durable	523
+2026-02-22 23:54:54,701{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:partition	:primary-isolated
+2026-02-22 23:54:54,777{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-quorum	nil
+2026-02-22 23:54:54,779{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:54,825{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:write-async	526
+2026-02-22 23:54:54,826{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:write-async	526
+2026-02-22 23:54:54,856{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:write-durable	529
+2026-02-22 23:54:55,023{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:write-async	531
+2026-02-22 23:54:55,024{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:ok	:write-async	531
+2026-02-22 23:54:55,096{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:invoke	:write-durable	534
+2026-02-22 23:54:55,096{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:55,172{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:read-quorum	nil
+2026-02-22 23:54:55,176{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:55,215{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:write-async	540
+2026-02-22 23:54:55,217{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:ok	:write-async	540
+2026-02-22 23:54:55,357{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:write-durable	544
+2026-02-22 23:54:55,961{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:info	:write-durable	506	:sync-timeout
+2026-02-22 23:54:55,961{GMT}	INFO	[jepsen worker 0] jepsen.util: 20	:invoke	:write-durable	1018
+2026-02-22 23:54:55,961{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:56,602{GMT}	INFO	[jepsen worker 3] jepsen.util: 18	:info	:write-durable	523	:sync-timeout
+2026-02-22 23:54:56,603{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:write-durable	1520
+2026-02-22 23:54:56,603{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:56,862{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:info	:write-durable	529	:sync-timeout
+2026-02-22 23:54:56,862{GMT}	INFO	[jepsen worker 1] jepsen.util: 21	:invoke	:write-durable	1725
+2026-02-22 23:54:56,863{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:57,105{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:info	:write-durable	534	:sync-timeout
+2026-02-22 23:54:57,105{GMT}	INFO	[jepsen worker 4] jepsen.util: 24	:invoke	:write-durable	1911
+2026-02-22 23:54:57,105{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:57,361{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:info	:write-durable	544	:sync-timeout
+2026-02-22 23:54:57,361{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:invoke	:read-quorum	nil
+2026-02-22 23:54:57,361{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:57,363{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:57,511{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:invoke	:write-async	1915
+2026-02-22 23:54:57,513{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:ok	:write-async	1915
+2026-02-22 23:54:57,665{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:invoke	:read-quorum	nil
+2026-02-22 23:54:57,670{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:57,755{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:invoke	:read-quorum	nil
+2026-02-22 23:54:57,759{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:57,789{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:invoke	:read-quorum	nil
+2026-02-22 23:54:57,794{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:57,965{GMT}	INFO	[jepsen worker 0] jepsen.util: 20	:info	:write-durable	1018	:sync-timeout
+2026-02-22 23:54:57,990{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:write-durable	1922
+2026-02-22 23:54:57,991{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:58,176{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:invoke	:write-durable	1924
+2026-02-22 23:54:58,612{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:info	:write-durable	1520	:sync-timeout
+2026-02-22 23:54:58,612{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:invoke	:read-quorum	nil
+2026-02-22 23:54:58,612{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:58,614{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:58,710{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:invoke	:read-quorum	nil
+2026-02-22 23:54:58,714{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:58,823{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:invoke	:read-quorum	nil
+2026-02-22 23:54:58,828{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:58,844{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:invoke	:write-durable	1931
+2026-02-22 23:54:58,867{GMT}	INFO	[jepsen worker 1] jepsen.util: 21	:info	:write-durable	1725	:sync-timeout
+2026-02-22 23:54:58,900{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:invoke	:read-quorum	nil
+2026-02-22 23:54:58,900{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:58,906{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:59,026{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:invoke	:write-async	1938
+2026-02-22 23:54:59,029{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:ok	:write-async	1938
+2026-02-22 23:54:59,069{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:invoke	:write-durable	1942
+2026-02-22 23:54:59,111{GMT}	INFO	[jepsen worker 4] jepsen.util: 24	:info	:write-durable	1911	:sync-timeout
+2026-02-22 23:54:59,161{GMT}	INFO	[jepsen worker 4] jepsen.util: 29	:invoke	:read-quorum	nil
+2026-02-22 23:54:59,161{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:59,165{GMT}	INFO	[jepsen worker 4] jepsen.util: 29	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:59,326{GMT}	INFO	[jepsen worker 4] jepsen.util: 29	:invoke	:write-async	1948
+2026-02-22 23:54:59,328{GMT}	INFO	[jepsen worker 4] jepsen.util: 29	:ok	:write-async	1948
+2026-02-22 23:54:59,418{GMT}	INFO	[jepsen worker 4] jepsen.util: 29	:invoke	:read-quorum	nil
+2026-02-22 23:54:59,421{GMT}	INFO	[jepsen worker 4] jepsen.util: 29	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:54:59,592{GMT}	INFO	[jepsen worker 4] jepsen.util: 29	:invoke	:write-durable	1953
+2026-02-22 23:54:59,996{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:info	:write-durable	1922	:sync-timeout
+2026-02-22 23:54:59,996{GMT}	INFO	[jepsen worker 0] jepsen.util: 30	:invoke	:write-durable	2270
+2026-02-22 23:54:59,996{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:00,185{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:info	:write-durable	1924	:sync-timeout
+2026-02-22 23:55:00,185{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:read-quorum	nil
+2026-02-22 23:55:00,186{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:00,189{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:00,189{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:write-async	2274
+2026-02-22 23:55:00,191{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:ok	:write-async	2274
+2026-02-22 23:55:00,193{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:write-durable	2278
+2026-02-22 23:55:00,849{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:info	:write-durable	1931	:sync-timeout
+2026-02-22 23:55:00,849{GMT}	INFO	[jepsen worker 3] jepsen.util: 33	:invoke	:write-async	2789
+2026-02-22 23:55:00,849{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:00,850{GMT}	INFO	[jepsen worker 3] jepsen.util: 33	:ok	:write-async	2789
+2026-02-22 23:55:00,947{GMT}	INFO	[jepsen worker 3] jepsen.util: 33	:invoke	:write-durable	2793
+2026-02-22 23:55:01,075{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:info	:write-durable	1942	:sync-timeout
+2026-02-22 23:55:01,075{GMT}	INFO	[jepsen worker 1] jepsen.util: 31	:invoke	:read-quorum	nil
+2026-02-22 23:55:01,075{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:01,078{GMT}	INFO	[jepsen worker 1] jepsen.util: 31	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:01,186{GMT}	INFO	[jepsen worker 1] jepsen.util: 31	:invoke	:write-durable	2798
+2026-02-22 23:55:01,603{GMT}	INFO	[jepsen worker 4] jepsen.util: 29	:info	:write-durable	1953	:sync-timeout
+2026-02-22 23:55:01,603{GMT}	INFO	[jepsen worker 4] jepsen.util: 34	:invoke	:write-async	3127
+2026-02-22 23:55:01,603{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:01,605{GMT}	INFO	[jepsen worker 4] jepsen.util: 34	:ok	:write-async	3127
+2026-02-22 23:55:01,660{GMT}	INFO	[jepsen worker 4] jepsen.util: 34	:invoke	:write-async	3131
+2026-02-22 23:55:01,662{GMT}	INFO	[jepsen worker 4] jepsen.util: 34	:ok	:write-async	3131
+2026-02-22 23:55:01,708{GMT}	INFO	[jepsen worker 4] jepsen.util: 34	:invoke	:read-quorum	nil
+2026-02-22 23:55:01,712{GMT}	INFO	[jepsen worker 4] jepsen.util: 34	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:01,867{GMT}	INFO	[jepsen worker 4] jepsen.util: 34	:invoke	:write-durable	3136
+2026-02-22 23:55:02,006{GMT}	INFO	[jepsen worker 0] jepsen.util: 30	:info	:write-durable	2270	:sync-timeout
+2026-02-22 23:55:02,006{GMT}	INFO	[jepsen worker 0] jepsen.util: 35	:invoke	:read-quorum	nil
+2026-02-22 23:55:02,006{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:02,009{GMT}	INFO	[jepsen worker 0] jepsen.util: 35	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:02,017{GMT}	INFO	[jepsen worker 0] jepsen.util: 35	:invoke	:read-quorum	nil
+2026-02-22 23:55:02,020{GMT}	INFO	[jepsen worker 0] jepsen.util: 35	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:02,047{GMT}	INFO	[jepsen worker 0] jepsen.util: 35	:invoke	:write-async	3141
+2026-02-22 23:55:02,048{GMT}	INFO	[jepsen worker 0] jepsen.util: 35	:ok	:write-async	3141
+2026-02-22 23:55:02,202{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:info	:write-durable	2278	:sync-timeout
+2026-02-22 23:55:02,202{GMT}	INFO	[jepsen worker 2] jepsen.util: 32	:invoke	:write-async	3145
+2026-02-22 23:55:02,202{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:02,205{GMT}	INFO	[jepsen worker 2] jepsen.util: 32	:ok	:write-async	3145
+2026-02-22 23:55:02,392{GMT}	INFO	[jepsen worker 0] jepsen.util: 35	:invoke	:write-durable	3148
+2026-02-22 23:55:02,587{GMT}	INFO	[jepsen worker 2] jepsen.util: 32	:invoke	:write-async	3150
+2026-02-22 23:55:02,589{GMT}	INFO	[jepsen worker 2] jepsen.util: 32	:ok	:write-async	3150
+2026-02-22 23:55:02,771{GMT}	INFO	[jepsen worker 2] jepsen.util: 32	:invoke	:write-async	3155
+2026-02-22 23:55:02,773{GMT}	INFO	[jepsen worker 2] jepsen.util: 32	:ok	:write-async	3155
+2026-02-22 23:55:02,952{GMT}	INFO	[jepsen worker 3] jepsen.util: 33	:info	:write-durable	2793	:sync-timeout
+2026-02-22 23:55:02,954{GMT}	INFO	[jepsen worker 2] jepsen.util: 32	:invoke	:write-durable	3161
+2026-02-22 23:55:03,070{GMT}	INFO	[jepsen worker 3] jepsen.util: 38	:invoke	:read-quorum	nil
+2026-02-22 23:55:03,070{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:03,074{GMT}	INFO	[jepsen worker 3] jepsen.util: 38	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:03,195{GMT}	INFO	[jepsen worker 1] jepsen.util: 31	:info	:write-durable	2798	:sync-timeout
+2026-02-22 23:55:03,252{GMT}	INFO	[jepsen worker 3] jepsen.util: 38	:invoke	:write-durable	3168
+2026-02-22 23:55:03,266{GMT}	INFO	[jepsen worker 1] jepsen.util: 36	:invoke	:write-durable	3170
+2026-02-22 23:55:03,266{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:03,873{GMT}	INFO	[jepsen worker 4] jepsen.util: 34	:info	:write-durable	3136	:sync-timeout
+2026-02-22 23:55:03,873{GMT}	INFO	[jepsen worker 4] jepsen.util: 39	:invoke	:write-async	3640
+2026-02-22 23:55:03,873{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:03,875{GMT}	INFO	[jepsen worker 4] jepsen.util: 39	:ok	:write-async	3640
+2026-02-22 23:55:03,903{GMT}	INFO	[jepsen worker 4] jepsen.util: 39	:invoke	:write-durable	3644
+2026-02-22 23:55:04,399{GMT}	INFO	[jepsen worker 0] jepsen.util: 35	:info	:write-durable	3148	:sync-timeout
+2026-02-22 23:55:04,399{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:invoke	:read-quorum	nil
+2026-02-22 23:55:04,399{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:04,402{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:04,600{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:invoke	:write-async	3649
+2026-02-22 23:55:04,603{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:ok	:write-async	3649
+2026-02-22 23:55:04,707{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	nil
+2026-02-22 23:55:04,707{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Healing all network partitions
+2026-02-22 23:55:04,708{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n1
+2026-02-22 23:55:04,720{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:invoke	:write-async	3656
+2026-02-22 23:55:04,722{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:ok	:write-async	3656
+2026-02-22 23:55:04,826{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:invoke	:write-async	3660
+2026-02-22 23:55:04,827{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:ok	:write-async	3660
+2026-02-22 23:55:04,848{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n2
+2026-02-22 23:55:04,949{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n3
+2026-02-22 23:55:04,951{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:invoke	:write-durable	3663
+2026-02-22 23:55:04,958{GMT}	INFO	[jepsen worker 2] jepsen.util: 32	:info	:write-durable	3161	:sync-timeout
+2026-02-22 23:55:05,038{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	:healed
+2026-02-22 23:55:05,112{GMT}	INFO	[jepsen worker 2] jepsen.util: 37	:invoke	:read-quorum	nil
+2026-02-22 23:55:05,112{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:05,114{GMT}	INFO	[jepsen worker 2] jepsen.util: 37	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:05,263{GMT}	INFO	[jepsen worker 3] jepsen.util: 38	:info	:write-durable	3168	:sync-timeout
+2026-02-22 23:55:05,272{GMT}	INFO	[jepsen worker 1] jepsen.util: 36	:info	:write-durable	3170	:sync-timeout
+2026-02-22 23:55:05,276{GMT}	INFO	[jepsen worker 2] jepsen.util: 37	:invoke	:write-async	3669
+2026-02-22 23:55:05,278{GMT}	INFO	[jepsen worker 2] jepsen.util: 37	:ok	:write-async	3669
+2026-02-22 23:55:05,357{GMT}	INFO	[jepsen worker 3] jepsen.util: 43	:invoke	:write-durable	3672
+2026-02-22 23:55:05,357{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:05,361{GMT}	INFO	[jepsen worker 1] jepsen.util: 41	:invoke	:write-durable	3674
+2026-02-22 23:55:05,361{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:05,485{GMT}	INFO	[jepsen worker 2] jepsen.util: 37	:invoke	:read-quorum	nil
+2026-02-22 23:55:05,488{GMT}	INFO	[jepsen worker 2] jepsen.util: 37	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:05,592{GMT}	INFO	[jepsen worker 2] jepsen.util: 37	:invoke	:write-durable	3679
+2026-02-22 23:55:05,914{GMT}	INFO	[jepsen worker 4] jepsen.util: 39	:info	:write-durable	3644	:sync-timeout
+2026-02-22 23:55:05,914{GMT}	INFO	[jepsen worker 4] jepsen.util: 44	:invoke	:write-durable	3935
+2026-02-22 23:55:05,914{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:06,958{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:info	:write-durable	3663	:sync-timeout
+2026-02-22 23:55:06,958{GMT}	INFO	[jepsen worker 0] jepsen.util: 45	:invoke	:write-async	4745
+2026-02-22 23:55:06,958{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:06,960{GMT}	INFO	[jepsen worker 0] jepsen.util: 45	:ok	:write-async	4745
+2026-02-22 23:55:07,078{GMT}	INFO	[jepsen worker 0] jepsen.util: 45	:invoke	:write-async	4749
+2026-02-22 23:55:07,080{GMT}	INFO	[jepsen worker 0] jepsen.util: 45	:ok	:write-async	4749
+2026-02-22 23:55:07,168{GMT}	INFO	[jepsen worker 0] jepsen.util: 45	:invoke	:write-async	4753
+2026-02-22 23:55:07,169{GMT}	INFO	[jepsen worker 0] jepsen.util: 45	:ok	:write-async	4753
+2026-02-22 23:55:07,317{GMT}	INFO	[jepsen worker 0] jepsen.util: 45	:invoke	:write-async	4756
+2026-02-22 23:55:07,318{GMT}	INFO	[jepsen worker 0] jepsen.util: 45	:ok	:write-async	4756
+2026-02-22 23:55:07,326{GMT}	INFO	[jepsen worker 0] jepsen.util: 45	:invoke	:write-durable	4760
+2026-02-22 23:55:07,361{GMT}	INFO	[jepsen worker 3] jepsen.util: 43	:info	:write-durable	3672	:sync-timeout
+2026-02-22 23:55:07,366{GMT}	INFO	[jepsen worker 1] jepsen.util: 41	:info	:write-durable	3674	:sync-timeout
+2026-02-22 23:55:07,436{GMT}	INFO	[jepsen worker 1] jepsen.util: 46	:invoke	:read-quorum	nil
+2026-02-22 23:55:07,437{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:07,440{GMT}	INFO	[jepsen worker 1] jepsen.util: 46	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:07,458{GMT}	INFO	[jepsen worker 3] jepsen.util: 48	:invoke	:read-quorum	nil
+2026-02-22 23:55:07,458{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:07,461{GMT}	INFO	[jepsen worker 3] jepsen.util: 48	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:07,525{GMT}	INFO	[jepsen worker 3] jepsen.util: 48	:invoke	:read-quorum	nil
+2026-02-22 23:55:07,530{GMT}	INFO	[jepsen worker 3] jepsen.util: 48	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:07,599{GMT}	INFO	[jepsen worker 2] jepsen.util: 37	:info	:write-durable	3679	:sync-timeout
+2026-02-22 23:55:07,705{GMT}	INFO	[jepsen worker 1] jepsen.util: 46	:invoke	:write-async	4764
+2026-02-22 23:55:07,707{GMT}	INFO	[jepsen worker 1] jepsen.util: 46	:ok	:write-async	4764
+2026-02-22 23:55:07,836{GMT}	INFO	[jepsen worker 1] jepsen.util: 46	:invoke	:write-async	4767
+2026-02-22 23:55:07,839{GMT}	INFO	[jepsen worker 1] jepsen.util: 46	:ok	:write-async	4767
+2026-02-22 23:55:07,864{GMT}	INFO	[jepsen worker 1] jepsen.util: 46	:invoke	:read-quorum	nil
+2026-02-22 23:55:07,868{GMT}	INFO	[jepsen worker 1] jepsen.util: 46	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:07,921{GMT}	INFO	[jepsen worker 4] jepsen.util: 44	:info	:write-durable	3935	:sync-timeout
+2026-02-22 23:55:08,006{GMT}	INFO	[jepsen worker 1] jepsen.util: 46	:invoke	:write-durable	4771
+2026-02-22 23:55:08,045{GMT}	INFO	[jepsen worker 2] jepsen.util: 42	:invoke	:read-quorum	nil
+2026-02-22 23:55:08,046{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:08,050{GMT}	INFO	[jepsen worker 2] jepsen.util: 42	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:08,241{GMT}	INFO	[jepsen worker 3] jepsen.util: 48	:invoke	:read-quorum	nil
+2026-02-22 23:55:08,243{GMT}	INFO	[jepsen worker 3] jepsen.util: 48	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:08,280{GMT}	INFO	[jepsen worker 4] jepsen.util: 49	:invoke	:write-durable	4774
+2026-02-22 23:55:08,280{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:08,408{GMT}	INFO	[jepsen worker 2] jepsen.util: 42	:invoke	:read-quorum	nil
+2026-02-22 23:55:08,412{GMT}	INFO	[jepsen worker 2] jepsen.util: 42	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:08,603{GMT}	INFO	[jepsen worker 2] jepsen.util: 42	:invoke	:write-durable	4777
+2026-02-22 23:55:08,706{GMT}	INFO	[jepsen worker 3] jepsen.util: 48	:invoke	:write-async	4779
+2026-02-22 23:55:08,708{GMT}	INFO	[jepsen worker 3] jepsen.util: 48	:ok	:write-async	4779
+2026-02-22 23:55:08,871{GMT}	INFO	[jepsen worker 3] jepsen.util: 48	:invoke	:write-durable	4783
+2026-02-22 23:55:09,329{GMT}	INFO	[jepsen worker 0] jepsen.util: 45	:info	:write-durable	4760	:sync-timeout
+2026-02-22 23:55:09,330{GMT}	INFO	[jepsen worker 0] jepsen.util: 50	:invoke	:write-durable	5143
+2026-02-22 23:55:09,330{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:10,011{GMT}	INFO	[jepsen worker 1] jepsen.util: 46	:info	:write-durable	4771	:sync-timeout
+2026-02-22 23:55:10,011{GMT}	INFO	[jepsen worker 1] jepsen.util: 51	:invoke	:write-async	5675
+2026-02-22 23:55:10,011{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:10,013{GMT}	INFO	[jepsen worker 1] jepsen.util: 51	:ok	:write-async	5675
+2026-02-22 23:55:10,080{GMT}	INFO	[jepsen worker 1] jepsen.util: 51	:invoke	:write-async	5681
+2026-02-22 23:55:10,082{GMT}	INFO	[jepsen worker 1] jepsen.util: 51	:ok	:write-async	5681
+2026-02-22 23:55:10,187{GMT}	INFO	[jepsen worker 1] jepsen.util: 51	:invoke	:read-quorum	nil
+2026-02-22 23:55:10,189{GMT}	INFO	[jepsen worker 1] jepsen.util: 51	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:10,285{GMT}	INFO	[jepsen worker 1] jepsen.util: 51	:invoke	:write-durable	5686
+2026-02-22 23:55:10,287{GMT}	INFO	[jepsen worker 4] jepsen.util: 49	:info	:write-durable	4774	:sync-timeout
+2026-02-22 23:55:10,287{GMT}	INFO	[jepsen worker 4] jepsen.util: 54	:invoke	:write-durable	5689
+2026-02-22 23:55:10,287{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:10,611{GMT}	INFO	[jepsen worker 2] jepsen.util: 42	:info	:write-durable	4777	:sync-timeout
+2026-02-22 23:55:10,612{GMT}	INFO	[jepsen worker 2] jepsen.util: 47	:invoke	:read-quorum	nil
+2026-02-22 23:55:10,612{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:10,614{GMT}	INFO	[jepsen worker 2] jepsen.util: 47	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:10,761{GMT}	INFO	[jepsen worker 2] jepsen.util: 47	:invoke	:write-durable	5694
+2026-02-22 23:55:10,878{GMT}	INFO	[jepsen worker 3] jepsen.util: 48	:info	:write-durable	4783	:sync-timeout
+2026-02-22 23:55:10,878{GMT}	INFO	[jepsen worker 3] jepsen.util: 53	:invoke	:read-quorum	nil
+2026-02-22 23:55:10,879{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:10,882{GMT}	INFO	[jepsen worker 3] jepsen.util: 53	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:11,075{GMT}	INFO	[jepsen worker 3] jepsen.util: 53	:invoke	:write-async	5699
+2026-02-22 23:55:11,077{GMT}	INFO	[jepsen worker 3] jepsen.util: 53	:ok	:write-async	5699
+2026-02-22 23:55:11,092{GMT}	INFO	[jepsen worker 3] jepsen.util: 53	:invoke	:read-quorum	nil
+2026-02-22 23:55:11,095{GMT}	INFO	[jepsen worker 3] jepsen.util: 53	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:11,120{GMT}	INFO	[jepsen worker 3] jepsen.util: 53	:invoke	:write-durable	5704
+2026-02-22 23:55:11,335{GMT}	INFO	[jepsen worker 0] jepsen.util: 50	:info	:write-durable	5143	:sync-timeout
+2026-02-22 23:55:11,335{GMT}	INFO	[jepsen worker 0] jepsen.util: 55	:invoke	:write-async	5873
+2026-02-22 23:55:11,335{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:11,337{GMT}	INFO	[jepsen worker 0] jepsen.util: 55	:ok	:write-async	5873
+2026-02-22 23:55:11,429{GMT}	INFO	[jepsen worker 0] jepsen.util: 55	:invoke	:read-quorum	nil
+2026-02-22 23:55:11,434{GMT}	INFO	[jepsen worker 0] jepsen.util: 55	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:11,434{GMT}	INFO	[jepsen worker 0] jepsen.util: 55	:invoke	:write-durable	5879
+2026-02-22 23:55:12,291{GMT}	INFO	[jepsen worker 1] jepsen.util: 51	:info	:write-durable	5686	:sync-timeout
+2026-02-22 23:55:12,291{GMT}	INFO	[jepsen worker 4] jepsen.util: 54	:info	:write-durable	5689	:sync-timeout
+2026-02-22 23:55:12,291{GMT}	INFO	[jepsen worker 1] jepsen.util: 56	:invoke	:write-durable	6548
+2026-02-22 23:55:12,291{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:12,297{GMT}	INFO	[jepsen worker 4] jepsen.util: 59	:invoke	:write-durable	6550
+2026-02-22 23:55:12,297{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:12,767{GMT}	INFO	[jepsen worker 2] jepsen.util: 47	:info	:write-durable	5694	:sync-timeout
+2026-02-22 23:55:12,767{GMT}	INFO	[jepsen worker 2] jepsen.util: 52	:invoke	:write-async	6917
+2026-02-22 23:55:12,767{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:12,769{GMT}	INFO	[jepsen worker 2] jepsen.util: 52	:ok	:write-async	6917
+2026-02-22 23:55:12,938{GMT}	INFO	[jepsen worker 2] jepsen.util: 52	:invoke	:read-quorum	nil
+2026-02-22 23:55:12,941{GMT}	INFO	[jepsen worker 2] jepsen.util: 52	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:13,064{GMT}	INFO	[jepsen worker 2] jepsen.util: 52	:invoke	:read-quorum	nil
+2026-02-22 23:55:13,067{GMT}	INFO	[jepsen worker 2] jepsen.util: 52	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:13,129{GMT}	INFO	[jepsen worker 3] jepsen.util: 53	:info	:write-durable	5704	:sync-timeout
+2026-02-22 23:55:13,197{GMT}	INFO	[jepsen worker 2] jepsen.util: 52	:invoke	:write-durable	6924
+2026-02-22 23:55:13,297{GMT}	INFO	[jepsen worker 3] jepsen.util: 58	:invoke	:read-quorum	nil
+2026-02-22 23:55:13,297{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:13,301{GMT}	INFO	[jepsen worker 3] jepsen.util: 58	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:13,423{GMT}	INFO	[jepsen worker 3] jepsen.util: 58	:invoke	:read-quorum	nil
+2026-02-22 23:55:13,428{GMT}	INFO	[jepsen worker 3] jepsen.util: 58	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:13,440{GMT}	INFO	[jepsen worker 0] jepsen.util: 55	:info	:write-durable	5879	:sync-timeout
+2026-02-22 23:55:13,581{GMT}	INFO	[jepsen worker 3] jepsen.util: 58	:invoke	:read-quorum	nil
+2026-02-22 23:55:13,586{GMT}	INFO	[jepsen worker 3] jepsen.util: 58	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:13,623{GMT}	INFO	[jepsen worker 0] jepsen.util: 60	:invoke	:write-durable	6927
+2026-02-22 23:55:13,623{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:13,798{GMT}	INFO	[jepsen worker 3] jepsen.util: 58	:invoke	:write-durable	6929
+2026-02-22 23:55:14,295{GMT}	INFO	[jepsen worker 1] jepsen.util: 56	:info	:write-durable	6548	:sync-timeout
+2026-02-22 23:55:14,295{GMT}	INFO	[jepsen worker 1] jepsen.util: 61	:invoke	:read-quorum	nil
+2026-02-22 23:55:14,295{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:14,296{GMT}	INFO	[jepsen worker 1] jepsen.util: 61	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:14,301{GMT}	INFO	[jepsen worker 4] jepsen.util: 59	:info	:write-durable	6550	:sync-timeout
+2026-02-22 23:55:14,381{GMT}	INFO	[jepsen worker 1] jepsen.util: 61	:invoke	:write-durable	6934
+2026-02-22 23:55:14,544{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:invoke	:read-quorum	nil
+2026-02-22 23:55:14,544{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:14,547{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:14,713{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:invoke	:read-quorum	nil
+2026-02-22 23:55:14,715{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:14,776{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:invoke	:write-async	6938
+2026-02-22 23:55:14,777{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:ok	:write-async	6938
+2026-02-22 23:55:14,918{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:invoke	:write-async	6941
+2026-02-22 23:55:14,920{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:ok	:write-async	6941
+2026-02-22 23:55:15,014{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:invoke	:read-quorum	nil
+2026-02-22 23:55:15,017{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:15,132{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:invoke	:read-quorum	nil
+2026-02-22 23:55:15,135{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:15,203{GMT}	INFO	[jepsen worker 2] jepsen.util: 52	:info	:write-durable	6924	:sync-timeout
+2026-02-22 23:55:15,325{GMT}	INFO	[jepsen worker 2] jepsen.util: 57	:invoke	:write-durable	6947
+2026-02-22 23:55:15,326{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:15,389{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:invoke	:write-durable	6949
+2026-02-22 23:55:15,628{GMT}	INFO	[jepsen worker 0] jepsen.util: 60	:info	:write-durable	6927	:sync-timeout
+2026-02-22 23:55:15,628{GMT}	INFO	[jepsen worker 0] jepsen.util: 65	:invoke	:write-durable	7138
+2026-02-22 23:55:15,628{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:15,803{GMT}	INFO	[jepsen worker 3] jepsen.util: 58	:info	:write-durable	6929	:sync-timeout
+2026-02-22 23:55:15,803{GMT}	INFO	[jepsen worker 3] jepsen.util: 63	:invoke	:read-quorum	nil
+2026-02-22 23:55:15,803{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:15,804{GMT}	INFO	[jepsen worker 3] jepsen.util: 63	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:15,998{GMT}	INFO	[jepsen worker 3] jepsen.util: 63	:invoke	:write-async	7142
+2026-02-22 23:55:16,000{GMT}	INFO	[jepsen worker 3] jepsen.util: 63	:ok	:write-async	7142
+2026-02-22 23:55:16,135{GMT}	INFO	[jepsen worker 3] jepsen.util: 63	:invoke	:read-quorum	nil
+2026-02-22 23:55:16,138{GMT}	INFO	[jepsen worker 3] jepsen.util: 63	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:16,216{GMT}	INFO	[jepsen worker 3] jepsen.util: 63	:invoke	:read-quorum	nil
+2026-02-22 23:55:16,219{GMT}	INFO	[jepsen worker 3] jepsen.util: 63	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:16,219{GMT}	INFO	[jepsen worker 3] jepsen.util: 63	:invoke	:write-durable	7146
+2026-02-22 23:55:16,386{GMT}	INFO	[jepsen worker 1] jepsen.util: 61	:info	:write-durable	6934	:sync-timeout
+2026-02-22 23:55:16,386{GMT}	INFO	[jepsen worker 1] jepsen.util: 66	:invoke	:write-durable	7278
+2026-02-22 23:55:16,386{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:17,330{GMT}	INFO	[jepsen worker 2] jepsen.util: 57	:info	:write-durable	6947	:sync-timeout
+2026-02-22 23:55:17,330{GMT}	INFO	[jepsen worker 2] jepsen.util: 62	:invoke	:read-quorum	nil
+2026-02-22 23:55:17,331{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:17,333{GMT}	INFO	[jepsen worker 2] jepsen.util: 62	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:17,395{GMT}	INFO	[jepsen worker 4] jepsen.util: 64	:info	:write-durable	6949	:sync-timeout
+2026-02-22 23:55:17,477{GMT}	INFO	[jepsen worker 2] jepsen.util: 62	:invoke	:read-quorum	nil
+2026-02-22 23:55:17,480{GMT}	INFO	[jepsen worker 2] jepsen.util: 62	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:17,541{GMT}	INFO	[jepsen worker 2] jepsen.util: 62	:invoke	:read-quorum	nil
+2026-02-22 23:55:17,544{GMT}	INFO	[jepsen worker 2] jepsen.util: 62	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:17,634{GMT}	INFO	[jepsen worker 0] jepsen.util: 65	:info	:write-durable	7138	:sync-timeout
+2026-02-22 23:55:17,734{GMT}	INFO	[jepsen worker 2] jepsen.util: 62	:invoke	:write-durable	7282
+2026-02-22 23:55:17,894{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:invoke	:write-async	7284
+2026-02-22 23:55:17,894{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:17,895{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:ok	:write-async	7284
+2026-02-22 23:55:17,903{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:invoke	:write-async	7287
+2026-02-22 23:55:17,904{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:ok	:write-async	7287
+2026-02-22 23:55:17,954{GMT}	INFO	[jepsen worker 0] jepsen.util: 70	:invoke	:read-quorum	nil
+2026-02-22 23:55:17,955{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:17,956{GMT}	INFO	[jepsen worker 0] jepsen.util: 70	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:18,046{GMT}	INFO	[jepsen worker 0] jepsen.util: 70	:invoke	:write-async	7290
+2026-02-22 23:55:18,048{GMT}	INFO	[jepsen worker 0] jepsen.util: 70	:ok	:write-async	7290
+2026-02-22 23:55:18,126{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:invoke	:read-quorum	nil
+2026-02-22 23:55:18,129{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:18,184{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:invoke	:write-async	7293
+2026-02-22 23:55:18,185{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:ok	:write-async	7293
+2026-02-22 23:55:18,224{GMT}	INFO	[jepsen worker 3] jepsen.util: 63	:info	:write-durable	7146	:sync-timeout
+2026-02-22 23:55:18,296{GMT}	INFO	[jepsen worker 3] jepsen.util: 68	:invoke	:write-durable	7297
+2026-02-22 23:55:18,296{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:18,385{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:invoke	:write-async	7299
+2026-02-22 23:55:18,387{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:ok	:write-async	7299
+2026-02-22 23:55:18,390{GMT}	INFO	[jepsen worker 1] jepsen.util: 66	:info	:write-durable	7278	:sync-timeout
+2026-02-22 23:55:18,513{GMT}	INFO	[jepsen worker 0] jepsen.util: 70	:invoke	:write-durable	7303
+2026-02-22 23:55:18,658{GMT}	INFO	[jepsen worker 1] jepsen.util: 71	:invoke	:read-quorum	nil
+2026-02-22 23:55:18,658{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:18,661{GMT}	INFO	[jepsen worker 1] jepsen.util: 71	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:18,664{GMT}	INFO	[jepsen worker 1] jepsen.util: 71	:invoke	:write-async	7306
+2026-02-22 23:55:18,665{GMT}	INFO	[jepsen worker 1] jepsen.util: 71	:ok	:write-async	7306
+2026-02-22 23:55:18,841{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:invoke	:write-async	7309
+2026-02-22 23:55:18,842{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:ok	:write-async	7309
+2026-02-22 23:55:18,875{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:invoke	:write-durable	7312
+2026-02-22 23:55:18,919{GMT}	INFO	[jepsen worker 1] jepsen.util: 71	:invoke	:write-durable	7314
+2026-02-22 23:55:19,739{GMT}	INFO	[jepsen worker 2] jepsen.util: 62	:info	:write-durable	7282	:sync-timeout
+2026-02-22 23:55:19,739{GMT}	INFO	[jepsen worker 2] jepsen.util: 67	:invoke	:read-quorum	nil
+2026-02-22 23:55:19,739{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:19,742{GMT}	INFO	[jepsen worker 2] jepsen.util: 67	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:19,857{GMT}	INFO	[jepsen worker 2] jepsen.util: 67	:invoke	:read-quorum	nil
+2026-02-22 23:55:19,860{GMT}	INFO	[jepsen worker 2] jepsen.util: 67	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:19,944{GMT}	INFO	[jepsen worker 2] jepsen.util: 67	:invoke	:write-durable	7319
+2026-02-22 23:55:20,044{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:partition	:primary-isolated
+2026-02-22 23:55:20,044{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Partitioning: isolating primary from replicas
+2026-02-22 23:55:20,044{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n1 from n2 ( 172.20.0.3 )
+2026-02-22 23:55:20,252{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n1 from n3 ( 172.20.0.4 )
+2026-02-22 23:55:20,301{GMT}	INFO	[jepsen worker 3] jepsen.util: 68	:info	:write-durable	7297	:sync-timeout
+2026-02-22 23:55:20,301{GMT}	INFO	[jepsen worker 3] jepsen.util: 73	:invoke	:write-durable	7609
+2026-02-22 23:55:20,301{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:20,397{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n2 from n1 ( 172.20.0.2 )
+2026-02-22 23:55:20,516{GMT}	INFO	[jepsen worker 0] jepsen.util: 70	:info	:write-durable	7303	:sync-timeout
+2026-02-22 23:55:20,516{GMT}	INFO	[jepsen worker 0] jepsen.util: 75	:invoke	:write-durable	7785
+2026-02-22 23:55:20,517{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:20,535{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n3 from n1 ( 172.20.0.2 )
+2026-02-22 23:55:20,657{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:partition	:primary-isolated
+2026-02-22 23:55:20,881{GMT}	INFO	[jepsen worker 4] jepsen.util: 69	:info	:write-durable	7312	:sync-timeout
+2026-02-22 23:55:20,881{GMT}	INFO	[jepsen worker 4] jepsen.util: 74	:invoke	:write-durable	8076
+2026-02-22 23:55:20,881{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:20,928{GMT}	INFO	[jepsen worker 1] jepsen.util: 71	:info	:write-durable	7314	:sync-timeout
+2026-02-22 23:55:20,928{GMT}	INFO	[jepsen worker 1] jepsen.util: 76	:invoke	:read-quorum	nil
+2026-02-22 23:55:20,928{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:20,930{GMT}	INFO	[jepsen worker 1] jepsen.util: 76	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:20,963{GMT}	INFO	[jepsen worker 1] jepsen.util: 76	:invoke	:write-durable	8080
+2026-02-22 23:55:21,950{GMT}	INFO	[jepsen worker 2] jepsen.util: 67	:info	:write-durable	7319	:sync-timeout
+2026-02-22 23:55:21,950{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:invoke	:read-quorum	nil
+2026-02-22 23:55:21,950{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:21,953{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:22,022{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:invoke	:read-quorum	nil
+2026-02-22 23:55:22,026{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:22,148{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:invoke	:write-async	8085
+2026-02-22 23:55:22,150{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:ok	:write-async	8085
+2026-02-22 23:55:22,301{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:invoke	:read-quorum	nil
+2026-02-22 23:55:22,302{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:22,304{GMT}	INFO	[jepsen worker 3] jepsen.util: 73	:info	:write-durable	7609	:sync-timeout
+2026-02-22 23:55:22,447{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:invoke	:read-quorum	nil
+2026-02-22 23:55:22,453{GMT}	INFO	[jepsen worker 3] jepsen.util: 78	:invoke	:write-durable	8087
+2026-02-22 23:55:22,454{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:22,455{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:22,521{GMT}	INFO	[jepsen worker 0] jepsen.util: 75	:info	:write-durable	7785	:sync-timeout
+2026-02-22 23:55:22,640{GMT}	INFO	[jepsen worker 0] jepsen.util: 80	:invoke	:read-quorum	nil
+2026-02-22 23:55:22,640{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:22,643{GMT}	INFO	[jepsen worker 0] jepsen.util: 80	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:22,694{GMT}	INFO	[jepsen worker 0] jepsen.util: 80	:invoke	:write-durable	8090
+2026-02-22 23:55:22,832{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:invoke	:write-async	8092
+2026-02-22 23:55:22,834{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:ok	:write-async	8092
+2026-02-22 23:55:22,887{GMT}	INFO	[jepsen worker 4] jepsen.util: 74	:info	:write-durable	8076	:sync-timeout
+2026-02-22 23:55:22,887{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:invoke	:write-async	8097
+2026-02-22 23:55:22,889{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:ok	:write-async	8097
+2026-02-22 23:55:22,968{GMT}	INFO	[jepsen worker 1] jepsen.util: 76	:info	:write-durable	8080	:sync-timeout
+2026-02-22 23:55:23,040{GMT}	INFO	[jepsen worker 1] jepsen.util: 81	:invoke	:write-async	8101
+2026-02-22 23:55:23,040{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:23,042{GMT}	INFO	[jepsen worker 1] jepsen.util: 81	:ok	:write-async	8101
+2026-02-22 23:55:23,160{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:invoke	:write-durable	8104
+2026-02-22 23:55:23,261{GMT}	INFO	[jepsen worker 4] jepsen.util: 79	:invoke	:write-async	8106
+2026-02-22 23:55:23,262{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:23,263{GMT}	INFO	[jepsen worker 4] jepsen.util: 79	:ok	:write-async	8106
+2026-02-22 23:55:23,379{GMT}	INFO	[jepsen worker 4] jepsen.util: 79	:invoke	:write-async	8109
+2026-02-22 23:55:23,380{GMT}	INFO	[jepsen worker 4] jepsen.util: 79	:ok	:write-async	8109
+2026-02-22 23:55:23,555{GMT}	INFO	[jepsen worker 1] jepsen.util: 81	:invoke	:write-durable	8112
+2026-02-22 23:55:23,718{GMT}	INFO	[jepsen worker 4] jepsen.util: 79	:invoke	:write-async	8114
+2026-02-22 23:55:23,720{GMT}	INFO	[jepsen worker 4] jepsen.util: 79	:ok	:write-async	8114
+2026-02-22 23:55:23,839{GMT}	INFO	[jepsen worker 4] jepsen.util: 79	:invoke	:write-durable	8119
+2026-02-22 23:55:24,457{GMT}	INFO	[jepsen worker 3] jepsen.util: 78	:info	:write-durable	8087	:sync-timeout
+2026-02-22 23:55:24,458{GMT}	INFO	[jepsen worker 3] jepsen.util: 83	:invoke	:read-quorum	nil
+2026-02-22 23:55:24,458{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:24,459{GMT}	INFO	[jepsen worker 3] jepsen.util: 83	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:24,567{GMT}	INFO	[jepsen worker 3] jepsen.util: 83	:invoke	:read-quorum	nil
+2026-02-22 23:55:24,569{GMT}	INFO	[jepsen worker 3] jepsen.util: 83	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:24,704{GMT}	INFO	[jepsen worker 0] jepsen.util: 80	:info	:write-durable	8090	:sync-timeout
+2026-02-22 23:55:24,706{GMT}	INFO	[jepsen worker 0] jepsen.util: 85	:invoke	:write-durable	8124
+2026-02-22 23:55:24,706{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:24,711{GMT}	INFO	[jepsen worker 3] jepsen.util: 83	:invoke	:read-quorum	nil
+2026-02-22 23:55:24,714{GMT}	INFO	[jepsen worker 3] jepsen.util: 83	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:24,909{GMT}	INFO	[jepsen worker 3] jepsen.util: 83	:invoke	:write-durable	8129
+2026-02-22 23:55:25,166{GMT}	INFO	[jepsen worker 2] jepsen.util: 72	:info	:write-durable	8104	:sync-timeout
+2026-02-22 23:55:25,166{GMT}	INFO	[jepsen worker 2] jepsen.util: 77	:invoke	:write-durable	8332
+2026-02-22 23:55:25,166{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:25,559{GMT}	INFO	[jepsen worker 1] jepsen.util: 81	:info	:write-durable	8112	:sync-timeout
+2026-02-22 23:55:25,560{GMT}	INFO	[jepsen worker 1] jepsen.util: 86	:invoke	:read-quorum	nil
+2026-02-22 23:55:25,560{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:25,561{GMT}	INFO	[jepsen worker 1] jepsen.util: 86	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:25,626{GMT}	INFO	[jepsen worker 1] jepsen.util: 86	:invoke	:write-durable	8336
+2026-02-22 23:55:25,847{GMT}	INFO	[jepsen worker 4] jepsen.util: 79	:info	:write-durable	8119	:sync-timeout
+2026-02-22 23:55:25,847{GMT}	INFO	[jepsen worker 4] jepsen.util: 84	:invoke	:write-durable	8511
+2026-02-22 23:55:25,847{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:26,712{GMT}	INFO	[jepsen worker 0] jepsen.util: 85	:info	:write-durable	8124	:sync-timeout
+2026-02-22 23:55:26,712{GMT}	INFO	[jepsen worker 0] jepsen.util: 90	:invoke	:read-quorum	nil
+2026-02-22 23:55:26,712{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:26,715{GMT}	INFO	[jepsen worker 0] jepsen.util: 90	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:26,852{GMT}	INFO	[jepsen worker 0] jepsen.util: 90	:invoke	:write-async	8516
+2026-02-22 23:55:26,854{GMT}	INFO	[jepsen worker 0] jepsen.util: 90	:ok	:write-async	8516
+2026-02-22 23:55:26,916{GMT}	INFO	[jepsen worker 3] jepsen.util: 83	:info	:write-durable	8129	:sync-timeout
+2026-02-22 23:55:27,050{GMT}	INFO	[jepsen worker 3] jepsen.util: 88	:invoke	:write-durable	8521
+2026-02-22 23:55:27,050{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:27,094{GMT}	INFO	[jepsen worker 0] jepsen.util: 90	:invoke	:write-durable	8523
+2026-02-22 23:55:27,172{GMT}	INFO	[jepsen worker 2] jepsen.util: 77	:info	:write-durable	8332	:sync-timeout
+2026-02-22 23:55:27,235{GMT}	INFO	[jepsen worker 2] jepsen.util: 82	:invoke	:write-async	8587
+2026-02-22 23:55:27,235{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:27,236{GMT}	INFO	[jepsen worker 2] jepsen.util: 82	:ok	:write-async	8587
+2026-02-22 23:55:27,309{GMT}	INFO	[jepsen worker 2] jepsen.util: 82	:invoke	:write-durable	8590
+2026-02-22 23:55:27,632{GMT}	INFO	[jepsen worker 1] jepsen.util: 86	:info	:write-durable	8336	:sync-timeout
+2026-02-22 23:55:27,632{GMT}	INFO	[jepsen worker 1] jepsen.util: 91	:invoke	:write-async	8842
+2026-02-22 23:55:27,632{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:27,632{GMT}	INFO	[jepsen worker 1] jepsen.util: 91	:ok	:write-async	8842
+2026-02-22 23:55:27,772{GMT}	INFO	[jepsen worker 1] jepsen.util: 91	:invoke	:write-async	8845
+2026-02-22 23:55:27,774{GMT}	INFO	[jepsen worker 1] jepsen.util: 91	:ok	:write-async	8845
+2026-02-22 23:55:27,854{GMT}	INFO	[jepsen worker 4] jepsen.util: 84	:info	:write-durable	8511	:sync-timeout
+2026-02-22 23:55:27,977{GMT}	INFO	[jepsen worker 1] jepsen.util: 91	:invoke	:read-quorum	nil
+2026-02-22 23:55:27,980{GMT}	INFO	[jepsen worker 1] jepsen.util: 91	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:28,134{GMT}	INFO	[jepsen worker 4] jepsen.util: 89	:invoke	:read-quorum	nil
+2026-02-22 23:55:28,134{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:28,137{GMT}	INFO	[jepsen worker 4] jepsen.util: 89	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:28,174{GMT}	INFO	[jepsen worker 4] jepsen.util: 89	:invoke	:read-quorum	nil
+2026-02-22 23:55:28,178{GMT}	INFO	[jepsen worker 4] jepsen.util: 89	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:28,221{GMT}	INFO	[jepsen worker 4] jepsen.util: 89	:invoke	:write-durable	8848
+2026-02-22 23:55:28,310{GMT}	INFO	[jepsen worker 1] jepsen.util: 91	:invoke	:write-async	8850
+2026-02-22 23:55:28,311{GMT}	INFO	[jepsen worker 1] jepsen.util: 91	:ok	:write-async	8850
+2026-02-22 23:55:28,399{GMT}	INFO	[jepsen worker 1] jepsen.util: 91	:invoke	:write-durable	8854
+2026-02-22 23:55:29,057{GMT}	INFO	[jepsen worker 3] jepsen.util: 88	:info	:write-durable	8521	:sync-timeout
+2026-02-22 23:55:29,058{GMT}	INFO	[jepsen worker 3] jepsen.util: 93	:invoke	:write-durable	9354
+2026-02-22 23:55:29,058{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:29,100{GMT}	INFO	[jepsen worker 0] jepsen.util: 90	:info	:write-durable	8523	:sync-timeout
+2026-02-22 23:55:29,230{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:invoke	:read-quorum	nil
+2026-02-22 23:55:29,231{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:29,244{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:29,315{GMT}	INFO	[jepsen worker 2] jepsen.util: 82	:info	:write-durable	8590	:sync-timeout
+2026-02-22 23:55:29,343{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:invoke	:read-quorum	nil
+2026-02-22 23:55:29,352{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:29,374{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:invoke	:write-async	9357
+2026-02-22 23:55:29,376{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:ok	:write-async	9357
+2026-02-22 23:55:29,550{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:invoke	:write-async	9360
+2026-02-22 23:55:29,553{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:ok	:write-async	9360
+2026-02-22 23:55:29,592{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:invoke	:read-quorum	nil
+2026-02-22 23:55:29,595{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:29,715{GMT}	INFO	[jepsen worker 2] jepsen.util: 87	:invoke	:read-quorum	nil
+2026-02-22 23:55:29,717{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:29,726{GMT}	INFO	[jepsen worker 2] jepsen.util: 87	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:29,897{GMT}	INFO	[jepsen worker 2] jepsen.util: 87	:invoke	:write-async	9363
+2026-02-22 23:55:29,943{GMT}	INFO	[jepsen worker 2] jepsen.util: 87	:ok	:write-async	9363
+2026-02-22 23:55:30,097{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:invoke	:write-durable	9366
+2026-02-22 23:55:30,183{GMT}	INFO	[jepsen worker 2] jepsen.util: 87	:invoke	:write-async	9368
+2026-02-22 23:55:30,184{GMT}	INFO	[jepsen worker 2] jepsen.util: 87	:ok	:write-async	9368
+2026-02-22 23:55:30,227{GMT}	INFO	[jepsen worker 4] jepsen.util: 89	:info	:write-durable	8848	:sync-timeout
+2026-02-22 23:55:30,264{GMT}	INFO	[jepsen worker 2] jepsen.util: 87	:invoke	:write-durable	9372
+2026-02-22 23:55:30,406{GMT}	INFO	[jepsen worker 1] jepsen.util: 91	:info	:write-durable	8854	:sync-timeout
+2026-02-22 23:55:30,409{GMT}	INFO	[jepsen worker 1] jepsen.util: 96	:invoke	:read-quorum	nil
+2026-02-22 23:55:30,409{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:30,412{GMT}	INFO	[jepsen worker 1] jepsen.util: 96	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:30,478{GMT}	INFO	[jepsen worker 1] jepsen.util: 96	:invoke	:write-async	9375
+2026-02-22 23:55:30,479{GMT}	INFO	[jepsen worker 1] jepsen.util: 96	:ok	:write-async	9375
+2026-02-22 23:55:30,661{GMT}	INFO	[jepsen worker 4] jepsen.util: 94	:invoke	:write-async	9378
+2026-02-22 23:55:30,661{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:30,662{GMT}	INFO	[jepsen worker 4] jepsen.util: 94	:ok	:write-async	9378
+2026-02-22 23:55:30,663{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	nil
+2026-02-22 23:55:30,663{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Healing all network partitions
+2026-02-22 23:55:30,663{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n1
+2026-02-22 23:55:30,714{GMT}	INFO	[jepsen worker 4] jepsen.util: 94	:invoke	:write-async	9383
+2026-02-22 23:55:30,715{GMT}	INFO	[jepsen worker 4] jepsen.util: 94	:ok	:write-async	9383
+2026-02-22 23:55:30,761{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n2
+2026-02-22 23:55:30,841{GMT}	INFO	[jepsen worker 1] jepsen.util: 96	:invoke	:write-durable	9386
+2026-02-22 23:55:30,851{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n3
+2026-02-22 23:55:30,894{GMT}	INFO	[jepsen worker 4] jepsen.util: 94	:invoke	:write-durable	9388
+2026-02-22 23:55:30,927{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	:healed
+2026-02-22 23:55:31,063{GMT}	INFO	[jepsen worker 3] jepsen.util: 93	:info	:write-durable	9354	:sync-timeout
+2026-02-22 23:55:31,063{GMT}	INFO	[jepsen worker 3] jepsen.util: 98	:invoke	:read-quorum	nil
+2026-02-22 23:55:31,063{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:31,064{GMT}	INFO	[jepsen worker 3] jepsen.util: 98	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:31,064{GMT}	INFO	[jepsen worker 3] jepsen.util: 98	:invoke	:write-durable	9391
+2026-02-22 23:55:32,101{GMT}	INFO	[jepsen worker 0] jepsen.util: 95	:info	:write-durable	9366	:sync-timeout
+2026-02-22 23:55:32,101{GMT}	INFO	[jepsen worker 0] jepsen.util: 100	:invoke	:read-quorum	nil
+2026-02-22 23:55:32,101{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:32,102{GMT}	INFO	[jepsen worker 0] jepsen.util: 100	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:32,221{GMT}	INFO	[jepsen worker 0] jepsen.util: 100	:invoke	:write-durable	9394
+2026-02-22 23:55:32,268{GMT}	INFO	[jepsen worker 2] jepsen.util: 87	:info	:write-durable	9372	:sync-timeout
+2026-02-22 23:55:32,310{GMT}	INFO	[jepsen worker 2] jepsen.util: 92	:invoke	:read-quorum	nil
+2026-02-22 23:55:32,310{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:32,314{GMT}	INFO	[jepsen worker 2] jepsen.util: 92	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:32,337{GMT}	INFO	[jepsen worker 2] jepsen.util: 92	:invoke	:write-durable	9399
+2026-02-22 23:55:32,846{GMT}	INFO	[jepsen worker 1] jepsen.util: 96	:info	:write-durable	9386	:sync-timeout
+2026-02-22 23:55:32,846{GMT}	INFO	[jepsen worker 1] jepsen.util: 101	:invoke	:read-quorum	nil
+2026-02-22 23:55:32,846{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:32,849{GMT}	INFO	[jepsen worker 1] jepsen.util: 101	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:32,878{GMT}	INFO	[jepsen worker 1] jepsen.util: 101	:invoke	:write-async	9404
+2026-02-22 23:55:32,879{GMT}	INFO	[jepsen worker 1] jepsen.util: 101	:ok	:write-async	9404
+2026-02-22 23:55:32,898{GMT}	INFO	[jepsen worker 4] jepsen.util: 94	:info	:write-durable	9388	:sync-timeout
+2026-02-22 23:55:33,042{GMT}	INFO	[jepsen worker 4] jepsen.util: 99	:invoke	:read-quorum	nil
+2026-02-22 23:55:33,042{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:33,044{GMT}	INFO	[jepsen worker 4] jepsen.util: 99	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:33,067{GMT}	INFO	[jepsen worker 3] jepsen.util: 98	:info	:write-durable	9391	:sync-timeout
+2026-02-22 23:55:33,127{GMT}	INFO	[jepsen worker 1] jepsen.util: 101	:invoke	:read-quorum	nil
+2026-02-22 23:55:33,128{GMT}	INFO	[jepsen worker 1] jepsen.util: 101	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:33,288{GMT}	INFO	[jepsen worker 1] jepsen.util: 101	:invoke	:write-durable	9407
+2026-02-22 23:55:33,318{GMT}	INFO	[jepsen worker 3] jepsen.util: 103	:invoke	:write-async	9409
+2026-02-22 23:55:33,318{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:33,319{GMT}	INFO	[jepsen worker 3] jepsen.util: 103	:ok	:write-async	9409
+2026-02-22 23:55:33,467{GMT}	INFO	[jepsen worker 3] jepsen.util: 103	:invoke	:write-durable	9412
+2026-02-22 23:55:33,662{GMT}	INFO	[jepsen worker 4] jepsen.util: 99	:invoke	:write-durable	9414
+2026-02-22 23:55:34,225{GMT}	INFO	[jepsen worker 0] jepsen.util: 100	:info	:write-durable	9394	:sync-timeout
+2026-02-22 23:55:34,225{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:invoke	:read-quorum	nil
+2026-02-22 23:55:34,225{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:34,226{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:34,344{GMT}	INFO	[jepsen worker 2] jepsen.util: 92	:info	:write-durable	9399	:sync-timeout
+2026-02-22 23:55:34,410{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:invoke	:write-async	9419
+2026-02-22 23:55:34,412{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:ok	:write-async	9419
+2026-02-22 23:55:34,485{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:invoke	:write-async	9422
+2026-02-22 23:55:34,487{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:ok	:write-async	9422
+2026-02-22 23:55:34,662{GMT}	INFO	[jepsen worker 2] jepsen.util: 97	:invoke	:write-async	9425
+2026-02-22 23:55:34,663{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:34,664{GMT}	INFO	[jepsen worker 2] jepsen.util: 97	:ok	:write-async	9425
+2026-02-22 23:55:34,745{GMT}	INFO	[jepsen worker 2] jepsen.util: 97	:invoke	:write-durable	9428
+2026-02-22 23:55:34,869{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:invoke	:write-async	9430
+2026-02-22 23:55:34,870{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:ok	:write-async	9430
+2026-02-22 23:55:35,044{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:invoke	:read-quorum	nil
+2026-02-22 23:55:35,047{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:35,136{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:invoke	:write-async	9435
+2026-02-22 23:55:35,138{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:ok	:write-async	9435
+2026-02-22 23:55:35,230{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:invoke	:read-quorum	nil
+2026-02-22 23:55:35,233{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:35,292{GMT}	INFO	[jepsen worker 1] jepsen.util: 101	:info	:write-durable	9407	:sync-timeout
+2026-02-22 23:55:35,370{GMT}	INFO	[jepsen worker 1] jepsen.util: 106	:invoke	:write-durable	9441
+2026-02-22 23:55:35,370{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:35,473{GMT}	INFO	[jepsen worker 3] jepsen.util: 103	:info	:write-durable	9412	:sync-timeout
+2026-02-22 23:55:35,497{GMT}	INFO	[jepsen worker 3] jepsen.util: 108	:invoke	:read-quorum	nil
+2026-02-22 23:55:35,497{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:35,499{GMT}	INFO	[jepsen worker 3] jepsen.util: 108	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:35,549{GMT}	INFO	[jepsen worker 3] jepsen.util: 108	:invoke	:write-async	9444
+2026-02-22 23:55:35,551{GMT}	INFO	[jepsen worker 3] jepsen.util: 108	:ok	:write-async	9444
+2026-02-22 23:55:35,666{GMT}	INFO	[jepsen worker 4] jepsen.util: 99	:info	:write-durable	9414	:sync-timeout
+2026-02-22 23:55:35,752{GMT}	INFO	[jepsen worker 4] jepsen.util: 104	:invoke	:write-async	9448
+2026-02-22 23:55:35,752{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:35,754{GMT}	INFO	[jepsen worker 4] jepsen.util: 104	:ok	:write-async	9448
+2026-02-22 23:55:35,802{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:invoke	:read-quorum	nil
+2026-02-22 23:55:35,805{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:35,849{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:invoke	:write-durable	9451
+2026-02-22 23:55:35,929{GMT}	INFO	[jepsen worker 3] jepsen.util: 108	:invoke	:read-quorum	nil
+2026-02-22 23:55:35,933{GMT}	INFO	[jepsen worker 3] jepsen.util: 108	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:35,965{GMT}	INFO	[jepsen worker 3] jepsen.util: 108	:invoke	:write-durable	9456
+2026-02-22 23:55:36,020{GMT}	INFO	[jepsen worker 4] jepsen.util: 104	:invoke	:write-async	9458
+2026-02-22 23:55:36,021{GMT}	INFO	[jepsen worker 4] jepsen.util: 104	:ok	:write-async	9458
+2026-02-22 23:55:36,099{GMT}	INFO	[jepsen worker 4] jepsen.util: 104	:invoke	:read-quorum	nil
+2026-02-22 23:55:36,103{GMT}	INFO	[jepsen worker 4] jepsen.util: 104	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:36,170{GMT}	INFO	[jepsen worker 4] jepsen.util: 104	:invoke	:read-quorum	nil
+2026-02-22 23:55:36,173{GMT}	INFO	[jepsen worker 4] jepsen.util: 104	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:36,369{GMT}	INFO	[jepsen worker 4] jepsen.util: 104	:invoke	:write-durable	9463
+2026-02-22 23:55:36,755{GMT}	INFO	[jepsen worker 2] jepsen.util: 97	:info	:write-durable	9428	:sync-timeout
+2026-02-22 23:55:36,755{GMT}	INFO	[jepsen worker 2] jepsen.util: 102	:invoke	:read-quorum	nil
+2026-02-22 23:55:36,755{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:36,759{GMT}	INFO	[jepsen worker 2] jepsen.util: 102	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:36,871{GMT}	INFO	[jepsen worker 2] jepsen.util: 102	:invoke	:read-quorum	nil
+2026-02-22 23:55:36,874{GMT}	INFO	[jepsen worker 2] jepsen.util: 102	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:37,067{GMT}	INFO	[jepsen worker 2] jepsen.util: 102	:invoke	:read-quorum	nil
+2026-02-22 23:55:37,070{GMT}	INFO	[jepsen worker 2] jepsen.util: 102	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:37,070{GMT}	INFO	[jepsen worker 2] jepsen.util: 102	:invoke	:write-async	9467
+2026-02-22 23:55:37,071{GMT}	INFO	[jepsen worker 2] jepsen.util: 102	:ok	:write-async	9467
+2026-02-22 23:55:37,098{GMT}	INFO	[jepsen worker 2] jepsen.util: 102	:invoke	:write-durable	9470
+2026-02-22 23:55:37,373{GMT}	INFO	[jepsen worker 1] jepsen.util: 106	:info	:write-durable	9441	:sync-timeout
+2026-02-22 23:55:37,374{GMT}	INFO	[jepsen worker 1] jepsen.util: 111	:invoke	:write-async	9685
+2026-02-22 23:55:37,374{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:37,375{GMT}	INFO	[jepsen worker 1] jepsen.util: 111	:ok	:write-async	9685
+2026-02-22 23:55:37,408{GMT}	INFO	[jepsen worker 1] jepsen.util: 111	:invoke	:write-durable	9689
+2026-02-22 23:55:37,856{GMT}	INFO	[jepsen worker 0] jepsen.util: 105	:info	:write-durable	9451	:sync-timeout
+2026-02-22 23:55:37,856{GMT}	INFO	[jepsen worker 0] jepsen.util: 110	:invoke	:read-quorum	nil
+2026-02-22 23:55:37,856{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:37,859{GMT}	INFO	[jepsen worker 0] jepsen.util: 110	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:37,968{GMT}	INFO	[jepsen worker 3] jepsen.util: 108	:info	:write-durable	9456	:sync-timeout
+2026-02-22 23:55:38,031{GMT}	INFO	[jepsen worker 0] jepsen.util: 110	:invoke	:write-async	9695
+2026-02-22 23:55:38,032{GMT}	INFO	[jepsen worker 0] jepsen.util: 110	:ok	:write-async	9695
+2026-02-22 23:55:38,152{GMT}	INFO	[jepsen worker 0] jepsen.util: 110	:invoke	:write-durable	9698
+2026-02-22 23:55:38,314{GMT}	INFO	[jepsen worker 3] jepsen.util: 113	:invoke	:write-async	9700
+2026-02-22 23:55:38,314{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:38,316{GMT}	INFO	[jepsen worker 3] jepsen.util: 113	:ok	:write-async	9700
+2026-02-22 23:55:38,361{GMT}	INFO	[jepsen worker 3] jepsen.util: 113	:invoke	:write-async	9704
+2026-02-22 23:55:38,362{GMT}	INFO	[jepsen worker 3] jepsen.util: 113	:ok	:write-async	9704
+2026-02-22 23:55:38,375{GMT}	INFO	[jepsen worker 4] jepsen.util: 104	:info	:write-durable	9463	:sync-timeout
+2026-02-22 23:55:38,547{GMT}	INFO	[jepsen worker 3] jepsen.util: 113	:invoke	:write-durable	9708
+2026-02-22 23:55:38,717{GMT}	INFO	[jepsen worker 4] jepsen.util: 109	:invoke	:write-durable	9710
+2026-02-22 23:55:38,717{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:39,107{GMT}	INFO	[jepsen worker 2] jepsen.util: 102	:info	:write-durable	9470	:sync-timeout
+2026-02-22 23:55:39,107{GMT}	INFO	[jepsen worker 2] jepsen.util: 107	:invoke	:read-quorum	nil
+2026-02-22 23:55:39,107{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:39,110{GMT}	INFO	[jepsen worker 2] jepsen.util: 107	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:39,113{GMT}	INFO	[jepsen worker 2] jepsen.util: 107	:invoke	:write-async	9715
+2026-02-22 23:55:39,114{GMT}	INFO	[jepsen worker 2] jepsen.util: 107	:ok	:write-async	9715
+2026-02-22 23:55:39,171{GMT}	INFO	[jepsen worker 2] jepsen.util: 107	:invoke	:write-async	9718
+2026-02-22 23:55:39,173{GMT}	INFO	[jepsen worker 2] jepsen.util: 107	:ok	:write-async	9718
+2026-02-22 23:55:39,290{GMT}	INFO	[jepsen worker 2] jepsen.util: 107	:invoke	:write-durable	9722
+2026-02-22 23:55:39,418{GMT}	INFO	[jepsen worker 1] jepsen.util: 111	:info	:write-durable	9689	:sync-timeout
+2026-02-22 23:55:39,476{GMT}	INFO	[jepsen worker 1] jepsen.util: 116	:invoke	:write-async	9824
+2026-02-22 23:55:39,477{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:39,478{GMT}	INFO	[jepsen worker 1] jepsen.util: 116	:ok	:write-async	9824
+2026-02-22 23:55:39,623{GMT}	INFO	[jepsen worker 1] jepsen.util: 116	:invoke	:write-durable	9828
+2026-02-22 23:55:40,156{GMT}	INFO	[jepsen worker 0] jepsen.util: 110	:info	:write-durable	9698	:sync-timeout
+2026-02-22 23:55:40,156{GMT}	INFO	[jepsen worker 0] jepsen.util: 115	:invoke	:write-durable	10246
+2026-02-22 23:55:40,156{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:40,552{GMT}	INFO	[jepsen worker 3] jepsen.util: 113	:info	:write-durable	9708	:sync-timeout
+2026-02-22 23:55:40,552{GMT}	INFO	[jepsen worker 3] jepsen.util: 118	:invoke	:write-async	10558
+2026-02-22 23:55:40,553{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:40,554{GMT}	INFO	[jepsen worker 3] jepsen.util: 118	:ok	:write-async	10558
+2026-02-22 23:55:40,702{GMT}	INFO	[jepsen worker 3] jepsen.util: 118	:invoke	:write-durable	10562
+2026-02-22 23:55:40,724{GMT}	INFO	[jepsen worker 4] jepsen.util: 109	:info	:write-durable	9710	:sync-timeout
+2026-02-22 23:55:40,742{GMT}	INFO	[jepsen worker 4] jepsen.util: 114	:invoke	:read-quorum	nil
+2026-02-22 23:55:40,742{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:40,747{GMT}	INFO	[jepsen worker 4] jepsen.util: 114	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:40,943{GMT}	INFO	[jepsen worker 4] jepsen.util: 114	:invoke	:write-durable	10568
+2026-02-22 23:55:41,296{GMT}	INFO	[jepsen worker 2] jepsen.util: 107	:info	:write-durable	9722	:sync-timeout
+2026-02-22 23:55:41,296{GMT}	INFO	[jepsen worker 2] jepsen.util: 112	:invoke	:write-durable	10847
+2026-02-22 23:55:41,296{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:41,628{GMT}	INFO	[jepsen worker 1] jepsen.util: 116	:info	:write-durable	9828	:sync-timeout
+2026-02-22 23:55:41,628{GMT}	INFO	[jepsen worker 1] jepsen.util: 121	:invoke	:write-async	11105
+2026-02-22 23:55:41,628{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:41,629{GMT}	INFO	[jepsen worker 1] jepsen.util: 121	:ok	:write-async	11105
+2026-02-22 23:55:41,816{GMT}	INFO	[jepsen worker 1] jepsen.util: 121	:invoke	:write-durable	11109
+2026-02-22 23:55:42,164{GMT}	INFO	[jepsen worker 0] jepsen.util: 115	:info	:write-durable	10246	:sync-timeout
+2026-02-22 23:55:42,164{GMT}	INFO	[jepsen worker 0] jepsen.util: 120	:invoke	:write-durable	11382
+2026-02-22 23:55:42,164{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:42,711{GMT}	INFO	[jepsen worker 3] jepsen.util: 118	:info	:write-durable	10562	:sync-timeout
+2026-02-22 23:55:42,711{GMT}	INFO	[jepsen worker 3] jepsen.util: 123	:invoke	:write-async	11812
+2026-02-22 23:55:42,712{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:42,713{GMT}	INFO	[jepsen worker 3] jepsen.util: 123	:ok	:write-async	11812
+2026-02-22 23:55:42,738{GMT}	INFO	[jepsen worker 3] jepsen.util: 123	:invoke	:read-quorum	nil
+2026-02-22 23:55:42,743{GMT}	INFO	[jepsen worker 3] jepsen.util: 123	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:42,862{GMT}	INFO	[jepsen worker 3] jepsen.util: 123	:invoke	:read-quorum	nil
+2026-02-22 23:55:42,864{GMT}	INFO	[jepsen worker 3] jepsen.util: 123	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:42,947{GMT}	INFO	[jepsen worker 4] jepsen.util: 114	:info	:write-durable	10568	:sync-timeout
+2026-02-22 23:55:42,974{GMT}	INFO	[jepsen worker 4] jepsen.util: 119	:invoke	:write-durable	11817
+2026-02-22 23:55:42,975{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:43,159{GMT}	INFO	[jepsen worker 3] jepsen.util: 123	:invoke	:read-quorum	nil
+2026-02-22 23:55:43,163{GMT}	INFO	[jepsen worker 3] jepsen.util: 123	:fail	:read-quorum	nil	:no-quorum
+2026-02-22 23:55:43,299{GMT}	INFO	[jepsen worker 2] jepsen.util: 112	:info	:write-durable	10847	:sync-timeout
+2026-02-22 23:55:43,317{GMT}	INFO	[jepsen worker 2] jepsen.util: 117	:invoke	:write-durable	11824
+2026-02-22 23:55:43,318{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:43,353{GMT}	INFO	[jepsen worker 3] jepsen.util: 123	:invoke	:write-durable	11826
+2026-02-22 23:55:43,821{GMT}	INFO	[jepsen worker 1] jepsen.util: 121	:info	:write-durable	11109	:sync-timeout
+2026-02-22 23:55:43,821{GMT}	INFO	[jepsen worker 1] jepsen.util: 126	:invoke	:write-durable	12191
+2026-02-22 23:55:43,821{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:44,170{GMT}	INFO	[jepsen worker 0] jepsen.util: 120	:info	:write-durable	11382	:sync-timeout
+2026-02-22 23:55:44,981{GMT}	INFO	[jepsen worker 4] jepsen.util: 119	:info	:write-durable	11817	:sync-timeout
+2026-02-22 23:55:45,323{GMT}	INFO	[jepsen worker 2] jepsen.util: 117	:info	:write-durable	11824	:sync-timeout
+2026-02-22 23:55:45,360{GMT}	INFO	[jepsen worker 3] jepsen.util: 123	:info	:write-durable	11826	:sync-timeout
+2026-02-22 23:55:45,830{GMT}	INFO	[jepsen worker 1] jepsen.util: 126	:info	:write-durable	12191	:sync-timeout
+2026-02-22 23:55:45,937{GMT}	INFO	[jepsen worker 3] jepsen.generator.interpreter: Recovering from faults...
+2026-02-22 23:55:45,937{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	nil
+2026-02-22 23:55:45,937{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Healing all network partitions
+2026-02-22 23:55:45,937{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n1
+2026-02-22 23:55:46,044{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n2
+2026-02-22 23:55:46,112{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n3
+2026-02-22 23:55:46,179{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	:healed
+2026-02-22 23:55:51,182{GMT}	INFO	[jepsen worker 0] jepsen.generator.interpreter: Final reads...
+2026-02-22 23:55:51,182{GMT}	INFO	[jepsen worker 1] jepsen.util: 131	:invoke	:read	nil
+2026-02-22 23:55:51,183{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:51,183{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 131 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.zombie.ZombieClient.invoke_BANG_(zombie.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:55:51,235{GMT}	INFO	[jepsen worker 2] jepsen.util: 122	:invoke	:read	nil
+2026-02-22 23:55:51,235{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:51,235{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 122 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.zombie.ZombieClient.invoke_BANG_(zombie.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:55:51,390{GMT}	INFO	[jepsen worker 3] jepsen.util: 128	:invoke	:read	nil
+2026-02-22 23:55:51,391{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:51,391{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 128 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.zombie.ZombieClient.invoke_BANG_(zombie.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:55:51,399{GMT}	INFO	[jepsen worker 4] jepsen.util: 124	:invoke	:read	nil
+2026-02-22 23:55:51,399{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:51,399{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 124 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.zombie.ZombieClient.invoke_BANG_(zombie.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:55:51,494{GMT}	INFO	[jepsen worker 0] jepsen.util: 125	:invoke	:read	nil
+2026-02-22 23:55:51,494{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:51,494{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 125 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.zombie.ZombieClient.invoke_BANG_(zombie.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:55:51,547{GMT}	INFO	[jepsen worker 0] jepsen.util: 130	:invoke	:read	nil
+2026-02-22 23:55:51,547{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:51,547{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 130 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.zombie.ZombieClient.invoke_BANG_(zombie.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:55:51,729{GMT}	INFO	[jepsen worker 1] jepsen.util: 136	:invoke	:read	nil
+2026-02-22 23:55:51,730{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:51,730{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 136 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.zombie.ZombieClient.invoke_BANG_(zombie.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:55:51,752{GMT}	INFO	[jepsen worker 2] jepsen.util: 127	:invoke	:read	nil
+2026-02-22 23:55:51,752{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:51,752{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 127 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.zombie.ZombieClient.invoke_BANG_(zombie.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:55:51,911{GMT}	INFO	[jepsen worker 3] jepsen.util: 133	:invoke	:read	nil
+2026-02-22 23:55:51,911{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:51,911{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 133 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.zombie.ZombieClient.invoke_BANG_(zombie.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:55:52,002{GMT}	INFO	[jepsen worker 4] jepsen.util: 129	:invoke	:read	nil
+2026-02-22 23:55:52,002{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.zombie: Opening zombie client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:55:52,002{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 129 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.zombie.ZombieClient.invoke_BANG_(zombie.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:55:52,017{GMT}	INFO	[clojure-agent-send-off-pool-1] jepsen.frogdb.db: Healing partition on n1
+2026-02-22 23:55:52,102{GMT}	INFO	[clojure-agent-send-off-pool-1] jepsen.frogdb.db: Healing partition on n2
+2026-02-22 23:55:52,172{GMT}	INFO	[clojure-agent-send-off-pool-1] jepsen.frogdb.db: Healing partition on n3
+2026-02-22 23:55:52,241{GMT}	INFO	[jepsen test runner] jepsen.core: Run complete, writing
+2026-02-22 23:55:52,286{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB replication node n1
+2026-02-22 23:55:52,286{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Tearing down FrogDB replication node n3
+2026-02-22 23:55:52,286{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Tearing down FrogDB replication node n2
+2026-02-22 23:55:52,382{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS teardown for n1 (no-op)
+2026-02-22 23:55:52,382{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS teardown for n3 (no-op)
+2026-02-22 23:55:52,382{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS teardown for n2 (no-op)
+2026-02-22 23:55:52,382{GMT}	INFO	[jepsen test runner] jepsen.core: Analyzing...
+2026-02-22 23:55:52,406{GMT}	WARN	[clojure-agent-send-off-pool-5] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$rate_graph_BANG_.invokeStatic(perf.clj:626)
+	at jepsen.checker.perf$rate_graph_BANG_.invoke(perf.clj:571)
+	at jepsen.checker$rate_graph$reify__10772.check(checker.clj:843)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-22 23:55:52,408{GMT}	WARN	[clojure-agent-send-off-pool-2] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$point_graph_BANG_.invokeStatic(perf.clj:523)
+	at jepsen.checker.perf$point_graph_BANG_.invoke(perf.clj:496)
+	at jepsen.checker$latency_graph$reify__10769.check(checker.clj:830)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-22 23:55:52,409{GMT}	INFO	[jepsen test runner] jepsen.core: Analysis complete
+2026-02-22 23:55:52,418{GMT}	INFO	[jepsen results] jepsen.store: Wrote /Users/nathan/workspace/nathanjordan/workspace-1/jepsen/frogdb/store/frogdb-zombie-partition-docker-replication/20260222T235441.089-0500/results.edn
+2026-02-22 23:55:52,437{GMT}	INFO	[jepsen test runner] jepsen.core: {:workload {:valid? true,
+            :durable-writes 0,
+            :async-writes 112,
+            :final-value nil,
+            :final-in-durable? true,
+            :zombie-reads 0,
+            :zombie-values ()},
+ :stats {:valid? false,
+         :count 380,
+         :ok-count 112,
+         :fail-count 134,
+         :info-count 134,
+         :by-f {:read {:valid? false,
+                       :count 10,
+                       :ok-count 0,
+                       :fail-count 0,
+                       :info-count 10},
+                :read-quorum {:valid? false,
+                              :count 134,
+                              :ok-count 0,
+                              :fail-count 134,
+                              :info-count 0},
+                :write-async {:valid? true,
+                              :count 112,
+                              :ok-count 112,
+                              :fail-count 0,
+                              :info-count 0},
+                :write-durable {:valid? false,
+                                :count 124,
+                                :ok-count 0,
+                                :fail-count 0,
+                                :info-count 124}}},
+ :exceptions {:valid? true,
+              :exceptions ({:count 10,
+                            :class java.lang.IllegalArgumentException,
+                            :example #jepsen.history.Op{:index 751,
+                                                        :time 67593089958,
+                                                        :type :info,
+                                                        :process 131,
+                                                        :f :read,
+                                                        :value nil,
+                                                        :exception {:via [{:type java.lang.IllegalArgumentException,
+                                                                           :message "No matching clause: :read",
+                                                                           :at [jepsen.frogdb.zombie.ZombieClient
+                                                                                invoke_BANG_
+                                                                                "zombie.clj"
+                                                                                54]}],
+                                                                    :trace [[jepsen.frogdb.zombie.ZombieClient
+                                                                             invoke_BANG_
+                                                                             "zombie.clj"
+                                                                             54]
+                                                                            [jepsen.client.Validate
+                                                                             invoke_BANG_
+                                                                             "client.clj"
+                                                                             83]
+                                                                            [jepsen.generator.interpreter.ClientWorker
+                                                                             invoke_BANG_
+                                                                             "interpreter.clj"
+                                                                             65]
+                                                                            [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147
+                                                                             invoke
+                                                                             "interpreter.clj"
+                                                                             140]
+                                                                            [jepsen.generator.interpreter$spawn_worker$fn__13146
+                                                                             invoke
+                                                                             "interpreter.clj"
+                                                                             123]
+                                                                            [clojure.core$binding_conveyor_fn$fn__5823
+                                                                             invoke
+                                                                             "core.clj"
+                                                                             2047]
+                                                                            [clojure.lang.AFn
+                                                                             call
+                                                                             "AFn.java"
+                                                                             18]
+                                                                            [java.util.concurrent.FutureTask
+                                                                             run
+                                                                             "FutureTask.java"
+                                                                             328]
+                                                                            [java.util.concurrent.ThreadPoolExecutor
+                                                                             runWorker
+                                                                             "ThreadPoolExecutor.java"
+                                                                             1090]
+                                                                            [java.util.concurrent.ThreadPoolExecutor$Worker
+                                                                             run
+                                                                             "ThreadPoolExecutor.java"
+                                                                             614]
+                                                                            [java.lang.Thread
+                                                                             run
+                                                                             "Thread.java"
+                                                                             1474]],
+                                                                    :cause "No matching clause: :read"},
+                                                        :error "indeterminate: No matching clause: :read"}})},
+ :perf {:latency-graph {:valid? :unknown,
+                        :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :rate-graph {:valid? :unknown,
+                     :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :valid? :unknown},
+ :valid? false}
+
+
+Analysis invalid! (ﾉಥ益ಥ）ﾉ ┻━┻

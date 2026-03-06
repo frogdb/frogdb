@@ -1,0 +1,924 @@
+2026-02-23 02:32:59,405{GMT}	INFO	[jepsen test runner] jepsen.core: Test version 74d5f0adef2ee45b18cfff01bd38961de783ae5d (plus uncommitted changes)
+2026-02-23 02:32:59,406{GMT}	INFO	[jepsen test runner] jepsen.core: Command line:
+lein run test --docker --workload register --nemesis none --time-limit 10
+2026-02-23 02:32:59,436{GMT}	INFO	[jepsen test runner] jepsen.core: Running test:
+{:remote
+ #jepsen.control.retry.Remote{:remote #jepsen.control.scp.Remote{:cmd-remote #jepsen.control.sshj.SSHJRemote{:concurrency-limit 6,
+                                                                                                             :conn-spec nil,
+                                                                                                             :client nil,
+                                                                                                             :semaphore nil},
+                                                                 :conn-spec nil},
+                              :conn nil}
+ :concurrency 5
+ :cluster false
+ :db
+ #object[jepsen.frogdb.db$docker_db$reify__9886
+         "0x79d137fd"
+         "jepsen.frogdb.db$docker_db$reify__9886@79d137fd"]
+ :leave-db-running? false
+ :name "frogdb-register-docker"
+ :logging-json? false
+ :independent false
+ :start-time
+ #object[org.joda.time.DateTime "0x3d850252" "2026-02-23T02:32:59.358-05:00"]
+ :docker true
+ :net
+ #object[jepsen.net$reify__12635
+         "0x36881f62"
+         "jepsen.net$reify__12635@36881f62"]
+ :client
+ #jepsen.frogdb.register.RegisterClient{:conn nil, :node nil, :docker-host? nil}
+ :barrier
+ #object[java.util.concurrent.CyclicBarrier
+         "0x1c791c14"
+         "java.util.concurrent.CyclicBarrier@1c791c14"]
+ :ssh {:dummy? true}
+ :rate 10
+ :checker
+ #object[jepsen.checker$compose$reify__10552
+         "0xc24e06a"
+         "jepsen.checker$compose$reify__10552@c24e06a"]
+ :argv
+ ("test"
+  "--docker"
+  "--workload"
+  "register"
+  "--nemesis"
+  "none"
+  "--time-limit"
+  "10")
+ :nemesis #unprintable "jepsen.nemesis$reify__12738@1926e42e"
+ :nodes ["n1"]
+ :test-count 1
+ :replication false
+ :cluster-nodes ["n1"]
+ :generator
+ #object[jepsen.util.Forgettable
+         "0x286566f"
+         ((jepsen.generator.Synchronize
+           {:gen (jepsen.generator.TimeLimit
+                  {:limit 10000000000,
+                   :cutoff nil,
+                   :gen (jepsen.generator.Any
+                         {:gens [(jepsen.generator.OnThreads
+                                  {:f #{:nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x5c0b55bc"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@5c0b55bc"],
+                                   :gen nil})
+                                 (jepsen.generator.OnThreads
+                                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x5abe46b7"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@5abe46b7"],
+                                   :gen (jepsen.generator.Stagger
+                                         {:dt 200000000,
+                                          :next-time nil,
+                                          :gen (jepsen.generator.Mix
+                                                {:i 0,
+                                                 :gens [#object[jepsen.frogdb.register$generator$fn__11720
+                                                                "0x56d5311e"
+                                                                "jepsen.frogdb.register$generator$fn__11720@56d5311e"]
+                                                        #object[jepsen.frogdb.register$generator$fn__11722
+                                                                "0x66a81c48"
+                                                                "jepsen.frogdb.register$generator$fn__11722@66a81c48"]
+                                                        #object[jepsen.frogdb.register$generator$fn__11724
+                                                                "0x60880394"
+                                                                "jepsen.frogdb.register$generator$fn__11724@60880394"]]})})})]})})})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Recovering from faults..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #{:nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x482b6acc"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@482b6acc"],
+                   :gen nil})})
+          (jepsen.generator.Synchronize {:gen {:type :sleep, :value 5}})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Final reads..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x3709ef16"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@3709ef16"],
+                   :gen (jepsen.generator.Stagger
+                         {:dt 200000000,
+                          :next-time nil,
+                          :gen (jepsen.generator.Limit
+                                {:remaining 10,
+                                 :gen (jepsen.generator.Repeat
+                                       {:remaining -1, :gen {:f :read}})})})})}))]
+ :interval 10
+ :os
+ #object[jepsen.frogdb.core$reify__14062
+         "0x1d8ecb80"
+         "jepsen.frogdb.core$reify__14062@1d8ecb80"]
+ :time-limit 10
+ :workload "register"
+ :local false}
+
+2026-02-23 02:33:00,741{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS setup for n1 (no-op)
+2026-02-23 02:33:00,742{GMT}	INFO	[jepsen test runner] jepsen.db: Tearing down DB
+2026-02-23 02:33:00,742{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB on n1
+2026-02-23 02:33:00,742{GMT}	INFO	[jepsen test runner] jepsen.db: Setting up DB
+2026-02-23 02:33:00,742{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Setting up FrogDB on n1
+2026-02-23 02:33:00,743{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Starting container for n1
+2026-02-23 02:33:01,856{GMT}	INFO	[jepsen test runner] jepsen.core: Relative time begins now
+2026-02-23 02:33:01,856{GMT}	INFO	[jepsen node n1] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:01,856{GMT}	INFO	[jepsen node n1] jepsen.frogdb.register: Setting up register client, deleting key jepsen-register
+2026-02-23 02:33:01,877{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:01,878{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:01,880{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	nil
+2026-02-23 02:33:01,992{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:33:01,992{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:01,994{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	nil
+2026-02-23 02:33:02,112{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:cas	[68 19]
+2026-02-23 02:33:02,113{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:02,134{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:cas	[68 19]
+2026-02-23 02:33:02,226{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:cas	[8 65]
+2026-02-23 02:33:02,226{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:02,227{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:cas	[8 65]
+2026-02-23 02:33:02,331{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:33:02,331{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:02,332{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	nil
+2026-02-23 02:33:02,377{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	69
+2026-02-23 02:33:02,380{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	69
+2026-02-23 02:33:02,540{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:02,542{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	69
+2026-02-23 02:33:02,649{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write	58
+2026-02-23 02:33:02,652{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write	58
+2026-02-23 02:33:02,803{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:cas	[41 30]
+2026-02-23 02:33:02,806{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:cas	[41 30]
+2026-02-23 02:33:02,860{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write	92
+2026-02-23 02:33:02,862{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write	92
+2026-02-23 02:33:02,969{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:cas	[44 77]
+2026-02-23 02:33:02,971{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:cas	[44 77]
+2026-02-23 02:33:03,053{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:03,055{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	92
+2026-02-23 02:33:03,235{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:03,238{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	92
+2026-02-23 02:33:03,381{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:33:03,382{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	92
+2026-02-23 02:33:03,532{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:33:03,534{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	92
+2026-02-23 02:33:03,542{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:cas	[79 64]
+2026-02-23 02:33:03,543{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:cas	[79 64]
+2026-02-23 02:33:03,707{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:33:03,708{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	92
+2026-02-23 02:33:03,754{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	90
+2026-02-23 02:33:03,756{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	90
+2026-02-23 02:33:03,840{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	2
+2026-02-23 02:33:03,841{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	2
+2026-02-23 02:33:04,008{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:cas	[20 53]
+2026-02-23 02:33:04,010{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:cas	[20 53]
+2026-02-23 02:33:04,090{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:cas	[96 86]
+2026-02-23 02:33:04,091{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:cas	[96 86]
+2026-02-23 02:33:04,158{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write	98
+2026-02-23 02:33:04,159{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write	98
+2026-02-23 02:33:04,200{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write	36
+2026-02-23 02:33:04,201{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write	36
+2026-02-23 02:33:04,394{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:04,395{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	36
+2026-02-23 02:33:04,533{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	99
+2026-02-23 02:33:04,535{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	99
+2026-02-23 02:33:04,648{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:cas	[92 85]
+2026-02-23 02:33:04,649{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:cas	[92 85]
+2026-02-23 02:33:04,845{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write	88
+2026-02-23 02:33:04,848{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write	88
+2026-02-23 02:33:04,915{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:cas	[59 88]
+2026-02-23 02:33:04,917{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:cas	[59 88]
+2026-02-23 02:33:05,108{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write	62
+2026-02-23 02:33:05,110{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write	62
+2026-02-23 02:33:05,164{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:05,165{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	62
+2026-02-23 02:33:05,291{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:05,293{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	62
+2026-02-23 02:33:05,304{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write	23
+2026-02-23 02:33:05,306{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write	23
+2026-02-23 02:33:05,472{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:cas	[30 12]
+2026-02-23 02:33:05,473{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:cas	[30 12]
+2026-02-23 02:33:05,497{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write	90
+2026-02-23 02:33:05,498{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write	90
+2026-02-23 02:33:05,644{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:33:05,645{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	90
+2026-02-23 02:33:05,793{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:05,794{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	90
+2026-02-23 02:33:05,954{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	99
+2026-02-23 02:33:05,956{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	99
+2026-02-23 02:33:06,072{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:cas	[68 0]
+2026-02-23 02:33:06,074{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:cas	[68 0]
+2026-02-23 02:33:06,097{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:33:06,098{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	99
+2026-02-23 02:33:06,243{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write	50
+2026-02-23 02:33:06,244{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write	50
+2026-02-23 02:33:06,387{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:33:06,388{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	50
+2026-02-23 02:33:06,480{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:cas	[92 8]
+2026-02-23 02:33:06,481{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:cas	[92 8]
+2026-02-23 02:33:06,633{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	99
+2026-02-23 02:33:06,634{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	99
+2026-02-23 02:33:06,687{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:cas	[42 88]
+2026-02-23 02:33:06,688{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:cas	[42 88]
+2026-02-23 02:33:06,873{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:33:06,874{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	99
+2026-02-23 02:33:07,066{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write	64
+2026-02-23 02:33:07,067{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write	64
+2026-02-23 02:33:07,263{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:33:07,264{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	64
+2026-02-23 02:33:07,375{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	95
+2026-02-23 02:33:07,376{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	95
+2026-02-23 02:33:07,474{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	37
+2026-02-23 02:33:07,476{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	37
+2026-02-23 02:33:07,531{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:cas	[90 15]
+2026-02-23 02:33:07,532{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:cas	[90 15]
+2026-02-23 02:33:07,546{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:cas	[32 59]
+2026-02-23 02:33:07,547{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:cas	[32 59]
+2026-02-23 02:33:07,663{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:cas	[44 2]
+2026-02-23 02:33:07,664{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:cas	[44 2]
+2026-02-23 02:33:07,694{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:33:07,695{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	37
+2026-02-23 02:33:07,747{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:07,749{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	37
+2026-02-23 02:33:07,871{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	45
+2026-02-23 02:33:07,872{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	45
+2026-02-23 02:33:07,981{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:33:07,982{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	45
+2026-02-23 02:33:07,986{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write	69
+2026-02-23 02:33:07,987{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write	69
+2026-02-23 02:33:08,023{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:33:08,024{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	69
+2026-02-23 02:33:08,094{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:cas	[81 21]
+2026-02-23 02:33:08,096{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:cas	[81 21]
+2026-02-23 02:33:08,245{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:08,246{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	69
+2026-02-23 02:33:08,365{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:08,366{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	69
+2026-02-23 02:33:08,544{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:cas	[42 16]
+2026-02-23 02:33:08,546{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:cas	[42 16]
+2026-02-23 02:33:08,677{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:33:08,678{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	69
+2026-02-23 02:33:08,777{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:cas	[86 83]
+2026-02-23 02:33:08,779{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:cas	[86 83]
+2026-02-23 02:33:08,910{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:cas	[34 68]
+2026-02-23 02:33:08,911{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:cas	[34 68]
+2026-02-23 02:33:09,102{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	47
+2026-02-23 02:33:09,104{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	47
+2026-02-23 02:33:09,275{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:cas	[64 26]
+2026-02-23 02:33:09,278{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:cas	[64 26]
+2026-02-23 02:33:09,476{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:33:09,479{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	47
+2026-02-23 02:33:09,535{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write	53
+2026-02-23 02:33:09,538{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write	53
+2026-02-23 02:33:09,668{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write	31
+2026-02-23 02:33:09,670{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write	31
+2026-02-23 02:33:09,775{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:cas	[76 68]
+2026-02-23 02:33:09,777{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:cas	[76 68]
+2026-02-23 02:33:09,840{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	6
+2026-02-23 02:33:09,843{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	6
+2026-02-23 02:33:09,883{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:09,889{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	6
+2026-02-23 02:33:09,964{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write	55
+2026-02-23 02:33:09,966{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write	55
+2026-02-23 02:33:10,034{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write	53
+2026-02-23 02:33:10,035{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write	53
+2026-02-23 02:33:10,058{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write	88
+2026-02-23 02:33:10,059{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write	88
+2026-02-23 02:33:10,232{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:33:10,234{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	38
+2026-02-23 02:33:10,392{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:10,394{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	38
+2026-02-23 02:33:10,416{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	16
+2026-02-23 02:33:10,418{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	16
+2026-02-23 02:33:10,569{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write	29
+2026-02-23 02:33:10,571{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write	29
+2026-02-23 02:33:10,575{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:33:10,577{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	29
+2026-02-23 02:33:10,589{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:33:10,591{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	29
+2026-02-23 02:33:10,778{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:cas	[49 8]
+2026-02-23 02:33:10,779{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:cas	[49 8]
+2026-02-23 02:33:10,931{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write	47
+2026-02-23 02:33:10,934{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write	47
+2026-02-23 02:33:11,093{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:11,095{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	47
+2026-02-23 02:33:11,166{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:33:11,167{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	47
+2026-02-23 02:33:11,309{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:cas	[51 77]
+2026-02-23 02:33:11,311{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:cas	[51 77]
+2026-02-23 02:33:11,348{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:33:11,349{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	15
+2026-02-23 02:33:11,438{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:33:11,440{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	15
+2026-02-23 02:33:11,615{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:33:11,617{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:info	:read	nil	[:io-exception nil]
+2026-02-23 02:33:11,663{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:invoke	:cas	[51 17]
+2026-02-23 02:33:11,664{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:11,665{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:info	:cas	[51 17]	[:io-exception "Connection reset"]
+2026-02-23 02:33:11,673{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write	86
+2026-02-23 02:33:11,674{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:info	:write	86	[:io-exception "Connection reset"]
+2026-02-23 02:33:11,686{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:cas	[63 66]
+2026-02-23 02:33:11,687{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:info	:cas	[63 66]	[:io-exception "Connection reset"]
+2026-02-23 02:33:11,863{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:33:11,864{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 3 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.client$read_register.invokeStatic(client.clj:75)
+	at jepsen.frogdb.client$read_register.invoke(client.clj:72)
+	at jepsen.frogdb.register.RegisterClient.invoke_BANG_(register.clj:51)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.pollConnect(Native Method)
+	at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:550)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 14 common frames omitted
+2026-02-23 02:33:11,866{GMT}	INFO	[jepsen worker 4] jepsen.generator.interpreter: Recovering from faults...
+2026-02-23 02:33:16,872{GMT}	INFO	[jepsen worker 0] jepsen.generator.interpreter: Final reads...
+2026-02-23 02:33:16,872{GMT}	INFO	[jepsen worker 1] jepsen.util: 6	:invoke	:read	nil
+2026-02-23 02:33:16,872{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:16,873{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 6 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.client$read_register.invokeStatic(client.clj:75)
+	at jepsen.frogdb.client$read_register.invoke(client.clj:72)
+	at jepsen.frogdb.register.RegisterClient.invoke_BANG_(register.clj:51)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.pollConnect(Native Method)
+	at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:550)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 14 common frames omitted
+2026-02-23 02:33:17,025{GMT}	INFO	[jepsen worker 2] jepsen.util: 7	:invoke	:read	nil
+2026-02-23 02:33:17,026{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:17,027{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 7 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.client$read_register.invokeStatic(client.clj:75)
+	at jepsen.frogdb.client$read_register.invoke(client.clj:72)
+	at jepsen.frogdb.register.RegisterClient.invoke_BANG_(register.clj:51)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.pollConnect(Native Method)
+	at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:550)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 14 common frames omitted
+2026-02-23 02:33:17,105{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:read	nil
+2026-02-23 02:33:17,106{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:17,106{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 8 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.client$read_register.invokeStatic(client.clj:75)
+	at jepsen.frogdb.client$read_register.invoke(client.clj:72)
+	at jepsen.frogdb.register.RegisterClient.invoke_BANG_(register.clj:51)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.pollConnect(Native Method)
+	at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:550)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 14 common frames omitted
+2026-02-23 02:33:17,262{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:33:17,263{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 4 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.client$read_register.invokeStatic(client.clj:75)
+	at jepsen.frogdb.client$read_register.invoke(client.clj:72)
+	at jepsen.frogdb.register.RegisterClient.invoke_BANG_(register.clj:51)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.pollConnect(Native Method)
+	at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:550)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 14 common frames omitted
+2026-02-23 02:33:17,364{GMT}	INFO	[jepsen worker 0] jepsen.util: 10	:invoke	:read	nil
+2026-02-23 02:33:17,365{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:17,365{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 10 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.client$read_register.invokeStatic(client.clj:75)
+	at jepsen.frogdb.client$read_register.invoke(client.clj:72)
+	at jepsen.frogdb.register.RegisterClient.invoke_BANG_(register.clj:51)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.pollConnect(Native Method)
+	at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:550)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 14 common frames omitted
+2026-02-23 02:33:17,443{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:read	nil
+2026-02-23 02:33:17,445{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:17,446{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 15 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.client$read_register.invokeStatic(client.clj:75)
+	at jepsen.frogdb.client$read_register.invoke(client.clj:72)
+	at jepsen.frogdb.register.RegisterClient.invoke_BANG_(register.clj:51)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.pollConnect(Native Method)
+	at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:550)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 14 common frames omitted
+2026-02-23 02:33:17,537{GMT}	INFO	[jepsen worker 1] jepsen.util: 11	:invoke	:read	nil
+2026-02-23 02:33:17,538{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:17,538{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 11 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.client$read_register.invokeStatic(client.clj:75)
+	at jepsen.frogdb.client$read_register.invoke(client.clj:72)
+	at jepsen.frogdb.register.RegisterClient.invoke_BANG_(register.clj:51)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.pollConnect(Native Method)
+	at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:550)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 14 common frames omitted
+2026-02-23 02:33:17,677{GMT}	INFO	[jepsen worker 2] jepsen.util: 12	:invoke	:read	nil
+2026-02-23 02:33:17,677{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:17,677{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 12 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.client$read_register.invokeStatic(client.clj:75)
+	at jepsen.frogdb.client$read_register.invoke(client.clj:72)
+	at jepsen.frogdb.register.RegisterClient.invoke_BANG_(register.clj:51)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.pollConnect(Native Method)
+	at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:550)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 14 common frames omitted
+2026-02-23 02:33:17,858{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read	nil
+2026-02-23 02:33:17,858{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:17,858{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 13 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.client$read_register.invokeStatic(client.clj:75)
+	at jepsen.frogdb.client$read_register.invoke(client.clj:72)
+	at jepsen.frogdb.register.RegisterClient.invoke_BANG_(register.clj:51)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.pollConnect(Native Method)
+	at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:550)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 14 common frames omitted
+2026-02-23 02:33:17,903{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:invoke	:read	nil
+2026-02-23 02:33:17,903{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.register: Opening register client to n1 (docker-host?: true )
+2026-02-23 02:33:17,903{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 9 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.client$read_register.invokeStatic(client.clj:75)
+	at jepsen.frogdb.client$read_register.invoke(client.clj:72)
+	at jepsen.frogdb.register.RegisterClient.invoke_BANG_(register.clj:51)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.ConnectException: Connection refused
+	at java.base/sun.nio.ch.Net.pollConnect(Native Method)
+	at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:639)
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:550)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 14 common frames omitted
+2026-02-23 02:33:17,924{GMT}	INFO	[jepsen test runner] jepsen.core: Run complete, writing
+2026-02-23 02:33:17,973{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB on n1
+2026-02-23 02:33:17,973{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS teardown for n1 (no-op)
+2026-02-23 02:33:17,973{GMT}	INFO	[jepsen test runner] jepsen.core: Analyzing...
+2026-02-23 02:33:17,986{GMT}	INFO	[clojure-agent-send-off-pool-6] knossos.model.memo: More than 1024 reachable models; not memoizing models for this search
+2026-02-23 02:33:18,188{GMT}	INFO	[jepsen test runner] jepsen.core: Analysis complete
+2026-02-23 02:33:18,211{GMT}	INFO	[jepsen results] jepsen.store: Wrote /Users/nathan/workspace/nathanjordan/workspace-1/jepsen/frogdb/store/frogdb-register-docker/20260223T023259.358-0500/results.edn
+2026-02-23 02:33:18,235{GMT}	INFO	[jepsen test runner] jepsen.core: {:workload {:valid? false,
+            :configs ({:model #knossos.model.CASRegister{:value nil},
+                       :last-op {:process 1,
+                                 :type :ok,
+                                 :f :read,
+                                 :value nil,
+                                 :index 3,
+                                 :time 138303792},
+                       :pending [{:process 2,
+                                  :type :invoke,
+                                  :f :cas,
+                                  :value [68 19],
+                                  :index 4,
+                                  :time 256605167}]}),
+            :final-paths ([{:op {:process 1,
+                                 :type :ok,
+                                 :f :read,
+                                 :value nil,
+                                 :index 3,
+                                 :time 138303792},
+                            :model #knossos.model.CASRegister{:value nil}}
+                           {:op {:process 2,
+                                 :type :ok,
+                                 :f :cas,
+                                 :value [68 19],
+                                 :index 5,
+                                 :time 278429959},
+                            :model #knossos.model.Inconsistent{:msg "can't CAS  from 68 to 19"}}]),
+            :previous-ok {:process 1,
+                          :type :ok,
+                          :f :read,
+                          :value nil,
+                          :index 3,
+                          :time 138303792},
+            :last-op {:process 1,
+                      :type :ok,
+                      :f :read,
+                      :value nil,
+                      :index 3,
+                      :time 138303792},
+            :op {:process 2,
+                 :type :ok,
+                 :f :cas,
+                 :value [68 19],
+                 :index 5,
+                 :time 278429959},
+            :analyzer :linear},
+ :stats {:valid? true,
+         :count 104,
+         :ok-count 89,
+         :fail-count 0,
+         :info-count 15,
+         :by-f {:cas {:valid? true,
+                      :count 26,
+                      :ok-count 24,
+                      :fail-count 0,
+                      :info-count 2},
+                :read {:valid? true,
+                       :count 47,
+                       :ok-count 35,
+                       :fail-count 0,
+                       :info-count 12},
+                :write {:valid? true,
+                        :count 31,
+                        :ok-count 30,
+                        :fail-count 0,
+                        :info-count 1}}},
+ :exceptions {:valid? true,
+              :exceptions ({:count 11,
+                            :class clojure.lang.ExceptionInfo,
+                            :example #jepsen.history.Op{:index 187,
+                                                        :time 10011197167,
+                                                        :type :info,
+                                                        :process 3,
+                                                        :f :read,
+                                                        :value nil,
+                                                        :exception {:via [{:type clojure.lang.ExceptionInfo,
+                                                                           :message "Carmine connection error",
+                                                                           :data {},
+                                                                           :at [taoensso.carmine.connections$pooled_conn
+                                                                                invokeStatic
+                                                                                "connections.clj"
+                                                                                282]}
+                                                                          {:type java.net.ConnectException,
+                                                                           :message "Connection refused",
+                                                                           :at [sun.nio.ch.Net
+                                                                                pollConnect
+                                                                                "Net.java"
+                                                                                -2]}],
+                                                                    :trace [[sun.nio.ch.Net
+                                                                             pollConnect
+                                                                             "Net.java"
+                                                                             -2]
+                                                                            [sun.nio.ch.Net
+                                                                             pollConnectNow
+                                                                             "Net.java"
+                                                                             639]
+                                                                            [sun.nio.ch.NioSocketImpl
+                                                                             timedFinishConnect
+                                                                             "NioSocketImpl.java"
+                                                                             550]
+                                                                            [sun.nio.ch.NioSocketImpl
+                                                                             connect
+                                                                             "NioSocketImpl.java"
+                                                                             594]
+                                                                            [java.net.SocksSocketImpl
+                                                                             connect
+                                                                             "SocksSocketImpl.java"
+                                                                             284]
+                                                                            [java.net.Socket
+                                                                             connect
+                                                                             "Socket.java"
+                                                                             659]
+                                                                            [taoensso.carmine.connections$make_new_connection
+                                                                             invokeStatic
+                                                                             "connections.clj"
+                                                                             127]
+                                                                            [taoensso.carmine.connections$make_new_connection
+                                                                             invoke
+                                                                             "connections.clj"
+                                                                             106]
+                                                                            [taoensso.carmine.connections$make_connection_factory$reify__7724
+                                                                             makeObject
+                                                                             "connections.clj"
+                                                                             168]
+                                                                            [org.apache.commons.pool2.impl.GenericKeyedObjectPool
+                                                                             create
+                                                                             "GenericKeyedObjectPool.java"
+                                                                             796]
+                                                                            [org.apache.commons.pool2.impl.GenericKeyedObjectPool
+                                                                             borrowObject
+                                                                             "GenericKeyedObjectPool.java"
+                                                                             444]
+                                                                            [org.apache.commons.pool2.impl.GenericKeyedObjectPool
+                                                                             borrowObject
+                                                                             "GenericKeyedObjectPool.java"
+                                                                             355]
+                                                                            [taoensso.carmine.connections.ConnectionPool
+                                                                             get_conn
+                                                                             "connections.clj"
+                                                                             64]
+                                                                            [taoensso.carmine.connections$pooled_conn
+                                                                             invokeStatic
+                                                                             "connections.clj"
+                                                                             277]
+                                                                            [taoensso.carmine.connections$pooled_conn
+                                                                             invoke
+                                                                             "connections.clj"
+                                                                             271]
+                                                                            [jepsen.frogdb.client$read_register
+                                                                             invokeStatic
+                                                                             "client.clj"
+                                                                             75]
+                                                                            [jepsen.frogdb.client$read_register
+                                                                             invoke
+                                                                             "client.clj"
+                                                                             72]
+                                                                            [jepsen.frogdb.register.RegisterClient
+                                                                             invoke_BANG_
+                                                                             "register.clj"
+                                                                             51]
+                                                                            [jepsen.client.Validate
+                                                                             invoke_BANG_
+                                                                             "client.clj"
+                                                                             83]
+                                                                            [jepsen.generator.interpreter.ClientWorker
+                                                                             invoke_BANG_
+                                                                             "interpreter.clj"
+                                                                             65]
+                                                                            [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147
+                                                                             invoke
+                                                                             "interpreter.clj"
+                                                                             140]
+                                                                            [jepsen.generator.interpreter$spawn_worker$fn__13146
+                                                                             invoke
+                                                                             "interpreter.clj"
+                                                                             123]
+                                                                            [clojure.core$binding_conveyor_fn$fn__5823
+                                                                             invoke
+                                                                             "core.clj"
+                                                                             2047]
+                                                                            [clojure.lang.AFn
+                                                                             call
+                                                                             "AFn.java"
+                                                                             18]
+                                                                            [java.util.concurrent.FutureTask
+                                                                             run
+                                                                             "FutureTask.java"
+                                                                             328]
+                                                                            [java.util.concurrent.ThreadPoolExecutor
+                                                                             runWorker
+                                                                             "ThreadPoolExecutor.java"
+                                                                             1090]
+                                                                            [java.util.concurrent.ThreadPoolExecutor$Worker
+                                                                             run
+                                                                             "ThreadPoolExecutor.java"
+                                                                             614]
+                                                                            [java.lang.Thread
+                                                                             run
+                                                                             "Thread.java"
+                                                                             1474]],
+                                                                    :cause "Connection refused"},
+                                                        :error "indeterminate: Connection refused"}})},
+ :perf {:latency-graph {:valid? true},
+        :rate-graph {:valid? true},
+        :valid? true},
+ :valid? false}
+
+
+Analysis invalid! (ﾉಥ益ಥ）ﾉ ┻━┻

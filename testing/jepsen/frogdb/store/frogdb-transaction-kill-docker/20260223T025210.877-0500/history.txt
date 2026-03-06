@@ -1,0 +1,1202 @@
+1	:invoke	:transfer	{:from 0, :to 1, :amount 41}
+1	:info	:transfer	{:from 0, :to 1, :amount 41}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+2	:invoke	:read	nil
+2	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+3	:invoke	:read	nil
+3	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+4	:invoke	:read	nil
+4	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+0	:invoke	:transfer	{:from 3, :to 4, :amount 9}
+0	:info	:transfer	{:from 3, :to 4, :amount 9}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+5	:invoke	:read	nil
+5	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+6	:invoke	:transfer	{:from 1, :to 4, :amount 95}
+6	:info	:transfer	{:from 1, :to 4, :amount 95}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+2	:invoke	:transfer	{:from 1, :to 2, :amount 32}
+2	:info	:transfer	{:from 1, :to 2, :amount 32}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+3	:invoke	:transfer	{:from 1, :to 0, :amount 3}
+3	:info	:transfer	{:from 1, :to 0, :amount 3}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+4	:invoke	:read	nil
+4	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+5	:invoke	:transfer	{:from 0, :to 2, :amount 43}
+5	:info	:transfer	{:from 0, :to 2, :amount 43}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+10	:invoke	:read	nil
+10	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+11	:invoke	:transfer	{:from 0, :to 2, :amount 83}
+11	:info	:transfer	{:from 0, :to 2, :amount 83}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+7	:invoke	:transfer	{:from 4, :to 2, :amount 53}
+7	:info	:transfer	{:from 4, :to 2, :amount 53}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+8	:invoke	:read	nil
+8	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+4	:invoke	:transfer	{:from 0, :to 1, :amount 10}
+4	:info	:transfer	{:from 0, :to 1, :amount 10}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+10	:invoke	:transfer	{:from 0, :to 1, :amount 3}
+10	:info	:transfer	{:from 0, :to 1, :amount 3}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+15	:invoke	:transfer	{:from 1, :to 3, :amount 96}
+15	:info	:transfer	{:from 1, :to 3, :amount 96}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+16	:invoke	:read	nil
+16	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+12	:invoke	:transfer	{:from 0, :to 4, :amount 75}
+12	:info	:transfer	{:from 0, :to 4, :amount 75}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+8	:invoke	:transfer	{:from 3, :to 2, :amount 84}
+8	:info	:transfer	{:from 3, :to 2, :amount 84}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+9	:invoke	:read	nil
+9	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+20	:invoke	:read	nil
+20	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+20	:invoke	:read	nil
+20	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+16	:invoke	:read	nil
+16	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+17	:invoke	:read	nil
+17	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+13	:invoke	:read	nil
+13	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+9	:invoke	:read	nil
+9	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+20	:invoke	:read	nil
+20	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+20	:invoke	:read	nil
+20	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+16	:invoke	:read	nil
+16	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+17	:invoke	:transfer	{:from 0, :to 2, :amount 39}
+17	:info	:transfer	{:from 0, :to 2, :amount 39}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+13	:invoke	:transfer	{:from 1, :to 3, :amount 14}
+13	:info	:transfer	{:from 1, :to 3, :amount 14}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+9	:invoke	:read	nil
+9	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+20	:invoke	:read	nil
+20	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+20	:invoke	:read	nil
+20	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+16	:invoke	:read	nil
+16	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+22	:invoke	:read	nil
+22	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+18	:invoke	:read	nil
+18	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+9	:invoke	:transfer	{:from 3, :to 1, :amount 91}
+9	:info	:transfer	{:from 3, :to 1, :amount 91}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+20	:invoke	:read	nil
+20	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+20	:invoke	:read	nil
+20	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+16	:invoke	:read	nil
+16	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+22	:invoke	:read	nil
+22	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+18	:invoke	:transfer	{:from 4, :to 2, :amount 27}
+18	:info	:transfer	{:from 4, :to 2, :amount 27}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+14	:invoke	:read	nil
+14	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+20	:invoke	:read	nil
+20	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+20	:invoke	:transfer	{:from 0, :to 2, :amount 67}
+20	:info	:transfer	{:from 0, :to 2, :amount 67}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+16	:invoke	:transfer	{:from 0, :to 3, :amount 75}
+16	:info	:transfer	{:from 0, :to 3, :amount 75}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+22	:invoke	:read	nil
+22	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+23	:invoke	:read	nil
+23	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+14	:invoke	:read	nil
+14	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+25	:invoke	:read	nil
+25	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+25	:invoke	:read	nil
+25	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+21	:invoke	:read	nil
+21	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+22	:invoke	:read	nil
+22	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+23	:invoke	:transfer	{:from 0, :to 1, :amount 54}
+23	:info	:transfer	{:from 0, :to 1, :amount 54}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+14	:invoke	:transfer	{:from 4, :to 0, :amount 62}
+14	:info	:transfer	{:from 4, :to 0, :amount 62}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+25	:invoke	:transfer	{:from 1, :to 3, :amount 6}
+25	:info	:transfer	{:from 1, :to 3, :amount 6}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+30	:invoke	:read	nil
+30	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+21	:invoke	:transfer	{:from 4, :to 0, :amount 59}
+21	:info	:transfer	{:from 4, :to 0, :amount 59}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+22	:invoke	:read	nil
+22	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+28	:invoke	:read	nil
+28	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+19	:invoke	:read	nil
+19	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+30	:invoke	:read	nil
+30	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+30	:invoke	:transfer	{:from 4, :to 0, :amount 41}
+30	:info	:transfer	{:from 4, :to 0, :amount 41}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+26	:invoke	:read	nil
+26	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+22	:invoke	:transfer	{:from 2, :to 0, :amount 74}
+22	:info	:transfer	{:from 2, :to 0, :amount 74}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+28	:invoke	:read	nil
+28	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+19	:invoke	:read	nil
+19	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+35	:invoke	:read	nil
+35	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+35	:invoke	:transfer	{:from 0, :to 3, :amount 18}
+35	:info	:transfer	{:from 0, :to 3, :amount 18}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+26	:invoke	:transfer	{:from 4, :to 1, :amount 7}
+26	:info	:transfer	{:from 4, :to 1, :amount 7}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+27	:invoke	:read	nil
+27	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+28	:invoke	:read	nil
+28	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+19	:invoke	:read	nil
+19	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+40	:invoke	:transfer	{:from 4, :to 3, :amount 81}
+40	:info	:transfer	{:from 4, :to 3, :amount 81}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+45	:invoke	:transfer	{:from 4, :to 3, :amount 26}
+45	:info	:transfer	{:from 4, :to 3, :amount 26}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+31	:invoke	:transfer	{:from 2, :to 4, :amount 43}
+31	:info	:transfer	{:from 2, :to 4, :amount 43}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+27	:invoke	:transfer	{:from 1, :to 4, :amount 44}
+27	:info	:transfer	{:from 1, :to 4, :amount 44}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+28	:invoke	:read	nil
+28	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+19	:invoke	:read	nil
+19	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+50	:invoke	:transfer	{:from 3, :to 0, :amount 10}
+50	:info	:transfer	{:from 3, :to 0, :amount 10}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+55	:invoke	:read	nil
+55	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+36	:invoke	:transfer	{:from 1, :to 4, :amount 31}
+36	:info	:transfer	{:from 1, :to 4, :amount 31}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+32	:invoke	:transfer	{:from 1, :to 2, :amount 75}
+32	:info	:transfer	{:from 1, :to 2, :amount 75}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+28	:invoke	:transfer	{:from 0, :to 2, :amount 51}
+28	:info	:transfer	{:from 0, :to 2, :amount 51}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+19	:invoke	:transfer	{:from 4, :to 0, :amount 98}
+19	:info	:transfer	{:from 4, :to 0, :amount 98}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+55	:invoke	:transfer	{:from 0, :to 3, :amount 48}
+55	:info	:transfer	{:from 0, :to 3, :amount 48}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+60	:invoke	:read	nil
+60	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+41	:invoke	:read	nil
+41	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+37	:invoke	:transfer	{:from 4, :to 2, :amount 72}
+37	:info	:transfer	{:from 4, :to 2, :amount 72}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+33	:invoke	:transfer	{:from 4, :to 3, :amount 32}
+33	:info	:transfer	{:from 4, :to 3, :amount 32}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+24	:invoke	:transfer	{:from 2, :to 1, :amount 85}
+24	:info	:transfer	{:from 2, :to 1, :amount 85}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+60	:invoke	:transfer	{:from 1, :to 0, :amount 37}
+60	:info	:transfer	{:from 1, :to 0, :amount 37}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+65	:invoke	:transfer	{:from 1, :to 2, :amount 69}
+65	:info	:transfer	{:from 1, :to 2, :amount 69}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+41	:invoke	:read	nil
+41	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+42	:invoke	:transfer	{:from 3, :to 4, :amount 69}
+42	:info	:transfer	{:from 3, :to 4, :amount 69}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+38	:invoke	:transfer	{:from 2, :to 4, :amount 81}
+38	:info	:transfer	{:from 2, :to 4, :amount 81}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+29	:invoke	:transfer	{:from 3, :to 0, :amount 40}
+29	:info	:transfer	{:from 3, :to 0, :amount 40}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+70	:invoke	:read	nil
+70	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+70	:invoke	:read	nil
+70	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+41	:invoke	:read	nil
+41	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+:nemesis	:info	:kill	nil
+43	:invoke	:read	nil
+43	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+:nemesis	:info	:kill	["n1"]
+70	:invoke	:transfer	{:from 1, :to 0, :amount 57}
+70	:info	:transfer	{:from 1, :to 0, :amount 57}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+75	:invoke	:read	nil
+75	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+41	:invoke	:transfer	{:from 0, :to 4, :amount 81}
+41	:info	:transfer	{:from 0, :to 4, :amount 81}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+47	:invoke	:read	nil
+47	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+43	:invoke	:transfer	{:from 2, :to 4, :amount 56}
+43	:info	:transfer	{:from 2, :to 4, :amount 56}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+34	:invoke	:transfer	{:from 2, :to 3, :amount 50}
+34	:info	:transfer	{:from 2, :to 3, :amount 50}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+75	:invoke	:read	nil
+75	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+75	:invoke	:read	nil
+75	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+46	:invoke	:read	nil
+46	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+47	:invoke	:read	nil
+47	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+48	:invoke	:read	nil
+48	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+39	:invoke	:read	nil
+39	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+75	:invoke	:read	nil
+75	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+75	:invoke	:read	nil
+75	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+46	:invoke	:transfer	{:from 3, :to 4, :amount 71}
+46	:info	:transfer	{:from 3, :to 4, :amount 71}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+47	:invoke	:read	nil
+47	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+48	:invoke	:transfer	{:from 2, :to 0, :amount 57}
+48	:info	:transfer	{:from 2, :to 0, :amount 57}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+39	:invoke	:read	nil
+39	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+75	:invoke	:transfer	{:from 4, :to 1, :amount 38}
+75	:info	:transfer	{:from 4, :to 1, :amount 38}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+80	:invoke	:read	nil
+80	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+51	:invoke	:read	nil
+51	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+47	:invoke	:read	nil
+47	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+53	:invoke	:read	nil
+53	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+39	:invoke	:read	nil
+39	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+80	:invoke	:read	nil
+80	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+80	:invoke	:transfer	{:from 1, :to 2, :amount 36}
+80	:info	:transfer	{:from 1, :to 2, :amount 36}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+51	:invoke	:transfer	{:from 1, :to 2, :amount 88}
+51	:info	:transfer	{:from 1, :to 2, :amount 88}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+47	:invoke	:transfer	{:from 4, :to 2, :amount 73}
+47	:info	:transfer	{:from 4, :to 2, :amount 73}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+53	:invoke	:transfer	{:from 2, :to 3, :amount 5}
+53	:info	:transfer	{:from 2, :to 3, :amount 5}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+39	:invoke	:read	nil
+39	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+85	:invoke	:read	nil
+85	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+85	:invoke	:read	nil
+85	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+56	:invoke	:transfer	{:from 2, :to 0, :amount 62}
+56	:info	:transfer	{:from 2, :to 0, :amount 62}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+52	:invoke	:transfer	{:from 1, :to 4, :amount 92}
+52	:info	:transfer	{:from 1, :to 4, :amount 92}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+58	:invoke	:transfer	{:from 0, :to 2, :amount 69}
+58	:info	:transfer	{:from 0, :to 2, :amount 69}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+39	:invoke	:transfer	{:from 1, :to 0, :amount 75}
+39	:info	:transfer	{:from 1, :to 0, :amount 75}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+85	:invoke	:read	nil
+85	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+85	:invoke	:transfer	{:from 2, :to 1, :amount 51}
+85	:info	:transfer	{:from 2, :to 1, :amount 51}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+61	:invoke	:read	nil
+61	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+57	:invoke	:read	nil
+57	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+63	:invoke	:transfer	{:from 0, :to 2, :amount 62}
+63	:info	:transfer	{:from 0, :to 2, :amount 62}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+44	:invoke	:read	nil
+44	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+90	:invoke	:transfer	{:from 2, :to 1, :amount 50}
+90	:info	:transfer	{:from 2, :to 1, :amount 50}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+95	:invoke	:transfer	{:from 3, :to 0, :amount 71}
+95	:info	:transfer	{:from 3, :to 0, :amount 71}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+61	:invoke	:transfer	{:from 4, :to 2, :amount 90}
+57	:invoke	:transfer	{:from 2, :to 3, :amount 39}
+57	:info	:transfer	{:from 2, :to 3, :amount 39}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+61	:info	:transfer	{:from 4, :to 2, :amount 90}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+68	:invoke	:transfer	{:from 1, :to 4, :amount 61}
+68	:info	:transfer	{:from 1, :to 4, :amount 61}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+44	:invoke	:read	nil
+44	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+100	:invoke	:transfer	{:from 1, :to 0, :amount 30}
+100	:info	:transfer	{:from 1, :to 0, :amount 30}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+105	:invoke	:read	nil
+105	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+66	:invoke	:read	nil
+66	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+62	:invoke	:read	nil
+62	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+73	:invoke	:transfer	{:from 0, :to 1, :amount 43}
+73	:info	:transfer	{:from 0, :to 1, :amount 43}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+44	:invoke	:transfer	{:from 4, :to 0, :amount 79}
+44	:info	:transfer	{:from 4, :to 0, :amount 79}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+105	:invoke	:read	nil
+105	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+105	:invoke	:transfer	{:from 2, :to 3, :amount 33}
+105	:info	:transfer	{:from 2, :to 3, :amount 33}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+66	:invoke	:transfer	{:from 4, :to 3, :amount 69}
+66	:info	:transfer	{:from 4, :to 3, :amount 69}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+:nemesis	:info	:start	nil
+78	:invoke	:read	nil
+78	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+49	:invoke	:read	nil
+49	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+110	:invoke	:read	nil
+110	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+110	:invoke	:transfer	{:from 0, :to 1, :amount 54}
+110	:info	:transfer	{:from 0, :to 1, :amount 54}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+71	:invoke	:transfer	{:from 3, :to 2, :amount 56}
+71	:info	:transfer	{:from 3, :to 2, :amount 56}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+62	:invoke	:transfer	{:from 3, :to 1, :amount 66}
+62	:info	:transfer	{:from 3, :to 1, :amount 66}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+78	:invoke	:read	nil
+78	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+49	:invoke	:read	nil
+49	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+115	:invoke	:transfer	{:from 1, :to 2, :amount 25}
+115	:info	:transfer	{:from 1, :to 2, :amount 25}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+120	:invoke	:transfer	{:from 2, :to 0, :amount 41}
+120	:info	:transfer	{:from 2, :to 0, :amount 41}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+76	:invoke	:transfer	{:from 0, :to 2, :amount 87}
+76	:info	:transfer	{:from 0, :to 2, :amount 87}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+67	:invoke	:transfer	{:from 1, :to 3, :amount 75}
+67	:info	:transfer	{:from 1, :to 3, :amount 75}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+78	:invoke	:transfer	{:from 4, :to 1, :amount 30}
+78	:info	:transfer	{:from 4, :to 1, :amount 30}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+49	:invoke	:read	nil
+49	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+125	:invoke	:read	nil
+125	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+125	:invoke	:transfer	{:from 4, :to 0, :amount 13}
+125	:info	:transfer	{:from 4, :to 0, :amount 13}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+81	:invoke	:read	nil
+81	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+72	:invoke	:read	nil
+72	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+83	:invoke	:read	nil
+83	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+49	:invoke	:transfer	{:from 2, :to 1, :amount 46}
+49	:info	:transfer	{:from 2, :to 1, :amount 46}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+130	:invoke	:read	nil
+130	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+130	:invoke	:read	nil
+130	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+81	:invoke	:transfer	{:from 3, :to 4, :amount 90}
+81	:info	:transfer	{:from 3, :to 4, :amount 90}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+72	:invoke	:transfer	{:from 3, :to 1, :amount 84}
+72	:info	:transfer	{:from 3, :to 1, :amount 84}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+83	:invoke	:transfer	{:from 1, :to 3, :amount 86}
+83	:info	:transfer	{:from 1, :to 3, :amount 86}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+54	:invoke	:transfer	{:from 0, :to 2, :amount 7}
+54	:info	:transfer	{:from 0, :to 2, :amount 7}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+130	:invoke	:read	nil
+130	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+130	:invoke	:read	nil
+130	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+86	:invoke	:transfer	{:from 4, :to 1, :amount 55}
+86	:info	:transfer	{:from 4, :to 1, :amount 55}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+77	:invoke	:transfer	{:from 2, :to 4, :amount 49}
+77	:info	:transfer	{:from 2, :to 4, :amount 49}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+:nemesis	:info	:start	["n1"]
+59	:invoke	:read	nil
+59	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+130	:invoke	:transfer	{:from 2, :to 1, :amount 60}
+130	:info	:transfer	{:from 2, :to 1, :amount 60}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+135	:invoke	:read	nil
+91	:invoke	:read	nil
+135	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+91	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+82	:invoke	:transfer	{:from 2, :to 0, :amount 89}
+82	:info	:transfer	{:from 2, :to 0, :amount 89}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+88	:invoke	:transfer	{:from 4, :to 3, :amount 21}
+88	:info	:transfer	{:from 4, :to 3, :amount 21}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+59	:invoke	:read	nil
+59	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+135	:invoke	:transfer	{:from 0, :to 1, :amount 23}
+135	:info	:transfer	{:from 0, :to 1, :amount 23}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+140	:invoke	:transfer	{:from 2, :to 1, :amount 89}
+140	:info	:transfer	{:from 2, :to 1, :amount 89}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+91	:invoke	:read	nil
+91	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+87	:invoke	:read	nil
+87	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+93	:invoke	:read	nil
+93	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+59	:invoke	:transfer	{:from 0, :to 2, :amount 25}
+59	:info	:transfer	{:from 0, :to 2, :amount 25}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+145	:invoke	:read	nil
+145	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+145	:invoke	:transfer	{:from 1, :to 4, :amount 8}
+145	:info	:transfer	{:from 1, :to 4, :amount 8}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+91	:invoke	:read	nil
+91	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+87	:invoke	:read	nil
+87	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+93	:invoke	:transfer	{:from 2, :to 0, :amount 25}
+93	:info	:transfer	{:from 2, :to 0, :amount 25}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+64	:invoke	:read	nil
+64	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+150	:invoke	:transfer	{:from 1, :to 0, :amount 99}
+150	:info	:transfer	{:from 1, :to 0, :amount 99}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+155	:invoke	:transfer	{:from 3, :to 2, :amount 94}
+155	:info	:transfer	{:from 3, :to 2, :amount 94}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+91	:invoke	:transfer	{:from 3, :to 2, :amount 2}
+91	:info	:transfer	{:from 3, :to 2, :amount 2}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+87	:invoke	:read	nil
+87	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+98	:invoke	:read	nil
+98	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+64	:invoke	:read	nil
+64	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+160	:invoke	:read	nil
+160	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+160	:invoke	:read	nil
+160	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+96	:invoke	:read	nil
+96	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+87	:invoke	:read	nil
+87	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+98	:invoke	:transfer	{:from 3, :to 2, :amount 70}
+98	:info	:transfer	{:from 3, :to 2, :amount 70}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+64	:invoke	:read	nil
+64	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+160	:invoke	:transfer	{:from 2, :to 0, :amount 90}
+96	:invoke	:transfer	{:from 4, :to 2, :amount 85}
+160	:info	:transfer	{:from 2, :to 0, :amount 90}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+96	:info	:transfer	{:from 4, :to 2, :amount 85}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+101	:invoke	:read	nil
+101	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+87	:invoke	:read	nil
+87	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+103	:invoke	:transfer	{:from 1, :to 2, :amount 27}
+103	:info	:transfer	{:from 1, :to 2, :amount 27}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+64	:invoke	:read	nil
+64	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+165	:invoke	:transfer	{:from 1, :to 4, :amount 56}
+165	:info	:transfer	{:from 1, :to 4, :amount 56}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+170	:invoke	:read	nil
+170	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+101	:invoke	:transfer	{:from 3, :to 0, :amount 27}
+101	:info	:transfer	{:from 3, :to 0, :amount 27}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+87	:invoke	:transfer	{:from 0, :to 2, :amount 67}
+87	:info	:transfer	{:from 0, :to 2, :amount 67}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+108	:invoke	:read	nil
+108	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+64	:invoke	:read	nil
+64	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+170	:invoke	:transfer	{:from 4, :to 0, :amount 97}
+170	:info	:transfer	{:from 4, :to 0, :amount 97}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+175	:invoke	:transfer	{:from 2, :to 0, :amount 44}
+175	:info	:transfer	{:from 2, :to 0, :amount 44}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+106	:invoke	:transfer	{:from 2, :to 3, :amount 48}
+106	:info	:transfer	{:from 2, :to 3, :amount 48}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+92	:invoke	:transfer	{:from 4, :to 0, :amount 14}
+92	:info	:transfer	{:from 4, :to 0, :amount 14}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+108	:invoke	:read	nil
+108	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+64	:invoke	:read	nil
+64	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+180	:invoke	:transfer	{:from 0, :to 1, :amount 8}
+180	:info	:transfer	{:from 0, :to 1, :amount 8}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+185	:invoke	:transfer	{:from 3, :to 4, :amount 89}
+185	:info	:transfer	{:from 3, :to 4, :amount 89}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+111	:invoke	:transfer	{:from 2, :to 3, :amount 57}
+111	:info	:transfer	{:from 2, :to 3, :amount 57}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+108	:invoke	:transfer	{:from 4, :to 1, :amount 15}
+108	:info	:transfer	{:from 4, :to 1, :amount 15}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+64	:invoke	:read	nil
+64	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+190	:invoke	:read	nil
+190	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+190	:invoke	:read	nil
+190	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+116	:invoke	:transfer	{:from 0, :to 4, :amount 58}
+116	:info	:transfer	{:from 0, :to 4, :amount 58}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+97	:invoke	:read	nil
+97	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+113	:invoke	:transfer	{:from 2, :to 3, :amount 53}
+113	:info	:transfer	{:from 2, :to 3, :amount 53}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+64	:invoke	:transfer	{:from 2, :to 0, :amount 63}
+64	:info	:transfer	{:from 2, :to 0, :amount 63}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+190	:invoke	:transfer	{:from 4, :to 1, :amount 96}
+190	:info	:transfer	{:from 4, :to 1, :amount 96}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+195	:invoke	:read	nil
+195	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+121	:invoke	:transfer	{:from 4, :to 3, :amount 49}
+121	:info	:transfer	{:from 4, :to 3, :amount 49}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+97	:invoke	:transfer	{:from 4, :to 3, :amount 37}
+97	:info	:transfer	{:from 4, :to 3, :amount 37}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+118	:invoke	:read	nil
+118	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+69	:invoke	:transfer	{:from 2, :to 3, :amount 79}
+69	:info	:transfer	{:from 2, :to 3, :amount 79}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+195	:invoke	:transfer	{:from 3, :to 2, :amount 71}
+195	:info	:transfer	{:from 3, :to 2, :amount 71}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+200	:invoke	:read	nil
+200	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+126	:invoke	:read	nil
+126	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+102	:invoke	:read	nil
+102	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+118	:invoke	:read	nil
+118	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+74	:invoke	:read	nil
+74	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+200	:invoke	:read	nil
+200	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+200	:invoke	:transfer	{:from 1, :to 3, :amount 19}
+200	:info	:transfer	{:from 1, :to 3, :amount 19}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+126	:invoke	:transfer	{:from 2, :to 4, :amount 27}
+126	:info	:transfer	{:from 2, :to 4, :amount 27}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+102	:invoke	:read	nil
+102	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+118	:invoke	:transfer	{:from 4, :to 2, :amount 34}
+118	:info	:transfer	{:from 4, :to 2, :amount 34}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+74	:invoke	:read	nil
+74	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+205	:invoke	:transfer	{:from 0, :to 2, :amount 100}
+205	:info	:transfer	{:from 0, :to 2, :amount 100}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+210	:invoke	:read	nil
+210	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+131	:invoke	:read	nil
+131	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+102	:invoke	:transfer	{:from 3, :to 0, :amount 28}
+102	:info	:transfer	{:from 3, :to 0, :amount 28}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+123	:invoke	:transfer	{:from 2, :to 3, :amount 31}
+123	:info	:transfer	{:from 2, :to 3, :amount 31}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+74	:invoke	:read	nil
+74	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+210	:invoke	:transfer	{:from 2, :to 1, :amount 47}
+210	:info	:transfer	{:from 2, :to 1, :amount 47}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+215	:invoke	:transfer	{:from 2, :to 0, :amount 46}
+215	:info	:transfer	{:from 2, :to 0, :amount 46}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+131	:invoke	:read	nil
+131	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+107	:invoke	:read	nil
+107	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+128	:invoke	:read	nil
+128	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+74	:invoke	:transfer	{:from 3, :to 1, :amount 86}
+74	:info	:transfer	{:from 3, :to 1, :amount 86}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+220	:invoke	:transfer	{:from 3, :to 1, :amount 23}
+220	:info	:transfer	{:from 3, :to 1, :amount 23}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+225	:invoke	:transfer	{:from 4, :to 0, :amount 69}
+225	:info	:transfer	{:from 4, :to 0, :amount 69}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+131	:invoke	:read	nil
+131	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+107	:invoke	:read	nil
+107	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+128	:invoke	:read	nil
+128	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+79	:invoke	:transfer	{:from 2, :to 3, :amount 23}
+79	:info	:transfer	{:from 2, :to 3, :amount 23}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+230	:invoke	:transfer	{:from 0, :to 4, :amount 83}
+230	:info	:transfer	{:from 0, :to 4, :amount 83}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+235	:invoke	:transfer	{:from 2, :to 1, :amount 92}
+235	:info	:transfer	{:from 2, :to 1, :amount 92}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+131	:invoke	:transfer	{:from 3, :to 2, :amount 78}
+131	:info	:transfer	{:from 3, :to 2, :amount 78}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+107	:invoke	:transfer	{:from 2, :to 0, :amount 74}
+107	:info	:transfer	{:from 2, :to 0, :amount 74}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+128	:invoke	:read	nil
+128	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+84	:invoke	:transfer	{:from 4, :to 3, :amount 60}
+84	:info	:transfer	{:from 4, :to 3, :amount 60}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+240	:invoke	:read	nil
+240	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+240	:invoke	:read	nil
+240	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+136	:invoke	:transfer	{:from 4, :to 0, :amount 51}
+136	:info	:transfer	{:from 4, :to 0, :amount 51}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+112	:invoke	:read	nil
+112	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+128	:invoke	:read	nil
+128	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+89	:invoke	:read	nil
+89	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+240	:invoke	:read	nil
+240	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+240	:invoke	:read	nil
+240	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+141	:invoke	:read	nil
+141	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+112	:invoke	:read	nil
+112	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+128	:invoke	:transfer	{:from 0, :to 4, :amount 30}
+128	:info	:transfer	{:from 0, :to 4, :amount 30}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+89	:invoke	:read	nil
+89	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+240	:invoke	:transfer	{:from 3, :to 1, :amount 57}
+240	:info	:transfer	{:from 3, :to 1, :amount 57}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+245	:invoke	:transfer	{:from 0, :to 2, :amount 80}
+245	:info	:transfer	{:from 0, :to 2, :amount 80}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+141	:invoke	:transfer	{:from 1, :to 2, :amount 100}
+141	:info	:transfer	{:from 1, :to 2, :amount 100}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+112	:invoke	:transfer	{:from 0, :to 2, :amount 5}
+112	:info	:transfer	{:from 0, :to 2, :amount 5}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+133	:invoke	:transfer	{:from 4, :to 3, :amount 64}
+133	:info	:transfer	{:from 4, :to 3, :amount 64}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+89	:invoke	:read	nil
+250	:invoke	:transfer	{:from 3, :to 0, :amount 67}
+89	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+250	:info	:transfer	{:from 3, :to 0, :amount 67}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+255	:invoke	:read	nil
+255	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+146	:invoke	:read	nil
+146	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+117	:invoke	:transfer	{:from 4, :to 1, :amount 10}
+117	:info	:transfer	{:from 4, :to 1, :amount 10}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+138	:invoke	:transfer	{:from 1, :to 4, :amount 88}
+138	:info	:transfer	{:from 1, :to 4, :amount 88}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+89	:invoke	:read	nil
+89	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+255	:invoke	:read	nil
+255	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+255	:invoke	:transfer	{:from 2, :to 1, :amount 54}
+255	:info	:transfer	{:from 2, :to 1, :amount 54}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+146	:invoke	:transfer	{:from 0, :to 1, :amount 73}
+146	:info	:transfer	{:from 0, :to 1, :amount 73}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+122	:invoke	:transfer	{:from 0, :to 2, :amount 97}
+122	:info	:transfer	{:from 0, :to 2, :amount 97}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+143	:invoke	:transfer	{:from 2, :to 1, :amount 78}
+143	:info	:transfer	{:from 2, :to 1, :amount 78}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+89	:invoke	:read	nil
+89	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+260	:invoke	:transfer	{:from 4, :to 2, :amount 9}
+260	:info	:transfer	{:from 4, :to 2, :amount 9}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+265	:invoke	:read	nil
+265	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+151	:invoke	:transfer	{:from 4, :to 2, :amount 19}
+151	:info	:transfer	{:from 4, :to 2, :amount 19}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+127	:invoke	:read	nil
+127	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+148	:invoke	:read	nil
+148	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+89	:invoke	:transfer	{:from 4, :to 3, :amount 17}
+89	:info	:transfer	{:from 4, :to 3, :amount 17}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+265	:invoke	:transfer	{:from 4, :to 1, :amount 76}
+265	:info	:transfer	{:from 4, :to 1, :amount 76}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+270	:invoke	:read	nil
+270	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+156	:invoke	:transfer	{:from 1, :to 4, :amount 75}
+156	:info	:transfer	{:from 1, :to 4, :amount 75}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+127	:invoke	:read	nil
+127	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+148	:invoke	:transfer	{:from 4, :to 1, :amount 52}
+148	:info	:transfer	{:from 4, :to 1, :amount 52}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+94	:invoke	:transfer	{:from 2, :to 3, :amount 11}
+94	:info	:transfer	{:from 2, :to 3, :amount 11}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+270	:invoke	:transfer	{:from 4, :to 2, :amount 85}
+270	:info	:transfer	{:from 4, :to 2, :amount 85}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+275	:invoke	:read	nil
+275	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+161	:invoke	:read	nil
+161	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+127	:invoke	:transfer	{:from 2, :to 4, :amount 33}
+127	:info	:transfer	{:from 2, :to 4, :amount 33}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+153	:invoke	:transfer	{:from 3, :to 2, :amount 64}
+153	:info	:transfer	{:from 3, :to 2, :amount 64}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+99	:invoke	:read	nil
+99	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+275	:invoke	:transfer	{:from 3, :to 0, :amount 99}
+275	:info	:transfer	{:from 3, :to 0, :amount 99}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+280	:invoke	:transfer	{:from 4, :to 2, :amount 73}
+280	:info	:transfer	{:from 4, :to 2, :amount 73}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+161	:invoke	:read	nil
+161	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+:nemesis	:info	:kill	nil
+:nemesis	:info	:kill	["n1"]
+99	:invoke	:transfer	{:from 3, :to 1, :amount 69}
+99	:info	:transfer	{:from 3, :to 1, :amount 69}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+285	:invoke	:transfer	{:from 0, :to 2, :amount 6}
+285	:info	:transfer	{:from 0, :to 2, :amount 6}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+290	:invoke	:transfer	{:from 0, :to 1, :amount 37}
+290	:info	:transfer	{:from 0, :to 1, :amount 37}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+161	:invoke	:transfer	{:from 4, :to 1, :amount 92}
+161	:info	:transfer	{:from 4, :to 1, :amount 92}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+132	:invoke	:read	nil
+132	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+158	:invoke	:read	nil
+158	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+104	:invoke	:read	nil
+104	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+295	:invoke	:read	nil
+295	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+295	:invoke	:read	nil
+295	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+166	:invoke	:transfer	{:from 2, :to 0, :amount 64}
+166	:info	:transfer	{:from 2, :to 0, :amount 64}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+132	:invoke	:transfer	{:from 2, :to 1, :amount 51}
+132	:info	:transfer	{:from 2, :to 1, :amount 51}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+158	:invoke	:transfer	{:from 4, :to 2, :amount 27}
+158	:info	:transfer	{:from 4, :to 2, :amount 27}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+104	:invoke	:read	nil
+104	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+295	:invoke	:transfer	{:from 1, :to 3, :amount 82}
+295	:info	:transfer	{:from 1, :to 3, :amount 82}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+300	:invoke	:read	nil
+300	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+171	:invoke	:transfer	{:from 4, :to 3, :amount 31}
+171	:info	:transfer	{:from 4, :to 3, :amount 31}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+137	:invoke	:transfer	{:from 0, :to 4, :amount 44}
+137	:info	:transfer	{:from 0, :to 4, :amount 44}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+163	:invoke	:transfer	{:from 2, :to 1, :amount 30}
+163	:info	:transfer	{:from 2, :to 1, :amount 30}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+104	:invoke	:read	nil
+104	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+300	:invoke	:read	nil
+300	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+300	:invoke	:transfer	{:from 3, :to 4, :amount 63}
+300	:info	:transfer	{:from 3, :to 4, :amount 63}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+176	:invoke	:transfer	{:from 4, :to 3, :amount 30}
+176	:info	:transfer	{:from 4, :to 3, :amount 30}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+142	:invoke	:transfer	{:from 0, :to 2, :amount 90}
+142	:info	:transfer	{:from 0, :to 2, :amount 90}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+168	:invoke	:read	nil
+168	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+104	:invoke	:transfer	{:from 2, :to 0, :amount 24}
+104	:info	:transfer	{:from 2, :to 0, :amount 24}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+305	:invoke	:transfer	{:from 4, :to 3, :amount 35}
+305	:info	:transfer	{:from 4, :to 3, :amount 35}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+310	:invoke	:transfer	{:from 2, :to 3, :amount 52}
+310	:info	:transfer	{:from 2, :to 3, :amount 52}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+181	:invoke	:transfer	{:from 0, :to 3, :amount 73}
+181	:info	:transfer	{:from 0, :to 3, :amount 73}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+147	:invoke	:transfer	{:from 3, :to 2, :amount 80}
+147	:info	:transfer	{:from 3, :to 2, :amount 80}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+168	:invoke	:transfer	{:from 4, :to 3, :amount 16}
+168	:info	:transfer	{:from 4, :to 3, :amount 16}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+109	:invoke	:read	nil
+109	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+315	:invoke	:transfer	{:from 4, :to 0, :amount 27}
+315	:info	:transfer	{:from 4, :to 0, :amount 27}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+320	:invoke	:transfer	{:from 1, :to 3, :amount 14}
+320	:info	:transfer	{:from 1, :to 3, :amount 14}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+186	:invoke	:transfer	{:from 3, :to 2, :amount 25}
+186	:info	:transfer	{:from 3, :to 2, :amount 25}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+152	:invoke	:transfer	{:from 4, :to 3, :amount 44}
+152	:info	:transfer	{:from 4, :to 3, :amount 44}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+173	:invoke	:read	nil
+173	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+109	:invoke	:read	nil
+109	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+325	:invoke	:transfer	{:from 2, :to 1, :amount 81}
+325	:info	:transfer	{:from 2, :to 1, :amount 81}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+330	:invoke	:transfer	{:from 2, :to 3, :amount 64}
+330	:info	:transfer	{:from 2, :to 3, :amount 64}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+191	:invoke	:transfer	{:from 0, :to 3, :amount 58}
+191	:info	:transfer	{:from 0, :to 3, :amount 58}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+157	:invoke	:transfer	{:from 3, :to 1, :amount 83}
+157	:info	:transfer	{:from 3, :to 1, :amount 83}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+173	:invoke	:transfer	{:from 3, :to 1, :amount 52}
+173	:info	:transfer	{:from 3, :to 1, :amount 52}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+109	:invoke	:read	nil
+109	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+335	:invoke	:read	nil
+335	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+:nemesis	:info	:start	nil
+196	:invoke	:transfer	{:from 4, :to 0, :amount 59}
+196	:info	:transfer	{:from 4, :to 0, :amount 59}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+162	:invoke	:transfer	{:from 4, :to 1, :amount 32}
+162	:info	:transfer	{:from 4, :to 1, :amount 32}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+178	:invoke	:transfer	{:from 0, :to 2, :amount 75}
+178	:info	:transfer	{:from 0, :to 2, :amount 75}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+109	:invoke	:read	nil
+109	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+335	:invoke	:read	nil
+335	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+335	:invoke	:transfer	{:from 2, :to 3, :amount 7}
+335	:info	:transfer	{:from 2, :to 3, :amount 7}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+201	:invoke	:transfer	{:from 2, :to 0, :amount 2}
+201	:info	:transfer	{:from 2, :to 0, :amount 2}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+167	:invoke	:transfer	{:from 0, :to 3, :amount 3}
+167	:info	:transfer	{:from 0, :to 3, :amount 3}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+183	:invoke	:read	nil
+183	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+109	:invoke	:transfer	{:from 0, :to 4, :amount 30}
+109	:info	:transfer	{:from 0, :to 4, :amount 30}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+340	:invoke	:transfer	{:from 4, :to 3, :amount 58}
+340	:info	:transfer	{:from 4, :to 3, :amount 58}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+345	:invoke	:transfer	{:from 1, :to 2, :amount 18}
+345	:info	:transfer	{:from 1, :to 2, :amount 18}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+206	:invoke	:transfer	{:from 3, :to 1, :amount 43}
+206	:info	:transfer	{:from 3, :to 1, :amount 43}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+172	:invoke	:read	nil
+172	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+183	:invoke	:read	nil
+183	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+114	:invoke	:read	nil
+114	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+350	:invoke	:read	nil
+350	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+350	:invoke	:transfer	{:from 2, :to 0, :amount 75}
+350	:info	:transfer	{:from 2, :to 0, :amount 75}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+211	:invoke	:transfer	{:from 0, :to 2, :amount 55}
+211	:info	:transfer	{:from 0, :to 2, :amount 55}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+172	:invoke	:transfer	{:from 2, :to 0, :amount 41}
+172	:info	:transfer	{:from 2, :to 0, :amount 41}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+183	:invoke	:transfer	{:from 2, :to 4, :amount 5}
+183	:info	:transfer	{:from 2, :to 4, :amount 5}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+114	:invoke	:read	nil
+114	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+355	:invoke	:transfer	{:from 3, :to 0, :amount 70}
+355	:info	:transfer	{:from 3, :to 0, :amount 70}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+360	:invoke	:transfer	{:from 1, :to 2, :amount 15}
+360	:info	:transfer	{:from 1, :to 2, :amount 15}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+216	:invoke	:read	nil
+216	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+177	:invoke	:transfer	{:from 1, :to 3, :amount 10}
+177	:info	:transfer	{:from 1, :to 3, :amount 10}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+188	:invoke	:transfer	{:from 3, :to 2, :amount 75}
+188	:info	:transfer	{:from 3, :to 2, :amount 75}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+114	:invoke	:read	nil
+114	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+365	:invoke	:transfer	{:from 0, :to 4, :amount 4}
+365	:info	:transfer	{:from 0, :to 4, :amount 4}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+370	:invoke	:transfer	{:from 4, :to 1, :amount 71}
+370	:info	:transfer	{:from 4, :to 1, :amount 71}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+:nemesis	:info	:start	["n1"]
+182	:invoke	:read	nil
+182	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+193	:invoke	:transfer	{:from 3, :to 2, :amount 7}
+193	:info	:transfer	{:from 3, :to 2, :amount 7}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+114	:invoke	:transfer	{:from 0, :to 2, :amount 34}
+114	:info	:transfer	{:from 0, :to 2, :amount 34}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+375	:invoke	:read	nil
+375	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+375	:invoke	:transfer	{:from 2, :to 1, :amount 86}
+375	:info	:transfer	{:from 2, :to 1, :amount 86}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+216	:invoke	:read	nil
+216	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+182	:invoke	:transfer	{:from 4, :to 1, :amount 68}
+182	:info	:transfer	{:from 4, :to 1, :amount 68}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+198	:invoke	:transfer	{:from 0, :to 2, :amount 22}
+198	:info	:transfer	{:from 0, :to 2, :amount 22}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+119	:invoke	:transfer	{:from 2, :to 1, :amount 39}
+119	:info	:transfer	{:from 2, :to 1, :amount 39}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+380	:invoke	:read	nil
+380	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+380	:invoke	:transfer	{:from 1, :to 4, :amount 40}
+380	:info	:transfer	{:from 1, :to 4, :amount 40}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+216	:invoke	:transfer	{:from 3, :to 4, :amount 80}
+216	:info	:transfer	{:from 3, :to 4, :amount 80}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+187	:invoke	:read	nil
+187	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+203	:invoke	:transfer	{:from 1, :to 3, :amount 82}
+203	:info	:transfer	{:from 1, :to 3, :amount 82}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+124	:invoke	:transfer	{:from 4, :to 3, :amount 22}
+124	:info	:transfer	{:from 4, :to 3, :amount 22}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+385	:invoke	:transfer	{:from 1, :to 0, :amount 70}
+385	:info	:transfer	{:from 1, :to 0, :amount 70}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+390	:invoke	:transfer	{:from 2, :to 0, :amount 19}
+390	:info	:transfer	{:from 2, :to 0, :amount 19}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+221	:invoke	:transfer	{:from 2, :to 1, :amount 22}
+221	:info	:transfer	{:from 2, :to 1, :amount 22}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+187	:invoke	:transfer	{:from 3, :to 0, :amount 2}
+187	:info	:transfer	{:from 3, :to 0, :amount 2}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+208	:invoke	:read	nil
+129	:invoke	:read	nil
+208	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+129	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+395	:invoke	:transfer	{:from 2, :to 4, :amount 63}
+395	:info	:transfer	{:from 2, :to 4, :amount 63}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+400	:invoke	:transfer	{:from 4, :to 3, :amount 84}
+400	:info	:transfer	{:from 4, :to 3, :amount 84}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+226	:invoke	:transfer	{:from 1, :to 0, :amount 56}
+226	:info	:transfer	{:from 1, :to 0, :amount 56}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+192	:invoke	:read	nil
+192	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+208	:invoke	:transfer	{:from 3, :to 1, :amount 94}
+208	:info	:transfer	{:from 3, :to 1, :amount 94}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+129	:invoke	:read	nil
+129	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+405	:invoke	:transfer	{:from 2, :to 3, :amount 57}
+405	:info	:transfer	{:from 2, :to 3, :amount 57}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+410	:invoke	:read	nil
+410	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+231	:invoke	:read	nil
+231	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+192	:invoke	:read	nil
+192	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+213	:invoke	:read	nil
+213	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+129	:invoke	:transfer	{:from 4, :to 1, :amount 88}
+129	:info	:transfer	{:from 4, :to 1, :amount 88}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+410	:invoke	:transfer	{:from 1, :to 0, :amount 12}
+410	:info	:transfer	{:from 1, :to 0, :amount 12}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+415	:invoke	:read	nil
+415	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+231	:invoke	:read	nil
+231	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+192	:invoke	:transfer	{:from 0, :to 1, :amount 93}
+192	:info	:transfer	{:from 0, :to 1, :amount 93}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+213	:invoke	:read	nil
+213	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+134	:invoke	:transfer	{:from 1, :to 4, :amount 98}
+134	:info	:transfer	{:from 1, :to 4, :amount 98}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+415	:invoke	:transfer	{:from 0, :to 1, :amount 34}
+415	:info	:transfer	{:from 0, :to 1, :amount 34}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+420	:invoke	:transfer	{:from 4, :to 0, :amount 39}
+420	:info	:transfer	{:from 4, :to 0, :amount 39}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+231	:invoke	:read	nil
+231	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+197	:invoke	:read	nil
+197	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+213	:invoke	:read	nil
+213	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+139	:invoke	:read	nil
+139	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+425	:invoke	:read	nil
+425	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+425	:invoke	:read	nil
+425	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+231	:invoke	:transfer	{:from 2, :to 4, :amount 97}
+231	:info	:transfer	{:from 2, :to 4, :amount 97}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+213	:invoke	:transfer	{:from 1, :to 0, :amount 29}
+213	:info	:transfer	{:from 1, :to 0, :amount 29}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+139	:invoke	:transfer	{:from 0, :to 4, :amount 8}
+139	:info	:transfer	{:from 0, :to 4, :amount 8}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+425	:invoke	:transfer	{:from 3, :to 4, :amount 78}
+425	:info	:transfer	{:from 3, :to 4, :amount 78}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+430	:invoke	:transfer	{:from 1, :to 3, :amount 51}
+430	:info	:transfer	{:from 1, :to 3, :amount 51}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+236	:invoke	:read	nil
+236	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+197	:invoke	:transfer	{:from 0, :to 4, :amount 49}
+197	:info	:transfer	{:from 0, :to 4, :amount 49}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+218	:invoke	:read	nil
+218	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+144	:invoke	:transfer	{:from 0, :to 1, :amount 39}
+144	:info	:transfer	{:from 0, :to 1, :amount 39}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+435	:invoke	:read	nil
+435	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+435	:invoke	:read	nil
+435	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+236	:invoke	:read	nil
+236	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+202	:invoke	:transfer	{:from 1, :to 2, :amount 96}
+202	:info	:transfer	{:from 1, :to 2, :amount 96}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+218	:invoke	:read	nil
+218	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+149	:invoke	:read	nil
+149	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+435	:invoke	:transfer	{:from 0, :to 1, :amount 86}
+435	:info	:transfer	{:from 0, :to 1, :amount 86}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+440	:invoke	:transfer	{:from 4, :to 0, :amount 97}
+440	:info	:transfer	{:from 4, :to 0, :amount 97}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+236	:invoke	:transfer	{:from 2, :to 3, :amount 33}
+236	:info	:transfer	{:from 2, :to 3, :amount 33}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+207	:invoke	:transfer	{:from 2, :to 0, :amount 100}
+207	:info	:transfer	{:from 2, :to 0, :amount 100}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+218	:invoke	:transfer	{:from 3, :to 1, :amount 28}
+218	:info	:transfer	{:from 3, :to 1, :amount 28}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+149	:invoke	:transfer	{:from 1, :to 3, :amount 72}
+149	:info	:transfer	{:from 1, :to 3, :amount 72}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+445	:invoke	:transfer	{:from 3, :to 4, :amount 31}
+445	:info	:transfer	{:from 3, :to 4, :amount 31}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+450	:invoke	:read	nil
+450	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+241	:invoke	:transfer	{:from 2, :to 1, :amount 61}
+241	:info	:transfer	{:from 2, :to 1, :amount 61}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+212	:invoke	:transfer	{:from 3, :to 4, :amount 21}
+212	:info	:transfer	{:from 3, :to 4, :amount 21}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+223	:invoke	:read	nil
+223	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+154	:invoke	:transfer	{:from 4, :to 3, :amount 64}
+154	:info	:transfer	{:from 4, :to 3, :amount 64}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+450	:invoke	:transfer	{:from 3, :to 0, :amount 48}
+450	:info	:transfer	{:from 3, :to 0, :amount 48}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+455	:invoke	:transfer	{:from 1, :to 4, :amount 9}
+455	:info	:transfer	{:from 1, :to 4, :amount 9}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+246	:invoke	:transfer	{:from 2, :to 4, :amount 85}
+246	:info	:transfer	{:from 2, :to 4, :amount 85}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+217	:invoke	:transfer	{:from 4, :to 2, :amount 28}
+217	:info	:transfer	{:from 4, :to 2, :amount 28}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+223	:invoke	:transfer	{:from 1, :to 0, :amount 69}
+223	:info	:transfer	{:from 1, :to 0, :amount 69}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+159	:invoke	:read	nil
+159	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+460	:invoke	:read	nil
+460	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+460	:invoke	:transfer	{:from 1, :to 2, :amount 3}
+460	:info	:transfer	{:from 1, :to 2, :amount 3}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+251	:invoke	:transfer	{:from 3, :to 0, :amount 10}
+251	:info	:transfer	{:from 3, :to 0, :amount 10}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+222	:invoke	:transfer	{:from 0, :to 2, :amount 76}
+222	:info	:transfer	{:from 0, :to 2, :amount 76}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+228	:invoke	:read	nil
+228	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+159	:invoke	:transfer	{:from 1, :to 2, :amount 91}
+159	:info	:transfer	{:from 1, :to 2, :amount 91}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+465	:invoke	:read	nil
+465	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+465	:invoke	:read	nil
+465	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+256	:invoke	:transfer	{:from 0, :to 1, :amount 88}
+256	:info	:transfer	{:from 0, :to 1, :amount 88}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+227	:invoke	:transfer	{:from 3, :to 4, :amount 89}
+227	:info	:transfer	{:from 3, :to 4, :amount 89}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+228	:invoke	:transfer	{:from 1, :to 0, :amount 4}
+228	:info	:transfer	{:from 1, :to 0, :amount 4}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+164	:invoke	:read	nil
+164	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+465	:invoke	:read	nil
+465	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+465	:invoke	:read	nil
+465	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+261	:invoke	:transfer	{:from 3, :to 2, :amount 17}
+261	:info	:transfer	{:from 3, :to 2, :amount 17}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+232	:invoke	:transfer	{:from 0, :to 2, :amount 17}
+232	:info	:transfer	{:from 0, :to 2, :amount 17}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+233	:invoke	:transfer	{:from 1, :to 3, :amount 24}
+233	:info	:transfer	{:from 1, :to 3, :amount 24}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+164	:invoke	:read	nil
+164	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+465	:invoke	:transfer	{:from 0, :to 1, :amount 17}
+465	:info	:transfer	{:from 0, :to 1, :amount 17}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+470	:invoke	:read	nil
+470	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+266	:invoke	:transfer	{:from 2, :to 3, :amount 38}
+266	:info	:transfer	{:from 2, :to 3, :amount 38}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+237	:invoke	:read	nil
+237	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+238	:invoke	:transfer	{:from 2, :to 1, :amount 97}
+238	:info	:transfer	{:from 2, :to 1, :amount 97}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+164	:invoke	:transfer	{:from 4, :to 2, :amount 60}
+164	:info	:transfer	{:from 4, :to 2, :amount 60}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+470	:invoke	:transfer	{:from 4, :to 2, :amount 52}
+470	:info	:transfer	{:from 4, :to 2, :amount 52}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+475	:invoke	:transfer	{:from 4, :to 3, :amount 61}
+475	:info	:transfer	{:from 4, :to 3, :amount 61}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+271	:invoke	:transfer	{:from 4, :to 1, :amount 4}
+271	:info	:transfer	{:from 4, :to 1, :amount 4}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+237	:invoke	:transfer	{:from 4, :to 1, :amount 45}
+237	:info	:transfer	{:from 4, :to 1, :amount 45}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+243	:invoke	:transfer	{:from 4, :to 1, :amount 39}
+243	:info	:transfer	{:from 4, :to 1, :amount 39}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+169	:invoke	:read	nil
+169	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+480	:invoke	:transfer	{:from 3, :to 1, :amount 72}
+480	:info	:transfer	{:from 3, :to 1, :amount 72}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+485	:invoke	:read	nil
+485	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+276	:invoke	:transfer	{:from 0, :to 1, :amount 16}
+276	:info	:transfer	{:from 0, :to 1, :amount 16}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+242	:invoke	:transfer	{:from 0, :to 2, :amount 57}
+242	:info	:transfer	{:from 0, :to 2, :amount 57}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+248	:invoke	:read	nil
+248	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+169	:invoke	:read	nil
+169	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+485	:invoke	:read	nil
+485	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+485	:invoke	:read	nil
+485	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+281	:invoke	:transfer	{:from 3, :to 1, :amount 25}
+281	:info	:transfer	{:from 3, :to 1, :amount 25}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+247	:invoke	:transfer	{:from 1, :to 3, :amount 31}
+247	:info	:transfer	{:from 1, :to 3, :amount 31}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+248	:invoke	:read	nil
+248	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+169	:invoke	:transfer	{:from 1, :to 4, :amount 87}
+169	:info	:transfer	{:from 1, :to 4, :amount 87}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+485	:invoke	:read	nil
+485	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+485	:invoke	:read	nil
+485	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+286	:invoke	:transfer	{:from 0, :to 4, :amount 47}
+286	:info	:transfer	{:from 0, :to 4, :amount 47}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+252	:invoke	:transfer	{:from 4, :to 0, :amount 6}
+252	:info	:transfer	{:from 4, :to 0, :amount 6}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+248	:invoke	:read	nil
+248	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+174	:invoke	:transfer	{:from 3, :to 2, :amount 74}
+174	:info	:transfer	{:from 3, :to 2, :amount 74}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+485	:invoke	:transfer	{:from 1, :to 3, :amount 54}
+485	:info	:transfer	{:from 1, :to 3, :amount 54}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+490	:invoke	:read	nil
+291	:invoke	:transfer	{:from 4, :to 0, :amount 31}
+490	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+291	:info	:transfer	{:from 4, :to 0, :amount 31}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+257	:invoke	:read	nil
+257	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+248	:invoke	:transfer	{:from 2, :to 3, :amount 60}
+248	:info	:transfer	{:from 2, :to 3, :amount 60}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+179	:invoke	:read	nil
+179	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+490	:invoke	:read	nil
+490	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+490	:invoke	:transfer	{:from 1, :to 2, :amount 44}
+490	:info	:transfer	{:from 1, :to 2, :amount 44}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+:nemesis	:info	:kill	nil
+257	:invoke	:read	nil
+257	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+:nemesis	:info	:kill	["n1"]
+179	:invoke	:read	nil
+179	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+495	:invoke	:read	nil
+495	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+495	:invoke	:read	nil
+495	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+296	:invoke	:read	nil
+296	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+257	:invoke	:transfer	{:from 2, :to 1, :amount 11}
+257	:info	:transfer	{:from 2, :to 1, :amount 11}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+253	:invoke	:transfer	{:from 0, :to 4, :amount 99}
+253	:info	:transfer	{:from 0, :to 4, :amount 99}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+179	:invoke	:transfer	{:from 3, :to 0, :amount 79}
+179	:info	:transfer	{:from 3, :to 0, :amount 79}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+495	:invoke	:read	nil
+495	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+495	:invoke	:read	nil
+495	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+296	:invoke	:read	nil
+296	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+262	:invoke	:read	nil
+262	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+258	:invoke	:transfer	{:from 1, :to 2, :amount 34}
+258	:info	:transfer	{:from 1, :to 2, :amount 34}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+184	:invoke	:transfer	{:from 2, :to 4, :amount 27}
+184	:info	:transfer	{:from 2, :to 4, :amount 27}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+495	:invoke	:transfer	{:from 3, :to 4, :amount 93}
+495	:info	:transfer	{:from 3, :to 4, :amount 93}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+500	:invoke	:read	nil
+500	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+296	:invoke	:read	nil
+296	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+262	:invoke	:transfer	{:from 2, :to 4, :amount 96}
+262	:info	:transfer	{:from 2, :to 4, :amount 96}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+263	:invoke	:transfer	{:from 1, :to 2, :amount 88}
+263	:info	:transfer	{:from 1, :to 2, :amount 88}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+189	:invoke	:read	nil
+189	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+500	:invoke	:read	nil
+500	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+500	:invoke	:transfer	{:from 3, :to 0, :amount 53}
+500	:info	:transfer	{:from 3, :to 0, :amount 53}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+296	:invoke	:read	nil
+296	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+267	:invoke	:transfer	{:from 1, :to 3, :amount 45}
+267	:info	:transfer	{:from 1, :to 3, :amount 45}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+268	:invoke	:read	nil
+268	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+189	:invoke	:transfer	{:from 0, :to 3, :amount 16}
+189	:info	:transfer	{:from 0, :to 3, :amount 16}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+505	:invoke	:transfer	{:from 1, :to 3, :amount 1}
+505	:info	:transfer	{:from 1, :to 3, :amount 1}	[:unexpected class clojure.lang.PersistentVector cannot be cast to class java.lang.Number (clojure.lang.PersistentVector is in unnamed module of loader 'app'; java.lang.Number is in module java.base of loader 'bootstrap')]
+510	:invoke	:read	nil
+510	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+296	:invoke	:read	nil
+296	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+272	:invoke	:read	nil
+272	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+268	:invoke	:read	nil
+268	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+:nemesis	:info	:start	nil
+:nemesis	:info	:start	["n1"]
+272	:invoke	:read	nil
+272	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+268	:invoke	:read	nil
+268	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+194	:invoke	:read	nil
+194	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+510	:invoke	:read	nil
+510	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+510	:invoke	:read	nil
+510	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+296	:invoke	:read	nil
+296	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+272	:invoke	:read	nil
+272	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+268	:invoke	:read	nil
+268	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+194	:invoke	:read	nil
+194	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]
+510	:invoke	:read	nil
+510	:ok	:read	["OK" "QUEUED" "QUEUED" "QUEUED" "QUEUED" "QUEUED" ["1000" "1000" "1000" "1000" "1000"]]

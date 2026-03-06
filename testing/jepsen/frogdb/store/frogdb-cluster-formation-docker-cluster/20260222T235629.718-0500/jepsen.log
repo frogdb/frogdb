@@ -1,0 +1,215 @@
+2026-02-22 23:56:29,768{GMT}	INFO	[jepsen test runner] jepsen.core: Test version 4a7760395f3d9033cc6c7a477c6947e5d983eb25 (plus uncommitted changes)
+2026-02-22 23:56:29,769{GMT}	INFO	[jepsen test runner] jepsen.core: Command line:
+lein run test --docker --workload cluster-formation --nemesis none --cluster --time-limit 30
+2026-02-22 23:56:29,798{GMT}	INFO	[jepsen test runner] jepsen.core: Running test:
+{:remote
+ #jepsen.control.retry.Remote{:remote #jepsen.control.scp.Remote{:cmd-remote #jepsen.control.sshj.SSHJRemote{:concurrency-limit 6,
+                                                                                                             :conn-spec nil,
+                                                                                                             :client nil,
+                                                                                                             :semaphore nil},
+                                                                 :conn-spec nil},
+                              :conn nil}
+ :concurrency 5
+ :cluster true
+ :db
+ #object[jepsen.frogdb.cluster_db$cluster_db$reify__13074
+         "0x6ee88669"
+         "jepsen.frogdb.cluster_db$cluster_db$reify__13074@6ee88669"]
+ :leave-db-running? false
+ :name "frogdb-cluster-formation-docker-cluster"
+ :logging-json? false
+ :independent false
+ :start-time
+ #object[org.joda.time.DateTime "0x1c791c14" "2026-02-22T23:56:29.718-05:00"]
+ :docker true
+ :net
+ #object[jepsen.net$reify__12635 "0xc24e06a" "jepsen.net$reify__12635@c24e06a"]
+ :client
+ #jepsen.frogdb.cluster_formation.ClusterFormationClient{:nodes nil,
+                                                         :docker-host? nil,
+                                                         :killed-nodes nil}
+ :barrier
+ #object[java.util.concurrent.CyclicBarrier
+         "0x1926e42e"
+         "java.util.concurrent.CyclicBarrier@1926e42e"]
+ :ssh {:dummy? true}
+ :rate 10
+ :checker
+ #object[jepsen.checker$compose$reify__10552
+         "0x6fa38b67"
+         "jepsen.checker$compose$reify__10552@6fa38b67"]
+ :argv
+ ("test"
+  "--docker"
+  "--workload"
+  "cluster-formation"
+  "--nemesis"
+  "none"
+  "--cluster"
+  "--time-limit"
+  "30")
+ :nemesis #unprintable "jepsen.nemesis$reify__12738@3b6ea33b"
+ :nodes ["n1" "n2" "n3"]
+ :test-count 1
+ :replication false
+ :cluster-nodes ["n1" "n2" "n3"]
+ :generator
+ #object[jepsen.util.Forgettable
+         "0x2bc41531"
+         ((jepsen.generator.Synchronize
+           {:gen (jepsen.generator.TimeLimit
+                  {:limit 30000000000,
+                   :cutoff nil,
+                   :gen (jepsen.generator.Any
+                         {:gens [(jepsen.generator.OnThreads
+                                  {:f #{:nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x56d5311e"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@56d5311e"],
+                                   :gen nil})
+                                 (jepsen.generator.OnThreads
+                                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x66a81c48"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@66a81c48"],
+                                   :gen (jepsen.generator.Stagger
+                                         {:dt 200000000,
+                                          :next-time nil,
+                                          :gen (jepsen.generator.Mix
+                                                {:i 2,
+                                                 :gens [#object[jepsen.frogdb.cluster_formation$generator$fn__13365
+                                                                "0x60880394"
+                                                                "jepsen.frogdb.cluster_formation$generator$fn__13365@60880394"]
+                                                        #object[jepsen.frogdb.cluster_formation$generator$fn__13367
+                                                                "0x482b6acc"
+                                                                "jepsen.frogdb.cluster_formation$generator$fn__13367@482b6acc"]
+                                                        #object[jepsen.frogdb.cluster_formation$generator$fn__13369
+                                                                "0x3709ef16"
+                                                                "jepsen.frogdb.cluster_formation$generator$fn__13369@3709ef16"]]})})})]})})})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Recovering from faults..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #{:nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x1165efe3"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@1165efe3"],
+                   :gen nil})})
+          (jepsen.generator.Synchronize {:gen {:type :sleep, :value 5}})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Final reads..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x3151caf8"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@3151caf8"],
+                   :gen (jepsen.generator.Stagger
+                         {:dt 200000000,
+                          :next-time nil,
+                          :gen (jepsen.generator.Limit
+                                {:remaining 10,
+                                 :gen (jepsen.generator.Repeat
+                                       {:remaining -1, :gen {:f :read}})})})})}))]
+ :interval 10
+ :os
+ #object[jepsen.frogdb.core$reify__14064
+         "0x744d556f"
+         "jepsen.frogdb.core$reify__14064@744d556f"]
+ :time-limit 30
+ :workload "cluster-formation"
+ :local false}
+
+2026-02-22 23:56:31,071{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS setup for n1 (no-op)
+2026-02-22 23:56:31,071{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS setup for n3 (no-op)
+2026-02-22 23:56:31,071{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS setup for n2 (no-op)
+2026-02-22 23:56:31,072{GMT}	INFO	[jepsen test runner] jepsen.db: Tearing down DB
+2026-02-22 23:56:31,072{GMT}	INFO	[jepsen node n2] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n2
+2026-02-22 23:56:31,072{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n3
+2026-02-22 23:56:31,072{GMT}	INFO	[jepsen node n1] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n1
+2026-02-22 23:56:31,072{GMT}	INFO	[jepsen node n2] jepsen.frogdb.cluster-db: Healing partition on n2
+2026-02-22 23:56:31,072{GMT}	INFO	[jepsen node n1] jepsen.frogdb.cluster-db: Healing partition on n1
+2026-02-22 23:56:31,072{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Healing partition on n3
+2026-02-22 23:56:31,229{GMT}	INFO	[jepsen test runner] jepsen.db: Setting up DB
+2026-02-22 23:56:31,229{GMT}	INFO	[jepsen node n1] jepsen.frogdb.cluster-db: Setting up Raft cluster node n1
+2026-02-22 23:56:31,229{GMT}	INFO	[jepsen node n2] jepsen.frogdb.cluster-db: Setting up Raft cluster node n2
+2026-02-22 23:56:31,229{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Setting up Raft cluster node n3
+2026-02-22 23:56:33,334{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Forming cluster with nodes: [n1 n2 n3]
+2026-02-22 23:56:33,334{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Node n1 meeting node n2 at 172.21.0.3
+2026-02-22 23:56:33,346{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Node n1 meeting node n3 at 172.21.0.4
+2026-02-22 23:56:35,353{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Assigning slots 0 - 5461 to node n1
+2026-02-22 23:56:35,354{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Assigning slots 0 - 5461
+2026-02-22 23:56:35,358{GMT}	INFO	[jepsen node n1] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n1
+2026-02-22 23:56:35,358{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n3
+2026-02-22 23:56:35,358{GMT}	INFO	[jepsen node n2] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n2
+2026-02-22 23:56:35,358{GMT}	INFO	[jepsen node n1] jepsen.frogdb.cluster-db: Healing partition on n1
+2026-02-22 23:56:35,358{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Healing partition on n3
+2026-02-22 23:56:35,358{GMT}	INFO	[jepsen node n2] jepsen.frogdb.cluster-db: Healing partition on n2
+2026-02-22 23:56:35,460{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS teardown for n2 (no-op)
+2026-02-22 23:56:35,460{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS teardown for n1 (no-op)
+2026-02-22 23:56:35,460{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS teardown for n3 (no-op)
+2026-02-22 23:56:35,462{GMT}	WARN	[jepsen test runner] jepsen.core: Test crashed!
+java.lang.ClassCastException: class java.lang.Character cannot be cast to class clojure.lang.Named (java.lang.Character is in module java.base of loader 'bootstrap'; clojure.lang.Named is in unnamed module of loader 'app')
+	at clojure.core$name.invokeStatic(core.clj:1610)
+	at clojure.core$name.invoke(core.clj:1604)
+	at taoensso.carmine$redis_call$fn__8360.invoke(carmine.clj:289)
+	at taoensso.encore$run_BANG_$fn__2229.invoke(encore.cljc:1665)
+	at clojure.lang.ArrayChunk.reduce(ArrayChunk.java:58)
+	at clojure.core.protocols$fn__8244.invokeStatic(protocols.clj:136)
+	at clojure.core.protocols$fn__8244.invoke(protocols.clj:124)
+	at clojure.core.protocols$fn__8204$G__8199__8213.invoke(protocols.clj:19)
+	at clojure.core.protocols$seq_reduce.invokeStatic(protocols.clj:31)
+	at clojure.core.protocols$fn__8234.invokeStatic(protocols.clj:75)
+	at clojure.core.protocols$fn__8234.invoke(protocols.clj:75)
+	at clojure.core.protocols$fn__8178$G__8173__8191.invoke(protocols.clj:13)
+	at clojure.core$reduce.invokeStatic(core.clj:6886)
+	at clojure.core$reduce.invoke(core.clj:6868)
+	at taoensso.encore$run_BANG_.invokeStatic(encore.cljc:1665)
+	at taoensso.encore$run_BANG_.invoke(encore.cljc:1665)
+	at taoensso.carmine$redis_call.invokeStatic(carmine.clj:287)
+	at taoensso.carmine$redis_call.doInvoke(carmine.clj:280)
+	at clojure.lang.RestFn.applyTo(RestFn.java:137)
+	at clojure.core$apply.invokeStatic(core.clj:667)
+	at clojure.core$apply.invoke(core.clj:662)
+	at jepsen.frogdb.cluster_db$assign_slots_to_node_BANG_$fn__12995$fn__12999$fn__13000.invoke(cluster_db.clj:374)
+	at taoensso.carmine.protocol$_with_replies.invokeStatic(protocol.clj:349)
+	at taoensso.carmine.protocol$_with_replies.invoke(protocol.clj:337)
+	at jepsen.frogdb.cluster_db$assign_slots_to_node_BANG_$fn__12995$fn__12999.invoke(cluster_db.clj:374)
+	at jepsen.frogdb.cluster_db$assign_slots_to_node_BANG_$fn__12995.doInvoke(cluster_db.clj:374)
+	at clojure.lang.RestFn.applyTo(RestFn.java:137)
+	at clojure.core$apply.invokeStatic(core.clj:667)
+	at clojure.core$apply.invoke(core.clj:662)
+	at jepsen.frogdb.cluster_db$assign_slots_to_node_BANG_.invokeStatic(cluster_db.clj:373)
+	at jepsen.frogdb.cluster_db$assign_slots_to_node_BANG_.invoke(cluster_db.clj:366)
+	at jepsen.frogdb.cluster_db$setup_cluster_slots_BANG_.invokeStatic(cluster_db.clj:385)
+	at jepsen.frogdb.cluster_db$setup_cluster_slots_BANG_.invoke(cluster_db.clj:377)
+	at jepsen.frogdb.cluster_db$form_cluster_BANG_.invokeStatic(cluster_db.clj:411)
+	at jepsen.frogdb.cluster_db$form_cluster_BANG_.invoke(cluster_db.clj:391)
+	at jepsen.frogdb.cluster_db$cluster_db$reify__13074.setup_BANG_(cluster_db.clj:489)
+	at jepsen.db$fn__11077$G__11071__11081.invoke(db.clj:12)
+	at jepsen.db$fn__11077$G__11070__11086.invoke(db.clj:12)
+	at clojure.core$partial$fn__5908.invoke(core.clj:2642)
+	at jepsen.control$on_nodes$fn__9012.invoke(control.clj:314)
+	at clojure.lang.AFn.applyToHelper(AFn.java:154)
+	at clojure.lang.AFn.applyTo(AFn.java:144)
+	at clojure.core$apply.invokeStatic(core.clj:667)
+	at clojure.core$with_bindings_STAR_.invokeStatic(core.clj:1990)
+	at clojure.core$with_bindings_STAR_.doInvoke(core.clj:1990)
+	at clojure.lang.RestFn.applyTo(RestFn.java:142)
+	at clojure.core$apply.invokeStatic(core.clj:671)
+	at clojure.core$bound_fn_STAR_$fn__5818.doInvoke(core.clj:2020)
+	at clojure.lang.RestFn.invoke(RestFn.java:408)
+	at dom_top.core$real_pmap_helper$build_thread__213$fn__214.invoke(core.clj:163)
+	at clojure.lang.AFn.applyToHelper(AFn.java:152)
+	at clojure.lang.AFn.applyTo(AFn.java:144)
+	at clojure.core$apply.invokeStatic(core.clj:667)
+	at clojure.core$with_bindings_STAR_.invokeStatic(core.clj:1990)
+	at clojure.core$with_bindings_STAR_.doInvoke(core.clj:1990)
+	at clojure.lang.RestFn.invoke(RestFn.java:425)
+	at clojure.lang.AFn.applyToHelper(AFn.java:156)
+	at clojure.lang.RestFn.applyTo(RestFn.java:132)
+	at clojure.core$apply.invokeStatic(core.clj:671)
+	at clojure.core$bound_fn_STAR_$fn__5818.doInvoke(core.clj:2020)
+	at clojure.lang.RestFn.invoke(RestFn.java:397)
+	at clojure.lang.AFn.run(AFn.java:22)
+	at java.base/java.lang.Thread.run(Thread.java:1474)

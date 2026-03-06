@@ -1,0 +1,1220 @@
+{:index 0, :time 15862417, :type :invoke, :process 0, :f :ttl, :value "expiry-key-7"}
+{:index 1, :time 19105834, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-7", :ttl -2}, :check-time 1771819716339}
+{:index 2, :time 203645292, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-1", :ttl 6}}
+{:index 3, :time 206019084, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-1", :ttl 6}, :result 0, :set-time 1771819716525}
+{:index 4, :time 261207667, :type :invoke, :process 3, :f :read, :value "expiry-key-19"}
+{:index 5, :time 264351542, :type :ok, :process 3, :f :read, :value {:key "expiry-key-19", :value nil}, :read-time 1771819716583}
+{:index 6, :time 354082375, :type :invoke, :process 4, :f :ttl, :value "expiry-key-4"}
+{:index 7, :time 356790875, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-4", :ttl -2}, :check-time 1771819716676}
+{:index 8, :time 465227459, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-9", :ttl 7}}
+{:index 9, :time 468930334, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-9", :ttl 7}, :result 0, :set-time 1771819716787}
+{:index 10, :time 514294792, :type :invoke, :process 0, :f :read, :value "expiry-key-10"}
+{:index 11, :time 516949584, :type :ok, :process 0, :f :read, :value {:key "expiry-key-10", :value nil}, :read-time 1771819716836}
+{:index 12, :time 648519875, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-16", :ttl 6}}
+{:index 13, :time 652327375, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-16", :ttl 6}, :result 0, :set-time 1771819716971}
+{:index 14, :time 683878542, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-4", :ttl 8}}
+{:index 15, :time 685738500, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-4", :ttl 8}, :result 0, :set-time 1771819717006}
+{:index 16, :time 735165542, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-0", :value 1470, :ttl 8}}
+{:index 17, :time 737212584, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-0", :value 1470, :ttl 8}, :set-time 1771819717057, :expected-expiry 1771819725057}
+{:index 18, :time 797964250, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-12", :value 7714, :ttl 9}}
+{:index 19, :time 800504875, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-12", :value 7714, :ttl 9}, :set-time 1771819717120, :expected-expiry 1771819726120}
+{:index 20, :time 947953709, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-15", :value 5458, :ttl 5}}
+{:index 21, :time 950409209, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-15", :value 5458, :ttl 5}, :set-time 1771819717270, :expected-expiry 1771819722270}
+{:index 22, :time 1028876125, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-16", :value 2642, :ttl 5}}
+{:index 23, :time 1031575625, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-16", :value 2642, :ttl 5}, :set-time 1771819717351, :expected-expiry 1771819722351}
+{:index 24, :time 1057194834, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 534, :ttl 5}}
+{:index 25, :time 1059538875, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 534, :ttl 5}, :set-time 1771819717379, :expected-expiry 1771819722379}
+{:index 26, :time 1173469667, :type :invoke, :process 2, :f :read, :value "expiry-key-4"}
+{:index 27, :time 1174849834, :type :ok, :process 2, :f :read, :value {:key "expiry-key-4", :value nil}, :read-time 1771819717495}
+{:index 28, :time 1207411500, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-19", :ttl 5}}
+{:index 29, :time 1208778375, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-19", :ttl 5}, :result 0, :set-time 1771819717529}
+{:index 30, :time 1288520792, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-5", :value 1094, :ttl 4}}
+{:index 31, :time 1291087125, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-5", :value 1094, :ttl 4}, :set-time 1771819717610, :expected-expiry 1771819721610}
+{:index 32, :time 1330055750, :type :invoke, :process 0, :f :read, :value "expiry-key-9"}
+{:index 33, :time 1333012459, :type :ok, :process 0, :f :read, :value {:key "expiry-key-9", :value nil}, :read-time 1771819717652}
+{:index 34, :time 1423054250, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-2", :ttl 3}}
+{:index 35, :time 1426095959, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-2", :ttl 3}, :result 1, :set-time 1771819717745}
+{:index 36, :time 1453511500, :type :invoke, :process 1, :f :read, :value "expiry-key-3"}
+{:index 37, :time 1456027625, :type :ok, :process 1, :f :read, :value {:key "expiry-key-3", :value nil}, :read-time 1771819717775}
+{:index 38, :time 1488261292, :type :invoke, :process 2, :f :read, :value "expiry-key-12"}
+{:index 39, :time 1496408417, :type :ok, :process 2, :f :read, :value {:key "expiry-key-12", :value "7714"}, :read-time 1771819717810}
+{:index 40, :time 1610194375, :type :invoke, :process 3, :f :read, :value "expiry-key-11"}
+{:index 41, :time 1612224667, :type :ok, :process 3, :f :read, :value {:key "expiry-key-11", :value nil}, :read-time 1771819717932}
+{:index 42, :time 1785513917, :type :invoke, :process 4, :f :read, :value "expiry-key-7"}
+{:index 43, :time 1787387459, :type :ok, :process 4, :f :read, :value {:key "expiry-key-7", :value nil}, :read-time 1771819718107}
+{:index 44, :time 1987008209, :type :invoke, :process 0, :f :persist, :value "expiry-key-7"}
+{:index 45, :time 1990084209, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-7"}, :result 0}
+{:index 46, :time 2147376459, :type :invoke, :process 0, :f :read, :value "expiry-key-5"}
+{:index 47, :time 2149275584, :type :ok, :process 0, :f :read, :value {:key "expiry-key-5", :value "1094"}, :read-time 1771819718469}
+{:index 48, :time 2230989042, :type :invoke, :process 1, :f :read, :value "expiry-key-15"}
+{:index 49, :time 2232470125, :type :ok, :process 1, :f :read, :value {:key "expiry-key-15", :value "5458"}, :read-time 1771819718553}
+{:index 50, :time 2411172334, :type :invoke, :process 2, :f :read, :value "expiry-key-16"}
+{:index 51, :time 2413836000, :type :ok, :process 2, :f :read, :value {:key "expiry-key-16", :value "2642"}, :read-time 1771819718733}
+{:index 52, :time 2613616750, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-4", :value 7867, :ttl 4}}
+{:index 53, :time 2616388417, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-4", :value 7867, :ttl 4}, :set-time 1771819718935, :expected-expiry 1771819722935}
+{:index 54, :time 2706466625, :type :invoke, :process 4, :f :persist, :value "expiry-key-2"}
+{:index 55, :time 2708834875, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-2"}, :result 1}
+{:index 56, :time 2873521000, :type :invoke, :process 0, :f :ttl, :value "expiry-key-1"}
+{:index 57, :time 2876430084, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-1", :ttl -2}, :check-time 1771819719195}
+{:index 58, :time 2944779042, :type :invoke, :process 0, :f :persist, :value "expiry-key-9"}
+{:index 59, :time 2947889709, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-9"}, :result 0}
+{:index 60, :time 3117462959, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-18", :ttl 5}}
+{:index 61, :time 3119649584, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-18", :ttl 5}, :result 0, :set-time 1771819719439}
+{:index 62, :time 3140942917, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-13", :value 7183, :ttl 5}}
+{:index 63, :time 3143082917, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-13", :value 7183, :ttl 5}, :set-time 1771819719463, :expected-expiry 1771819724463}
+{:index 64, :time 3239656500, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-12", :value 2677, :ttl 3}}
+{:index 65, :time 3241574792, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-12", :value 2677, :ttl 3}, :set-time 1771819719561, :expected-expiry 1771819722561}
+{:index 66, :time 3393533459, :type :invoke, :process 4, :f :persist, :value "expiry-key-15"}
+{:index 67, :time 3395077417, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-15"}, :result 1}
+{:index 68, :time 3512386959, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-13", :ttl 9}}
+{:index 69, :time 3515124167, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-13", :ttl 9}, :result 1, :set-time 1771819719834}
+{:index 70, :time 3548713292, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-11", :ttl 5}}
+{:index 71, :time 3551172209, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-11", :ttl 5}, :result 0, :set-time 1771819719870}
+{:index 72, :time 3673867292, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-17", :value 6434, :ttl 9}}
+{:index 73, :time 3677494417, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-17", :value 6434, :ttl 9}, :set-time 1771819719996, :expected-expiry 1771819728996}
+{:index 74, :time 3722571834, :type :invoke, :process 2, :f :ttl, :value "expiry-key-0"}
+{:index 75, :time 3725688334, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-0", :ttl 5}, :check-time 1771819720045}
+{:index 76, :time 3855227792, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-14", :value 7026, :ttl 7}}
+{:index 77, :time 3857534792, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-14", :value 7026, :ttl 7}, :set-time 1771819720177, :expected-expiry 1771819727177}
+{:index 78, :time 3903050584, :type :invoke, :process 4, :f :ttl, :value "expiry-key-4"}
+{:index 79, :time 3905024709, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-4", :ttl 2}, :check-time 1771819720225}
+{:index 80, :time 4004426917, :type :invoke, :process 0, :f :read, :value "expiry-key-0"}
+{:index 81, :time 4006312959, :type :ok, :process 0, :f :read, :value {:key "expiry-key-0", :value "1470"}, :read-time 1771819720326}
+{:index 82, :time 4041850334, :type :invoke, :process 0, :f :read, :value "expiry-key-5"}
+{:index 83, :time 4043993000, :type :ok, :process 0, :f :read, :value {:key "expiry-key-5", :value "1094"}, :read-time 1771819720363}
+{:index 84, :time 4160985917, :type :invoke, :process 1, :f :ttl, :value "expiry-key-14"}
+{:index 85, :time 4163105667, :type :ok, :process 1, :f :ttl, :value {:key "expiry-key-14", :ttl 6}, :check-time 1771819720483}
+{:index 86, :time 4254944042, :type :invoke, :process 2, :f :ttl, :value "expiry-key-0"}
+{:index 87, :time 4256844042, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-0", :ttl 4}, :check-time 1771819720577}
+{:index 88, :time 4427043000, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-19", :value 3272, :ttl 3}}
+{:index 89, :time 4428717000, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-19", :value 3272, :ttl 3}, :set-time 1771819720749, :expected-expiry 1771819723749}
+{:index 90, :time 4479506042, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-15", :value 179, :ttl 6}}
+{:index 91, :time 4481005292, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-15", :value 179, :ttl 6}, :set-time 1771819720801, :expected-expiry 1771819726801}
+{:index 92, :time 4484293625, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-6", :value 24, :ttl 5}}
+{:index 93, :time 4485393084, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-6", :value 24, :ttl 5}, :set-time 1771819720806, :expected-expiry 1771819725806}
+{:index 94, :time 4636027250, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 3145, :ttl 9}}
+{:index 95, :time 4638662459, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 3145, :ttl 9}, :set-time 1771819720958, :expected-expiry 1771819729958}
+{:index 96, :time 4828528667, :type :invoke, :process 1, :f :read, :value "expiry-key-7"}
+{:index 97, :time 4830710167, :type :ok, :process 1, :f :read, :value {:key "expiry-key-7", :value nil}, :read-time 1771819721150}
+{:index 98, :time 4932598500, :type :invoke, :process 2, :f :ttl, :value "expiry-key-5"}
+{:index 99, :time 4935060250, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-5", :ttl 0}, :check-time 1771819721254}
+{:index 100, :time 5058280292, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-0", :ttl 3}}
+{:index 101, :time 5061421334, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-0", :ttl 3}, :result 1, :set-time 1771819721380}
+{:index 102, :time 5169483875, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-0", :value 3867, :ttl 9}}
+{:index 103, :time 5173198250, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-0", :value 3867, :ttl 9}, :set-time 1771819721491, :expected-expiry 1771819730491}
+{:index 104, :time 5200051250, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-0", :ttl 7}}
+{:index 105, :time 5203480667, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-0", :ttl 7}, :result 1, :set-time 1771819721522}
+{:index 106, :time 5324856250, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-17", :value 7149, :ttl 5}}
+{:index 107, :time 5328413875, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-17", :value 7149, :ttl 5}, :set-time 1771819721647, :expected-expiry 1771819726647}
+{:index 108, :time 5364653500, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-14", :value 2952, :ttl 4}}
+{:index 109, :time 5367732709, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-14", :value 2952, :ttl 4}, :set-time 1771819721686, :expected-expiry 1771819725686}
+{:index 110, :time 5399678625, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-0", :value 145, :ttl 3}}
+{:index 111, :time 5402430292, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-0", :value 145, :ttl 3}, :set-time 1771819721721, :expected-expiry 1771819724721}
+{:index 112, :time 5436581542, :type :invoke, :process 3, :f :persist, :value "expiry-key-3"}
+{:index 113, :time 5438844959, :type :ok, :process 3, :f :persist, :value {:key "expiry-key-3"}, :result 0}
+{:index 114, :time 5468604250, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-11", :ttl 7}}
+{:index 115, :time 5470987209, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-11", :ttl 7}, :result 0, :set-time 1771819721791}
+{:index 116, :time 5655788792, :type :invoke, :process 0, :f :persist, :value "expiry-key-16"}
+{:index 117, :time 5659640000, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-16"}, :result 1}
+{:index 118, :time 5699145792, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-16", :value 5976, :ttl 7}}
+{:index 119, :time 5701025875, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-16", :value 5976, :ttl 7}, :set-time 1771819722021, :expected-expiry 1771819729021}
+{:index 120, :time 5880914167, :type :invoke, :process 1, :f :read, :value "expiry-key-8"}
+{:index 121, :time 5883243750, :type :ok, :process 1, :f :read, :value {:key "expiry-key-8", :value nil}, :read-time 1771819722203}
+{:index 122, :time 5972886375, :type :invoke, :process 2, :f :read, :value "expiry-key-10"}
+{:index 123, :time 5975400000, :type :ok, :process 2, :f :read, :value {:key "expiry-key-10", :value nil}, :read-time 1771819722295}
+{:index 124, :time 6105314917, :type :invoke, :process 3, :f :ttl, :value "expiry-key-11"}
+{:index 125, :time 6108174709, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-11", :ttl -2}, :check-time 1771819722427}
+{:index 126, :time 6286698542, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-12", :value 2495, :ttl 6}}
+{:index 127, :time 6291060834, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-12", :value 2495, :ttl 6}, :set-time 1771819722609, :expected-expiry 1771819728609}
+{:index 128, :time 6346880834, :type :invoke, :process 0, :f :ttl, :value "expiry-key-11"}
+{:index 129, :time 6349240417, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-11", :ttl -2}, :check-time 1771819722669}
+{:index 130, :time 6363183167, :type :invoke, :process 0, :f :persist, :value "expiry-key-9"}
+{:index 131, :time 6364982167, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-9"}, :result 0}
+{:index 132, :time 6380438459, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-9", :value 5747, :ttl 5}}
+{:index 133, :time 6395162709, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-9", :value 5747, :ttl 5}, :set-time 1771819722702, :expected-expiry 1771819727702}
+{:index 134, :time 6480235834, :type :invoke, :process 2, :f :read, :value "expiry-key-4"}
+{:index 135, :time 6484375042, :type :ok, :process 2, :f :read, :value {:key "expiry-key-4", :value "7867"}, :read-time 1771819722804}
+{:index 136, :time 6554639042, :type :invoke, :process 3, :f :read, :value "expiry-key-11"}
+{:index 137, :time 6556290584, :type :ok, :process 3, :f :read, :value {:key "expiry-key-11", :value nil}, :read-time 1771819722876}
+{:index 138, :time 6707758000, :type :invoke, :process 4, :f :persist, :value "expiry-key-0"}
+{:index 139, :time 6710635417, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-0"}, :result 1}
+{:index 140, :time 6785853459, :type :invoke, :process 0, :f :persist, :value "expiry-key-10"}
+{:index 141, :time 6788678875, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-10"}, :result 0}
+{:index 142, :time 6857435542, :type :invoke, :process 0, :f :read, :value "expiry-key-5"}
+{:index 143, :time 6859766250, :type :ok, :process 0, :f :read, :value {:key "expiry-key-5", :value nil}, :read-time 1771819723179}
+{:index 144, :time 6934544417, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 1464, :ttl 7}}
+{:index 145, :time 6936513250, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 1464, :ttl 7}, :set-time 1771819723256, :expected-expiry 1771819730256}
+{:index 146, :time 7059581375, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-19", :value 6631, :ttl 9}}
+{:index 147, :time 7062158917, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-19", :value 6631, :ttl 9}, :set-time 1771819723381, :expected-expiry 1771819732381}
+{:index 148, :time 7133239542, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-2", :ttl 9}}
+{:index 149, :time 7136250834, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-2", :ttl 9}, :result 1, :set-time 1771819723455}
+{:index 150, :time 7259781292, :type :invoke, :process 4, :f :read, :value "expiry-key-12"}
+{:index 151, :time 7263012542, :type :ok, :process 4, :f :read, :value {:key "expiry-key-12", :value "2495"}, :read-time 1771819723582}
+{:index 152, :time 7424490167, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-0", :value 628, :ttl 5}}
+{:index 153, :time 7428380292, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-0", :value 628, :ttl 5}, :set-time 1771819723746, :expected-expiry 1771819728746}
+{:index 154, :time 7622379209, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-2", :value 8303, :ttl 4}}
+{:index 155, :time 7624033667, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-2", :value 8303, :ttl 4}, :set-time 1771819723944, :expected-expiry 1771819727944}
+{:index 156, :time 7705443417, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-7", :value 9261, :ttl 5}}
+{:index 157, :time 7706870000, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-7", :value 9261, :ttl 5}, :set-time 1771819724027, :expected-expiry 1771819729027}
+{:index 158, :time 7760944750, :type :invoke, :process 2, :f :ttl, :value "expiry-key-4"}
+{:index 159, :time 7762562834, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-4", :ttl -2}, :check-time 1771819724082}
+{:index 160, :time 7956635834, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-9", :value 6716, :ttl 6}}
+{:index 161, :time 7959367042, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-9", :value 6716, :ttl 6}, :set-time 1771819724278, :expected-expiry 1771819730278}
+{:index 162, :time 8027690250, :type :invoke, :process 4, :f :ttl, :value "expiry-key-11"}
+{:index 163, :time 8030400417, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-11", :ttl -2}, :check-time 1771819724350}
+{:index 164, :time 8229048500, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-4", :ttl 7}}
+{:index 165, :time 8232276750, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-4", :ttl 7}, :result 0, :set-time 1771819724551}
+{:index 166, :time 8405031834, :type :invoke, :process 0, :f :ttl, :value "expiry-key-13"}
+{:index 167, :time 8408181375, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-13", :ttl 4}, :check-time 1771819724727}
+{:index 168, :time 8456269792, :type :invoke, :process 1, :f :persist, :value "expiry-key-8"}
+{:index 169, :time 8459262459, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-8"}, :result 0}
+{:index 170, :time 8517172167, :type :invoke, :process 2, :f :read, :value "expiry-key-6"}
+{:index 171, :time 8520054209, :type :ok, :process 2, :f :read, :value {:key "expiry-key-6", :value "24"}, :read-time 1771819724840}
+{:index 172, :time 8586448375, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-4", :value 5759, :ttl 3}}
+{:index 173, :time 8590259292, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-4", :value 5759, :ttl 3}, :set-time 1771819724909, :expected-expiry 1771819727909}
+{:index 174, :time 8701105625, :type :invoke, :process 4, :f :read, :value "expiry-key-16"}
+{:index 175, :time 8702530084, :type :ok, :process 4, :f :read, :value {:key "expiry-key-16", :value "5976"}, :read-time 1771819725023}
+{:index 176, :time 8748056542, :type :invoke, :process 0, :f :persist, :value "expiry-key-17"}
+{:index 177, :time 8749181209, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-17"}, :result 1}
+{:index 178, :time 8869106625, :type :invoke, :process 0, :f :persist, :value "expiry-key-4"}
+{:index 179, :time 8870690250, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-4"}, :result 1}
+{:index 180, :time 8944968334, :type :invoke, :process 1, :f :read, :value "expiry-key-17"}
+{:index 181, :time 8947259500, :type :ok, :process 1, :f :read, :value {:key "expiry-key-17", :value "7149"}, :read-time 1771819725267}
+{:index 182, :time 9105586417, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-19", :ttl 4}}
+{:index 183, :time 9108785625, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-19", :ttl 4}, :result 1, :set-time 1771819725428}
+{:index 184, :time 9240732875, :type :invoke, :process 3, :f :read, :value "expiry-key-2"}
+{:index 185, :time 9243094542, :type :ok, :process 3, :f :read, :value {:key "expiry-key-2", :value "8303"}, :read-time 1771819725562}
+{:index 186, :time 9297326417, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-18", :value 6382, :ttl 4}}
+{:index 187, :time 9299738250, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-18", :value 6382, :ttl 4}, :set-time 1771819725619, :expected-expiry 1771819729619}
+{:index 188, :time 9431277917, :type :invoke, :process 0, :f :ttl, :value "expiry-key-5"}
+{:index 189, :time 9433541667, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-5", :ttl -2}, :check-time 1771819725753}
+{:index 190, :time 9580847334, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 8459, :ttl 9}}
+{:index 191, :time 9583614000, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 8459, :ttl 9}, :set-time 1771819725903, :expected-expiry 1771819734903}
+{:index 192, :time 9693227917, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 9258, :ttl 5}}
+{:index 193, :time 9695731667, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 9258, :ttl 5}, :set-time 1771819726015, :expected-expiry 1771819731015}
+{:index 194, :time 9860435834, :type :invoke, :process 2, :f :read, :value "expiry-key-14"}
+{:index 195, :time 9862211459, :type :ok, :process 2, :f :read, :value {:key "expiry-key-14", :value nil}, :read-time 1771819726182}
+{:index 196, :time 10019950042, :type :info, :process :nemesis, :f :kill, :value nil}
+{:index 197, :time 10057242459, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-2", :ttl 9}}
+{:index 198, :time 10059759584, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-2", :ttl 9}, :result 1, :set-time 1771819726379}
+{:index 199, :time 10200267084, :type :info, :process :nemesis, :f :kill, :value ["n1"]}
+{:index 200, :time 10207770209, :type :invoke, :process 0, :f :ttl, :value "expiry-key-2"}
+{:index 201, :time 10208531250, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-2", :ttl 8}, :check-time 1771819726529}
+{:index 202, :time 10363967959, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-1", :value 8837, :ttl 5}}
+{:index 203, :time 10366601709, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-1", :value 8837, :ttl 5}, :set-time 1771819726686, :expected-expiry 1771819731686}
+{:index 204, :time 10439623709, :type :invoke, :process 2, :f :read, :value "expiry-key-17"}
+{:index 205, :time 10442169917, :type :ok, :process 2, :f :read, :value {:key "expiry-key-17", :value "7149"}, :read-time 1771819726761}
+{:index 206, :time 10445419459, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-3", :value 5280, :ttl 6}}
+{:index 207, :time 10447193542, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-3", :value 5280, :ttl 6}, :set-time 1771819726767, :expected-expiry 1771819732767}
+{:index 208, :time 10493041750, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-18", :value 6617, :ttl 6}}
+{:index 209, :time 10496509042, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-18", :value 6617, :ttl 6}, :set-time 1771819726815, :expected-expiry 1771819732815}
+{:index 210, :time 10688961792, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-6", :ttl 5}}
+{:index 211, :time 10690683084, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-6", :ttl 5}, :result 0, :set-time 1771819727011}
+{:index 212, :time 10800830542, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-14", :ttl 3}}
+{:index 213, :time 10802943459, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-14", :ttl 3}, :result 0, :set-time 1771819727122}
+{:index 214, :time 10858171209, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-5", :ttl 3}}
+{:index 215, :time 10859145209, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-5", :ttl 3}, :result 0, :set-time 1771819727180}
+{:index 216, :time 10984182875, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-0", :value 6469, :ttl 4}}
+{:index 217, :time 10986095334, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-0", :value 6469, :ttl 4}, :set-time 1771819727306, :expected-expiry 1771819731306}
+{:index 218, :time 11143296459, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-19", :value 8654, :ttl 6}}
+{:index 219, :time 11145556334, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-19", :value 8654, :ttl 6}, :set-time 1771819727465, :expected-expiry 1771819733465}
+{:index 220, :time 11219790459, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-18", :value 5269, :ttl 5}}
+{:index 221, :time 11222199834, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-18", :value 5269, :ttl 5}, :set-time 1771819727541, :expected-expiry 1771819732541}
+{:index 222, :time 11348523084, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-5", :value 7683, :ttl 9}}
+{:index 223, :time 11350280292, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-5", :value 7683, :ttl 9}, :set-time 1771819727670, :expected-expiry 1771819736670}
+{:index 224, :time 11372966125, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-6", :value 8604, :ttl 9}}
+{:index 225, :time 11374571375, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-6", :value 8604, :ttl 9}, :set-time 1771819727694, :expected-expiry 1771819736694}
+{:index 226, :time 11509074167, :type :invoke, :process 1, :f :persist, :value "expiry-key-1"}
+{:index 227, :time 11511594292, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-1"}, :result 1}
+{:index 228, :time 11650072292, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-6", :ttl 8}}
+{:index 229, :time 11652736459, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-6", :ttl 8}, :result 1, :set-time 1771819727972}
+{:index 230, :time 11827552709, :type :invoke, :process 3, :f :ttl, :value "expiry-key-11"}
+{:index 231, :time 11830024334, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-11", :ttl -2}, :check-time 1771819728149}
+{:index 232, :time 11933394209, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-12", :value 6035, :ttl 8}}
+{:index 233, :time 11935323167, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-12", :value 6035, :ttl 8}, :set-time 1771819728255, :expected-expiry 1771819736255}
+{:index 234, :time 12084126875, :type :invoke, :process 0, :f :read, :value "expiry-key-12"}
+{:index 235, :time 12086771292, :type :ok, :process 0, :f :read, :value {:key "expiry-key-12", :value "6035"}, :read-time 1771819728406}
+{:index 236, :time 12285041334, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-15", :value 5091, :ttl 7}}
+{:index 237, :time 12288637375, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-15", :value 5091, :ttl 7}, :set-time 1771819728607, :expected-expiry 1771819735607}
+{:index 238, :time 12364339084, :type :invoke, :process 1, :f :read, :value "expiry-key-18"}
+{:index 239, :time 12366256792, :type :ok, :process 1, :f :read, :value {:key "expiry-key-18", :value "5269"}, :read-time 1771819728686}
+{:index 240, :time 12428532334, :type :invoke, :process 2, :f :read, :value "expiry-key-19"}
+{:index 241, :time 12430886292, :type :ok, :process 2, :f :read, :value {:key "expiry-key-19", :value "8654"}, :read-time 1771819728750}
+{:index 242, :time 12435884625, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-11", :ttl 9}}
+{:index 243, :time 12437612209, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-11", :ttl 9}, :result 0, :set-time 1771819728757}
+{:index 244, :time 12500915584, :type :invoke, :process 4, :f :persist, :value "expiry-key-10"}
+{:index 245, :time 12502954042, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-10"}, :result 0}
+{:index 246, :time 12643331542, :type :invoke, :process 0, :f :read, :value "expiry-key-5"}
+{:index 247, :time 12646153875, :type :ok, :process 0, :f :read, :value {:key "expiry-key-5", :value "7683"}, :read-time 1771819728965}
+{:index 248, :time 12779514000, :type :invoke, :process 0, :f :persist, :value "expiry-key-15"}
+{:index 249, :time 12781253542, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-15"}, :result 1}
+{:index 250, :time 12822930459, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-16", :value 8693, :ttl 5}}
+{:index 251, :time 12825326209, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-16", :value 8693, :ttl 5}, :set-time 1771819729145, :expected-expiry 1771819734145}
+{:index 252, :time 13010540417, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-11", :value 6866, :ttl 5}}
+{:index 253, :time 13011634250, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-11", :value 6866, :ttl 5}, :set-time 1771819729332, :expected-expiry 1771819734332}
+{:index 254, :time 13178252709, :type :invoke, :process 3, :f :ttl, :value "expiry-key-1"}
+{:index 255, :time 13181135709, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-1", :ttl -1}, :check-time 1771819729500}
+{:index 256, :time 13252248584, :type :invoke, :process 4, :f :ttl, :value "expiry-key-11"}
+{:index 257, :time 13254237709, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-11", :ttl 4}, :check-time 1771819729574}
+{:index 258, :time 13364800625, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-10", :value 6534, :ttl 4}}
+{:index 259, :time 13366502084, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-10", :value 6534, :ttl 4}, :set-time 1771819729686, :expected-expiry 1771819733686}
+{:index 260, :time 13368484209, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-16", :ttl 6}}
+{:index 261, :time 13369578917, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-16", :ttl 6}, :result 1, :set-time 1771819729690}
+{:index 262, :time 13486870250, :type :invoke, :process 1, :f :read, :value "expiry-key-16"}
+{:index 263, :time 13496787334, :type :ok, :process 1, :f :read, :value {:key "expiry-key-16", :value "8693"}, :read-time 1771819729808}
+{:index 264, :time 13661055209, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-3", :value 2000, :ttl 5}}
+{:index 265, :time 13662672334, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-3", :value 2000, :ttl 5}, :set-time 1771819729983, :expected-expiry 1771819734983}
+{:index 266, :time 13856611042, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-7", :value 7736, :ttl 4}}
+{:index 267, :time 13859022667, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-7", :value 7736, :ttl 4}, :set-time 1771819730178, :expected-expiry 1771819734178}
+{:index 268, :time 13990252875, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-6", :ttl 3}}
+{:index 269, :time 13992737625, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-6", :ttl 3}, :result 1, :set-time 1771819730312}
+{:index 270, :time 14074262417, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-1", :ttl 7}}
+{:index 271, :time 14076413834, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-1", :ttl 7}, :result 1, :set-time 1771819730396}
+{:index 272, :time 14113707375, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-9", :ttl 6}}
+{:index 273, :time 14114605542, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-9", :ttl 6}, :result 0, :set-time 1771819730435}
+{:index 274, :time 14131265959, :type :invoke, :process 1, :f :read, :value "expiry-key-2"}
+{:index 275, :time 14132177375, :type :ok, :process 1, :f :read, :value {:key "expiry-key-2", :value "9258"}, :read-time 1771819730453}
+{:index 276, :time 14271390459, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-10", :value 2590, :ttl 6}}
+{:index 277, :time 14273839167, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-10", :value 2590, :ttl 6}, :set-time 1771819730593, :expected-expiry 1771819736593}
+{:index 278, :time 14353320584, :type :invoke, :process 3, :f :read, :value "expiry-key-15"}
+{:index 279, :time 14358680417, :type :ok, :process 3, :f :read, :value {:key "expiry-key-15", :value "5091"}, :read-time 1771819730677}
+{:index 280, :time 14484302125, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-0", :value 6339, :ttl 3}}
+{:index 281, :time 14487167292, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-0", :value 6339, :ttl 3}, :set-time 1771819730806, :expected-expiry 1771819733806}
+{:index 282, :time 14520940250, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-9", :value 3892, :ttl 9}}
+{:index 283, :time 14523032667, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-9", :value 3892, :ttl 9}, :set-time 1771819730842, :expected-expiry 1771819739842}
+{:index 284, :time 14566989334, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 3296, :ttl 7}}
+{:index 285, :time 14569029084, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 3296, :ttl 7}, :set-time 1771819730888, :expected-expiry 1771819737888}
+{:index 286, :time 14658868584, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 5639, :ttl 9}}
+{:index 287, :time 14661242750, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 5639, :ttl 9}, :set-time 1771819730980, :expected-expiry 1771819739980}
+{:index 288, :time 14735144834, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-16", :ttl 4}}
+{:index 289, :time 14737806750, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-16", :ttl 4}, :result 1, :set-time 1771819731057}
+{:index 290, :time 14783995375, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-7", :value 5091, :ttl 9}}
+{:index 291, :time 14786485917, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-7", :value 5091, :ttl 9}, :set-time 1771819731106, :expected-expiry 1771819740106}
+{:index 292, :time 14898060875, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-14", :value 5756, :ttl 6}}
+{:index 293, :time 14901448959, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-14", :value 5756, :ttl 6}, :set-time 1771819731220, :expected-expiry 1771819737220}
+{:index 294, :time 14907579000, :type :invoke, :process 0, :f :ttl, :value "expiry-key-1"}
+{:index 295, :time 14909184834, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-1", :ttl 6}, :check-time 1771819731229}
+{:index 296, :time 15072964750, :type :invoke, :process 0, :f :persist, :value "expiry-key-1"}
+{:index 297, :time 15076356875, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-1"}, :result 1}
+{:index 298, :time 15203459834, :type :info, :process :nemesis, :f :start, :value nil}
+{:index 299, :time 15238703584, :type :invoke, :process 2, :f :read, :value "expiry-key-16"}
+{:index 300, :time 15240019584, :type :ok, :process 2, :f :read, :value {:key "expiry-key-16", :value "8693"}, :read-time 1771819731560}
+{:index 301, :time 15342100375, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-0", :ttl 8}}
+{:index 302, :time 15344092292, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-0", :ttl 8}, :result 1, :set-time 1771819731664}
+{:index 303, :time 15345918584, :type :invoke, :process 4, :f :read, :value "expiry-key-0"}
+{:index 304, :time 15346538292, :type :ok, :process 4, :f :read, :value {:key "expiry-key-0", :value "6339"}, :read-time 1771819731667}
+{:index 305, :time 15427039542, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-4", :value 8352, :ttl 6}}
+{:index 306, :time 15429082459, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-4", :value 8352, :ttl 6}, :set-time 1771819731749, :expected-expiry 1771819737749}
+{:index 307, :time 15504850209, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-10", :value 271, :ttl 9}}
+{:index 308, :time 15506953292, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-10", :value 271, :ttl 9}, :set-time 1771819731827, :expected-expiry 1771819740827}
+{:index 309, :time 15634439334, :type :invoke, :process 1, :f :read, :value "expiry-key-18"}
+{:index 310, :time 15637221542, :type :ok, :process 1, :f :read, :value {:key "expiry-key-18", :value "5269"}, :read-time 1771819731956}
+{:index 311, :time 15806313500, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-13", :value 53, :ttl 5}}
+{:index 312, :time 15808273375, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-13", :value 53, :ttl 5}, :set-time 1771819732128, :expected-expiry 1771819737128}
+{:index 313, :time 15886275875, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-0", :ttl 6}}
+{:index 314, :time 15888704417, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-0", :ttl 6}, :result 1, :set-time 1771819732208}
+{:index 315, :time 16059817917, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-15", :value 5989, :ttl 6}}
+{:index 316, :time 16062095500, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-15", :value 5989, :ttl 6}, :set-time 1771819732381, :expected-expiry 1771819738381}
+{:index 317, :time 16219996167, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-6", :ttl 4}}
+{:index 318, :time 16221015417, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-6", :ttl 4}, :result 1, :set-time 1771819732542}
+{:index 319, :time 16275798917, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-11", :ttl 7}}
+{:index 320, :time 16276693334, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-11", :ttl 7}, :result 1, :set-time 1771819732597}
+{:index 321, :time 16456343500, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-10", :value 9307, :ttl 6}}
+{:index 322, :time 16457924084, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-10", :value 9307, :ttl 6}, :set-time 1771819732778, :expected-expiry 1771819738778}
+{:index 323, :time 16462724834, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-1", :value 9254, :ttl 4}}
+{:index 324, :time 16463642125, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-1", :value 9254, :ttl 4}, :set-time 1771819732784, :expected-expiry 1771819736784}
+{:index 325, :time 16486386250, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-6", :value 6950, :ttl 5}}
+{:index 326, :time 16488283542, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-6", :value 6950, :ttl 5}, :set-time 1771819732808, :expected-expiry 1771819737808}
+{:index 327, :time 16655178375, :type :invoke, :process 4, :f :ttl, :value "expiry-key-19"}
+{:index 328, :time 16658228125, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-19", :ttl 0}, :check-time 1771819732977}
+{:index 329, :time 16731320834, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-4", :value 5535, :ttl 5}}
+{:index 330, :time 16734988750, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-4", :value 5535, :ttl 5}, :set-time 1771819733053, :expected-expiry 1771819738053}
+{:index 331, :time 16799198167, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-15", :value 2641, :ttl 3}}
+{:index 332, :time 16802600917, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-15", :value 2641, :ttl 3}, :set-time 1771819733121, :expected-expiry 1771819736121}
+{:index 333, :time 16983993000, :type :invoke, :process 1, :f :persist, :value "expiry-key-1"}
+{:index 334, :time 16986542334, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-1"}, :result 1}
+{:index 335, :time 17154625292, :type :invoke, :process 2, :f :read, :value "expiry-key-8"}
+{:index 336, :time 17157601500, :type :ok, :process 2, :f :read, :value {:key "expiry-key-8", :value nil}, :read-time 1771819733477}
+{:index 337, :time 17349511084, :type :invoke, :process 3, :f :read, :value "expiry-key-9"}
+{:index 338, :time 17351471917, :type :ok, :process 3, :f :read, :value {:key "expiry-key-9", :value "3892"}, :read-time 1771819733671}
+{:index 339, :time 17404310500, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-10", :value 4321, :ttl 6}}
+{:index 340, :time 17406236500, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-10", :value 4321, :ttl 6}, :set-time 1771819733726, :expected-expiry 1771819739726}
+{:index 341, :time 17544996250, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-3", :value 9057, :ttl 6}}
+{:index 342, :time 17548098500, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-3", :value 9057, :ttl 6}, :set-time 1771819733867, :expected-expiry 1771819739867}
+{:index 343, :time 17647365959, :type :invoke, :process 0, :f :read, :value "expiry-key-8"}
+{:index 344, :time 17650492209, :type :ok, :process 0, :f :read, :value {:key "expiry-key-8", :value nil}, :read-time 1771819733969}
+{:index 345, :time 17835953959, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-12", :value 7548, :ttl 6}}
+{:index 346, :time 17839237417, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-12", :value 7548, :ttl 6}, :set-time 1771819734158, :expected-expiry 1771819740158}
+{:index 347, :time 17897983834, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-18", :value 6949, :ttl 5}}
+{:index 348, :time 17901361042, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-18", :value 6949, :ttl 5}, :set-time 1771819734220, :expected-expiry 1771819739220}
+{:index 349, :time 17963462375, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-3", :value 3947, :ttl 3}}
+{:index 350, :time 17966438167, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-3", :value 3947, :ttl 3}, :set-time 1771819734285, :expected-expiry 1771819737285}
+{:index 351, :time 18011109375, :type :invoke, :process 4, :f :read, :value "expiry-key-10"}
+{:index 352, :time 18013566292, :type :ok, :process 4, :f :read, :value {:key "expiry-key-10", :value "4321"}, :read-time 1771819734333}
+{:index 353, :time 18056567084, :type :invoke, :process 0, :f :persist, :value "expiry-key-12"}
+{:index 354, :time 18059571417, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-12"}, :result 1}
+{:index 355, :time 18238782334, :type :invoke, :process 0, :f :read, :value "expiry-key-15"}
+{:index 356, :time 18241711750, :type :ok, :process 0, :f :read, :value {:key "expiry-key-15", :value "2641"}, :read-time 1771819734561}
+{:index 357, :time 18248590625, :type :info, :process :nemesis, :f :start, :value ["n1"]}
+{:index 358, :time 18413735334, :type :invoke, :process 2, :f :read, :value "expiry-key-17"}
+{:index 359, :time 18415726334, :type :ok, :process 2, :f :read, :value {:key "expiry-key-17", :value "7149"}, :read-time 1771819734736}
+{:index 360, :time 18468965709, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-19", :value 9693, :ttl 7}}
+{:index 361, :time 18471129084, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-19", :value 9693, :ttl 7}, :set-time 1771819734791, :expected-expiry 1771819741791}
+{:index 362, :time 18618223042, :type :invoke, :process 4, :f :ttl, :value "expiry-key-14"}
+{:index 363, :time 18620812709, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-14", :ttl 2}, :check-time 1771819734940}
+{:index 364, :time 18624745625, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-15", :value 6385, :ttl 4}}
+{:index 365, :time 18628775334, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-15", :value 6385, :ttl 4}, :set-time 1771819734947, :expected-expiry 1771819738947}
+{:index 366, :time 18697011709, :type :invoke, :process 0, :f :persist, :value "expiry-key-18"}
+{:index 367, :time 18699184709, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-18"}, :result 1}
+{:index 368, :time 18842579334, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-10", :value 6121, :ttl 5}}
+{:index 369, :time 18845378459, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-10", :value 6121, :ttl 5}, :set-time 1771819735164, :expected-expiry 1771819740164}
+{:index 370, :time 18906282917, :type :invoke, :process 2, :f :ttl, :value "expiry-key-13"}
+{:index 371, :time 18908373459, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-13", :ttl 1}, :check-time 1771819735228}
+{:index 372, :time 19081293042, :type :invoke, :process 3, :f :read, :value "expiry-key-4"}
+{:index 373, :time 19084397750, :type :ok, :process 3, :f :read, :value {:key "expiry-key-4", :value "5535"}, :read-time 1771819735403}
+{:index 374, :time 19197982292, :type :invoke, :process 4, :f :persist, :value "expiry-key-4"}
+{:index 375, :time 19201170084, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-4"}, :result 1}
+{:index 376, :time 19306298375, :type :invoke, :process 0, :f :read, :value "expiry-key-3"}
+{:index 377, :time 19308725417, :type :ok, :process 0, :f :read, :value {:key "expiry-key-3", :value "3947"}, :read-time 1771819735628}
+{:index 378, :time 19326816334, :type :invoke, :process 0, :f :read, :value "expiry-key-9"}
+{:index 379, :time 19329461625, :type :ok, :process 0, :f :read, :value {:key "expiry-key-9", :value "3892"}, :read-time 1771819735649}
+{:index 380, :time 19404472417, :type :invoke, :process 1, :f :read, :value "expiry-key-8"}
+{:index 381, :time 19406765042, :type :ok, :process 1, :f :read, :value {:key "expiry-key-8", :value nil}, :read-time 1771819735726}
+{:index 382, :time 19605903125, :type :invoke, :process 2, :f :read, :value "expiry-key-15"}
+{:index 383, :time 19607869667, :type :ok, :process 2, :f :read, :value {:key "expiry-key-15", :value "6385"}, :read-time 1771819735928}
+{:index 384, :time 19621105584, :type :invoke, :process 3, :f :persist, :value "expiry-key-0"}
+{:index 385, :time 19623221292, :type :ok, :process 3, :f :persist, :value {:key "expiry-key-0"}, :result 1}
+{:index 386, :time 19666344667, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-8", :value 2835, :ttl 6}}
+{:index 387, :time 19667994625, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-8", :value 2835, :ttl 6}, :set-time 1771819735988, :expected-expiry 1771819741988}
+{:index 388, :time 19745184959, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-1", :value 4466, :ttl 6}}
+{:index 389, :time 19747595292, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-1", :value 4466, :ttl 6}, :set-time 1771819736067, :expected-expiry 1771819742067}
+{:index 390, :time 19921887500, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-3", :value 3048, :ttl 9}}
+{:index 391, :time 19925650667, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-3", :value 3048, :ttl 9}, :set-time 1771819736244, :expected-expiry 1771819745244}
+{:index 392, :time 20021418875, :type :invoke, :process 1, :f :read, :value "expiry-key-10"}
+{:index 393, :time 20023552750, :type :ok, :process 1, :f :read, :value {:key "expiry-key-10", :value "6121"}, :read-time 1771819736343}
+{:index 394, :time 20088882542, :type :invoke, :process 2, :f :ttl, :value "expiry-key-19"}
+{:index 395, :time 20091220625, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-19", :ttl 5}, :check-time 1771819736411}
+{:index 396, :time 20107431375, :type :invoke, :process 3, :f :read, :value "expiry-key-1"}
+{:index 397, :time 20109344959, :type :ok, :process 3, :f :read, :value {:key "expiry-key-1", :value "4466"}, :read-time 1771819736429}
+{:index 398, :time 20189936459, :type :invoke, :process 4, :f :read, :value "expiry-key-11"}
+{:index 399, :time 20192245209, :type :ok, :process 4, :f :read, :value {:key "expiry-key-11", :value "6866"}, :read-time 1771819736512}
+{:index 400, :time 20310991292, :type :invoke, :process 0, :f :ttl, :value "expiry-key-1"}
+{:index 401, :time 20313409875, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-1", :ttl 5}, :check-time 1771819736633}
+{:index 402, :time 20403714209, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 3925, :ttl 8}}
+{:index 403, :time 20406592375, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 3925, :ttl 8}, :set-time 1771819736726, :expected-expiry 1771819744726}
+{:index 404, :time 20425344042, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-0", :value 7740, :ttl 6}}
+{:index 405, :time 20428172750, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-0", :value 7740, :ttl 6}, :set-time 1771819736747, :expected-expiry 1771819742747}
+{:index 406, :time 20449322542, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-19", :ttl 4}}
+{:index 407, :time 20452944375, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-19", :ttl 4}, :result 1, :set-time 1771819736771}
+{:index 408, :time 20474969417, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-11", :value 395, :ttl 8}}
+{:index 409, :time 20478424167, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-11", :value 395, :ttl 8}, :set-time 1771819736797, :expected-expiry 1771819744797}
+{:index 410, :time 20568301792, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-5", :value 4435, :ttl 4}}
+{:index 411, :time 20570162459, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-5", :value 4435, :ttl 4}, :set-time 1771819736890, :expected-expiry 1771819740890}
+{:index 412, :time 20678137667, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-6", :value 772, :ttl 7}}
+{:index 413, :time 20681097959, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-6", :value 772, :ttl 7}, :set-time 1771819737000, :expected-expiry 1771819744000}
+{:index 414, :time 20737344792, :type :invoke, :process 0, :f :read, :value "expiry-key-10"}
+{:index 415, :time 20739704000, :type :ok, :process 0, :f :read, :value {:key "expiry-key-10", :value "6121"}, :read-time 1771819737059}
+{:index 416, :time 20753669709, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-3", :ttl 3}}
+{:index 417, :time 20757148750, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-3", :ttl 3}, :result 1, :set-time 1771819737076}
+{:index 418, :time 20814413709, :type :invoke, :process 2, :f :read, :value "expiry-key-12"}
+{:index 419, :time 20817236792, :type :ok, :process 2, :f :read, :value {:key "expiry-key-12", :value "3925"}, :read-time 1771819737136}
+{:index 420, :time 20864626875, :type :invoke, :process 3, :f :persist, :value "expiry-key-0"}
+{:index 421, :time 20866587250, :type :ok, :process 3, :f :persist, :value {:key "expiry-key-0"}, :result 1}
+{:index 422, :time 20969717500, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-2", :ttl 8}}
+{:index 423, :time 20972062292, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-2", :ttl 8}, :result 1, :set-time 1771819737291}
+{:index 424, :time 21081276250, :type :invoke, :process 0, :f :read, :value "expiry-key-10"}
+{:index 425, :time 21083301834, :type :ok, :process 0, :f :read, :value {:key "expiry-key-10", :value "6121"}, :read-time 1771819737403}
+{:index 426, :time 21178439125, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 483, :ttl 7}}
+{:index 427, :time 21180808042, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 483, :ttl 7}, :set-time 1771819737500, :expected-expiry 1771819744500}
+{:index 428, :time 21298120542, :type :invoke, :process 1, :f :read, :value "expiry-key-8"}
+{:index 429, :time 21300242667, :type :ok, :process 1, :f :read, :value {:key "expiry-key-8", :value "2835"}, :read-time 1771819737620}
+{:index 430, :time 21431299209, :type :invoke, :process 2, :f :ttl, :value "expiry-key-19"}
+{:index 431, :time 21433521459, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-19", :ttl 3}, :check-time 1771819737753}
+{:index 432, :time 21612841375, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-4", :value 9756, :ttl 4}}
+{:index 433, :time 21615458500, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-4", :value 9756, :ttl 4}, :set-time 1771819737935, :expected-expiry 1771819741935}
+{:index 434, :time 21674347584, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-4", :value 9437, :ttl 3}}
+{:index 435, :time 21676065209, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-4", :value 9437, :ttl 3}, :set-time 1771819737996, :expected-expiry 1771819740996}
+{:index 436, :time 21792540042, :type :invoke, :process 0, :f :read, :value "expiry-key-19"}
+{:index 437, :time 21795134167, :type :ok, :process 0, :f :read, :value {:key "expiry-key-19", :value "9693"}, :read-time 1771819738114}
+{:index 438, :time 21935113250, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-8", :value 1165, :ttl 9}}
+{:index 439, :time 21938375292, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-8", :value 1165, :ttl 9}, :set-time 1771819738257, :expected-expiry 1771819747257}
+{:index 440, :time 22101233459, :type :invoke, :process 1, :f :ttl, :value "expiry-key-0"}
+{:index 441, :time 22103872084, :type :ok, :process 1, :f :ttl, :value {:key "expiry-key-0", :ttl -1}, :check-time 1771819738423}
+{:index 442, :time 22154690959, :type :invoke, :process 2, :f :read, :value "expiry-key-11"}
+{:index 443, :time 22157394334, :type :ok, :process 2, :f :read, :value {:key "expiry-key-11", :value "395"}, :read-time 1771819738477}
+{:index 444, :time 22251170625, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-15", :ttl 9}}
+{:index 445, :time 22253902375, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-15", :ttl 9}, :result 1, :set-time 1771819738573}
+{:index 446, :time 22290504542, :type :invoke, :process 4, :f :read, :value "expiry-key-14"}
+{:index 447, :time 22293208709, :type :ok, :process 4, :f :read, :value {:key "expiry-key-14", :value "483"}, :read-time 1771819738612}
+{:index 448, :time 22333199167, :type :invoke, :process 0, :f :read, :value "expiry-key-0"}
+{:index 449, :time 22335568584, :type :ok, :process 0, :f :read, :value {:key "expiry-key-0", :value "7740"}, :read-time 1771819738655}
+{:index 450, :time 22384565709, :type :invoke, :process 0, :f :ttl, :value "expiry-key-10"}
+{:index 451, :time 22387103875, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-10", :ttl 1}, :check-time 1771819738706}
+{:index 452, :time 22438807667, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-9", :value 6364, :ttl 6}}
+{:index 453, :time 22440765625, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-9", :value 6364, :ttl 6}, :set-time 1771819738760, :expected-expiry 1771819744760}
+{:index 454, :time 22605332750, :type :invoke, :process 2, :f :ttl, :value "expiry-key-8"}
+{:index 455, :time 22606545417, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-8", :ttl 8}, :check-time 1771819738927}
+{:index 456, :time 22713662459, :type :invoke, :process 3, :f :read, :value "expiry-key-17"}
+{:index 457, :time 22714757459, :type :ok, :process 3, :f :read, :value {:key "expiry-key-17", :value "7149"}, :read-time 1771819739035}
+{:index 458, :time 22832697250, :type :invoke, :process 4, :f :read, :value "expiry-key-8"}
+{:index 459, :time 22834092167, :type :ok, :process 4, :f :read, :value {:key "expiry-key-8", :value "1165"}, :read-time 1771819739154}
+{:index 460, :time 22866055959, :type :invoke, :process 0, :f :ttl, :value "expiry-key-11"}
+{:index 461, :time 22867631917, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-11", :ttl 5}, :check-time 1771819739188}
+{:index 462, :time 23070956042, :type :invoke, :process 0, :f :persist, :value "expiry-key-7"}
+{:index 463, :time 23073828125, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-7"}, :result 1}
+{:index 464, :time 23096927250, :type :invoke, :process 1, :f :persist, :value "expiry-key-0"}
+{:index 465, :time 23099459334, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-0"}, :result 0}
+{:index 466, :time 23104832417, :type :invoke, :process 2, :f :ttl, :value "expiry-key-9"}
+{:index 467, :time 23106183125, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-9", :ttl 5}, :check-time 1771819739426}
+{:index 468, :time 23165615459, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-6", :value 7994, :ttl 3}}
+{:index 469, :time 23168770417, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-6", :value 7994, :ttl 3}, :set-time 1771819739487, :expected-expiry 1771819742487}
+{:index 470, :time 23249378834, :type :invoke, :process 4, :f :read, :value "expiry-key-2"}
+{:index 471, :time 23251096125, :type :ok, :process 4, :f :read, :value {:key "expiry-key-2", :value "5639"}, :read-time 1771819739571}
+{:index 472, :time 23437760250, :type :invoke, :process 0, :f :persist, :value "expiry-key-2"}
+{:index 473, :time 23440693625, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-2"}, :result 1}
+{:index 474, :time 23597541959, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-19", :ttl 4}}
+{:index 475, :time 23600518250, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-19", :ttl 4}, :result 1, :set-time 1771819739920}
+{:index 476, :time 23628982584, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-6", :value 8807, :ttl 4}}
+{:index 477, :time 23631597959, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-6", :value 8807, :ttl 4}, :set-time 1771819739951, :expected-expiry 1771819743951}
+{:index 478, :time 23735653459, :type :invoke, :process 3, :f :ttl, :value "expiry-key-10"}
+{:index 479, :time 23737151209, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-10", :ttl 0}, :check-time 1771819740057}
+{:index 480, :time 23790605542, :type :invoke, :process 4, :f :persist, :value "expiry-key-8"}
+{:index 481, :time 23791753125, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-8"}, :result 1}
+{:index 482, :time 23796414375, :type :invoke, :process 0, :f :persist, :value "expiry-key-17"}
+{:index 483, :time 23797150417, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-17"}, :result 0}
+{:index 484, :time 23801937125, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-11", :ttl 6}}
+{:index 485, :time 23802905750, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-11", :ttl 6}, :result 1, :set-time 1771819740124}
+{:index 486, :time 23839595500, :type :invoke, :process 1, :f :ttl, :value "expiry-key-4"}
+{:index 487, :time 23840519167, :type :ok, :process 1, :f :ttl, :value {:key "expiry-key-4", :ttl 0}, :check-time 1771819740161}
+{:index 488, :time 23993261292, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-14", :ttl 4}}
+{:index 489, :time 23996386209, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-14", :ttl 4}, :result 1, :set-time 1771819740315}
+{:index 490, :time 24002093500, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-18", :ttl 5}}
+{:index 491, :time 24003852375, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-18", :ttl 5}, :result 1, :set-time 1771819740324}
+{:index 492, :time 24188684709, :type :invoke, :process 4, :f :read, :value "expiry-key-2"}
+{:index 493, :time 24191457750, :type :ok, :process 4, :f :read, :value {:key "expiry-key-2", :value "5639"}, :read-time 1771819740510}
+{:index 494, :time 24305916250, :type :invoke, :process 0, :f :read, :value "expiry-key-12"}
+{:index 495, :time 24308776667, :type :ok, :process 0, :f :read, :value {:key "expiry-key-12", :value "3925"}, :read-time 1771819740628}
+{:index 496, :time 24426207542, :type :invoke, :process 0, :f :read, :value "expiry-key-2"}
+{:index 497, :time 24428212417, :type :ok, :process 0, :f :read, :value {:key "expiry-key-2", :value "5639"}, :read-time 1771819740748}
+{:index 498, :time 24464035459, :type :invoke, :process 1, :f :read, :value "expiry-key-7"}
+{:index 499, :time 24466359917, :type :ok, :process 1, :f :read, :value {:key "expiry-key-7", :value "5091"}, :read-time 1771819740786}
+{:index 500, :time 24581638084, :type :invoke, :process 2, :f :read, :value "expiry-key-14"}
+{:index 501, :time 24583651000, :type :ok, :process 2, :f :read, :value {:key "expiry-key-14", :value "483"}, :read-time 1771819740903}
+{:index 502, :time 24732315500, :type :invoke, :process 3, :f :ttl, :value "expiry-key-6"}
+{:index 503, :time 24734070667, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-6", :ttl 2}, :check-time 1771819741054}
+{:index 504, :time 24838122167, :type :invoke, :process 4, :f :read, :value "expiry-key-16"}
+{:index 505, :time 24839412875, :type :ok, :process 4, :f :read, :value {:key "expiry-key-16", :value nil}, :read-time 1771819741160}
+{:index 506, :time 24953713750, :type :invoke, :process 0, :f :read, :value "expiry-key-19"}
+{:index 507, :time 24954930084, :type :ok, :process 0, :f :read, :value {:key "expiry-key-19", :value "9693"}, :read-time 1771819741275}
+{:index 508, :time 25102735084, :type :invoke, :process 0, :f :ttl, :value "expiry-key-16"}
+{:index 509, :time 25105456834, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-16", :ttl -2}, :check-time 1771819741425}
+{:index 510, :time 25291285834, :type :invoke, :process 1, :f :read, :value "expiry-key-2"}
+{:index 511, :time 25294311167, :type :ok, :process 1, :f :read, :value {:key "expiry-key-2", :value "5639"}, :read-time 1771819741613}
+{:index 512, :time 25334541000, :type :invoke, :process 2, :f :persist, :value "expiry-key-10"}
+{:index 513, :time 25337804625, :type :ok, :process 2, :f :persist, :value {:key "expiry-key-10"}, :result 0}
+{:index 514, :time 25468539667, :type :invoke, :process 3, :f :read, :value "expiry-key-13"}
+{:index 515, :time 25471122209, :type :ok, :process 3, :f :read, :value {:key "expiry-key-13", :value nil}, :read-time 1771819741790}
+{:index 516, :time 25495560500, :type :invoke, :process 4, :f :ttl, :value "expiry-key-4"}
+{:index 517, :time 25498353375, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-4", :ttl -2}, :check-time 1771819741817}
+{:index 518, :time 25581119084, :type :invoke, :process 0, :f :read, :value "expiry-key-3"}
+{:index 519, :time 25582742750, :type :ok, :process 0, :f :read, :value {:key "expiry-key-3", :value nil}, :read-time 1771819741903}
+{:index 520, :time 25602819417, :type :invoke, :process 0, :f :persist, :value "expiry-key-8"}
+{:index 521, :time 25605285375, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-8"}, :result 0}
+{:index 522, :time 25770345417, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-4", :value 1739, :ttl 9}}
+{:index 523, :time 25773178042, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-4", :value 1739, :ttl 9}, :set-time 1771819742092, :expected-expiry 1771819751092}
+{:index 524, :time 25875402042, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-6", :value 2830, :ttl 4}}
+{:index 525, :time 25877020459, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-6", :value 2830, :ttl 4}, :set-time 1771819742197, :expected-expiry 1771819746197}
+{:index 526, :time 25959496042, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-1", :ttl 7}}
+{:index 527, :time 25960628834, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-1", :ttl 7}, :result 0, :set-time 1771819742281}
+{:index 528, :time 26047958209, :type :invoke, :process 4, :f :persist, :value "expiry-key-9"}
+{:index 529, :time 26049899542, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-9"}, :result 1}
+{:index 530, :time 26154846167, :type :invoke, :process 0, :f :read, :value "expiry-key-13"}
+{:index 531, :time 26156663792, :type :ok, :process 0, :f :read, :value {:key "expiry-key-13", :value nil}, :read-time 1771819742477}
+{:index 532, :time 26291039917, :type :invoke, :process 0, :f :persist, :value "expiry-key-9"}
+{:index 533, :time 26293524584, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-9"}, :result 0}
+{:index 534, :time 26351209959, :type :invoke, :process 1, :f :read, :value "expiry-key-2"}
+{:index 535, :time 26354381667, :type :ok, :process 1, :f :read, :value {:key "expiry-key-2", :value "5639"}, :read-time 1771819742673}
+{:index 536, :time 26414604417, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-5", :ttl 6}}
+{:index 537, :time 26417249084, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-5", :ttl 6}, :result 0, :set-time 1771819742736}
+{:index 538, :time 26530659709, :type :invoke, :process 3, :f :ttl, :value "expiry-key-19"}
+{:index 539, :time 26533211709, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-19", :ttl 1}, :check-time 1771819742852}
+{:index 540, :time 26541516125, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-2", :value 84, :ttl 3}}
+{:index 541, :time 26544209584, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-2", :value 84, :ttl 3}, :set-time 1771819742863, :expected-expiry 1771819745863}
+{:index 542, :time 26707815125, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-16", :value 2308, :ttl 9}}
+{:index 543, :time 26710035417, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-16", :value 2308, :ttl 9}, :set-time 1771819743029, :expected-expiry 1771819752029}
+{:index 544, :time 26770047125, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-13", :ttl 6}}
+{:index 545, :time 26772113542, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-13", :ttl 6}, :result 0, :set-time 1771819743092}
+{:index 546, :time 26825069459, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-9", :ttl 3}}
+{:index 547, :time 26827002834, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-9", :ttl 3}, :result 1, :set-time 1771819743147}
+{:index 548, :time 26891029459, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-8", :value 8290, :ttl 8}}
+{:index 549, :time 26893538250, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-8", :value 8290, :ttl 8}, :set-time 1771819743213, :expected-expiry 1771819751213}
+{:index 550, :time 27034505125, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-9", :value 8516, :ttl 8}}
+{:index 551, :time 27036214084, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-9", :value 8516, :ttl 8}, :set-time 1771819743356, :expected-expiry 1771819751356}
+{:index 552, :time 27064213000, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-16", :value 1168, :ttl 6}}
+{:index 553, :time 27066007834, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-16", :value 1168, :ttl 6}, :set-time 1771819743386, :expected-expiry 1771819749386}
+{:index 554, :time 27197930334, :type :invoke, :process 0, :f :read, :value "expiry-key-11"}
+{:index 555, :time 27200545959, :type :ok, :process 0, :f :read, :value {:key "expiry-key-11", :value "395"}, :read-time 1771819743520}
+{:index 556, :time 27297960667, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-3", :value 9521, :ttl 9}}
+{:index 557, :time 27301125209, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-3", :value 9521, :ttl 9}, :set-time 1771819743620, :expected-expiry 1771819752620}
+{:index 558, :time 27405485709, :type :invoke, :process 1, :f :read, :value "expiry-key-17"}
+{:index 559, :time 27407967875, :type :ok, :process 1, :f :read, :value {:key "expiry-key-17", :value "7149"}, :read-time 1771819743727}
+{:index 560, :time 27599028334, :type :invoke, :process 2, :f :read, :value "expiry-key-16"}
+{:index 561, :time 27600330250, :type :ok, :process 2, :f :read, :value {:key "expiry-key-16", :value "1168"}, :read-time 1771819743921}
+{:index 562, :time 27731267125, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-19", :ttl 5}}
+{:index 563, :time 27733342834, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-19", :ttl 5}, :result 0, :set-time 1771819744053}
+{:index 564, :time 27741311500, :type :invoke, :process 4, :f :ttl, :value "expiry-key-0"}
+{:index 565, :time 27742920834, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-0", :ttl -1}, :check-time 1771819744063}
+{:index 566, :time 27854190584, :type :invoke, :process 0, :f :persist, :value "expiry-key-7"}
+{:index 567, :time 27856762375, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-7"}, :result 0}
+{:index 568, :time 27893308042, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-1", :ttl 9}}
+{:index 569, :time 27895223250, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-1", :ttl 9}, :result 0, :set-time 1771819744215}
+{:index 570, :time 28049444625, :type :invoke, :process 1, :f :ttl, :value "expiry-key-19"}
+{:index 571, :time 28051292084, :type :ok, :process 1, :f :ttl, :value {:key "expiry-key-19", :ttl -2}, :check-time 1771819744371}
+{:index 572, :time 28098955709, :type :invoke, :process 2, :f :read, :value "expiry-key-10"}
+{:index 573, :time 28100297250, :type :ok, :process 2, :f :read, :value {:key "expiry-key-10", :value nil}, :read-time 1771819744421}
+{:index 574, :time 28270502709, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-3", :ttl 9}}
+{:index 575, :time 28273062834, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-3", :ttl 9}, :result 1, :set-time 1771819744592}
+{:index 576, :time 28339072709, :type :invoke, :process 4, :f :persist, :value "expiry-key-18"}
+{:index 577, :time 28341937417, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-18"}, :result 1}
+{:index 578, :time 28408947959, :type :invoke, :process 0, :f :read, :value "expiry-key-16"}
+{:index 579, :time 28410523875, :type :ok, :process 0, :f :read, :value {:key "expiry-key-16", :value "1168"}, :read-time 1771819744731}
+{:index 580, :time 28527461834, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 2377, :ttl 7}}
+{:index 581, :time 28529287834, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 2377, :ttl 7}, :set-time 1771819744849, :expected-expiry 1771819751849}
+{:index 582, :time 28641838250, :type :invoke, :process 1, :f :ttl, :value "expiry-key-16"}
+{:index 583, :time 28643990042, :type :ok, :process 1, :f :ttl, :value {:key "expiry-key-16", :ttl 4}, :check-time 1771819744963}
+{:index 584, :time 28764658792, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-17", :value 7676, :ttl 4}}
+{:index 585, :time 28766521584, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-17", :value 7676, :ttl 4}, :set-time 1771819745086, :expected-expiry 1771819749086}
+{:index 586, :time 28964315500, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-15", :value 6064, :ttl 8}}
+{:index 587, :time 28966841959, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-15", :value 6064, :ttl 8}, :set-time 1771819745286, :expected-expiry 1771819753286}
+{:index 588, :time 28999410542, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-16", :value 4586, :ttl 7}}
+{:index 589, :time 29002006459, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-16", :value 4586, :ttl 7}, :set-time 1771819745321, :expected-expiry 1771819752321}
+{:index 590, :time 29179400375, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 1010, :ttl 3}}
+{:index 591, :time 29181390834, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 1010, :ttl 3}, :set-time 1771819745501, :expected-expiry 1771819748501}
+{:index 592, :time 29192082375, :type :invoke, :process 0, :f :ttl, :value "expiry-key-1"}
+{:index 593, :time 29193042667, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-1", :ttl -2}, :check-time 1771819745514}
+{:index 594, :time 29306308167, :type :invoke, :process 1, :f :persist, :value "expiry-key-14"}
+{:index 595, :time 29307778417, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-14"}, :result 1}
+{:index 596, :time 29478619459, :type :invoke, :process 2, :f :read, :value "expiry-key-15"}
+{:index 597, :time 29480204875, :type :ok, :process 2, :f :read, :value {:key "expiry-key-15", :value "6064"}, :read-time 1771819745800}
+{:index 598, :time 29589595084, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-6", :value 5852, :ttl 8}}
+{:index 599, :time 29591367875, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-6", :value 5852, :ttl 8}, :set-time 1771819745911, :expected-expiry 1771819753911}
+{:index 600, :time 29738639417, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-1", :value 4834, :ttl 8}}
+{:index 601, :time 29740708167, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-1", :value 4834, :ttl 8}, :set-time 1771819746060, :expected-expiry 1771819754060}
+{:index 602, :time 29872771834, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-15", :ttl 7}}
+{:index 603, :time 29875555667, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-15", :ttl 7}, :result 1, :set-time 1771819746194}
+{:index 604, :time 29922950792, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-10", :ttl 5}}
+{:index 605, :time 29925133584, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-10", :ttl 5}, :result 0, :set-time 1771819746245}
+{:index 606, :time 30123735542, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-3", :ttl 7}}
+{:index 607, :time 30126759584, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-3", :ttl 7}, :result 1, :set-time 1771819746446}
+{:index 608, :time 30299438584, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-1", :ttl 7}}
+{:index 609, :time 30300658667, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-1", :ttl 7}, :result 1, :set-time 1771819746621}
+{:index 610, :time 30303114750, :type :invoke, :process 3, :f :read, :value "expiry-key-6"}
+{:index 611, :time 30303703959, :type :ok, :process 3, :f :read, :value {:key "expiry-key-6", :value "5852"}, :read-time 1771819746625}
+{:index 612, :time 30351475709, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-11", :value 9597, :ttl 4}}
+{:index 613, :time 30352827625, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-11", :value 9597, :ttl 4}, :set-time 1771819746673, :expected-expiry 1771819750673}
+{:index 614, :time 30353901000, :type :invoke, :process 0, :f :read, :value "expiry-key-8"}
+{:index 615, :time 30354560584, :type :ok, :process 0, :f :read, :value {:key "expiry-key-8", :value "8290"}, :read-time 1771819746675}
+{:index 616, :time 30364974000, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-4", :value 2094, :ttl 7}}
+{:index 617, :time 30366046042, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-4", :value 2094, :ttl 7}, :set-time 1771819746686, :expected-expiry 1771819753686}
+{:index 618, :time 30560702125, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-4", :ttl 7}}
+{:index 619, :time 30563298209, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-4", :ttl 7}, :result 1, :set-time 1771819746883}
+{:index 620, :time 30701203167, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-0", :ttl 8}}
+{:index 621, :time 30703890667, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-0", :ttl 8}, :result 1, :set-time 1771819747023}
+{:index 622, :time 30901183959, :type :invoke, :process 3, :f :ttl, :value "expiry-key-19"}
+{:index 623, :time 30902872459, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-19", :ttl -2}, :check-time 1771819747223}
+{:index 624, :time 31064604834, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-5", :value 5686, :ttl 5}}
+{:index 625, :time 31066494417, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-5", :value 5686, :ttl 5}, :set-time 1771819747386, :expected-expiry 1771819752386}
+{:index 626, :time 31137740542, :type :invoke, :process 0, :f :ttl, :value "expiry-key-3"}
+{:index 627, :time 31139633959, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-3", :ttl 5}, :check-time 1771819747459}
+{:index 628, :time 31247074834, :type :invoke, :process 0, :f :read, :value "expiry-key-12"}
+{:index 629, :time 31248636542, :type :ok, :process 0, :f :read, :value {:key "expiry-key-12", :value "2377"}, :read-time 1771819747569}
+{:index 630, :time 31260004000, :type :invoke, :process 1, :f :ttl, :value "expiry-key-19"}
+{:index 631, :time 31260932875, :type :ok, :process 1, :f :ttl, :value {:key "expiry-key-19", :ttl -2}, :check-time 1771819747581}
+{:index 632, :time 31382487209, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-15", :value 4340, :ttl 9}}
+{:index 633, :time 31383865667, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-15", :value 4340, :ttl 9}, :set-time 1771819747704, :expected-expiry 1771819756704}
+{:index 634, :time 31533244834, :type :invoke, :process 3, :f :persist, :value "expiry-key-2"}
+{:index 635, :time 31535646709, :type :ok, :process 3, :f :persist, :value {:key "expiry-key-2"}, :result 0}
+{:index 636, :time 31695609709, :type :invoke, :process 4, :f :read, :value "expiry-key-0"}
+{:index 637, :time 31697630042, :type :ok, :process 4, :f :read, :value {:key "expiry-key-0", :value "7740"}, :read-time 1771819748017}
+{:index 638, :time 31709057459, :type :invoke, :process 0, :f :ttl, :value "expiry-key-7"}
+{:index 639, :time 31711203209, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-7", :ttl -1}, :check-time 1771819748031}
+{:index 640, :time 31788300500, :type :invoke, :process 0, :f :read, :value "expiry-key-11"}
+{:index 641, :time 31792630167, :type :ok, :process 0, :f :read, :value {:key "expiry-key-11", :value "9597"}, :read-time 1771819748112}
+{:index 642, :time 31918542250, :type :invoke, :process 1, :f :read, :value "expiry-key-7"}
+{:index 643, :time 31921200500, :type :ok, :process 1, :f :read, :value {:key "expiry-key-7", :value "5091"}, :read-time 1771819748240}
+{:index 644, :time 32077689084, :type :invoke, :process 2, :f :ttl, :value "expiry-key-17"}
+{:index 645, :time 32080531709, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-17", :ttl 0}, :check-time 1771819748400}
+{:index 646, :time 32169637167, :type :invoke, :process 3, :f :read, :value "expiry-key-1"}
+{:index 647, :time 32172868750, :type :ok, :process 3, :f :read, :value {:key "expiry-key-1", :value "4834"}, :read-time 1771819748492}
+{:index 648, :time 32345446417, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-15", :value 3013, :ttl 5}}
+{:index 649, :time 32348571500, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-15", :value 3013, :ttl 5}, :set-time 1771819748667, :expected-expiry 1771819753667}
+{:index 650, :time 32427010667, :type :invoke, :process 0, :f :read, :value "expiry-key-16"}
+{:index 651, :time 32428197875, :type :ok, :process 0, :f :read, :value {:key "expiry-key-16", :value "4586"}, :read-time 1771819748749}
+{:index 652, :time 32500686917, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-14", :ttl 4}}
+{:index 653, :time 32501732084, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-14", :ttl 4}, :result 1, :set-time 1771819748822}
+{:index 654, :time 32582128250, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-9", :value 8245, :ttl 8}}
+{:index 655, :time 32584199959, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-9", :value 8245, :ttl 8}, :set-time 1771819748904, :expected-expiry 1771819756904}
+{:index 656, :time 32781262750, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-18", :ttl 8}}
+{:index 657, :time 32786387292, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-18", :ttl 8}, :result 1, :set-time 1771819749103}
+{:index 658, :time 32834536667, :type :invoke, :process 3, :f :persist, :value "expiry-key-13"}
+{:index 659, :time 32836205542, :type :ok, :process 3, :f :persist, :value {:key "expiry-key-13"}, :result 0}
+{:index 660, :time 32928992750, :type :invoke, :process 4, :f :read, :value "expiry-key-6"}
+{:index 661, :time 32931010750, :type :ok, :process 4, :f :read, :value {:key "expiry-key-6", :value "5852"}, :read-time 1771819749251}
+{:index 662, :time 32985712250, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-5", :value 8146, :ttl 8}}
+{:index 663, :time 32987537917, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-5", :value 8146, :ttl 8}, :set-time 1771819749307, :expected-expiry 1771819757307}
+{:index 664, :time 33156063084, :type :invoke, :process 0, :f :read, :value "expiry-key-2"}
+{:index 665, :time 33157573875, :type :ok, :process 0, :f :read, :value {:key "expiry-key-2", :value nil}, :read-time 1771819749478}
+{:index 666, :time 33256343167, :type :info, :process :nemesis, :f :kill, :value nil}
+{:index 667, :time 33319673834, :type :invoke, :process 2, :f :persist, :value "expiry-key-18"}
+{:index 668, :time 33321269500, :type :ok, :process 2, :f :persist, :value {:key "expiry-key-18"}, :result 1}
+{:index 669, :time 33426888000, :type :info, :process :nemesis, :f :kill, :value ["n1"]}
+{:index 670, :time 33492801459, :type :invoke, :process 4, :f :ttl, :value "expiry-key-15"}
+{:index 671, :time 33493499834, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-15", :ttl 3}, :check-time 1771819749814}
+{:index 672, :time 33561602000, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-11", :value 7762, :ttl 7}}
+{:index 673, :time 33562733417, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-11", :value 7762, :ttl 7}, :set-time 1771819749883, :expected-expiry 1771819756883}
+{:index 674, :time 33631361750, :type :invoke, :process 0, :f :read, :value "expiry-key-11"}
+{:index 675, :time 33633481167, :type :invoke, :process 1, :f :ttl, :value "expiry-key-9"}
+{:index 676, :time 33633816125, :type :ok, :process 0, :f :read, :value {:key "expiry-key-11", :value "7762"}, :read-time 1771819749953}
+{:index 677, :time 33638302584, :type :ok, :process 1, :f :ttl, :value {:key "expiry-key-9", :ttl 6}, :check-time 1771819749955}
+{:index 678, :time 33756264584, :type :invoke, :process 2, :f :read, :value "expiry-key-6"}
+{:index 679, :time 33759223792, :type :ok, :process 2, :f :read, :value {:key "expiry-key-6", :value "5852"}, :read-time 1771819750078}
+{:index 680, :time 33952668584, :type :invoke, :process 3, :f :ttl, :value "expiry-key-16"}
+{:index 681, :time 33955705709, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-16", :ttl 2}, :check-time 1771819750274}
+{:index 682, :time 34077303209, :type :invoke, :process 4, :f :persist, :value "expiry-key-12"}
+{:index 683, :time 34080706459, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-12"}, :result 1}
+{:index 684, :time 34249762709, :type :invoke, :process 0, :f :read, :value "expiry-key-11"}
+{:index 685, :time 34253004167, :type :ok, :process 0, :f :read, :value {:key "expiry-key-11", :value "7762"}, :read-time 1771819750572}
+{:index 686, :time 34330409417, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 5016, :ttl 5}}
+{:index 687, :time 34332644125, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 5016, :ttl 5}, :set-time 1771819750652, :expected-expiry 1771819755652}
+{:index 688, :time 34373034875, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-8", :ttl 8}}
+{:index 689, :time 34375413750, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-8", :ttl 8}, :result 1, :set-time 1771819750695}
+{:index 690, :time 34416026959, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-12", :ttl 6}}
+{:index 691, :time 34418303042, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-12", :ttl 6}, :result 1, :set-time 1771819750738}
+{:index 692, :time 34616600125, :type :invoke, :process 3, :f :ttl, :value "expiry-key-3"}
+{:index 693, :time 34617724834, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-3", :ttl 2}, :check-time 1771819750938}
+{:index 694, :time 34714362625, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-18", :value 1695, :ttl 4}}
+{:index 695, :time 34716937959, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-18", :value 1695, :ttl 4}, :set-time 1771819751036, :expected-expiry 1771819755036}
+{:index 696, :time 34838827084, :type :invoke, :process 0, :f :read, :value "expiry-key-1"}
+{:index 697, :time 34841107375, :type :ok, :process 0, :f :read, :value {:key "expiry-key-1", :value "4834"}, :read-time 1771819751161}
+{:index 698, :time 34993763000, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-9", :value 1455, :ttl 6}}
+{:index 699, :time 34996261834, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-9", :value 1455, :ttl 6}, :set-time 1771819751315, :expected-expiry 1771819757315}
+{:index 700, :time 35088469292, :type :invoke, :process 1, :f :persist, :value "expiry-key-2"}
+{:index 701, :time 35091296125, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-2"}, :result 0}
+{:index 702, :time 35279639000, :type :invoke, :process 2, :f :read, :value "expiry-key-8"}
+{:index 703, :time 35281974459, :type :ok, :process 2, :f :read, :value {:key "expiry-key-8", :value "8290"}, :read-time 1771819751601}
+{:index 704, :time 35363838750, :type :invoke, :process 3, :f :ttl, :value "expiry-key-16"}
+{:index 705, :time 35366204875, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-16", :ttl 0}, :check-time 1771819751686}
+{:index 706, :time 35395591500, :type :invoke, :process 4, :f :read, :value "expiry-key-19"}
+{:index 707, :time 35397606417, :type :ok, :process 4, :f :read, :value {:key "expiry-key-19", :value nil}, :read-time 1771819751717}
+{:index 708, :time 35599299875, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-11", :value 507, :ttl 3}}
+{:index 709, :time 35601612625, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-11", :value 507, :ttl 3}, :set-time 1771819751921, :expected-expiry 1771819754921}
+{:index 710, :time 35627684167, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-3", :ttl 4}}
+{:index 711, :time 35628859625, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-3", :ttl 4}, :result 1, :set-time 1771819751949}
+{:index 712, :time 35662296750, :type :invoke, :process 1, :f :ttl, :value "expiry-key-7"}
+{:index 713, :time 35663345875, :type :ok, :process 1, :f :ttl, :value {:key "expiry-key-7", :ttl -1}, :check-time 1771819751984}
+{:index 714, :time 35742295584, :type :invoke, :process 2, :f :ttl, :value "expiry-key-7"}
+{:index 715, :time 35743374584, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-7", :ttl -1}, :check-time 1771819752064}
+{:index 716, :time 35815962709, :type :invoke, :process 3, :f :read, :value "expiry-key-16"}
+{:index 717, :time 35817618709, :type :ok, :process 3, :f :read, :value {:key "expiry-key-16", :value "4586"}, :read-time 1771819752138}
+{:index 718, :time 35959847792, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-0", :value 8653, :ttl 5}}
+{:index 719, :time 35962342250, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-0", :value 8653, :ttl 5}, :set-time 1771819752282, :expected-expiry 1771819757282}
+{:index 720, :time 35969001084, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-6", :ttl 4}}
+{:index 721, :time 35971194959, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-6", :ttl 4}, :result 1, :set-time 1771819752291}
+{:index 722, :time 36137721417, :type :invoke, :process 0, :f :ttl, :value "expiry-key-17"}
+{:index 723, :time 36139502834, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-17", :ttl -2}, :check-time 1771819752459}
+{:index 724, :time 36242046042, :type :invoke, :process 1, :f :read, :value "expiry-key-16"}
+{:index 725, :time 36243980000, :type :ok, :process 1, :f :read, :value {:key "expiry-key-16", :value nil}, :read-time 1771819752564}
+{:index 726, :time 36244385167, :type :invoke, :process 2, :f :ttl, :value "expiry-key-19"}
+{:index 727, :time 36245770834, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-19", :ttl -2}, :check-time 1771819752566}
+{:index 728, :time 36293094209, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-1", :value 6918, :ttl 8}}
+{:index 729, :time 36296150209, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-1", :value 6918, :ttl 8}, :set-time 1771819752615, :expected-expiry 1771819760615}
+{:index 730, :time 36406747500, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-13", :value 8677, :ttl 8}}
+{:index 731, :time 36409259250, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-13", :value 8677, :ttl 8}, :set-time 1771819752729, :expected-expiry 1771819760729}
+{:index 732, :time 36497574709, :type :invoke, :process 0, :f :read, :value "expiry-key-0"}
+{:index 733, :time 36498937042, :type :ok, :process 0, :f :read, :value {:key "expiry-key-0", :value "8653"}, :read-time 1771819752819}
+{:index 734, :time 36679686250, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-17", :value 9628, :ttl 3}}
+{:index 735, :time 36682006542, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-17", :value 9628, :ttl 3}, :set-time 1771819753001, :expected-expiry 1771819756001}
+{:index 736, :time 36768087084, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-1", :ttl 3}}
+{:index 737, :time 36769157542, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-1", :ttl 3}, :result 1, :set-time 1771819753090}
+{:index 738, :time 36927547625, :type :invoke, :process 2, :f :ttl, :value "expiry-key-5"}
+{:index 739, :time 36929767375, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-5", :ttl 4}, :check-time 1771819753249}
+{:index 740, :time 36951053875, :type :invoke, :process 3, :f :read, :value "expiry-key-11"}
+{:index 741, :time 36952535417, :type :ok, :process 3, :f :read, :value {:key "expiry-key-11", :value "507"}, :read-time 1771819753273}
+{:index 742, :time 37070186834, :type :invoke, :process 4, :f :persist, :value "expiry-key-19"}
+{:index 743, :time 37072925834, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-19"}, :result 0}
+{:index 744, :time 37098685917, :type :invoke, :process 0, :f :read, :value "expiry-key-8"}
+{:index 745, :time 37101680917, :type :ok, :process 0, :f :read, :value {:key "expiry-key-8", :value "8290"}, :read-time 1771819753420}
+{:index 746, :time 37206790792, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-17", :ttl 6}}
+{:index 747, :time 37209461709, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-17", :ttl 6}, :result 1, :set-time 1771819753529}
+{:index 748, :time 37289552959, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-8", :value 1806, :ttl 4}}
+{:index 749, :time 37292802959, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-8", :value 1806, :ttl 4}, :set-time 1771819753611, :expected-expiry 1771819757611}
+{:index 750, :time 37331344209, :type :invoke, :process 2, :f :persist, :value "expiry-key-3"}
+{:index 751, :time 37333721834, :type :ok, :process 2, :f :persist, :value {:key "expiry-key-3"}, :result 1}
+{:index 752, :time 37413350334, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-8", :value 2921, :ttl 5}}
+{:index 753, :time 37416427417, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-8", :value 2921, :ttl 5}, :set-time 1771819753735, :expected-expiry 1771819758735}
+{:index 754, :time 37477911834, :type :invoke, :process 4, :f :read, :value "expiry-key-10"}
+{:index 755, :time 37480455542, :type :ok, :process 4, :f :read, :value {:key "expiry-key-10", :value nil}, :read-time 1771819753800}
+{:index 756, :time 37485717917, :type :invoke, :process 0, :f :ttl, :value "expiry-key-2"}
+{:index 757, :time 37495750292, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-2", :ttl -2}, :check-time 1771819753808}
+{:index 758, :time 37623008334, :type :invoke, :process 0, :f :ttl, :value "expiry-key-1"}
+{:index 759, :time 37625796709, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-1", :ttl 2}, :check-time 1771819753945}
+{:index 760, :time 37714630375, :type :invoke, :process 1, :f :read, :value "expiry-key-0"}
+{:index 761, :time 37717255042, :type :ok, :process 1, :f :read, :value {:key "expiry-key-0", :value "8653"}, :read-time 1771819754036}
+{:index 762, :time 37851504709, :type :invoke, :process 2, :f :ttl, :value "expiry-key-8"}
+{:index 763, :time 37852377125, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-8", :ttl 4}, :check-time 1771819754173}
+{:index 764, :time 38008620209, :type :invoke, :process 3, :f :read, :value "expiry-key-0"}
+{:index 765, :time 38009840167, :type :ok, :process 3, :f :read, :value {:key "expiry-key-0", :value "8653"}, :read-time 1771819754330}
+{:index 766, :time 38123574792, :type :invoke, :process 4, :f :read, :value "expiry-key-13"}
+{:index 767, :time 38126757917, :type :ok, :process 4, :f :read, :value {:key "expiry-key-13", :value "8677"}, :read-time 1771819754445}
+{:index 768, :time 38141094167, :type :invoke, :process 0, :f :read, :value "expiry-key-7"}
+{:index 769, :time 38143244500, :type :ok, :process 0, :f :read, :value {:key "expiry-key-7", :value "5091"}, :read-time 1771819754463}
+{:index 770, :time 38150238375, :type :invoke, :process 0, :f :persist, :value "expiry-key-7"}
+{:index 771, :time 38152342209, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-7"}, :result 0}
+{:index 772, :time 38199816250, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 6287, :ttl 6}}
+{:index 773, :time 38202807375, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 6287, :ttl 6}, :set-time 1771819754522, :expected-expiry 1771819760522}
+{:index 774, :time 38329187667, :type :invoke, :process 2, :f :persist, :value "expiry-key-17"}
+{:index 775, :time 38330778417, :type :ok, :process 2, :f :persist, :value {:key "expiry-key-17"}, :result 1}
+{:index 776, :time 38432238167, :type :info, :process :nemesis, :f :start, :value nil}
+{:index 777, :time 38465332667, :type :invoke, :process 4, :f :read, :value "expiry-key-2"}
+{:index 778, :time 38466754875, :type :ok, :process 4, :f :read, :value {:key "expiry-key-2", :value "6287"}, :read-time 1771819754787}
+{:index 779, :time 38528330584, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-17", :value 467, :ttl 8}}
+{:index 780, :time 38531119709, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-17", :value 467, :ttl 8}, :set-time 1771819754850, :expected-expiry 1771819762850}
+{:index 781, :time 38566535584, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-5", :ttl 3}}
+{:index 782, :time 38568321834, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-5", :ttl 3}, :result 1, :set-time 1771819754888}
+{:index 783, :time 38676677292, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-10", :value 818, :ttl 5}}
+{:index 784, :time 38679561834, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-10", :value 818, :ttl 5}, :set-time 1771819754999, :expected-expiry 1771819759999}
+{:index 785, :time 38692692500, :type :invoke, :process 2, :f :ttl, :value "expiry-key-14"}
+{:index 786, :time 38694643209, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-14", :ttl -2}, :check-time 1771819755014}
+{:index 787, :time 38793863959, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-18", :value 4178, :ttl 6}}
+{:index 788, :time 38795959917, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-18", :value 4178, :ttl 6}, :set-time 1771819755115, :expected-expiry 1771819761115}
+{:index 789, :time 38804499792, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-6", :ttl 6}}
+{:index 790, :time 38805825375, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-6", :ttl 6}, :result 1, :set-time 1771819755126}
+{:index 791, :time 38890872084, :type :invoke, :process 0, :f :ttl, :value "expiry-key-2"}
+{:index 792, :time 38891875917, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-2", :ttl 5}, :check-time 1771819755213}
+{:index 793, :time 38947304500, :type :invoke, :process 0, :f :persist, :value "expiry-key-10"}
+{:index 794, :time 38948710042, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-10"}, :result 1}
+{:index 795, :time 39116485917, :type :invoke, :process 1, :f :read, :value "expiry-key-10"}
+{:index 796, :time 39118643709, :type :ok, :process 1, :f :read, :value {:key "expiry-key-10", :value "818"}, :read-time 1771819755438}
+{:index 797, :time 39181303459, :type :invoke, :process 2, :f :read, :value "expiry-key-17"}
+{:index 798, :time 39182934667, :type :ok, :process 2, :f :read, :value {:key "expiry-key-17", :value "467"}, :read-time 1771819755503}
+{:index 799, :time 39354230292, :type :invoke, :process 3, :f :persist, :value "expiry-key-17"}
+{:index 800, :time 39357157500, :type :ok, :process 3, :f :persist, :value {:key "expiry-key-17"}, :result 1}
+{:index 801, :time 39468375875, :type :invoke, :process 4, :f :persist, :value "expiry-key-14"}
+{:index 802, :time 39471070167, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-14"}, :result 0}
+{:index 803, :time 39494813417, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-8", :value 2925, :ttl 6}}
+{:index 804, :time 39497195709, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-8", :value 2925, :ttl 6}, :set-time 1771819755817, :expected-expiry 1771819761817}
+{:index 805, :time 39651139459, :type :invoke, :process 0, :f :read, :value "expiry-key-13"}
+{:index 806, :time 39653449750, :type :ok, :process 0, :f :read, :value {:key "expiry-key-13", :value "8677"}, :read-time 1771819755973}
+{:index 807, :time 39688529500, :type :invoke, :process 1, :f :persist, :value "expiry-key-19"}
+{:index 808, :time 39690379875, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-19"}, :result 0}
+{:index 809, :time 39797165084, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-9", :value 4372, :ttl 8}}
+{:index 810, :time 39800589875, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-9", :value 4372, :ttl 8}, :set-time 1771819756119, :expected-expiry 1771819764119}
+{:index 811, :time 39816684500, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-8", :ttl 7}}
+{:index 812, :time 39818788417, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-8", :ttl 7}, :result 1, :set-time 1771819756138}
+{:index 813, :time 39901753875, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-5", :value 500, :ttl 7}}
+{:index 814, :time 39904526125, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-5", :value 500, :ttl 7}, :set-time 1771819756224, :expected-expiry 1771819763224}
+{:index 815, :time 40008000250, :type :invoke, :process 0, :f :read, :value "expiry-key-17"}
+{:index 816, :time 40009423084, :type :ok, :process 0, :f :read, :value {:key "expiry-key-17", :value "467"}, :read-time 1771819756330}
+{:index 817, :time 40042114209, :type :invoke, :process 0, :f :read, :value "expiry-key-17"}
+{:index 818, :time 40043716459, :type :ok, :process 0, :f :read, :value {:key "expiry-key-17", :value "467"}, :read-time 1771819756364}
+{:index 819, :time 40107366625, :type :invoke, :process 1, :f :read, :value "expiry-key-1"}
+{:index 820, :time 40109025625, :type :ok, :process 1, :f :read, :value {:key "expiry-key-1", :value nil}, :read-time 1771819756429}
+{:index 821, :time 40257907834, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-13", :value 2219, :ttl 9}}
+{:index 822, :time 40260230750, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-13", :value 2219, :ttl 9}, :set-time 1771819756580, :expected-expiry 1771819765580}
+{:index 823, :time 40313717042, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-15", :value 5625, :ttl 5}}
+{:index 824, :time 40315192750, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-15", :value 5625, :ttl 5}, :set-time 1771819756635, :expected-expiry 1771819761635}
+{:index 825, :time 40335313917, :type :invoke, :process 4, :f :read, :value "expiry-key-14"}
+{:index 826, :time 40336761542, :type :ok, :process 4, :f :read, :value {:key "expiry-key-14", :value nil}, :read-time 1771819756657}
+{:index 827, :time 40536889209, :type :invoke, :process 0, :f :read, :value "expiry-key-2"}
+{:index 828, :time 40538381084, :type :ok, :process 0, :f :read, :value {:key "expiry-key-2", :value "6287"}, :read-time 1771819756859}
+{:index 829, :time 40720946959, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 5936, :ttl 8}}
+{:index 830, :time 40724247084, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 5936, :ttl 8}, :set-time 1771819757043, :expected-expiry 1771819765043}
+{:index 831, :time 40799430917, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 2265, :ttl 5}}
+{:index 832, :time 40801670167, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-2", :value 2265, :ttl 5}, :set-time 1771819757121, :expected-expiry 1771819762121}
+{:index 833, :time 40834370000, :type :invoke, :process 2, :f :persist, :value "expiry-key-18"}
+{:index 834, :time 40835927375, :type :ok, :process 2, :f :persist, :value {:key "expiry-key-18"}, :result 1}
+{:index 835, :time 40884807625, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-2", :value 6070, :ttl 4}}
+{:index 836, :time 40886366000, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-2", :value 6070, :ttl 4}, :set-time 1771819757207, :expected-expiry 1771819761207}
+{:index 837, :time 40978151125, :type :invoke, :process 4, :f :ttl, :value "expiry-key-3"}
+{:index 838, :time 40979642125, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-3", :ttl -1}, :check-time 1771819757300}
+{:index 839, :time 41080857542, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-0", :value 664, :ttl 4}}
+{:index 840, :time 41081952084, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-0", :value 664, :ttl 4}, :set-time 1771819757403, :expected-expiry 1771819761403}
+{:index 841, :time 41190390709, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-8", :value 5139, :ttl 9}}
+{:index 842, :time 41191901959, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-8", :value 5139, :ttl 9}, :set-time 1771819757512, :expected-expiry 1771819766512}
+{:index 843, :time 41192264917, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-2", :ttl 9}}
+{:index 844, :time 41192736667, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-2", :ttl 9}, :result 1, :set-time 1771819757514}
+{:index 845, :time 41238026042, :type :invoke, :process 2, :f :ttl, :value "expiry-key-11"}
+{:index 846, :time 41239950250, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-11", :ttl -2}, :check-time 1771819757560}
+{:index 847, :time 41272437542, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-9", :ttl 6}}
+{:index 848, :time 41274630125, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-9", :ttl 6}, :result 1, :set-time 1771819757594}
+{:index 849, :time 41414234167, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-18", :ttl 3}}
+{:index 850, :time 41416660917, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-18", :ttl 3}, :result 1, :set-time 1771819757736}
+{:index 851, :time 41480605917, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 9930, :ttl 7}}
+{:index 852, :time 41481650042, :type :info, :process :nemesis, :f :start, :value ["n1"]}
+{:index 853, :time 41482754000, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-14", :value 9930, :ttl 7}, :set-time 1771819757802, :expected-expiry 1771819764802}
+{:index 854, :time 41524278834, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-4", :value 3024, :ttl 8}}
+{:index 855, :time 41526052209, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-4", :value 3024, :ttl 8}, :set-time 1771819757846, :expected-expiry 1771819765846}
+{:index 856, :time 41576807709, :type :invoke, :process 2, :f :persist, :value "expiry-key-18"}
+{:index 857, :time 41579004334, :type :ok, :process 2, :f :persist, :value {:key "expiry-key-18"}, :result 1}
+{:index 858, :time 41750424084, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-6", :value 9878, :ttl 3}}
+{:index 859, :time 41753321042, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-6", :value 9878, :ttl 3}, :set-time 1771819758072, :expected-expiry 1771819761072}
+{:index 860, :time 41879162667, :type :invoke, :process 4, :f :ttl, :value "expiry-key-12"}
+{:index 861, :time 41881094875, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-12", :ttl -2}, :check-time 1771819758201}
+{:index 862, :time 41940295584, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-6", :value 8130, :ttl 4}}
+{:index 863, :time 41942552334, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-6", :value 8130, :ttl 4}, :set-time 1771819758262, :expected-expiry 1771819762262}
+{:index 864, :time 42060366334, :type :invoke, :process 0, :f :read, :value "expiry-key-7"}
+{:index 865, :time 42062152167, :type :ok, :process 0, :f :read, :value {:key "expiry-key-7", :value "5091"}, :read-time 1771819758382}
+{:index 866, :time 42195487709, :type :invoke, :process 1, :f :persist, :value "expiry-key-0"}
+{:index 867, :time 42196631042, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-0"}, :result 1}
+{:index 868, :time 42290932959, :type :invoke, :process 2, :f :read, :value "expiry-key-4"}
+{:index 869, :time 42292284917, :type :ok, :process 2, :f :read, :value {:key "expiry-key-4", :value "3024"}, :read-time 1771819758613}
+{:index 870, :time 42328711709, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-7", :value 1363, :ttl 7}}
+{:index 871, :time 42330475000, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-7", :value 1363, :ttl 7}, :set-time 1771819758650, :expected-expiry 1771819765650}
+{:index 872, :time 42369258125, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-15", :value 3052, :ttl 7}}
+{:index 873, :time 42371423875, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-15", :value 3052, :ttl 7}, :set-time 1771819758691, :expected-expiry 1771819765691}
+{:index 874, :time 42517694000, :type :invoke, :process 0, :f :read, :value "expiry-key-5"}
+{:index 875, :time 42520220375, :type :ok, :process 0, :f :read, :value {:key "expiry-key-5", :value "500"}, :read-time 1771819758840}
+{:index 876, :time 42685583417, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-13", :value 2054, :ttl 3}}
+{:index 877, :time 42687224084, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-13", :value 2054, :ttl 3}, :set-time 1771819759007, :expected-expiry 1771819762007}
+{:index 878, :time 42738504000, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-18", :ttl 3}}
+{:index 879, :time 42740603709, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-18", :ttl 3}, :result 1, :set-time 1771819759060}
+{:index 880, :time 42924176875, :type :invoke, :process 2, :f :read, :value "expiry-key-3"}
+{:index 881, :time 42925923292, :type :ok, :process 2, :f :read, :value {:key "expiry-key-3", :value "9521"}, :read-time 1771819759246}
+{:index 882, :time 43060894834, :type :invoke, :process 3, :f :read, :value "expiry-key-0"}
+{:index 883, :time 43062887834, :type :ok, :process 3, :f :read, :value {:key "expiry-key-0", :value "664"}, :read-time 1771819759383}
+{:index 884, :time 43152493167, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-11", :value 4494, :ttl 9}}
+{:index 885, :time 43155098250, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-11", :value 4494, :ttl 9}, :set-time 1771819759474, :expected-expiry 1771819768474}
+{:index 886, :time 43309116250, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-7", :value 4885, :ttl 4}}
+{:index 887, :time 43310574250, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-7", :value 4885, :ttl 4}, :set-time 1771819759631, :expected-expiry 1771819763631}
+{:index 888, :time 43373688375, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-2", :value 3977, :ttl 6}}
+{:index 889, :time 43375649334, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-2", :value 3977, :ttl 6}, :set-time 1771819759696, :expected-expiry 1771819765696}
+{:index 890, :time 43391305750, :type :invoke, :process 1, :f :persist, :value "expiry-key-8"}
+{:index 891, :time 43392513375, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-8"}, :result 1}
+{:index 892, :time 43517283084, :type :invoke, :process 2, :f :ttl, :value "expiry-key-9"}
+{:index 893, :time 43518737792, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-9", :ttl 3}, :check-time 1771819759839}
+{:index 894, :time 43618615542, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-10", :value 4237, :ttl 9}}
+{:index 895, :time 43619764917, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-10", :value 4237, :ttl 9}, :set-time 1771819759940, :expected-expiry 1771819768940}
+{:index 896, :time 43669792084, :type :invoke, :process 4, :f :read, :value "expiry-key-10"}
+{:index 897, :time 43671590209, :type :ok, :process 4, :f :read, :value {:key "expiry-key-10", :value "4237"}, :read-time 1771819759992}
+{:index 898, :time 43734874667, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-3", :value 8701, :ttl 4}}
+{:index 899, :time 43736956000, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-3", :value 8701, :ttl 4}, :set-time 1771819760057, :expected-expiry 1771819764057}
+{:index 900, :time 43813854334, :type :invoke, :process 0, :f :read, :value "expiry-key-3"}
+{:index 901, :time 43814915667, :type :ok, :process 0, :f :read, :value {:key "expiry-key-3", :value "8701"}, :read-time 1771819760136}
+{:index 902, :time 43935782250, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-15", :value 9364, :ttl 9}}
+{:index 903, :time 43938656334, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-15", :value 9364, :ttl 9}, :set-time 1771819760258, :expected-expiry 1771819769258}
+{:index 904, :time 44051983417, :type :invoke, :process 2, :f :persist, :value "expiry-key-6"}
+{:index 905, :time 44054136917, :type :ok, :process 2, :f :persist, :value {:key "expiry-key-6"}, :result 1}
+{:index 906, :time 44085002834, :type :invoke, :process 3, :f :read, :value "expiry-key-7"}
+{:index 907, :time 44087241709, :type :ok, :process 3, :f :read, :value {:key "expiry-key-7", :value "4885"}, :read-time 1771819760407}
+{:index 908, :time 44102680084, :type :invoke, :process 4, :f :read, :value "expiry-key-13"}
+{:index 909, :time 44104417917, :type :ok, :process 4, :f :read, :value {:key "expiry-key-13", :value "2054"}, :read-time 1771819760424}
+{:index 910, :time 44133922334, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-13", :ttl 7}}
+{:index 911, :time 44136370250, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-13", :ttl 7}, :result 1, :set-time 1771819760456}
+{:index 912, :time 44156821125, :type :invoke, :process 0, :f :read, :value "expiry-key-10"}
+{:index 913, :time 44159389625, :type :ok, :process 0, :f :read, :value {:key "expiry-key-10", :value "4237"}, :read-time 1771819760479}
+{:index 914, :time 44211502750, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-16", :value 5210, :ttl 9}}
+{:index 915, :time 44214221125, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-16", :value 5210, :ttl 9}, :set-time 1771819760533, :expected-expiry 1771819769533}
+{:index 916, :time 44277921125, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-14", :value 9317, :ttl 3}}
+{:index 917, :time 44278958500, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-14", :value 9317, :ttl 3}, :set-time 1771819760600, :expected-expiry 1771819763600}
+{:index 918, :time 44424742750, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-4", :ttl 8}}
+{:index 919, :time 44426629584, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-4", :ttl 8}, :result 1, :set-time 1771819760747}
+{:index 920, :time 44497368250, :type :invoke, :process 4, :f :read, :value "expiry-key-16"}
+{:index 921, :time 44498915375, :type :ok, :process 4, :f :read, :value {:key "expiry-key-16", :value "5210"}, :read-time 1771819760819}
+{:index 922, :time 44523046875, :type :invoke, :process 0, :f :read, :value "expiry-key-11"}
+{:index 923, :time 44524811250, :type :ok, :process 0, :f :read, :value {:key "expiry-key-11", :value "4494"}, :read-time 1771819760845}
+{:index 924, :time 44610938042, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-7", :ttl 7}}
+{:index 925, :time 44613393417, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-7", :ttl 7}, :result 1, :set-time 1771819760933}
+{:index 926, :time 44671105792, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-4", :value 8553, :ttl 8}}
+{:index 927, :time 44673611542, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-4", :value 8553, :ttl 8}, :set-time 1771819760993, :expected-expiry 1771819768993}
+{:index 928, :time 44707369834, :type :invoke, :process 2, :f :read, :value "expiry-key-1"}
+{:index 929, :time 44709561042, :type :ok, :process 2, :f :read, :value {:key "expiry-key-1", :value nil}, :read-time 1771819761029}
+{:index 930, :time 44911784667, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-3", :value 8306, :ttl 9}}
+{:index 931, :time 44914244084, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-3", :value 8306, :ttl 9}, :set-time 1771819761234, :expected-expiry 1771819770234}
+{:index 932, :time 45109574292, :type :invoke, :process 4, :f :ttl, :value "expiry-key-12"}
+{:index 933, :time 45112463334, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-12", :ttl -2}, :check-time 1771819761432}
+{:index 934, :time 45290814500, :type :invoke, :process 0, :f :read, :value "expiry-key-12"}
+{:index 935, :time 45293653709, :type :ok, :process 0, :f :read, :value {:key "expiry-key-12", :value nil}, :read-time 1771819761613}
+{:index 936, :time 45482105792, :type :invoke, :process 0, :f :read, :value "expiry-key-12"}
+{:index 937, :time 45483688709, :type :ok, :process 0, :f :read, :value {:key "expiry-key-12", :value nil}, :read-time 1771819761804}
+{:index 938, :time 45626208000, :type :invoke, :process 1, :f :persist, :value "expiry-key-13"}
+{:index 939, :time 45629464209, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-13"}, :result 1}
+{:index 940, :time 45761282417, :type :invoke, :process 2, :f :persist, :value "expiry-key-3"}
+{:index 941, :time 45763526459, :type :ok, :process 2, :f :persist, :value {:key "expiry-key-3"}, :result 1}
+{:index 942, :time 45955497667, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-1", :value 6025, :ttl 8}}
+{:index 943, :time 45958094417, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-1", :value 6025, :ttl 8}, :set-time 1771819762277, :expected-expiry 1771819770277}
+{:index 944, :time 46007030750, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-16", :value 2481, :ttl 6}}
+{:index 945, :time 46009087959, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-16", :value 2481, :ttl 6}, :set-time 1771819762329, :expected-expiry 1771819768329}
+{:index 946, :time 46095021167, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-17", :value 1074, :ttl 4}}
+{:index 947, :time 46097991292, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-17", :value 1074, :ttl 4}, :set-time 1771819762417, :expected-expiry 1771819766417}
+{:index 948, :time 46125919750, :type :invoke, :process 0, :f :ttl, :value "expiry-key-3"}
+{:index 949, :time 46127706834, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-3", :ttl -1}, :check-time 1771819762448}
+{:index 950, :time 46311778959, :type :invoke, :process 1, :f :read, :value "expiry-key-14"}
+{:index 951, :time 46314047875, :type :ok, :process 1, :f :read, :value {:key "expiry-key-14", :value "9317"}, :read-time 1771819762634}
+{:index 952, :time 46405174959, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-4", :value 9189, :ttl 8}}
+{:index 953, :time 46407094750, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-4", :value 9189, :ttl 8}, :set-time 1771819762727, :expected-expiry 1771819770727}
+{:index 954, :time 46541972667, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-13", :value 1846, :ttl 4}}
+{:index 955, :time 46543230334, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-13", :value 1846, :ttl 4}, :set-time 1771819762864, :expected-expiry 1771819766864}
+{:index 956, :time 46626835625, :type :invoke, :process 0, :f :ttl, :value "expiry-key-7"}
+{:index 957, :time 46629073000, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-7", :ttl 4}, :check-time 1771819762949}
+{:index 958, :time 46820055250, :type :invoke, :process 0, :f :persist, :value "expiry-key-7"}
+{:index 959, :time 46821515875, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-7"}, :result 1}
+{:index 960, :time 46934974334, :type :invoke, :process 1, :f :read, :value "expiry-key-18"}
+{:index 961, :time 46936384084, :type :ok, :process 1, :f :read, :value {:key "expiry-key-18", :value nil}, :read-time 1771819763257}
+{:index 962, :time 47063963417, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-2", :ttl 3}}
+{:index 963, :time 47066290000, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-2", :ttl 3}, :result 1, :set-time 1771819763386}
+{:index 964, :time 47078669042, :type :invoke, :process 3, :f :read, :value "expiry-key-6"}
+{:index 965, :time 47080554042, :type :ok, :process 3, :f :read, :value {:key "expiry-key-6", :value "8130"}, :read-time 1771819763401}
+{:index 966, :time 47247822375, :type :invoke, :process 4, :f :ttl, :value "expiry-key-4"}
+{:index 967, :time 47250531500, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-4", :ttl 7}, :check-time 1771819763570}
+{:index 968, :time 47349392084, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-19", :value 3379, :ttl 4}}
+{:index 969, :time 47352413209, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-19", :value 3379, :ttl 4}, :set-time 1771819763671, :expected-expiry 1771819767671}
+{:index 970, :time 47519603959, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-19", :value 4551, :ttl 4}}
+{:index 971, :time 47521289625, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-19", :value 4551, :ttl 4}, :set-time 1771819763842, :expected-expiry 1771819767842}
+{:index 972, :time 47701161334, :type :invoke, :process 1, :f :ttl, :value "expiry-key-10"}
+{:index 973, :time 47702327459, :type :ok, :process 1, :f :ttl, :value {:key "expiry-key-10", :ttl 4}, :check-time 1771819764023}
+{:index 974, :time 47899288500, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-18", :ttl 3}}
+{:index 975, :time 47901354875, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-18", :ttl 3}, :result 0, :set-time 1771819764221}
+{:index 976, :time 47943904167, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-15", :value 4367, :ttl 7}}
+{:index 977, :time 47945954709, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-15", :value 4367, :ttl 7}, :set-time 1771819764266, :expected-expiry 1771819771266}
+{:index 978, :time 48091833084, :type :invoke, :process 4, :f :ttl, :value "expiry-key-8"}
+{:index 979, :time 48094013792, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-8", :ttl -1}, :check-time 1771819764414}
+{:index 980, :time 48139674792, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-15", :value 594, :ttl 8}}
+{:index 981, :time 48142202167, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-15", :value 594, :ttl 8}, :set-time 1771819764462, :expected-expiry 1771819772462}
+{:index 982, :time 48273946542, :type :invoke, :process 0, :f :read, :value "expiry-key-17"}
+{:index 983, :time 48277042459, :type :ok, :process 0, :f :read, :value {:key "expiry-key-17", :value "1074"}, :read-time 1771819764596}
+{:index 984, :time 48282677417, :type :invoke, :process 1, :f :read, :value "expiry-key-17"}
+{:index 985, :time 48284598875, :type :ok, :process 1, :f :read, :value {:key "expiry-key-17", :value "1074"}, :read-time 1771819764604}
+{:index 986, :time 48483479959, :type :invoke, :process 2, :f :persist, :value "expiry-key-2"}
+{:index 987, :time 48486021959, :type :ok, :process 2, :f :persist, :value {:key "expiry-key-2"}, :result 1}
+{:index 988, :time 48616628250, :type :invoke, :process 3, :f :ttl, :value "expiry-key-16"}
+{:index 989, :time 48618296084, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-16", :ttl 3}, :check-time 1771819764938}
+{:index 990, :time 48659662459, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-4", :ttl 5}}
+{:index 991, :time 48660862542, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-4", :ttl 5}, :result 1, :set-time 1771819764982}
+{:index 992, :time 48776552625, :type :invoke, :process 0, :f :read, :value "expiry-key-15"}
+{:index 993, :time 48778336917, :type :ok, :process 0, :f :read, :value {:key "expiry-key-15", :value "594"}, :read-time 1771819765098}
+{:index 994, :time 48802868500, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-6", :value 2257, :ttl 4}}
+{:index 995, :time 48804455334, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-6", :value 2257, :ttl 4}, :set-time 1771819765125, :expected-expiry 1771819769125}
+{:index 996, :time 48840010209, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-8", :value 3633, :ttl 5}}
+{:index 997, :time 48842274542, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-8", :value 3633, :ttl 5}, :set-time 1771819765162, :expected-expiry 1771819770162}
+{:index 998, :time 48867651375, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-1", :value 9078, :ttl 8}}
+{:index 999, :time 48869811625, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-1", :value 9078, :ttl 8}, :set-time 1771819765189, :expected-expiry 1771819773189}
+{:index 1000, :time 49053955000, :type :invoke, :process 3, :f :persist, :value "expiry-key-3"}
+{:index 1001, :time 49056312334, :type :ok, :process 3, :f :persist, :value {:key "expiry-key-3"}, :result 0}
+{:index 1002, :time 49253483542, :type :invoke, :process 4, :f :read, :value "expiry-key-14"}
+{:index 1003, :time 49255609209, :type :ok, :process 4, :f :read, :value {:key "expiry-key-14", :value nil}, :read-time 1771819765575}
+{:index 1004, :time 49355261500, :type :invoke, :process 0, :f :read, :value "expiry-key-0"}
+{:index 1005, :time 49357991709, :type :ok, :process 0, :f :read, :value {:key "expiry-key-0", :value "664"}, :read-time 1771819765677}
+{:index 1006, :time 49520090000, :type :invoke, :process 0, :f :read, :value "expiry-key-17"}
+{:index 1007, :time 49521454667, :type :ok, :process 0, :f :read, :value {:key "expiry-key-17", :value "1074"}, :read-time 1771819765842}
+{:index 1008, :time 49677002042, :type :invoke, :process 1, :f :read, :value "expiry-key-2"}
+{:index 1009, :time 49678641917, :type :ok, :process 1, :f :read, :value {:key "expiry-key-2", :value "3977"}, :read-time 1771819765999}
+{:index 1010, :time 49723707292, :type :invoke, :process 2, :f :read, :value "expiry-key-18"}
+{:index 1011, :time 49725083292, :type :ok, :process 2, :f :read, :value {:key "expiry-key-18", :value nil}, :read-time 1771819766046}
+{:index 1012, :time 49849931375, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-11", :value 5635, :ttl 3}}
+{:index 1013, :time 49852304084, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-11", :value 5635, :ttl 3}, :set-time 1771819766172, :expected-expiry 1771819769172}
+{:index 1014, :time 50003334500, :type :invoke, :process 4, :f :read, :value "expiry-key-17"}
+{:index 1015, :time 50005440875, :type :ok, :process 4, :f :read, :value {:key "expiry-key-17", :value "1074"}, :read-time 1771819766325}
+{:index 1016, :time 50176939667, :type :invoke, :process 0, :f :ttl, :value "expiry-key-1"}
+{:index 1017, :time 50179285750, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-1", :ttl 6}, :check-time 1771819766499}
+{:index 1018, :time 50254862000, :type :invoke, :process 0, :f :ttl, :value "expiry-key-15"}
+{:index 1019, :time 50256927000, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-15", :ttl 5}, :check-time 1771819766577}
+{:index 1020, :time 50382054500, :type :invoke, :process 1, :f :ttl, :value "expiry-key-11"}
+{:index 1021, :time 50384187834, :type :ok, :process 1, :f :ttl, :value {:key "expiry-key-11", :ttl 2}, :check-time 1771819766704}
+{:index 1022, :time 50577729625, :type :invoke, :process 2, :f :read, :value "expiry-key-18"}
+{:index 1023, :time 50581101125, :type :ok, :process 2, :f :read, :value {:key "expiry-key-18", :value nil}, :read-time 1771819766900}
+{:index 1024, :time 50752348709, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-12", :value 8333, :ttl 6}}
+{:index 1025, :time 50755081167, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-12", :value 8333, :ttl 6}, :set-time 1771819767075, :expected-expiry 1771819773075}
+{:index 1026, :time 50765940875, :type :invoke, :process 4, :f :read, :value "expiry-key-5"}
+{:index 1027, :time 50767481125, :type :ok, :process 4, :f :read, :value {:key "expiry-key-5", :value nil}, :read-time 1771819767088}
+{:index 1028, :time 50847012750, :type :invoke, :process 0, :f :ttl, :value "expiry-key-19"}
+{:index 1029, :time 50847833625, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-19", :ttl 0}, :check-time 1771819767169}
+{:index 1030, :time 51039468250, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-9", :ttl 5}}
+{:index 1031, :time 51041773209, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-9", :ttl 5}, :result 0, :set-time 1771819767361}
+{:index 1032, :time 51060304292, :type :invoke, :process 1, :f :persist, :value "expiry-key-13"}
+{:index 1033, :time 51061976375, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-13"}, :result 0}
+{:index 1034, :time 51242260584, :type :invoke, :process 2, :f :read, :value "expiry-key-4"}
+{:index 1035, :time 51244358292, :type :ok, :process 2, :f :read, :value {:key "expiry-key-4", :value "9189"}, :read-time 1771819767564}
+{:index 1036, :time 51343044709, :type :invoke, :process 3, :f :persist, :value "expiry-key-1"}
+{:index 1037, :time 51345511959, :type :ok, :process 3, :f :persist, :value {:key "expiry-key-1"}, :result 1}
+{:index 1038, :time 51352017875, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-13", :ttl 5}}
+{:index 1039, :time 51353847042, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-13", :ttl 5}, :result 0, :set-time 1771819767674}
+{:index 1040, :time 51454301209, :type :invoke, :process 0, :f :read, :value "expiry-key-8"}
+{:index 1041, :time 51456817042, :type :ok, :process 0, :f :read, :value {:key "expiry-key-8", :value "3633"}, :read-time 1771819767777}
+{:index 1042, :time 51541722750, :type :invoke, :process 0, :f :ttl, :value "expiry-key-16"}
+{:index 1043, :time 51544398042, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-16", :ttl 0}, :check-time 1771819767864}
+{:index 1044, :time 51662999917, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-9", :ttl 6}}
+{:index 1045, :time 51666623209, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-9", :ttl 6}, :result 0, :set-time 1771819767985}
+{:index 1046, :time 51678084292, :type :invoke, :process 2, :f :read, :value "expiry-key-12"}
+{:index 1047, :time 51680652334, :type :ok, :process 2, :f :read, :value {:key "expiry-key-12", :value "8333"}, :read-time 1771819768000}
+{:index 1048, :time 51695151459, :type :invoke, :process 3, :f :persist, :value "expiry-key-11"}
+{:index 1049, :time 51695949417, :type :invoke, :process 4, :f :ttl, :value "expiry-key-1"}
+{:index 1050, :time 51697366750, :type :ok, :process 3, :f :persist, :value {:key "expiry-key-11"}, :result 1}
+{:index 1051, :time 51697485000, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-1", :ttl -1}, :check-time 1771819768018}
+{:index 1052, :time 51814788459, :type :invoke, :process 0, :f :ttl, :value "expiry-key-4"}
+{:index 1053, :time 51816459417, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-4", :ttl 1}, :check-time 1771819768136}
+{:index 1054, :time 51968150834, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-18", :value 4261, :ttl 5}}
+{:index 1055, :time 51969831584, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-18", :value 4261, :ttl 5}, :set-time 1771819768290, :expected-expiry 1771819773290}
+{:index 1056, :time 52027170042, :type :invoke, :process 1, :f :read, :value "expiry-key-5"}
+{:index 1057, :time 52028859875, :type :ok, :process 1, :f :read, :value {:key "expiry-key-5", :value nil}, :read-time 1771819768349}
+{:index 1058, :time 52215709500, :type :invoke, :process 2, :f :read, :value "expiry-key-5"}
+{:index 1059, :time 52217987959, :type :ok, :process 2, :f :read, :value {:key "expiry-key-5", :value nil}, :read-time 1771819768538}
+{:index 1060, :time 52416087709, :type :invoke, :process 3, :f :ttl, :value "expiry-key-0"}
+{:index 1061, :time 52418783125, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-0", :ttl -1}, :check-time 1771819768738}
+{:index 1062, :time 52513307792, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-12", :ttl 4}}
+{:index 1063, :time 52515447584, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-12", :ttl 4}, :result 1, :set-time 1771819768836}
+{:index 1064, :time 52685536250, :type :invoke, :process 0, :f :ttl, :value "expiry-key-13"}
+{:index 1065, :time 52687229875, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-13", :ttl -2}, :check-time 1771819769007}
+{:index 1066, :time 52773767584, :type :invoke, :process 0, :f :persist, :value "expiry-key-10"}
+{:index 1067, :time 52775749209, :type :ok, :process 0, :f :persist, :value {:key "expiry-key-10"}, :result 0}
+{:index 1068, :time 52961252042, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-12", :ttl 8}}
+{:index 1069, :time 52962677792, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-12", :ttl 8}, :result 1, :set-time 1771819769283}
+{:index 1070, :time 52963210875, :type :invoke, :process 2, :f :read, :value "expiry-key-19"}
+{:index 1071, :time 52963675167, :type :ok, :process 2, :f :read, :value {:key "expiry-key-19", :value nil}, :read-time 1771819769285}
+{:index 1072, :time 52965087167, :type :invoke, :process 3, :f :read, :value "expiry-key-0"}
+{:index 1073, :time 52965454875, :type :ok, :process 3, :f :read, :value {:key "expiry-key-0", :value "664"}, :read-time 1771819769287}
+{:index 1074, :time 52978166750, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-18", :ttl 8}}
+{:index 1075, :time 52978770000, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-18", :ttl 8}, :result 1, :set-time 1771819769300}
+{:index 1076, :time 53127867375, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-19", :value 8764, :ttl 7}}
+{:index 1077, :time 53129695917, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-19", :value 8764, :ttl 7}, :set-time 1771819769450, :expected-expiry 1771819776450}
+{:index 1078, :time 53294025334, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 6806, :ttl 9}}
+{:index 1079, :time 53295817667, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 6806, :ttl 9}, :set-time 1771819769616, :expected-expiry 1771819778616}
+{:index 1080, :time 53426776959, :type :invoke, :process 1, :f :read, :value "expiry-key-11"}
+{:index 1081, :time 53429120334, :type :ok, :process 1, :f :read, :value {:key "expiry-key-11", :value "5635"}, :read-time 1771819769749}
+{:index 1082, :time 53496760084, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-1", :value 785, :ttl 9}}
+{:index 1083, :time 53498860834, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-1", :value 785, :ttl 9}, :set-time 1771819769819, :expected-expiry 1771819778819}
+{:index 1084, :time 53672951125, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-9", :value 75, :ttl 6}}
+{:index 1085, :time 53676513209, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-9", :value 75, :ttl 6}, :set-time 1771819769995, :expected-expiry 1771819775995}
+{:index 1086, :time 53787837042, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-10", :ttl 6}}
+{:index 1087, :time 53790566917, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-10", :ttl 6}, :result 0, :set-time 1771819770110}
+{:index 1088, :time 53866065417, :type :invoke, :process 0, :f :read, :value "expiry-key-19"}
+{:index 1089, :time 53869041875, :type :ok, :process 0, :f :read, :value {:key "expiry-key-19", :value "8764"}, :read-time 1771819770188}
+{:index 1090, :time 54036529500, :type :invoke, :process 0, :f :ttl, :value "expiry-key-15"}
+{:index 1091, :time 54037832334, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-15", :ttl 2}, :check-time 1771819770358}
+{:index 1092, :time 54058415084, :type :invoke, :process 1, :f :persist, :value "expiry-key-7"}
+{:index 1093, :time 54059284084, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-7"}, :result 0}
+{:index 1094, :time 54089322625, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-5", :ttl 4}}
+{:index 1095, :time 54090435417, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-5", :ttl 4}, :result 0, :set-time 1771819770411}
+{:index 1096, :time 54205680917, :type :invoke, :process 3, :f :persist, :value "expiry-key-12"}
+{:index 1097, :time 54207618542, :type :ok, :process 3, :f :persist, :value {:key "expiry-key-12"}, :result 1}
+{:index 1098, :time 54359727625, :type :invoke, :process 4, :f :read, :value "expiry-key-12"}
+{:index 1099, :time 54361464917, :type :ok, :process 4, :f :read, :value {:key "expiry-key-12", :value "6806"}, :read-time 1771819770681}
+{:index 1100, :time 54391080459, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-5", :value 9796, :ttl 7}}
+{:index 1101, :time 54393081334, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-5", :value 9796, :ttl 7}, :set-time 1771819770713, :expected-expiry 1771819777713}
+{:index 1102, :time 54585702750, :type :invoke, :process 0, :f :read, :value "expiry-key-4"}
+{:index 1103, :time 54587636792, :type :ok, :process 0, :f :read, :value {:key "expiry-key-4", :value nil}, :read-time 1771819770908}
+{:index 1104, :time 54738080167, :type :invoke, :process 1, :f :read, :value "expiry-key-6"}
+{:index 1105, :time 54740910542, :type :ok, :process 1, :f :read, :value {:key "expiry-key-6", :value nil}, :read-time 1771819771060}
+{:index 1106, :time 54880944667, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-10", :value 5998, :ttl 3}}
+{:index 1107, :time 54883232709, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-10", :value 5998, :ttl 3}, :set-time 1771819771203, :expected-expiry 1771819774203}
+{:index 1108, :time 54918545875, :type :invoke, :process 3, :f :ttl, :value "expiry-key-7"}
+{:index 1109, :time 54920223042, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-7", :ttl -1}, :check-time 1771819771240}
+{:index 1110, :time 55099018375, :type :invoke, :process 4, :f :set-with-ttl, :value {:key "expiry-key-13", :value 7417, :ttl 3}}
+{:index 1111, :time 55100492375, :type :ok, :process 4, :f :set-with-ttl, :value {:key "expiry-key-13", :value 7417, :ttl 3}, :set-time 1771819771421, :expected-expiry 1771819774421}
+{:index 1112, :time 55297836000, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-17", :ttl 7}}
+{:index 1113, :time 55300067625, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-17", :ttl 7}, :result 0, :set-time 1771819771620}
+{:index 1114, :time 55316738459, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-8", :value 2951, :ttl 6}}
+{:index 1115, :time 55319427917, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-8", :value 2951, :ttl 6}, :set-time 1771819771639, :expected-expiry 1771819777639}
+{:index 1116, :time 55493928792, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-8", :value 3014, :ttl 7}}
+{:index 1117, :time 55502177250, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-8", :value 3014, :ttl 7}, :set-time 1771819771816, :expected-expiry 1771819778816}
+{:index 1118, :time 55568405875, :type :invoke, :process 2, :f :read, :value "expiry-key-16"}
+{:index 1119, :time 55571090250, :type :ok, :process 2, :f :read, :value {:key "expiry-key-16", :value nil}, :read-time 1771819771890}
+{:index 1120, :time 55763722792, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-3", :value 9345, :ttl 8}}
+{:index 1121, :time 55765528084, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-3", :value 9345, :ttl 8}, :set-time 1771819772086, :expected-expiry 1771819780086}
+{:index 1122, :time 55904995584, :type :invoke, :process 4, :f :expire, :value {:key "expiry-key-8", :ttl 7}}
+{:index 1123, :time 55907806750, :type :ok, :process 4, :f :expire, :value {:key "expiry-key-8", :ttl 7}, :result 1, :set-time 1771819772227}
+{:index 1124, :time 56091053584, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-7", :value 3984, :ttl 3}}
+{:index 1125, :time 56093611167, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-7", :value 3984, :ttl 3}, :set-time 1771819772413, :expected-expiry 1771819775413}
+{:index 1126, :time 56281071584, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 1437, :ttl 3}}
+{:index 1127, :time 56282060667, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-12", :value 1437, :ttl 3}, :set-time 1771819772603, :expected-expiry 1771819775603}
+{:index 1128, :time 56433832167, :type :invoke, :process 1, :f :persist, :value "expiry-key-9"}
+{:index 1129, :time 56436316792, :type :ok, :process 1, :f :persist, :value {:key "expiry-key-9"}, :result 1}
+{:index 1130, :time 56492231042, :type :info, :process :nemesis, :f :kill, :value nil}
+{:index 1131, :time 56586110500, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-10", :ttl 7}}
+{:index 1132, :time 56588684167, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-10", :ttl 7}, :result 1, :set-time 1771819772908}
+{:index 1133, :time 56687977459, :type :info, :process :nemesis, :f :kill, :value ["n1"]}
+{:index 1134, :time 56719448459, :type :invoke, :process 0, :f :read, :value "expiry-key-9"}
+{:index 1135, :time 56720423125, :type :ok, :process 0, :f :read, :value {:key "expiry-key-9", :value "75"}, :read-time 1771819773041}
+{:index 1136, :time 56743739500, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-3", :value 360, :ttl 5}}
+{:index 1137, :time 56744633667, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-3", :value 360, :ttl 5}, :set-time 1771819773065, :expected-expiry 1771819778065}
+{:index 1138, :time 56815747500, :type :invoke, :process 1, :f :read, :value "expiry-key-9"}
+{:index 1139, :time 56817345875, :type :ok, :process 1, :f :read, :value {:key "expiry-key-9", :value "75"}, :read-time 1771819773138}
+{:index 1140, :time 56906729292, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-15", :value 4398, :ttl 8}}
+{:index 1141, :time 56909095917, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-15", :value 4398, :ttl 8}, :set-time 1771819773229, :expected-expiry 1771819781229}
+{:index 1142, :time 57015853625, :type :invoke, :process 3, :f :ttl, :value "expiry-key-14"}
+{:index 1143, :time 57017821209, :type :ok, :process 3, :f :ttl, :value {:key "expiry-key-14", :ttl -2}, :check-time 1771819773338}
+{:index 1144, :time 57054974125, :type :invoke, :process 4, :f :read, :value "expiry-key-12"}
+{:index 1145, :time 57057079042, :type :ok, :process 4, :f :read, :value {:key "expiry-key-12", :value "1437"}, :read-time 1771819773377}
+{:index 1146, :time 57174742125, :type :invoke, :process 0, :f :read, :value "expiry-key-14"}
+{:index 1147, :time 57177410500, :type :ok, :process 0, :f :read, :value {:key "expiry-key-14", :value nil}, :read-time 1771819773497}
+{:index 1148, :time 57230311417, :type :invoke, :process 0, :f :ttl, :value "expiry-key-14"}
+{:index 1149, :time 57232477625, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-14", :ttl -2}, :check-time 1771819773553}
+{:index 1150, :time 57375132000, :type :invoke, :process 1, :f :set-with-ttl, :value {:key "expiry-key-8", :value 1113, :ttl 4}}
+{:index 1151, :time 57376982042, :type :ok, :process 1, :f :set-with-ttl, :value {:key "expiry-key-8", :value 1113, :ttl 4}, :set-time 1771819773697, :expected-expiry 1771819777697}
+{:index 1152, :time 57524151834, :type :invoke, :process 2, :f :expire, :value {:key "expiry-key-7", :ttl 9}}
+{:index 1153, :time 57526773792, :type :ok, :process 2, :f :expire, :value {:key "expiry-key-7", :ttl 9}, :result 1, :set-time 1771819773847}
+{:index 1154, :time 57675423875, :type :invoke, :process 3, :f :expire, :value {:key "expiry-key-3", :ttl 4}}
+{:index 1155, :time 57678885292, :type :ok, :process 3, :f :expire, :value {:key "expiry-key-3", :ttl 4}, :result 1, :set-time 1771819773998}
+{:index 1156, :time 57751394750, :type :invoke, :process 4, :f :ttl, :value "expiry-key-15"}
+{:index 1157, :time 57754571084, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-15", :ttl 7}, :check-time 1771819774074}
+{:index 1158, :time 57949185375, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-15", :ttl 6}}
+{:index 1159, :time 57951420584, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-15", :ttl 6}, :result 1, :set-time 1771819774271}
+{:index 1160, :time 58078712542, :type :invoke, :process 0, :f :ttl, :value "expiry-key-18"}
+{:index 1161, :time 58080964042, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-18", :ttl 2}, :check-time 1771819774401}
+{:index 1162, :time 58267557042, :type :invoke, :process 1, :f :ttl, :value "expiry-key-0"}
+{:index 1163, :time 58269210750, :type :ok, :process 1, :f :ttl, :value {:key "expiry-key-0", :ttl -1}, :check-time 1771819774590}
+{:index 1164, :time 58291126250, :type :invoke, :process 2, :f :ttl, :value "expiry-key-13"}
+{:index 1165, :time 58293524459, :type :ok, :process 2, :f :ttl, :value {:key "expiry-key-13", :ttl -2}, :check-time 1771819774613}
+{:index 1166, :time 58443756000, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-14", :value 6536, :ttl 7}}
+{:index 1167, :time 58445192250, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-14", :value 6536, :ttl 7}, :set-time 1771819774766, :expected-expiry 1771819781766}
+{:index 1168, :time 58495186584, :type :invoke, :process 4, :f :ttl, :value "expiry-key-7"}
+{:index 1169, :time 58497672542, :type :ok, :process 4, :f :ttl, :value {:key "expiry-key-7", :ttl 8}, :check-time 1771819774817}
+{:index 1170, :time 58655510959, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-13", :value 4504, :ttl 4}}
+{:index 1171, :time 58658600959, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-13", :value 4504, :ttl 4}, :set-time 1771819774978, :expected-expiry 1771819778978}
+{:index 1172, :time 58702092500, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-0", :ttl 5}}
+{:index 1173, :time 58704579417, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-0", :ttl 5}, :result 1, :set-time 1771819775024}
+{:index 1174, :time 58764024375, :type :invoke, :process 1, :f :read, :value "expiry-key-16"}
+{:index 1175, :time 58766625292, :type :ok, :process 1, :f :read, :value {:key "expiry-key-16", :value nil}, :read-time 1771819775086}
+{:index 1176, :time 58827783917, :type :invoke, :process 2, :f :set-with-ttl, :value {:key "expiry-key-8", :value 815, :ttl 5}}
+{:index 1177, :time 58829847250, :type :ok, :process 2, :f :set-with-ttl, :value {:key "expiry-key-8", :value 815, :ttl 5}, :set-time 1771819775150, :expected-expiry 1771819780150}
+{:index 1178, :time 58991532125, :type :invoke, :process 3, :f :set-with-ttl, :value {:key "expiry-key-7", :value 1834, :ttl 6}}
+{:index 1179, :time 58993960125, :type :ok, :process 3, :f :set-with-ttl, :value {:key "expiry-key-7", :value 1834, :ttl 6}, :set-time 1771819775313, :expected-expiry 1771819781313}
+{:index 1180, :time 59074535084, :type :invoke, :process 4, :f :read, :value "expiry-key-4"}
+{:index 1181, :time 59076526250, :type :ok, :process 4, :f :read, :value {:key "expiry-key-4", :value nil}, :read-time 1771819775396}
+{:index 1182, :time 59257049542, :type :invoke, :process 0, :f :ttl, :value "expiry-key-12"}
+{:index 1183, :time 59259634667, :type :ok, :process 0, :f :ttl, :value {:key "expiry-key-12", :ttl 0}, :check-time 1771819775579}
+{:index 1184, :time 59374464584, :type :invoke, :process 0, :f :expire, :value {:key "expiry-key-0", :ttl 8}}
+{:index 1185, :time 59376161625, :type :ok, :process 0, :f :expire, :value {:key "expiry-key-0", :ttl 8}, :result 1, :set-time 1771819775696}
+{:index 1186, :time 59436825667, :type :invoke, :process 1, :f :expire, :value {:key "expiry-key-11", :ttl 4}}
+{:index 1187, :time 59437849709, :type :ok, :process 1, :f :expire, :value {:key "expiry-key-11", :ttl 4}, :result 1, :set-time 1771819775759}
+{:index 1188, :time 59595340500, :type :invoke, :process 2, :f :read, :value "expiry-key-15"}
+{:index 1189, :time 59596925292, :type :ok, :process 2, :f :read, :value {:key "expiry-key-15", :value "4398"}, :read-time 1771819775917}
+{:index 1190, :time 59676593125, :type :invoke, :process 3, :f :persist, :value "expiry-key-11"}
+{:index 1191, :time 59678404125, :type :ok, :process 3, :f :persist, :value {:key "expiry-key-11"}, :result 1}
+{:index 1192, :time 59802640042, :type :invoke, :process 4, :f :persist, :value "expiry-key-18"}
+{:index 1193, :time 59804532125, :type :ok, :process 4, :f :persist, :value {:key "expiry-key-18"}, :result 1}
+{:index 1194, :time 59930052375, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-5", :value 4377, :ttl 3}}
+{:index 1195, :time 59932338834, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-5", :value 4377, :ttl 3}, :set-time 1771819776252, :expected-expiry 1771819779252}
+{:index 1196, :time 59996089959, :type :invoke, :process 0, :f :set-with-ttl, :value {:key "expiry-key-11", :value 485, :ttl 7}}
+{:index 1197, :time 59998163542, :type :ok, :process 0, :f :set-with-ttl, :value {:key "expiry-key-11", :value 485, :ttl 7}, :set-time 1771819776318, :expected-expiry 1771819783318}
+{:index 1198, :time 61690446792, :type :info, :process :nemesis, :f :start, :value nil}
+{:index 1199, :time 64732810417, :type :info, :process :nemesis, :f :start, :value ["n1"]}
+{:index 1200, :time 69738583667, :type :invoke, :process 0, :f :read, :value nil}
+{:index 1201, :time 69742869500, :type :ok, :process 0, :f :read, :value {:key nil, :value nil}, :read-time 1771819786061}
+{:index 1202, :time 69896200500, :type :invoke, :process 0, :f :read, :value nil}
+{:index 1203, :time 69898037875, :type :ok, :process 0, :f :read, :value {:key nil, :value nil}, :read-time 1771819786218}
+{:index 1204, :time 69913989750, :type :invoke, :process 1, :f :read, :value nil}
+{:index 1205, :time 69916010292, :type :ok, :process 1, :f :read, :value {:key nil, :value nil}, :read-time 1771819786236}
+{:index 1206, :time 69941028334, :type :invoke, :process 2, :f :read, :value nil}
+{:index 1207, :time 69942965292, :type :ok, :process 2, :f :read, :value {:key nil, :value nil}, :read-time 1771819786263}
+{:index 1208, :time 69987564084, :type :invoke, :process 3, :f :read, :value nil}
+{:index 1209, :time 69989451042, :type :ok, :process 3, :f :read, :value {:key nil, :value nil}, :read-time 1771819786309}
+{:index 1210, :time 69999556167, :type :invoke, :process 4, :f :read, :value nil}
+{:index 1211, :time 70001187375, :type :ok, :process 4, :f :read, :value {:key nil, :value nil}, :read-time 1771819786321}
+{:index 1212, :time 70148929500, :type :invoke, :process 0, :f :read, :value nil}
+{:index 1213, :time 70150997542, :type :ok, :process 0, :f :read, :value {:key nil, :value nil}, :read-time 1771819786471}
+{:index 1214, :time 70180540750, :type :invoke, :process 0, :f :read, :value nil}
+{:index 1215, :time 70181532167, :type :ok, :process 0, :f :read, :value {:key nil, :value nil}, :read-time 1771819786502}
+{:index 1216, :time 70354959750, :type :invoke, :process 1, :f :read, :value nil}
+{:index 1217, :time 70356103167, :type :ok, :process 1, :f :read, :value {:key nil, :value nil}, :read-time 1771819786677}
+{:index 1218, :time 70502059667, :type :invoke, :process 2, :f :read, :value nil}
+{:index 1219, :time 70507632000, :type :ok, :process 2, :f :read, :value {:key nil, :value nil}, :read-time 1771819786824}

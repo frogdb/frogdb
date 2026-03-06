@@ -1,0 +1,777 @@
+2026-02-22 23:51:53,978{GMT}	INFO	[jepsen test runner] jepsen.core: Test version 4a7760395f3d9033cc6c7a477c6947e5d983eb25 (plus uncommitted changes)
+2026-02-22 23:51:53,978{GMT}	INFO	[jepsen test runner] jepsen.core: Command line:
+lein run test --docker --workload replication --nemesis none --time-limit 30
+2026-02-22 23:51:54,007{GMT}	INFO	[jepsen test runner] jepsen.core: Running test:
+{:remote
+ #jepsen.control.retry.Remote{:remote #jepsen.control.scp.Remote{:cmd-remote #jepsen.control.sshj.SSHJRemote{:concurrency-limit 6,
+                                                                                                             :conn-spec nil,
+                                                                                                             :client nil,
+                                                                                                             :semaphore nil},
+                                                                 :conn-spec nil},
+                              :conn nil}
+ :concurrency 5
+ :cluster false
+ :db
+ #object[jepsen.frogdb.db$replication_db$reify__9900
+         "0x4d1bbad3"
+         "jepsen.frogdb.db$replication_db$reify__9900@4d1bbad3"]
+ :leave-db-running? false
+ :name "frogdb-replication-docker-replication"
+ :logging-json? false
+ :independent false
+ :start-time
+ #object[org.joda.time.DateTime "0xc24e06a" "2026-02-22T23:51:53.940-05:00"]
+ :docker true
+ :net
+ #object[jepsen.net$reify__12635
+         "0x1926e42e"
+         "jepsen.net$reify__12635@1926e42e"]
+ :client
+ #jepsen.frogdb.replication.ReplicationClient{:conns nil,
+                                              :primary-conn nil,
+                                              :replica-conns nil,
+                                              :docker-host? nil}
+ :barrier
+ #object[java.util.concurrent.CyclicBarrier
+         "0x6fa38b67"
+         "java.util.concurrent.CyclicBarrier@6fa38b67"]
+ :ssh {:dummy? true}
+ :rate 10
+ :checker
+ #object[jepsen.checker$compose$reify__10552
+         "0x3b6ea33b"
+         "jepsen.checker$compose$reify__10552@3b6ea33b"]
+ :argv
+ ("test"
+  "--docker"
+  "--workload"
+  "replication"
+  "--nemesis"
+  "none"
+  "--time-limit"
+  "30")
+ :nemesis #unprintable "jepsen.nemesis$reify__12738@1062338c"
+ :nodes ["n1" "n2" "n3"]
+ :test-count 1
+ :replication false
+ :cluster-nodes ["n1" "n2" "n3"]
+ :generator
+ #object[jepsen.util.Forgettable
+         "0x67af3485"
+         ((jepsen.generator.Synchronize
+           {:gen (jepsen.generator.TimeLimit
+                  {:limit 30000000000,
+                   :cutoff nil,
+                   :gen (jepsen.generator.Any
+                         {:gens [(jepsen.generator.OnThreads
+                                  {:f #{:nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x66a81c48"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@66a81c48"],
+                                   :gen nil})
+                                 (jepsen.generator.OnThreads
+                                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x60880394"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@60880394"],
+                                   :gen (jepsen.generator.Stagger
+                                         {:dt 200000000,
+                                          :next-time nil,
+                                          :gen (jepsen.generator.Mix
+                                                {:i 2,
+                                                 :gens [#object[jepsen.frogdb.replication$generator$fn__11852
+                                                                "0x482b6acc"
+                                                                "jepsen.frogdb.replication$generator$fn__11852@482b6acc"]
+                                                        #object[jepsen.frogdb.replication$generator$fn__11854
+                                                                "0x3709ef16"
+                                                                "jepsen.frogdb.replication$generator$fn__11854@3709ef16"]
+                                                        #object[jepsen.frogdb.replication$generator$fn__11856
+                                                                "0x1165efe3"
+                                                                "jepsen.frogdb.replication$generator$fn__11856@1165efe3"]
+                                                        #object[jepsen.frogdb.replication$generator$fn__11858
+                                                                "0x3151caf8"
+                                                                "jepsen.frogdb.replication$generator$fn__11858@3151caf8"]
+                                                        #object[jepsen.frogdb.replication$generator$fn__11860
+                                                                "0x22bfbb14"
+                                                                "jepsen.frogdb.replication$generator$fn__11860@22bfbb14"]]})})})]})})})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Recovering from faults..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #{:nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x5a36810a"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@5a36810a"],
+                   :gen nil})})
+          (jepsen.generator.Synchronize {:gen {:type :sleep, :value 5}})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Final reads..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x64926758"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@64926758"],
+                   :gen (jepsen.generator.Stagger
+                         {:dt 200000000,
+                          :next-time nil,
+                          :gen (jepsen.generator.Limit
+                                {:remaining 10,
+                                 :gen (jepsen.generator.Repeat
+                                       {:remaining -1, :gen {:f :read}})})})})}))]
+ :interval 10
+ :os
+ #object[jepsen.frogdb.core$reify__14064
+         "0x7e282ec9"
+         "jepsen.frogdb.core$reify__14064@7e282ec9"]
+ :time-limit 30
+ :workload "replication"
+ :local false}
+
+2026-02-22 23:51:55,339{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS setup for n3 (no-op)
+2026-02-22 23:51:55,339{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS setup for n2 (no-op)
+2026-02-22 23:51:55,339{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS setup for n1 (no-op)
+2026-02-22 23:51:55,339{GMT}	INFO	[jepsen test runner] jepsen.db: Tearing down DB
+2026-02-22 23:51:55,339{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB replication node n1
+2026-02-22 23:51:55,339{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Tearing down FrogDB replication node n2
+2026-02-22 23:51:55,339{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Tearing down FrogDB replication node n3
+2026-02-22 23:51:55,564{GMT}	INFO	[jepsen test runner] jepsen.db: Setting up DB
+2026-02-22 23:51:55,564{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Setting up FrogDB replication node n1
+2026-02-22 23:51:55,564{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Setting up FrogDB replication node n3
+2026-02-22 23:51:55,564{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Setting up FrogDB replication node n2
+2026-02-22 23:51:56,748{GMT}	INFO	[jepsen test runner] jepsen.core: Relative time begins now
+2026-02-22 23:51:56,749{GMT}	INFO	[jepsen node n2] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:51:56,749{GMT}	INFO	[jepsen node n3] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:51:56,749{GMT}	INFO	[jepsen node n1] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:51:56,749{GMT}	INFO	[jepsen node n3] jepsen.frogdb.replication: Setting up replication test key jepsen-repl
+2026-02-22 23:51:56,749{GMT}	INFO	[jepsen node n2] jepsen.frogdb.replication: Setting up replication test key jepsen-repl
+2026-02-22 23:51:56,749{GMT}	INFO	[jepsen node n1] jepsen.frogdb.replication: Setting up replication test key jepsen-repl
+2026-02-22 23:51:57,281{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-primary	nil
+2026-02-22 23:51:57,282{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:51:57,287{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-primary	0
+2026-02-22 23:51:57,465{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-primary	nil
+2026-02-22 23:51:57,465{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:51:57,491{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-primary	0
+2026-02-22 23:51:57,638{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write	3
+2026-02-22 23:51:57,638{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:51:57,641{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write	3
+2026-02-22 23:51:57,677{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-primary	nil
+2026-02-22 23:51:57,677{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:51:57,679{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-primary	3
+2026-02-22 23:51:57,854{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:51:57,854{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:51:57,889{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" 3, "n2" nil, "n3" nil}
+2026-02-22 23:51:57,964{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-sync	6
+2026-02-22 23:51:58,027{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write	8
+2026-02-22 23:51:58,029{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write	8
+2026-02-22 23:51:58,183{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-sync	11
+2026-02-22 23:51:58,261{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:51:58,265{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" 11, "n2" nil, "n3" nil}
+2026-02-22 23:51:58,452{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-primary	nil
+2026-02-22 23:51:58,453{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-primary	11
+2026-02-22 23:51:58,603{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-sync	14
+2026-02-22 23:51:58,698{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:51:58,704{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" 14, "n2" nil, "n3" nil}
+2026-02-22 23:51:58,869{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-primary	nil
+2026-02-22 23:51:58,870{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-primary	nil
+2026-02-22 23:51:58,870{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-primary	14
+2026-02-22 23:51:58,871{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-primary	14
+2026-02-22 23:51:58,884{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-sync	18
+2026-02-22 23:51:58,929{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:51:58,932{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" 18, "n2" nil, "n3" nil}
+2026-02-22 23:51:59,042{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write	23
+2026-02-22 23:51:59,044{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write	23
+2026-02-22 23:51:59,093{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write	27
+2026-02-22 23:51:59,094{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write	27
+2026-02-22 23:51:59,241{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-sync	31
+2026-02-22 23:52:02,970{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:info	:write-sync	6	:timeout
+2026-02-22 23:52:02,971{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:invoke	:read-replica	nil
+2026-02-22 23:52:02,971{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:02,972{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:ok	:read-replica	nil
+2026-02-22 23:52:02,994{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:invoke	:write-sync	35
+2026-02-22 23:52:03,187{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:info	:write-sync	11	:timeout
+2026-02-22 23:52:03,187{GMT}	INFO	[jepsen worker 1] jepsen.util: 6	:invoke	:read-all	nil
+2026-02-22 23:52:03,187{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:03,191{GMT}	INFO	[jepsen worker 1] jepsen.util: 6	:ok	:read-all	{"n1" 35, "n2" nil, "n3" nil}
+2026-02-22 23:52:03,234{GMT}	INFO	[jepsen worker 1] jepsen.util: 6	:invoke	:write-sync	41
+2026-02-22 23:52:03,607{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:info	:write-sync	14	:timeout
+2026-02-22 23:52:03,607{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:invoke	:write-sync	332
+2026-02-22 23:52:03,607{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:03,886{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:info	:write-sync	18	:timeout
+2026-02-22 23:52:03,886{GMT}	INFO	[jepsen worker 2] jepsen.util: 7	:invoke	:write-sync	551
+2026-02-22 23:52:03,886{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:04,244{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:info	:write-sync	31	:timeout
+2026-02-22 23:52:04,244{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:write-sync	830
+2026-02-22 23:52:04,245{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:07,999{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:info	:write-sync	35	:timeout
+2026-02-22 23:52:08,000{GMT}	INFO	[jepsen worker 0] jepsen.util: 10	:invoke	:write-sync	3731
+2026-02-22 23:52:08,000{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:08,238{GMT}	INFO	[jepsen worker 1] jepsen.util: 6	:info	:write-sync	41	:timeout
+2026-02-22 23:52:08,238{GMT}	INFO	[jepsen worker 1] jepsen.util: 11	:invoke	:write-sync	3918
+2026-02-22 23:52:08,238{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:08,611{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:info	:write-sync	332	:timeout
+2026-02-22 23:52:08,612{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:write	4209
+2026-02-22 23:52:08,612{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:08,615{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:write	4209
+2026-02-22 23:52:08,653{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-replica	nil
+2026-02-22 23:52:08,655{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:read-replica	nil
+2026-02-22 23:52:08,767{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-replica	nil
+2026-02-22 23:52:08,769{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:read-replica	nil
+2026-02-22 23:52:08,791{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-all	nil
+2026-02-22 23:52:08,795{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:read-all	{"n1" 4209, "n2" nil, "n3" nil}
+2026-02-22 23:52:08,801{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-all	nil
+2026-02-22 23:52:08,804{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:read-all	{"n1" 4209, "n2" nil, "n3" nil}
+2026-02-22 23:52:08,853{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-primary	nil
+2026-02-22 23:52:08,855{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:read-primary	4209
+2026-02-22 23:52:08,858{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-all	nil
+2026-02-22 23:52:08,861{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:read-all	{"n1" 4209, "n2" nil, "n3" nil}
+2026-02-22 23:52:08,889{GMT}	INFO	[jepsen worker 2] jepsen.util: 7	:info	:write-sync	551	:timeout
+2026-02-22 23:52:08,928{GMT}	INFO	[jepsen worker 2] jepsen.util: 12	:invoke	:write-sync	4215
+2026-02-22 23:52:08,928{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:09,028{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-primary	nil
+2026-02-22 23:52:09,032{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:read-primary	4215
+2026-02-22 23:52:09,195{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-all	nil
+2026-02-22 23:52:09,199{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:read-all	{"n1" 4215, "n2" nil, "n3" nil}
+2026-02-22 23:52:09,250{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:info	:write-sync	830	:timeout
+2026-02-22 23:52:09,337{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:write	4221
+2026-02-22 23:52:09,337{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:09,338{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:write	4221
+2026-02-22 23:52:09,483{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-replica	nil
+2026-02-22 23:52:09,485{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:read-replica	nil
+2026-02-22 23:52:09,571{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:write	4224
+2026-02-22 23:52:09,575{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:write	4224
+2026-02-22 23:52:09,686{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-replica	nil
+2026-02-22 23:52:09,688{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:read-replica	nil
+2026-02-22 23:52:09,880{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-replica	nil
+2026-02-22 23:52:09,882{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:read-replica	nil
+2026-02-22 23:52:10,006{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-replica	nil
+2026-02-22 23:52:10,009{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:read-replica	nil
+2026-02-22 23:52:10,083{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read-all	nil
+2026-02-22 23:52:10,087{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:ok	:read-all	{"n1" 4224, "n2" nil, "n3" nil}
+2026-02-22 23:52:10,224{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:write-sync	4227
+2026-02-22 23:52:10,371{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-all	nil
+2026-02-22 23:52:10,374{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:read-all	{"n1" 4227, "n2" nil, "n3" nil}
+2026-02-22 23:52:10,539{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:write	4232
+2026-02-22 23:52:10,540{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:write	4232
+2026-02-22 23:52:10,577{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-primary	nil
+2026-02-22 23:52:10,579{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:read-primary	4232
+2026-02-22 23:52:10,662{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:read-replica	nil
+2026-02-22 23:52:10,663{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:ok	:read-replica	nil
+2026-02-22 23:52:10,723{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:write-sync	4236
+2026-02-22 23:52:13,005{GMT}	INFO	[jepsen worker 0] jepsen.util: 10	:info	:write-sync	3731	:timeout
+2026-02-22 23:52:13,005{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:write-sync	6006
+2026-02-22 23:52:13,005{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:13,241{GMT}	INFO	[jepsen worker 1] jepsen.util: 11	:info	:write-sync	3918	:timeout
+2026-02-22 23:52:13,242{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-all	nil
+2026-02-22 23:52:13,242{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:13,249{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-all	{"n1" 6006, "n2" nil, "n3" nil}
+2026-02-22 23:52:13,268{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-primary	nil
+2026-02-22 23:52:13,269{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-primary	6006
+2026-02-22 23:52:13,380{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-primary	nil
+2026-02-22 23:52:13,382{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-primary	6006
+2026-02-22 23:52:13,553{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-primary	nil
+2026-02-22 23:52:13,555{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-primary	6006
+2026-02-22 23:52:13,687{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-replica	nil
+2026-02-22 23:52:13,688{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-replica	nil
+2026-02-22 23:52:13,816{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-primary	nil
+2026-02-22 23:52:13,817{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-primary	6006
+2026-02-22 23:52:13,893{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-all	nil
+2026-02-22 23:52:13,897{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-all	{"n1" 6006, "n2" nil, "n3" nil}
+2026-02-22 23:52:13,932{GMT}	INFO	[jepsen worker 2] jepsen.util: 12	:info	:write-sync	4215	:timeout
+2026-02-22 23:52:14,058{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-all	nil
+2026-02-22 23:52:14,063{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-all	{"n1" 6006, "n2" nil, "n3" nil}
+2026-02-22 23:52:14,203{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:write	6009
+2026-02-22 23:52:14,206{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:write	6009
+2026-02-22 23:52:14,381{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-primary	nil
+2026-02-22 23:52:14,382{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-primary	6009
+2026-02-22 23:52:14,547{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:read-all	nil
+2026-02-22 23:52:14,547{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:14,553{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:ok	:read-all	{"n1" 6009, "n2" nil, "n3" nil}
+2026-02-22 23:52:14,647{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-replica	nil
+2026-02-22 23:52:14,649{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-replica	nil
+2026-02-22 23:52:14,819{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-primary	nil
+2026-02-22 23:52:14,820{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-primary	6009
+2026-02-22 23:52:14,886{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:read-primary	nil
+2026-02-22 23:52:14,888{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:ok	:read-primary	6009
+2026-02-22 23:52:14,927{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:write-sync	6012
+2026-02-22 23:52:14,978{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:read-replica	nil
+2026-02-22 23:52:14,980{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:ok	:read-replica	nil
+2026-02-22 23:52:15,136{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:read-all	nil
+2026-02-22 23:52:15,143{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:ok	:read-all	{"n1" 6012, "n2" nil, "n3" nil}
+2026-02-22 23:52:15,228{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:info	:write-sync	4227	:timeout
+2026-02-22 23:52:15,326{GMT}	INFO	[jepsen worker 3] jepsen.util: 18	:invoke	:write-sync	6021
+2026-02-22 23:52:15,326{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:15,521{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:read-all	nil
+2026-02-22 23:52:15,530{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:ok	:read-all	{"n1" 6021, "n2" nil, "n3" nil}
+2026-02-22 23:52:15,531{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:read-replica	nil
+2026-02-22 23:52:15,532{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:ok	:read-replica	nil
+2026-02-22 23:52:15,602{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:read-all	nil
+2026-02-22 23:52:15,608{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:ok	:read-all	{"n1" 6021, "n2" nil, "n3" nil}
+2026-02-22 23:52:15,614{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:read-replica	nil
+2026-02-22 23:52:15,615{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:ok	:read-replica	nil
+2026-02-22 23:52:15,726{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:info	:write-sync	4236	:timeout
+2026-02-22 23:52:15,726{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:read-replica	nil
+2026-02-22 23:52:15,727{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:ok	:read-replica	nil
+2026-02-22 23:52:15,807{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:invoke	:read-replica	nil
+2026-02-22 23:52:15,807{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:15,808{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:ok	:read-replica	nil
+2026-02-22 23:52:15,844{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:invoke	:read-primary	nil
+2026-02-22 23:52:15,845{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:ok	:read-primary	6021
+2026-02-22 23:52:15,967{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:write-sync	6024
+2026-02-22 23:52:16,081{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:invoke	:read-replica	nil
+2026-02-22 23:52:16,084{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:ok	:read-replica	nil
+2026-02-22 23:52:16,199{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:invoke	:read-all	nil
+2026-02-22 23:52:16,205{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:ok	:read-all	{"n1" 6024, "n2" nil, "n3" nil}
+2026-02-22 23:52:16,293{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:invoke	:read-primary	nil
+2026-02-22 23:52:16,296{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:ok	:read-primary	6024
+2026-02-22 23:52:16,489{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:invoke	:read-primary	nil
+2026-02-22 23:52:16,492{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:ok	:read-primary	6024
+2026-02-22 23:52:16,513{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:invoke	:read-all	nil
+2026-02-22 23:52:16,519{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:ok	:read-all	{"n1" 6024, "n2" nil, "n3" nil}
+2026-02-22 23:52:16,681{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:invoke	:write-sync	6031
+2026-02-22 23:52:18,010{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:info	:write-sync	6006	:timeout
+2026-02-22 23:52:18,010{GMT}	INFO	[jepsen worker 0] jepsen.util: 20	:invoke	:read-replica	nil
+2026-02-22 23:52:18,011{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:18,011{GMT}	INFO	[jepsen worker 0] jepsen.util: 20	:ok	:read-replica	nil
+2026-02-22 23:52:18,063{GMT}	INFO	[jepsen worker 0] jepsen.util: 20	:invoke	:read-replica	nil
+2026-02-22 23:52:18,065{GMT}	INFO	[jepsen worker 0] jepsen.util: 20	:ok	:read-replica	nil
+2026-02-22 23:52:18,219{GMT}	INFO	[jepsen worker 0] jepsen.util: 20	:invoke	:write-sync	6035
+2026-02-22 23:52:19,931{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:info	:write-sync	6012	:timeout
+2026-02-22 23:52:19,931{GMT}	INFO	[jepsen worker 1] jepsen.util: 21	:invoke	:read-replica	nil
+2026-02-22 23:52:19,931{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:19,933{GMT}	INFO	[jepsen worker 1] jepsen.util: 21	:ok	:read-replica	nil
+2026-02-22 23:52:20,064{GMT}	INFO	[jepsen worker 1] jepsen.util: 21	:invoke	:write-sync	6039
+2026-02-22 23:52:20,330{GMT}	INFO	[jepsen worker 3] jepsen.util: 18	:info	:write-sync	6021	:timeout
+2026-02-22 23:52:20,330{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:write	6240
+2026-02-22 23:52:20,330{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:20,333{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:ok	:write	6240
+2026-02-22 23:52:20,465{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:read-primary	nil
+2026-02-22 23:52:20,466{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:ok	:read-primary	6240
+2026-02-22 23:52:20,569{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:read-replica	nil
+2026-02-22 23:52:20,571{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:ok	:read-replica	nil
+2026-02-22 23:52:20,715{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:write	6244
+2026-02-22 23:52:20,716{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:ok	:write	6244
+2026-02-22 23:52:20,865{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:read-all	nil
+2026-02-22 23:52:20,869{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:ok	:read-all	{"n1" 6244, "n2" nil, "n3" nil}
+2026-02-22 23:52:20,960{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:write	6250
+2026-02-22 23:52:20,962{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:ok	:write	6250
+2026-02-22 23:52:20,971{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:info	:write-sync	6024	:timeout
+2026-02-22 23:52:21,059{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:invoke	:read-replica	nil
+2026-02-22 23:52:21,059{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:21,062{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:ok	:read-replica	nil
+2026-02-22 23:52:21,100{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:invoke	:write	6253
+2026-02-22 23:52:21,102{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:ok	:write	6253
+2026-02-22 23:52:21,245{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:invoke	:write-sync	6256
+2026-02-22 23:52:21,424{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:write	6258
+2026-02-22 23:52:21,428{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:ok	:write	6258
+2026-02-22 23:52:21,561{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:read-primary	nil
+2026-02-22 23:52:21,563{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:ok	:read-primary	6258
+2026-02-22 23:52:21,663{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:write	6262
+2026-02-22 23:52:21,666{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:ok	:write	6262
+2026-02-22 23:52:21,669{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:write-sync	6267
+2026-02-22 23:52:21,685{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:info	:write-sync	6031	:timeout
+2026-02-22 23:52:21,809{GMT}	INFO	[jepsen worker 4] jepsen.util: 24	:invoke	:read-all	nil
+2026-02-22 23:52:21,809{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:21,815{GMT}	INFO	[jepsen worker 4] jepsen.util: 24	:ok	:read-all	{"n1" 6267, "n2" nil, "n3" nil}
+2026-02-22 23:52:21,968{GMT}	INFO	[jepsen worker 4] jepsen.util: 24	:invoke	:write-sync	6274
+2026-02-22 23:52:23,225{GMT}	INFO	[jepsen worker 0] jepsen.util: 20	:info	:write-sync	6035	:timeout
+2026-02-22 23:52:23,225{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:write	7251
+2026-02-22 23:52:23,225{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:23,228{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:ok	:write	7251
+2026-02-22 23:52:23,250{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:read-primary	nil
+2026-02-22 23:52:23,252{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:ok	:read-primary	7251
+2026-02-22 23:52:23,385{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:read-all	nil
+2026-02-22 23:52:23,387{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:ok	:read-all	{"n1" 7251, "n2" nil, "n3" nil}
+2026-02-22 23:52:23,391{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:read-all	nil
+2026-02-22 23:52:23,392{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:ok	:read-all	{"n1" 7251, "n2" nil, "n3" nil}
+2026-02-22 23:52:23,572{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:read-all	nil
+2026-02-22 23:52:23,577{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:ok	:read-all	{"n1" 7251, "n2" nil, "n3" nil}
+2026-02-22 23:52:23,746{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:read-primary	nil
+2026-02-22 23:52:23,749{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:ok	:read-primary	7251
+2026-02-22 23:52:23,925{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:read-primary	nil
+2026-02-22 23:52:23,927{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:ok	:read-primary	7251
+2026-02-22 23:52:23,995{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:read-all	nil
+2026-02-22 23:52:24,000{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:ok	:read-all	{"n1" 7251, "n2" nil, "n3" nil}
+2026-02-22 23:52:24,017{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:read-all	nil
+2026-02-22 23:52:24,020{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:ok	:read-all	{"n1" 7251, "n2" nil, "n3" nil}
+2026-02-22 23:52:24,139{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:write	7256
+2026-02-22 23:52:24,142{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:ok	:write	7256
+2026-02-22 23:52:24,222{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:read-replica	nil
+2026-02-22 23:52:24,225{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:ok	:read-replica	nil
+2026-02-22 23:52:24,416{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:write-sync	7261
+2026-02-22 23:52:25,079{GMT}	INFO	[jepsen worker 1] jepsen.util: 21	:info	:write-sync	6039	:timeout
+2026-02-22 23:52:25,079{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:invoke	:read-primary	nil
+2026-02-22 23:52:25,079{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:25,082{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:ok	:read-primary	7261
+2026-02-22 23:52:25,234{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:invoke	:read-replica	nil
+2026-02-22 23:52:25,236{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:ok	:read-replica	nil
+2026-02-22 23:52:25,388{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:invoke	:read-all	nil
+2026-02-22 23:52:25,394{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:ok	:read-all	{"n1" 7261, "n2" nil, "n3" nil}
+2026-02-22 23:52:25,579{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:invoke	:write-sync	7268
+2026-02-22 23:52:26,254{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:info	:write-sync	6256	:timeout
+2026-02-22 23:52:26,255{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:read-replica	nil
+2026-02-22 23:52:26,256{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:26,258{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:ok	:read-replica	nil
+2026-02-22 23:52:26,428{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:write	7272
+2026-02-22 23:52:26,432{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:ok	:write	7272
+2026-02-22 23:52:26,590{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:read-replica	nil
+2026-02-22 23:52:26,591{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:ok	:read-replica	nil
+2026-02-22 23:52:26,672{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:info	:write-sync	6267	:timeout
+2026-02-22 23:52:26,740{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:invoke	:read-all	nil
+2026-02-22 23:52:26,740{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:26,743{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:ok	:read-all	{"n1" 7272, "n2" nil, "n3" nil}
+2026-02-22 23:52:26,756{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:read-primary	nil
+2026-02-22 23:52:26,757{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:ok	:read-primary	7272
+2026-02-22 23:52:26,867{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:read-all	nil
+2026-02-22 23:52:26,870{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:ok	:read-all	{"n1" 7272, "n2" nil, "n3" nil}
+2026-02-22 23:52:26,973{GMT}	INFO	[jepsen worker 4] jepsen.util: 24	:info	:write-sync	6274	:timeout
+2026-02-22 23:52:27,021{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:read-primary	nil
+2026-02-22 23:52:27,022{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:ok	:read-primary	7272
+2026-02-22 23:52:27,191{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:read-all	nil
+2026-02-22 23:52:27,195{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:ok	:read-all	{"n1" 7272, "n2" nil, "n3" nil}
+2026-02-22 23:52:27,242{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:read-primary	nil
+2026-02-22 23:52:27,244{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:ok	:read-primary	7272
+2026-02-22 23:52:29,419{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:info	:write-sync	7261	:timeout
+2026-02-22 23:52:30,582{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:info	:write-sync	7268	:timeout
+2026-02-22 23:52:30,582{GMT}	INFO	[jepsen worker 3] jepsen.generator.interpreter: Recovering from faults...
+2026-02-22 23:52:35,588{GMT}	INFO	[jepsen worker nemesis] jepsen.generator.interpreter: Final reads...
+2026-02-22 23:52:35,589{GMT}	INFO	[jepsen worker 0] jepsen.util: 30	:invoke	:read	nil
+2026-02-22 23:52:35,590{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:35,593{GMT}	WARN	[jepsen worker 0] jepsen.frogdb.replication: Unexpected error: #error {
+ :cause No matching clause: :read
+ :via
+ [{:type java.lang.IllegalArgumentException
+   :message No matching clause: :read
+   :at [jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]}]
+ :trace
+ [[jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]
+  [jepsen.client.Validate invoke_BANG_ client.clj 83]
+  [jepsen.generator.interpreter.ClientWorker invoke_BANG_ interpreter.clj 65]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke interpreter.clj 140]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke interpreter.clj 123]
+  [clojure.core$binding_conveyor_fn$fn__5823 invoke core.clj 2047]
+  [clojure.lang.AFn call AFn.java 18]
+  [java.util.concurrent.FutureTask run FutureTask.java 328]
+  [java.util.concurrent.ThreadPoolExecutor runWorker ThreadPoolExecutor.java 1090]
+  [java.util.concurrent.ThreadPoolExecutor$Worker run ThreadPoolExecutor.java 614]
+  [java.lang.Thread run Thread.java 1474]]}
+2026-02-22 23:52:35,594{GMT}	INFO	[jepsen worker 0] jepsen.util: 30	:info	:read	nil	[:unexpected "No matching clause: :read"]
+2026-02-22 23:52:35,640{GMT}	INFO	[jepsen worker 1] jepsen.util: 31	:invoke	:read	nil
+2026-02-22 23:52:35,641{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:35,641{GMT}	WARN	[jepsen worker 1] jepsen.frogdb.replication: Unexpected error: #error {
+ :cause No matching clause: :read
+ :via
+ [{:type java.lang.IllegalArgumentException
+   :message No matching clause: :read
+   :at [jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]}]
+ :trace
+ [[jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]
+  [jepsen.client.Validate invoke_BANG_ client.clj 83]
+  [jepsen.generator.interpreter.ClientWorker invoke_BANG_ interpreter.clj 65]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke interpreter.clj 140]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke interpreter.clj 123]
+  [clojure.core$binding_conveyor_fn$fn__5823 invoke core.clj 2047]
+  [clojure.lang.AFn call AFn.java 18]
+  [java.util.concurrent.FutureTask run FutureTask.java 328]
+  [java.util.concurrent.ThreadPoolExecutor runWorker ThreadPoolExecutor.java 1090]
+  [java.util.concurrent.ThreadPoolExecutor$Worker run ThreadPoolExecutor.java 614]
+  [java.lang.Thread run Thread.java 1474]]}
+2026-02-22 23:52:35,641{GMT}	INFO	[jepsen worker 1] jepsen.util: 31	:info	:read	nil	[:unexpected "No matching clause: :read"]
+2026-02-22 23:52:35,705{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:read	nil
+2026-02-22 23:52:35,705{GMT}	WARN	[jepsen worker 2] jepsen.frogdb.replication: Unexpected error: #error {
+ :cause No matching clause: :read
+ :via
+ [{:type java.lang.IllegalArgumentException
+   :message No matching clause: :read
+   :at [jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]}]
+ :trace
+ [[jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]
+  [jepsen.client.Validate invoke_BANG_ client.clj 83]
+  [jepsen.generator.interpreter.ClientWorker invoke_BANG_ interpreter.clj 65]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke interpreter.clj 140]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke interpreter.clj 123]
+  [clojure.core$binding_conveyor_fn$fn__5823 invoke core.clj 2047]
+  [clojure.lang.AFn call AFn.java 18]
+  [java.util.concurrent.FutureTask run FutureTask.java 328]
+  [java.util.concurrent.ThreadPoolExecutor runWorker ThreadPoolExecutor.java 1090]
+  [java.util.concurrent.ThreadPoolExecutor$Worker run ThreadPoolExecutor.java 614]
+  [java.lang.Thread run Thread.java 1474]]}
+2026-02-22 23:52:35,705{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:info	:read	nil	[:unexpected "No matching clause: :read"]
+2026-02-22 23:52:35,819{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:invoke	:read	nil
+2026-02-22 23:52:35,819{GMT}	WARN	[jepsen worker 3] jepsen.frogdb.replication: Unexpected error: #error {
+ :cause No matching clause: :read
+ :via
+ [{:type java.lang.IllegalArgumentException
+   :message No matching clause: :read
+   :at [jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]}]
+ :trace
+ [[jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]
+  [jepsen.client.Validate invoke_BANG_ client.clj 83]
+  [jepsen.generator.interpreter.ClientWorker invoke_BANG_ interpreter.clj 65]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke interpreter.clj 140]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke interpreter.clj 123]
+  [clojure.core$binding_conveyor_fn$fn__5823 invoke core.clj 2047]
+  [clojure.lang.AFn call AFn.java 18]
+  [java.util.concurrent.FutureTask run FutureTask.java 328]
+  [java.util.concurrent.ThreadPoolExecutor runWorker ThreadPoolExecutor.java 1090]
+  [java.util.concurrent.ThreadPoolExecutor$Worker run ThreadPoolExecutor.java 614]
+  [java.lang.Thread run Thread.java 1474]]}
+2026-02-22 23:52:35,819{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:info	:read	nil	[:unexpected "No matching clause: :read"]
+2026-02-22 23:52:35,890{GMT}	INFO	[jepsen worker 4] jepsen.util: 29	:invoke	:read	nil
+2026-02-22 23:52:35,890{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:35,890{GMT}	WARN	[jepsen worker 4] jepsen.frogdb.replication: Unexpected error: #error {
+ :cause No matching clause: :read
+ :via
+ [{:type java.lang.IllegalArgumentException
+   :message No matching clause: :read
+   :at [jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]}]
+ :trace
+ [[jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]
+  [jepsen.client.Validate invoke_BANG_ client.clj 83]
+  [jepsen.generator.interpreter.ClientWorker invoke_BANG_ interpreter.clj 65]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke interpreter.clj 140]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke interpreter.clj 123]
+  [clojure.core$binding_conveyor_fn$fn__5823 invoke core.clj 2047]
+  [clojure.lang.AFn call AFn.java 18]
+  [java.util.concurrent.FutureTask run FutureTask.java 328]
+  [java.util.concurrent.ThreadPoolExecutor runWorker ThreadPoolExecutor.java 1090]
+  [java.util.concurrent.ThreadPoolExecutor$Worker run ThreadPoolExecutor.java 614]
+  [java.lang.Thread run Thread.java 1474]]}
+2026-02-22 23:52:35,890{GMT}	INFO	[jepsen worker 4] jepsen.util: 29	:info	:read	nil	[:unexpected "No matching clause: :read"]
+2026-02-22 23:52:36,078{GMT}	INFO	[jepsen worker 0] jepsen.util: 35	:invoke	:read	nil
+2026-02-22 23:52:36,079{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:36,080{GMT}	WARN	[jepsen worker 0] jepsen.frogdb.replication: Unexpected error: #error {
+ :cause No matching clause: :read
+ :via
+ [{:type java.lang.IllegalArgumentException
+   :message No matching clause: :read
+   :at [jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]}]
+ :trace
+ [[jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]
+  [jepsen.client.Validate invoke_BANG_ client.clj 83]
+  [jepsen.generator.interpreter.ClientWorker invoke_BANG_ interpreter.clj 65]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke interpreter.clj 140]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke interpreter.clj 123]
+  [clojure.core$binding_conveyor_fn$fn__5823 invoke core.clj 2047]
+  [clojure.lang.AFn call AFn.java 18]
+  [java.util.concurrent.FutureTask run FutureTask.java 328]
+  [java.util.concurrent.ThreadPoolExecutor runWorker ThreadPoolExecutor.java 1090]
+  [java.util.concurrent.ThreadPoolExecutor$Worker run ThreadPoolExecutor.java 614]
+  [java.lang.Thread run Thread.java 1474]]}
+2026-02-22 23:52:36,080{GMT}	INFO	[jepsen worker 0] jepsen.util: 35	:info	:read	nil	[:unexpected "No matching clause: :read"]
+2026-02-22 23:52:36,175{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:invoke	:read	nil
+2026-02-22 23:52:36,175{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:36,176{GMT}	WARN	[jepsen worker 0] jepsen.frogdb.replication: Unexpected error: #error {
+ :cause No matching clause: :read
+ :via
+ [{:type java.lang.IllegalArgumentException
+   :message No matching clause: :read
+   :at [jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]}]
+ :trace
+ [[jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]
+  [jepsen.client.Validate invoke_BANG_ client.clj 83]
+  [jepsen.generator.interpreter.ClientWorker invoke_BANG_ interpreter.clj 65]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke interpreter.clj 140]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke interpreter.clj 123]
+  [clojure.core$binding_conveyor_fn$fn__5823 invoke core.clj 2047]
+  [clojure.lang.AFn call AFn.java 18]
+  [java.util.concurrent.FutureTask run FutureTask.java 328]
+  [java.util.concurrent.ThreadPoolExecutor runWorker ThreadPoolExecutor.java 1090]
+  [java.util.concurrent.ThreadPoolExecutor$Worker run ThreadPoolExecutor.java 614]
+  [java.lang.Thread run Thread.java 1474]]}
+2026-02-22 23:52:36,176{GMT}	INFO	[jepsen worker 0] jepsen.util: 40	:info	:read	nil	[:unexpected "No matching clause: :read"]
+2026-02-22 23:52:36,259{GMT}	INFO	[jepsen worker 1] jepsen.util: 36	:invoke	:read	nil
+2026-02-22 23:52:36,259{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:36,260{GMT}	WARN	[jepsen worker 1] jepsen.frogdb.replication: Unexpected error: #error {
+ :cause No matching clause: :read
+ :via
+ [{:type java.lang.IllegalArgumentException
+   :message No matching clause: :read
+   :at [jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]}]
+ :trace
+ [[jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]
+  [jepsen.client.Validate invoke_BANG_ client.clj 83]
+  [jepsen.generator.interpreter.ClientWorker invoke_BANG_ interpreter.clj 65]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke interpreter.clj 140]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke interpreter.clj 123]
+  [clojure.core$binding_conveyor_fn$fn__5823 invoke core.clj 2047]
+  [clojure.lang.AFn call AFn.java 18]
+  [java.util.concurrent.FutureTask run FutureTask.java 328]
+  [java.util.concurrent.ThreadPoolExecutor runWorker ThreadPoolExecutor.java 1090]
+  [java.util.concurrent.ThreadPoolExecutor$Worker run ThreadPoolExecutor.java 614]
+  [java.lang.Thread run Thread.java 1474]]}
+2026-02-22 23:52:36,260{GMT}	INFO	[jepsen worker 1] jepsen.util: 36	:info	:read	nil	[:unexpected "No matching clause: :read"]
+2026-02-22 23:52:36,432{GMT}	INFO	[jepsen worker 2] jepsen.util: 32	:invoke	:read	nil
+2026-02-22 23:52:36,433{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:36,434{GMT}	WARN	[jepsen worker 2] jepsen.frogdb.replication: Unexpected error: #error {
+ :cause No matching clause: :read
+ :via
+ [{:type java.lang.IllegalArgumentException
+   :message No matching clause: :read
+   :at [jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]}]
+ :trace
+ [[jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]
+  [jepsen.client.Validate invoke_BANG_ client.clj 83]
+  [jepsen.generator.interpreter.ClientWorker invoke_BANG_ interpreter.clj 65]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke interpreter.clj 140]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke interpreter.clj 123]
+  [clojure.core$binding_conveyor_fn$fn__5823 invoke core.clj 2047]
+  [clojure.lang.AFn call AFn.java 18]
+  [java.util.concurrent.FutureTask run FutureTask.java 328]
+  [java.util.concurrent.ThreadPoolExecutor runWorker ThreadPoolExecutor.java 1090]
+  [java.util.concurrent.ThreadPoolExecutor$Worker run ThreadPoolExecutor.java 614]
+  [java.lang.Thread run Thread.java 1474]]}
+2026-02-22 23:52:36,435{GMT}	INFO	[jepsen worker 2] jepsen.util: 32	:info	:read	nil	[:unexpected "No matching clause: :read"]
+2026-02-22 23:52:36,496{GMT}	INFO	[jepsen worker 3] jepsen.util: 33	:invoke	:read	nil
+2026-02-22 23:52:36,497{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.replication: Opening replication client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:52:36,498{GMT}	WARN	[jepsen worker 3] jepsen.frogdb.replication: Unexpected error: #error {
+ :cause No matching clause: :read
+ :via
+ [{:type java.lang.IllegalArgumentException
+   :message No matching clause: :read
+   :at [jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]}]
+ :trace
+ [[jepsen.frogdb.replication.ReplicationClient invoke_BANG_ replication.clj 58]
+  [jepsen.client.Validate invoke_BANG_ client.clj 83]
+  [jepsen.generator.interpreter.ClientWorker invoke_BANG_ interpreter.clj 65]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke interpreter.clj 140]
+  [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke interpreter.clj 123]
+  [clojure.core$binding_conveyor_fn$fn__5823 invoke core.clj 2047]
+  [clojure.lang.AFn call AFn.java 18]
+  [java.util.concurrent.FutureTask run FutureTask.java 328]
+  [java.util.concurrent.ThreadPoolExecutor runWorker ThreadPoolExecutor.java 1090]
+  [java.util.concurrent.ThreadPoolExecutor$Worker run ThreadPoolExecutor.java 614]
+  [java.lang.Thread run Thread.java 1474]]}
+2026-02-22 23:52:36,498{GMT}	INFO	[jepsen worker 3] jepsen.util: 33	:info	:read	nil	[:unexpected "No matching clause: :read"]
+2026-02-22 23:52:36,520{GMT}	INFO	[jepsen test runner] jepsen.core: Run complete, writing
+2026-02-22 23:52:36,560{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB replication node n1
+2026-02-22 23:52:36,560{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Tearing down FrogDB replication node n2
+2026-02-22 23:52:36,560{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Tearing down FrogDB replication node n3
+2026-02-22 23:52:36,708{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS teardown for n2 (no-op)
+2026-02-22 23:52:36,708{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS teardown for n3 (no-op)
+2026-02-22 23:52:36,708{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS teardown for n1 (no-op)
+2026-02-22 23:52:36,708{GMT}	INFO	[jepsen test runner] jepsen.core: Analyzing...
+2026-02-22 23:52:36,725{GMT}	WARN	[clojure-agent-send-off-pool-5] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$point_graph_BANG_.invokeStatic(perf.clj:523)
+	at jepsen.checker.perf$point_graph_BANG_.invoke(perf.clj:496)
+	at jepsen.checker$latency_graph$reify__10769.check(checker.clj:830)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-22 23:52:36,725{GMT}	WARN	[clojure-agent-send-off-pool-3] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$rate_graph_BANG_.invokeStatic(perf.clj:626)
+	at jepsen.checker.perf$rate_graph_BANG_.invoke(perf.clj:571)
+	at jepsen.checker$rate_graph$reify__10772.check(checker.clj:843)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-22 23:52:36,727{GMT}	INFO	[jepsen test runner] jepsen.core: Analysis complete
+2026-02-22 23:52:36,736{GMT}	INFO	[jepsen results] jepsen.store: Wrote /Users/nathan/workspace/nathanjordan/workspace-1/jepsen/frogdb/store/frogdb-replication-docker-replication/20260222T235153.940-0500/results.edn
+2026-02-22 23:52:36,755{GMT}	INFO	[jepsen test runner] jepsen.core: {:workload {:valid? false,
+            :regression? false,
+            :consistent? false,
+            :max-written 7272,
+            :final-values (7272 nil nil),
+            :num-writes 18,
+            :num-reads 53},
+ :stats {:valid? false,
+         :count 139,
+         :ok-count 102,
+         :fail-count 0,
+         :info-count 37,
+         :by-f {:read {:valid? false,
+                       :count 10,
+                       :ok-count 0,
+                       :fail-count 0,
+                       :info-count 10},
+                :read-all {:valid? true,
+                           :count 31,
+                           :ok-count 31,
+                           :fail-count 0,
+                           :info-count 0},
+                :read-primary {:valid? true,
+                               :count 28,
+                               :ok-count 28,
+                               :fail-count 0,
+                               :info-count 0},
+                :read-replica {:valid? true,
+                               :count 25,
+                               :ok-count 25,
+                               :fail-count 0,
+                               :info-count 0},
+                :write {:valid? true,
+                        :count 18,
+                        :ok-count 18,
+                        :fail-count 0,
+                        :info-count 0},
+                :write-sync {:valid? false,
+                             :count 27,
+                             :ok-count 0,
+                             :fail-count 0,
+                             :info-count 27}}},
+ :exceptions {:valid? true},
+ :perf {:latency-graph {:valid? :unknown,
+                        :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :rate-graph {:valid? :unknown,
+                     :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :valid? :unknown},
+ :valid? false}
+
+
+Analysis invalid! (ﾉಥ益ಥ）ﾉ ┻━┻

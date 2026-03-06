@@ -1,0 +1,1948 @@
+2026-02-23 00:32:31,931{GMT}	INFO	[jepsen test runner] jepsen.core: Test version 76d4d9869c0d23942a74d6643c42a2d2b3a35bfd (plus uncommitted changes)
+2026-02-23 00:32:31,931{GMT}	INFO	[jepsen test runner] jepsen.core: Command line:
+lein run test --docker --workload key-routing --nemesis none --cluster --time-limit 30
+2026-02-23 00:32:31,965{GMT}	INFO	[jepsen test runner] jepsen.core: Running test:
+{:remote
+ #jepsen.control.retry.Remote{:remote #jepsen.control.scp.Remote{:cmd-remote #jepsen.control.sshj.SSHJRemote{:concurrency-limit 6,
+                                                                                                             :conn-spec nil,
+                                                                                                             :client nil,
+                                                                                                             :semaphore nil},
+                                                                 :conn-spec nil},
+                              :conn nil}
+ :concurrency 5
+ :cluster true
+ :db
+ #object[jepsen.frogdb.cluster_db$cluster_db$reify__13072
+         "0x6ee88669"
+         "jepsen.frogdb.cluster_db$cluster_db$reify__13072@6ee88669"]
+ :leave-db-running? false
+ :name "frogdb-key-routing-docker-cluster"
+ :logging-json? false
+ :independent false
+ :start-time
+ #object[org.joda.time.DateTime "0x1c791c14" "2026-02-23T00:32:31.888-05:00"]
+ :docker true
+ :net
+ #object[jepsen.net$reify__12635 "0xc24e06a" "jepsen.net$reify__12635@c24e06a"]
+ :client
+ #jepsen.frogdb.key_routing.KeyRoutingClient{:nodes nil,
+                                             :docker-host? nil,
+                                             :slot-mapping nil,
+                                             :routing-stats nil}
+ :barrier
+ #object[java.util.concurrent.CyclicBarrier
+         "0x1926e42e"
+         "java.util.concurrent.CyclicBarrier@1926e42e"]
+ :ssh {:dummy? true}
+ :rate 10
+ :checker
+ #object[jepsen.checker$compose$reify__10552
+         "0x6fa38b67"
+         "jepsen.checker$compose$reify__10552@6fa38b67"]
+ :argv
+ ("test"
+  "--docker"
+  "--workload"
+  "key-routing"
+  "--nemesis"
+  "none"
+  "--cluster"
+  "--time-limit"
+  "30")
+ :nemesis #unprintable "jepsen.nemesis$reify__12738@3b6ea33b"
+ :nodes ["n1" "n2" "n3"]
+ :test-count 1
+ :replication false
+ :cluster-nodes ["n1" "n2" "n3"]
+ :generator
+ #object[jepsen.util.Forgettable
+         "0x2bc41531"
+         ((jepsen.generator.Synchronize
+           {:gen (jepsen.generator.TimeLimit
+                  {:limit 30000000000,
+                   :cutoff nil,
+                   :gen (jepsen.generator.Any
+                         {:gens [(jepsen.generator.OnThreads
+                                  {:f #{:nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x56d5311e"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@56d5311e"],
+                                   :gen nil})
+                                 (jepsen.generator.OnThreads
+                                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x66a81c48"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@66a81c48"],
+                                   :gen (jepsen.generator.Stagger
+                                         {:dt 200000000,
+                                          :next-time nil,
+                                          :gen (jepsen.generator.Mix
+                                                {:i 2,
+                                                 :gens [#object[jepsen.frogdb.key_routing$generator$fn__14003
+                                                                "0x60880394"
+                                                                "jepsen.frogdb.key_routing$generator$fn__14003@60880394"]
+                                                        #object[jepsen.frogdb.key_routing$generator$fn__14005
+                                                                "0x482b6acc"
+                                                                "jepsen.frogdb.key_routing$generator$fn__14005@482b6acc"]
+                                                        #object[jepsen.frogdb.key_routing$generator$fn__14007
+                                                                "0x3709ef16"
+                                                                "jepsen.frogdb.key_routing$generator$fn__14007@3709ef16"]
+                                                        #object[jepsen.frogdb.key_routing$generator$fn__14009
+                                                                "0x1165efe3"
+                                                                "jepsen.frogdb.key_routing$generator$fn__14009@1165efe3"]
+                                                        #object[jepsen.frogdb.key_routing$generator$fn__14011
+                                                                "0x3151caf8"
+                                                                "jepsen.frogdb.key_routing$generator$fn__14011@3151caf8"]
+                                                        #object[jepsen.frogdb.key_routing$generator$fn__14013
+                                                                "0x22bfbb14"
+                                                                "jepsen.frogdb.key_routing$generator$fn__14013@22bfbb14"]]})})})]})})})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Recovering from faults..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #{:nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x5a36810a"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@5a36810a"],
+                   :gen nil})})
+          (jepsen.generator.Synchronize {:gen {:type :sleep, :value 5}})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Final reads..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x64926758"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@64926758"],
+                   :gen (jepsen.generator.Stagger
+                         {:dt 200000000,
+                          :next-time nil,
+                          :gen (jepsen.generator.Limit
+                                {:remaining 10,
+                                 :gen (jepsen.generator.Repeat
+                                       {:remaining -1, :gen {:f :read}})})})})}))]
+ :interval 10
+ :os
+ #object[jepsen.frogdb.core$reify__14062
+         "0x7e282ec9"
+         "jepsen.frogdb.core$reify__14062@7e282ec9"]
+ :time-limit 30
+ :workload "key-routing"
+ :local false}
+
+2026-02-23 00:32:33,357{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS setup for n3 (no-op)
+2026-02-23 00:32:33,357{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS setup for n1 (no-op)
+2026-02-23 00:32:33,357{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS setup for n2 (no-op)
+2026-02-23 00:32:33,357{GMT}	INFO	[jepsen test runner] jepsen.db: Tearing down DB
+2026-02-23 00:32:33,357{GMT}	INFO	[jepsen node n1] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n1
+2026-02-23 00:32:33,357{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n3
+2026-02-23 00:32:33,357{GMT}	INFO	[jepsen node n2] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n2
+2026-02-23 00:32:33,358{GMT}	INFO	[jepsen node n1] jepsen.frogdb.cluster-db: Healing partition on n1
+2026-02-23 00:32:33,358{GMT}	INFO	[jepsen node n2] jepsen.frogdb.cluster-db: Healing partition on n2
+2026-02-23 00:32:33,358{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Healing partition on n3
+2026-02-23 00:32:33,540{GMT}	INFO	[jepsen test runner] jepsen.db: Setting up DB
+2026-02-23 00:32:33,540{GMT}	INFO	[jepsen node n1] jepsen.frogdb.cluster-db: Setting up Raft cluster node n1
+2026-02-23 00:32:33,540{GMT}	INFO	[jepsen node n2] jepsen.frogdb.cluster-db: Setting up Raft cluster node n2
+2026-02-23 00:32:33,540{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Setting up Raft cluster node n3
+2026-02-23 00:32:35,666{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Forming cluster with nodes: [n1 n2 n3]
+2026-02-23 00:32:35,666{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Node n1 meeting node n2 at 172.21.0.3
+2026-02-23 00:32:35,675{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Node n1 meeting node n3 at 172.21.0.4
+2026-02-23 00:32:37,688{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Assigning slots 0 - 5461 to node n1
+2026-02-23 00:32:37,689{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Assigning slots 0 - 5461
+2026-02-23 00:32:37,703{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Assigning slots 5462 - 10922 to node n2
+2026-02-23 00:32:37,703{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Assigning slots 5462 - 10922
+2026-02-23 00:32:37,730{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Assigning slots 10923 - 16383 to node n3
+2026-02-23 00:32:37,731{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Assigning slots 10923 - 16383
+2026-02-23 00:32:37,759{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Cluster state is OK
+2026-02-23 00:32:37,760{GMT}	INFO	[jepsen test runner] jepsen.core: Relative time begins now
+2026-02-23 00:32:37,761{GMT}	INFO	[jepsen node n1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:37,761{GMT}	INFO	[jepsen node n2] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:37,761{GMT}	INFO	[jepsen node n3] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:37,811{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 00:32:37,811{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:37,984{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 00:32:37,984{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:38,103{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 00:32:38,103{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:38,252{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write	nil
+2026-02-23 00:32:38,252{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:38,384{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 00:32:38,384{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:42,825{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 0 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:42,826{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:invoke	:targeted-read	4553
+2026-02-23 00:32:42,827{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:42,995{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 1 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:43,021{GMT}	INFO	[jepsen worker 1] jepsen.util: 6	:invoke	:read	nil
+2026-02-23 00:32:43,021{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:43,115{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 2 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:43,117{GMT}	INFO	[jepsen worker 2] jepsen.util: 7	:invoke	:targeted-write	{:slot 15495, :value 1618}
+2026-02-23 00:32:43,117{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:43,266{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 3 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:43,266{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:read	nil
+2026-02-23 00:32:43,266{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:43,395{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 4 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:43,484{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:invoke	:read	nil
+2026-02-23 00:32:43,485{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:48,040{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 6 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:48,040{GMT}	INFO	[jepsen worker 1] jepsen.util: 11	:invoke	:write	nil
+2026-02-23 00:32:48,040{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:48,278{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 8 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:48,278{GMT}	INFO	[jepsen worker 3] jepsen.util: 13	:invoke	:read	nil
+2026-02-23 00:32:48,279{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:48,500{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 9 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:48,500{GMT}	INFO	[jepsen worker 4] jepsen.util: 14	:invoke	:targeted-read	14986
+2026-02-23 00:32:48,501{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:48,519{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 5 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:131)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:48,548{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 7 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:121)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:48,573{GMT}	INFO	[jepsen worker 2] jepsen.util: 12	:invoke	:targeted-read	602
+2026-02-23 00:32:48,574{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:48,599{GMT}	INFO	[jepsen worker 0] jepsen.util: 10	:invoke	:write	nil
+2026-02-23 00:32:48,599{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:53,053{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 11 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:53,053{GMT}	INFO	[jepsen worker 1] jepsen.util: 16	:invoke	:write	nil
+2026-02-23 00:32:53,054{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:53,290{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 13 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:53,290{GMT}	INFO	[jepsen worker 3] jepsen.util: 18	:invoke	:targeted-write	{:slot 5001, :value 5448}
+2026-02-23 00:32:53,290{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:53,615{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 10 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:53,617{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:targeted-read	2437
+2026-02-23 00:32:53,617{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:54,751{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 12 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:131)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:54,753{GMT}	INFO	[jepsen worker 2] jepsen.util: 17	:invoke	:write	nil
+2026-02-23 00:32:54,754{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:55,131{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 14 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:131)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:55,131{GMT}	INFO	[jepsen worker 4] jepsen.util: 19	:invoke	:write	nil
+2026-02-23 00:32:55,131{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:58,068{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 16 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:58,068{GMT}	INFO	[jepsen worker 1] jepsen.util: 21	:invoke	:targeted-read	11788
+2026-02-23 00:32:58,068{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:58,213{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 21 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:131)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.BindException: Can't assign requested address
+	at java.base/sun.nio.ch.Net.connect0(Native Method)
+	at java.base/sun.nio.ch.Net.connect(Net.java:546)
+	at java.base/sun.nio.ch.Net.connect(Net.java:535)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:585)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:58,213{GMT}	INFO	[jepsen worker 1] jepsen.util: 26	:invoke	:read	nil
+2026-02-23 00:32:58,213{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:58,229{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 26 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.BindException: Can't assign requested address
+	at java.base/sun.nio.ch.Net.connect0(Native Method)
+	at java.base/sun.nio.ch.Net.connect(Net.java:546)
+	at java.base/sun.nio.ch.Net.connect(Net.java:535)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:585)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:58,364{GMT}	INFO	[jepsen worker 1] jepsen.util: 31	:invoke	:read	nil
+2026-02-23 00:32:58,365{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:58,390{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 31 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.BindException: Can't assign requested address
+	at java.base/sun.nio.ch.Net.connect0(Native Method)
+	at java.base/sun.nio.ch.Net.connect(Net.java:546)
+	at java.base/sun.nio.ch.Net.connect(Net.java:535)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:585)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:58,561{GMT}	INFO	[jepsen worker 1] jepsen.util: 36	:invoke	:write	nil
+2026-02-23 00:32:58,561{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:59,109{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 15 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:131)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:59,110{GMT}	INFO	[jepsen worker 0] jepsen.util: 20	:invoke	:write	nil
+2026-02-23 00:32:59,110{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:32:59,763{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 17 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:32:59,764{GMT}	INFO	[jepsen worker 2] jepsen.util: 22	:invoke	:write	nil
+2026-02-23 00:32:59,764{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:00,142{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 19 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:00,143{GMT}	INFO	[jepsen worker 4] jepsen.util: 24	:invoke	:targeted-write	{:slot 5621, :value 347}
+2026-02-23 00:33:00,143{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:01,641{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 18 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:121)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:01,642{GMT}	INFO	[jepsen worker 3] jepsen.util: 23	:invoke	:targeted-read	15875
+2026-02-23 00:33:01,642{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:03,611{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 36 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:03,611{GMT}	INFO	[jepsen worker 1] jepsen.util: 41	:invoke	:write	nil
+2026-02-23 00:33:03,611{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:04,118{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 20 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:04,118{GMT}	INFO	[jepsen worker 0] jepsen.util: 25	:invoke	:write	nil
+2026-02-23 00:33:04,119{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:04,778{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 22 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:04,778{GMT}	INFO	[jepsen worker 2] jepsen.util: 27	:invoke	:write	nil
+2026-02-23 00:33:04,778{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:06,382{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 24 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:121)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:06,383{GMT}	INFO	[jepsen worker 4] jepsen.util: 29	:invoke	:write	nil
+2026-02-23 00:33:06,383{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:08,624{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 41 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:09,135{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 25 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:09,625{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 23 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:131)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:09,792{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 27 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:11,398{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 29 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:98)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:11,399{GMT}	INFO	[jepsen worker 2] jepsen.generator.interpreter: Recovering from faults...
+2026-02-23 00:33:16,402{GMT}	INFO	[jepsen worker 4] jepsen.generator.interpreter: Final reads...
+2026-02-23 00:33:16,403{GMT}	INFO	[jepsen worker 0] jepsen.util: 30	:invoke	:read	nil
+2026-02-23 00:33:16,403{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:16,493{GMT}	INFO	[jepsen worker 1] jepsen.util: 46	:invoke	:read	nil
+2026-02-23 00:33:16,493{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:16,674{GMT}	INFO	[jepsen worker 2] jepsen.util: 32	:invoke	:read	nil
+2026-02-23 00:33:16,675{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:16,727{GMT}	INFO	[jepsen worker 3] jepsen.util: 28	:invoke	:read	nil
+2026-02-23 00:33:16,728{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:16,852{GMT}	INFO	[jepsen worker 4] jepsen.util: 34	:invoke	:read	nil
+2026-02-23 00:33:16,852{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:21,415{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 30 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:21,415{GMT}	INFO	[jepsen worker 0] jepsen.util: 35	:invoke	:read	nil
+2026-02-23 00:33:21,415{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:21,508{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 46 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:21,508{GMT}	INFO	[jepsen worker 1] jepsen.util: 51	:invoke	:read	nil
+2026-02-23 00:33:21,509{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:21,692{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 32 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:21,710{GMT}	INFO	[jepsen worker 2] jepsen.util: 37	:invoke	:read	nil
+2026-02-23 00:33:21,710{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:21,741{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 28 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:21,849{GMT}	INFO	[jepsen worker 3] jepsen.util: 33	:invoke	:read	nil
+2026-02-23 00:33:21,849{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:21,864{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 34 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:21,962{GMT}	INFO	[jepsen worker 4] jepsen.util: 39	:invoke	:read	nil
+2026-02-23 00:33:21,962{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.key-routing: Opening key routing client
+2026-02-23 00:33:26,429{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 35 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:26,518{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 51 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:26,721{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 37 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:26,863{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 33 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:27,021{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 39 crashed
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190.invoke(cluster_client.clj:239)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invokeStatic(cluster_client.clj:235)
+	at jepsen.frogdb.cluster_client$execute_with_redirect.invoke(cluster_client.clj:200)
+	at jepsen.frogdb.key_routing$track_redirect.invokeStatic(key_routing.clj:64)
+	at jepsen.frogdb.key_routing$track_redirect.invoke(key_routing.clj:61)
+	at jepsen.frogdb.key_routing.KeyRoutingClient.invoke_BANG_(key_routing.clj:109)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.SocketTimeoutException: Connect timed out
+	at java.base/sun.nio.ch.NioSocketImpl.timedFinishConnect(NioSocketImpl.java:547)
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:594)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted
+2026-02-23 00:33:27,033{GMT}	INFO	[jepsen test runner] jepsen.core: Run complete, writing
+2026-02-23 00:33:27,089{GMT}	INFO	[jepsen node n1] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n1
+2026-02-23 00:33:27,089{GMT}	INFO	[jepsen node n2] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n2
+2026-02-23 00:33:27,089{GMT}	INFO	[jepsen node n1] jepsen.frogdb.cluster-db: Healing partition on n1
+2026-02-23 00:33:27,089{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Tearing down Raft cluster node n3
+2026-02-23 00:33:27,089{GMT}	INFO	[jepsen node n2] jepsen.frogdb.cluster-db: Healing partition on n2
+2026-02-23 00:33:27,089{GMT}	INFO	[jepsen node n3] jepsen.frogdb.cluster-db: Healing partition on n3
+2026-02-23 00:33:27,249{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS teardown for n3 (no-op)
+2026-02-23 00:33:27,249{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS teardown for n1 (no-op)
+2026-02-23 00:33:27,249{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS teardown for n2 (no-op)
+2026-02-23 00:33:27,249{GMT}	INFO	[jepsen test runner] jepsen.core: Analyzing...
+2026-02-23 00:33:27,266{GMT}	WARN	[clojure-agent-send-off-pool-2] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$point_graph_BANG_.invokeStatic(perf.clj:523)
+	at jepsen.checker.perf$point_graph_BANG_.invoke(perf.clj:496)
+	at jepsen.checker$latency_graph$reify__10769.check(checker.clj:830)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-23 00:33:27,266{GMT}	WARN	[clojure-agent-send-off-pool-1] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$rate_graph_BANG_.invokeStatic(perf.clj:626)
+	at jepsen.checker.perf$rate_graph_BANG_.invoke(perf.clj:571)
+	at jepsen.checker$rate_graph$reify__10772.check(checker.clj:843)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-23 00:33:27,267{GMT}	INFO	[jepsen test runner] jepsen.core: Analysis complete
+2026-02-23 00:33:27,284{GMT}	INFO	[jepsen results] jepsen.store: Wrote /Users/nathan/workspace/nathanjordan/workspace-1/jepsen/frogdb/store/frogdb-key-routing-docker-cluster/20260223T003231.888-0500/results.edn
+2026-02-23 00:33:27,301{GMT}	INFO	[jepsen test runner] jepsen.core: {:workload {:ops-with-redirects 0,
+            :avg-redirects-per-op 0.0,
+            :failed-ops 0,
+            :redirect-failures 0,
+            :valid? true,
+            :total-ops 0,
+            :final-stats nil,
+            :timeout-ops 0,
+            :total-reads 0,
+            :total-redirects 0,
+            :total-writes 0},
+ :stats {:valid? false,
+         :count 42,
+         :ok-count 0,
+         :fail-count 0,
+         :info-count 42,
+         :by-f {:read {:valid? false,
+                       :count 20,
+                       :ok-count 0,
+                       :fail-count 0,
+                       :info-count 20},
+                :targeted-read {:valid? false,
+                                :count 6,
+                                :ok-count 0,
+                                :fail-count 0,
+                                :info-count 6},
+                :targeted-write {:valid? false,
+                                 :count 3,
+                                 :ok-count 0,
+                                 :fail-count 0,
+                                 :info-count 3},
+                :write {:valid? false,
+                        :count 13,
+                        :ok-count 0,
+                        :fail-count 0,
+                        :info-count 13}}},
+ :exceptions {:valid? true,
+              :exceptions ({:count 42,
+                            :class clojure.lang.ExceptionInfo,
+                            :example #jepsen.history.Op{:index 5,
+                                                        :time 5066727667,
+                                                        :type :info,
+                                                        :process 0,
+                                                        :f :read,
+                                                        :value nil,
+                                                        :exception {:via [{:type clojure.lang.ExceptionInfo,
+                                                                           :message "Carmine connection error",
+                                                                           :data {},
+                                                                           :at [taoensso.carmine.connections$pooled_conn
+                                                                                invokeStatic
+                                                                                "connections.clj"
+                                                                                282]}
+                                                                          {:type java.net.SocketTimeoutException,
+                                                                           :message "Connect timed out",
+                                                                           :at [sun.nio.ch.NioSocketImpl
+                                                                                timedFinishConnect
+                                                                                "NioSocketImpl.java"
+                                                                                547]}],
+                                                                    :trace [[sun.nio.ch.NioSocketImpl
+                                                                             timedFinishConnect
+                                                                             "NioSocketImpl.java"
+                                                                             547]
+                                                                            [sun.nio.ch.NioSocketImpl
+                                                                             connect
+                                                                             "NioSocketImpl.java"
+                                                                             594]
+                                                                            [java.net.SocksSocketImpl
+                                                                             connect
+                                                                             "SocksSocketImpl.java"
+                                                                             284]
+                                                                            [java.net.Socket
+                                                                             connect
+                                                                             "Socket.java"
+                                                                             659]
+                                                                            [taoensso.carmine.connections$make_new_connection
+                                                                             invokeStatic
+                                                                             "connections.clj"
+                                                                             127]
+                                                                            [taoensso.carmine.connections$make_new_connection
+                                                                             invoke
+                                                                             "connections.clj"
+                                                                             106]
+                                                                            [taoensso.carmine.connections$make_connection_factory$reify__7724
+                                                                             makeObject
+                                                                             "connections.clj"
+                                                                             168]
+                                                                            [org.apache.commons.pool2.impl.GenericKeyedObjectPool
+                                                                             create
+                                                                             "GenericKeyedObjectPool.java"
+                                                                             796]
+                                                                            [org.apache.commons.pool2.impl.GenericKeyedObjectPool
+                                                                             borrowObject
+                                                                             "GenericKeyedObjectPool.java"
+                                                                             444]
+                                                                            [org.apache.commons.pool2.impl.GenericKeyedObjectPool
+                                                                             borrowObject
+                                                                             "GenericKeyedObjectPool.java"
+                                                                             355]
+                                                                            [taoensso.carmine.connections.ConnectionPool
+                                                                             get_conn
+                                                                             "connections.clj"
+                                                                             64]
+                                                                            [taoensso.carmine.connections$pooled_conn
+                                                                             invokeStatic
+                                                                             "connections.clj"
+                                                                             277]
+                                                                            [taoensso.carmine.connections$pooled_conn
+                                                                             invoke
+                                                                             "connections.clj"
+                                                                             271]
+                                                                            [jepsen.frogdb.cluster_client$execute_with_redirect$fn__13190
+                                                                             invoke
+                                                                             "cluster_client.clj"
+                                                                             239]
+                                                                            [jepsen.frogdb.cluster_client$execute_with_redirect
+                                                                             invokeStatic
+                                                                             "cluster_client.clj"
+                                                                             235]
+                                                                            [jepsen.frogdb.cluster_client$execute_with_redirect
+                                                                             invoke
+                                                                             "cluster_client.clj"
+                                                                             200]
+                                                                            [jepsen.frogdb.key_routing$track_redirect
+                                                                             invokeStatic
+                                                                             "key_routing.clj"
+                                                                             64]
+                                                                            [jepsen.frogdb.key_routing$track_redirect
+                                                                             invoke
+                                                                             "key_routing.clj"
+                                                                             61]
+                                                                            [jepsen.frogdb.key_routing.KeyRoutingClient
+                                                                             invoke_BANG_
+                                                                             "key_routing.clj"
+                                                                             109]
+                                                                            [jepsen.client.Validate
+                                                                             invoke_BANG_
+                                                                             "client.clj"
+                                                                             83]
+                                                                            [jepsen.generator.interpreter.ClientWorker
+                                                                             invoke_BANG_
+                                                                             "interpreter.clj"
+                                                                             65]
+                                                                            [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147
+                                                                             invoke
+                                                                             "interpreter.clj"
+                                                                             140]
+                                                                            [jepsen.generator.interpreter$spawn_worker$fn__13146
+                                                                             invoke
+                                                                             "interpreter.clj"
+                                                                             123]
+                                                                            [clojure.core$binding_conveyor_fn$fn__5823
+                                                                             invoke
+                                                                             "core.clj"
+                                                                             2047]
+                                                                            [clojure.lang.AFn
+                                                                             call
+                                                                             "AFn.java"
+                                                                             18]
+                                                                            [java.util.concurrent.FutureTask
+                                                                             run
+                                                                             "FutureTask.java"
+                                                                             328]
+                                                                            [java.util.concurrent.ThreadPoolExecutor
+                                                                             runWorker
+                                                                             "ThreadPoolExecutor.java"
+                                                                             1090]
+                                                                            [java.util.concurrent.ThreadPoolExecutor$Worker
+                                                                             run
+                                                                             "ThreadPoolExecutor.java"
+                                                                             614]
+                                                                            [java.lang.Thread
+                                                                             run
+                                                                             "Thread.java"
+                                                                             1474]],
+                                                                    :cause "Connect timed out"},
+                                                        :error "indeterminate: Connect timed out"}})},
+ :perf {:latency-graph {:valid? :unknown,
+                        :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :rate-graph {:valid? :unknown,
+                     :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :valid? :unknown},
+ :valid? false}
+
+
+Analysis invalid! (ﾉಥ益ಥ）ﾉ ┻━┻

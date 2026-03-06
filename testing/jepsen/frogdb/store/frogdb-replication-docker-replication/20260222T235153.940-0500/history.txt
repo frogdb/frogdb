@@ -1,0 +1,278 @@
+0	:invoke	:read-primary	nil
+0	:ok	:read-primary	0
+1	:invoke	:read-primary	nil
+1	:ok	:read-primary	0
+2	:invoke	:write	3
+2	:ok	:write	3
+3	:invoke	:read-primary	nil
+3	:ok	:read-primary	3
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" 3, "n2" nil, "n3" nil}
+0	:invoke	:write-sync	6
+1	:invoke	:write	8
+1	:ok	:write	8
+1	:invoke	:write-sync	11
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" 11, "n2" nil, "n3" nil}
+3	:invoke	:read-primary	nil
+3	:ok	:read-primary	11
+4	:invoke	:write-sync	14
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" 14, "n2" nil, "n3" nil}
+2	:invoke	:read-primary	nil
+3	:invoke	:read-primary	nil
+2	:ok	:read-primary	14
+3	:ok	:read-primary	14
+2	:invoke	:write-sync	18
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" 18, "n2" nil, "n3" nil}
+3	:invoke	:write	23
+3	:ok	:write	23
+3	:invoke	:write	27
+3	:ok	:write	27
+3	:invoke	:write-sync	31
+0	:info	:write-sync	6	:timeout
+5	:invoke	:read-replica	nil
+5	:ok	:read-replica	nil
+5	:invoke	:write-sync	35
+1	:info	:write-sync	11	:timeout
+6	:invoke	:read-all	nil
+6	:ok	:read-all	{"n1" 35, "n2" nil, "n3" nil}
+6	:invoke	:write-sync	41
+4	:info	:write-sync	14	:timeout
+9	:invoke	:write-sync	332
+2	:info	:write-sync	18	:timeout
+7	:invoke	:write-sync	551
+3	:info	:write-sync	31	:timeout
+8	:invoke	:write-sync	830
+5	:info	:write-sync	35	:timeout
+10	:invoke	:write-sync	3731
+6	:info	:write-sync	41	:timeout
+11	:invoke	:write-sync	3918
+9	:info	:write-sync	332	:timeout
+14	:invoke	:write	4209
+14	:ok	:write	4209
+14	:invoke	:read-replica	nil
+14	:ok	:read-replica	nil
+14	:invoke	:read-replica	nil
+14	:ok	:read-replica	nil
+14	:invoke	:read-all	nil
+14	:ok	:read-all	{"n1" 4209, "n2" nil, "n3" nil}
+14	:invoke	:read-all	nil
+14	:ok	:read-all	{"n1" 4209, "n2" nil, "n3" nil}
+14	:invoke	:read-primary	nil
+14	:ok	:read-primary	4209
+14	:invoke	:read-all	nil
+14	:ok	:read-all	{"n1" 4209, "n2" nil, "n3" nil}
+7	:info	:write-sync	551	:timeout
+12	:invoke	:write-sync	4215
+14	:invoke	:read-primary	nil
+14	:ok	:read-primary	4215
+14	:invoke	:read-all	nil
+14	:ok	:read-all	{"n1" 4215, "n2" nil, "n3" nil}
+8	:info	:write-sync	830	:timeout
+13	:invoke	:write	4221
+13	:ok	:write	4221
+13	:invoke	:read-replica	nil
+13	:ok	:read-replica	nil
+14	:invoke	:write	4224
+14	:ok	:write	4224
+13	:invoke	:read-replica	nil
+13	:ok	:read-replica	nil
+13	:invoke	:read-replica	nil
+13	:ok	:read-replica	nil
+13	:invoke	:read-replica	nil
+13	:ok	:read-replica	nil
+13	:invoke	:read-all	nil
+13	:ok	:read-all	{"n1" 4224, "n2" nil, "n3" nil}
+13	:invoke	:write-sync	4227
+14	:invoke	:read-all	nil
+14	:ok	:read-all	{"n1" 4227, "n2" nil, "n3" nil}
+14	:invoke	:write	4232
+14	:ok	:write	4232
+14	:invoke	:read-primary	nil
+14	:ok	:read-primary	4232
+14	:invoke	:read-replica	nil
+14	:ok	:read-replica	nil
+14	:invoke	:write-sync	4236
+10	:info	:write-sync	3731	:timeout
+15	:invoke	:write-sync	6006
+11	:info	:write-sync	3918	:timeout
+16	:invoke	:read-all	nil
+16	:ok	:read-all	{"n1" 6006, "n2" nil, "n3" nil}
+16	:invoke	:read-primary	nil
+16	:ok	:read-primary	6006
+16	:invoke	:read-primary	nil
+16	:ok	:read-primary	6006
+16	:invoke	:read-primary	nil
+16	:ok	:read-primary	6006
+16	:invoke	:read-replica	nil
+16	:ok	:read-replica	nil
+16	:invoke	:read-primary	nil
+16	:ok	:read-primary	6006
+16	:invoke	:read-all	nil
+16	:ok	:read-all	{"n1" 6006, "n2" nil, "n3" nil}
+12	:info	:write-sync	4215	:timeout
+16	:invoke	:read-all	nil
+16	:ok	:read-all	{"n1" 6006, "n2" nil, "n3" nil}
+16	:invoke	:write	6009
+16	:ok	:write	6009
+16	:invoke	:read-primary	nil
+16	:ok	:read-primary	6009
+17	:invoke	:read-all	nil
+17	:ok	:read-all	{"n1" 6009, "n2" nil, "n3" nil}
+16	:invoke	:read-replica	nil
+16	:ok	:read-replica	nil
+16	:invoke	:read-primary	nil
+16	:ok	:read-primary	6009
+16	:invoke	:read-primary	nil
+16	:ok	:read-primary	6009
+16	:invoke	:write-sync	6012
+17	:invoke	:read-replica	nil
+17	:ok	:read-replica	nil
+17	:invoke	:read-all	nil
+17	:ok	:read-all	{"n1" 6012, "n2" nil, "n3" nil}
+13	:info	:write-sync	4227	:timeout
+18	:invoke	:write-sync	6021
+17	:invoke	:read-all	nil
+17	:ok	:read-all	{"n1" 6021, "n2" nil, "n3" nil}
+17	:invoke	:read-replica	nil
+17	:ok	:read-replica	nil
+17	:invoke	:read-all	nil
+17	:ok	:read-all	{"n1" 6021, "n2" nil, "n3" nil}
+17	:invoke	:read-replica	nil
+17	:ok	:read-replica	nil
+14	:info	:write-sync	4236	:timeout
+17	:invoke	:read-replica	nil
+17	:ok	:read-replica	nil
+19	:invoke	:read-replica	nil
+19	:ok	:read-replica	nil
+19	:invoke	:read-primary	nil
+19	:ok	:read-primary	6021
+17	:invoke	:write-sync	6024
+19	:invoke	:read-replica	nil
+19	:ok	:read-replica	nil
+19	:invoke	:read-all	nil
+19	:ok	:read-all	{"n1" 6024, "n2" nil, "n3" nil}
+19	:invoke	:read-primary	nil
+19	:ok	:read-primary	6024
+19	:invoke	:read-primary	nil
+19	:ok	:read-primary	6024
+19	:invoke	:read-all	nil
+19	:ok	:read-all	{"n1" 6024, "n2" nil, "n3" nil}
+19	:invoke	:write-sync	6031
+15	:info	:write-sync	6006	:timeout
+20	:invoke	:read-replica	nil
+20	:ok	:read-replica	nil
+20	:invoke	:read-replica	nil
+20	:ok	:read-replica	nil
+20	:invoke	:write-sync	6035
+16	:info	:write-sync	6012	:timeout
+21	:invoke	:read-replica	nil
+21	:ok	:read-replica	nil
+21	:invoke	:write-sync	6039
+18	:info	:write-sync	6021	:timeout
+23	:invoke	:write	6240
+23	:ok	:write	6240
+23	:invoke	:read-primary	nil
+23	:ok	:read-primary	6240
+23	:invoke	:read-replica	nil
+23	:ok	:read-replica	nil
+23	:invoke	:write	6244
+23	:ok	:write	6244
+23	:invoke	:read-all	nil
+23	:ok	:read-all	{"n1" 6244, "n2" nil, "n3" nil}
+23	:invoke	:write	6250
+23	:ok	:write	6250
+17	:info	:write-sync	6024	:timeout
+22	:invoke	:read-replica	nil
+22	:ok	:read-replica	nil
+22	:invoke	:write	6253
+22	:ok	:write	6253
+22	:invoke	:write-sync	6256
+23	:invoke	:write	6258
+23	:ok	:write	6258
+23	:invoke	:read-primary	nil
+23	:ok	:read-primary	6258
+23	:invoke	:write	6262
+23	:ok	:write	6262
+23	:invoke	:write-sync	6267
+19	:info	:write-sync	6031	:timeout
+24	:invoke	:read-all	nil
+24	:ok	:read-all	{"n1" 6267, "n2" nil, "n3" nil}
+24	:invoke	:write-sync	6274
+20	:info	:write-sync	6035	:timeout
+25	:invoke	:write	7251
+25	:ok	:write	7251
+25	:invoke	:read-primary	nil
+25	:ok	:read-primary	7251
+25	:invoke	:read-all	nil
+25	:ok	:read-all	{"n1" 7251, "n2" nil, "n3" nil}
+25	:invoke	:read-all	nil
+25	:ok	:read-all	{"n1" 7251, "n2" nil, "n3" nil}
+25	:invoke	:read-all	nil
+25	:ok	:read-all	{"n1" 7251, "n2" nil, "n3" nil}
+25	:invoke	:read-primary	nil
+25	:ok	:read-primary	7251
+25	:invoke	:read-primary	nil
+25	:ok	:read-primary	7251
+25	:invoke	:read-all	nil
+25	:ok	:read-all	{"n1" 7251, "n2" nil, "n3" nil}
+25	:invoke	:read-all	nil
+25	:ok	:read-all	{"n1" 7251, "n2" nil, "n3" nil}
+25	:invoke	:write	7256
+25	:ok	:write	7256
+25	:invoke	:read-replica	nil
+25	:ok	:read-replica	nil
+25	:invoke	:write-sync	7261
+21	:info	:write-sync	6039	:timeout
+26	:invoke	:read-primary	nil
+26	:ok	:read-primary	7261
+26	:invoke	:read-replica	nil
+26	:ok	:read-replica	nil
+26	:invoke	:read-all	nil
+26	:ok	:read-all	{"n1" 7261, "n2" nil, "n3" nil}
+26	:invoke	:write-sync	7268
+22	:info	:write-sync	6256	:timeout
+27	:invoke	:read-replica	nil
+27	:ok	:read-replica	nil
+27	:invoke	:write	7272
+27	:ok	:write	7272
+27	:invoke	:read-replica	nil
+27	:ok	:read-replica	nil
+23	:info	:write-sync	6267	:timeout
+28	:invoke	:read-all	nil
+28	:ok	:read-all	{"n1" 7272, "n2" nil, "n3" nil}
+27	:invoke	:read-primary	nil
+27	:ok	:read-primary	7272
+27	:invoke	:read-all	nil
+27	:ok	:read-all	{"n1" 7272, "n2" nil, "n3" nil}
+24	:info	:write-sync	6274	:timeout
+27	:invoke	:read-primary	nil
+27	:ok	:read-primary	7272
+27	:invoke	:read-all	nil
+27	:ok	:read-all	{"n1" 7272, "n2" nil, "n3" nil}
+27	:invoke	:read-primary	nil
+27	:ok	:read-primary	7272
+25	:info	:write-sync	7261	:timeout
+26	:info	:write-sync	7268	:timeout
+30	:invoke	:read	nil
+30	:info	:read	nil	[:unexpected No matching clause: :read]
+31	:invoke	:read	nil
+31	:info	:read	nil	[:unexpected No matching clause: :read]
+27	:invoke	:read	nil
+27	:info	:read	nil	[:unexpected No matching clause: :read]
+28	:invoke	:read	nil
+28	:info	:read	nil	[:unexpected No matching clause: :read]
+29	:invoke	:read	nil
+29	:info	:read	nil	[:unexpected No matching clause: :read]
+35	:invoke	:read	nil
+35	:info	:read	nil	[:unexpected No matching clause: :read]
+40	:invoke	:read	nil
+40	:info	:read	nil	[:unexpected No matching clause: :read]
+36	:invoke	:read	nil
+36	:info	:read	nil	[:unexpected No matching clause: :read]
+32	:invoke	:read	nil
+32	:info	:read	nil	[:unexpected No matching clause: :read]
+33	:invoke	:read	nil
+33	:info	:read	nil	[:unexpected No matching clause: :read]

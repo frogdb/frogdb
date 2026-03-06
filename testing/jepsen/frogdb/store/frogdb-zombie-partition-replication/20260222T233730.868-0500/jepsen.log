@@ -1,0 +1,191 @@
+2026-02-22 23:37:30,903{GMT}	INFO	[jepsen test runner] jepsen.core: Test version 4a7760395f3d9033cc6c7a477c6947e5d983eb25 (plus uncommitted changes)
+2026-02-22 23:37:30,903{GMT}	INFO	[jepsen test runner] jepsen.core: Command line:
+lein run test --workload zombie --nemesis partition --time-limit 60
+2026-02-22 23:37:30,938{GMT}	INFO	[jepsen test runner] jepsen.core: Running test:
+{:remote
+ #jepsen.control.retry.Remote{:remote #jepsen.control.scp.Remote{:cmd-remote #jepsen.control.sshj.SSHJRemote{:concurrency-limit 6,
+                                                                                                             :conn-spec nil,
+                                                                                                             :client nil,
+                                                                                                             :semaphore nil},
+                                                                 :conn-spec nil},
+                              :conn nil}
+ :concurrency 5
+ :cluster false
+ :db
+ #object[jepsen.frogdb.db$replication_db$reify__9900
+         "0x6ee88669"
+         "jepsen.frogdb.db$replication_db$reify__9900@6ee88669"]
+ :leave-db-running? false
+ :name "frogdb-zombie-partition-replication"
+ :logging-json? false
+ :independent false
+ :start-time
+ #object[org.joda.time.DateTime "0x1c791c14" "2026-02-22T23:37:30.868-05:00"]
+ :docker false
+ :net
+ #object[jepsen.net$reify__12635 "0xc24e06a" "jepsen.net$reify__12635@c24e06a"]
+ :client
+ #jepsen.frogdb.zombie.ZombieClient{:conns nil,
+                                    :primary-conn nil,
+                                    :docker-host? nil}
+ :barrier
+ #object[java.util.concurrent.CyclicBarrier
+         "0x1926e42e"
+         "java.util.concurrent.CyclicBarrier@1926e42e"]
+ :ssh {:dummy? true}
+ :rate 10
+ :checker
+ #object[jepsen.checker$compose$reify__10552
+         "0x6fa38b67"
+         "jepsen.checker$compose$reify__10552@6fa38b67"]
+ :argv
+ ("test" "--workload" "zombie" "--nemesis" "partition" "--time-limit" "60")
+ :nemesis
+ #unprintable "jepsen.frogdb.nemesis$partition_nemesis$reify__11056@3b6ea33b"
+ :nodes ["n1" "n2" "n3"]
+ :test-count 1
+ :replication false
+ :cluster-nodes ["n1" "n2" "n3"]
+ :generator
+ #object[jepsen.util.Forgettable
+         "0x2bc41531"
+         ((jepsen.generator.Synchronize
+           {:gen (jepsen.generator.TimeLimit
+                  {:limit 60000000000,
+                   :cutoff nil,
+                   :gen (jepsen.generator.Any
+                         {:gens [(jepsen.generator.OnThreads
+                                  {:f #{:nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x56d5311e"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@56d5311e"],
+                                   :gen (jepsen.generator.Cycle
+                                         {:remaining -1,
+                                          :original-gen [{:type :sleep,
+                                                          :value 10}
+                                                         {:type :info,
+                                                          :f :partition,
+                                                          :value :primary-isolated}
+                                                         {:type :sleep,
+                                                          :value 10}
+                                                         {:type :info, :f :heal}
+                                                         {:type :sleep,
+                                                          :value 5}],
+                                          :gen [{:type :sleep, :value 10}
+                                                {:type :info,
+                                                 :f :partition,
+                                                 :value :primary-isolated}
+                                                {:type :sleep, :value 10}
+                                                {:type :info, :f :heal}
+                                                {:type :sleep, :value 5}]})})
+                                 (jepsen.generator.OnThreads
+                                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x66a81c48"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@66a81c48"],
+                                   :gen (jepsen.generator.Stagger
+                                         {:dt 200000000,
+                                          :next-time nil,
+                                          :gen (jepsen.generator.Mix
+                                                {:i 1,
+                                                 :gens [#object[jepsen.frogdb.zombie$generator$fn__12684
+                                                                "0x60880394"
+                                                                "jepsen.frogdb.zombie$generator$fn__12684@60880394"]
+                                                        #object[jepsen.frogdb.zombie$generator$fn__12686
+                                                                "0x482b6acc"
+                                                                "jepsen.frogdb.zombie$generator$fn__12686@482b6acc"]
+                                                        #object[jepsen.frogdb.zombie$generator$fn__12688
+                                                                "0x3709ef16"
+                                                                "jepsen.frogdb.zombie$generator$fn__12688@3709ef16"]]})})})]})})})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Recovering from faults..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #{:nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x1165efe3"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@1165efe3"],
+                   :gen (jepsen.generator.Limit
+                         {:remaining 1, :gen {:type :info, :f :heal}})})})
+          (jepsen.generator.Synchronize {:gen {:type :sleep, :value 5}})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Final reads..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x3151caf8"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@3151caf8"],
+                   :gen (jepsen.generator.Stagger
+                         {:dt 200000000,
+                          :next-time nil,
+                          :gen (jepsen.generator.Limit
+                                {:remaining 10,
+                                 :gen (jepsen.generator.Repeat
+                                       {:remaining -1, :gen {:f :read}})})})})}))]
+ :interval 10
+ :os
+ #object[jepsen.frogdb.core$reify__14064
+         "0x744d556f"
+         "jepsen.frogdb.core$reify__14064@744d556f"]
+ :time-limit 60
+ :workload "zombie"
+ :local false}
+
+2026-02-22 23:37:32,161{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS setup for n1 (no-op)
+2026-02-22 23:37:32,161{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS setup for n3 (no-op)
+2026-02-22 23:37:32,161{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS setup for n2 (no-op)
+2026-02-22 23:37:32,161{GMT}	INFO	[jepsen test runner] jepsen.db: Tearing down DB
+2026-02-22 23:37:32,161{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB replication node n1
+2026-02-22 23:37:32,161{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Tearing down FrogDB replication node n2
+2026-02-22 23:37:32,161{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Tearing down FrogDB replication node n3
+2026-02-22 23:37:32,262{GMT}	INFO	[jepsen test runner] jepsen.db: Setting up DB
+2026-02-22 23:37:32,264{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Setting up FrogDB replication node n1
+2026-02-22 23:37:32,264{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Setting up FrogDB replication node n2
+2026-02-22 23:37:32,264{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Setting up FrogDB replication node n3
+2026-02-22 23:37:33,355{GMT}	INFO	[jepsen test runner] jepsen.core: Relative time begins now
+2026-02-22 23:37:33,356{GMT}	INFO	[jepsen node n1] jepsen.frogdb.zombie: Opening zombie client (docker?: false , nodes: [n1 n2 n3] )
+2026-02-22 23:37:33,356{GMT}	INFO	[jepsen node n2] jepsen.frogdb.zombie: Opening zombie client (docker?: false , nodes: [n1 n2 n3] )
+2026-02-22 23:37:33,356{GMT}	INFO	[jepsen node n3] jepsen.frogdb.zombie: Opening zombie client (docker?: false , nodes: [n1 n2 n3] )
+2026-02-22 23:37:33,356{GMT}	INFO	[jepsen node n1] jepsen.frogdb.zombie: Setting up zombie test key jepsen-zombie
+2026-02-22 23:37:33,356{GMT}	INFO	[jepsen node n2] jepsen.frogdb.zombie: Setting up zombie test key jepsen-zombie
+2026-02-22 23:37:33,356{GMT}	INFO	[jepsen node n3] jepsen.frogdb.zombie: Setting up zombie test key jepsen-zombie
+2026-02-22 23:37:33,361{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Tearing down FrogDB replication node n3
+2026-02-22 23:37:33,361{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB replication node n1
+2026-02-22 23:37:33,361{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Tearing down FrogDB replication node n2
+2026-02-22 23:37:33,454{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS teardown for n2 (no-op)
+2026-02-22 23:37:33,454{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS teardown for n3 (no-op)
+2026-02-22 23:37:33,454{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS teardown for n1 (no-op)
+2026-02-22 23:37:33,455{GMT}	WARN	[jepsen test runner] jepsen.core: Test crashed!
+clojure.lang.ExceptionInfo: Carmine connection error
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:282)
+	at taoensso.carmine.connections$pooled_conn.invoke(connections.clj:271)
+	at jepsen.frogdb.zombie.ZombieClient.setup_BANG_(zombie.clj:49)
+	at jepsen.core$run_case_BANG_$fn__13259.invoke(core.clj:212)
+	at dom_top.core$real_pmap_helper$build_thread__213$fn__214.invoke(core.clj:163)
+	at clojure.lang.AFn.applyToHelper(AFn.java:152)
+	at clojure.lang.AFn.applyTo(AFn.java:144)
+	at clojure.core$apply.invokeStatic(core.clj:667)
+	at clojure.core$with_bindings_STAR_.invokeStatic(core.clj:1990)
+	at clojure.core$with_bindings_STAR_.doInvoke(core.clj:1990)
+	at clojure.lang.RestFn.invoke(RestFn.java:425)
+	at clojure.lang.AFn.applyToHelper(AFn.java:156)
+	at clojure.lang.RestFn.applyTo(RestFn.java:132)
+	at clojure.core$apply.invokeStatic(core.clj:671)
+	at clojure.core$bound_fn_STAR_$fn__5818.doInvoke(core.clj:2020)
+	at clojure.lang.RestFn.invoke(RestFn.java:397)
+	at clojure.lang.AFn.run(AFn.java:22)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.net.UnknownHostException: n1
+	at java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:569)
+	at java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:284)
+	at java.base/java.net.Socket.connect(Socket.java:659)
+	at taoensso.carmine.connections$make_new_connection.invokeStatic(connections.clj:127)
+	at taoensso.carmine.connections$make_new_connection.invoke(connections.clj:106)
+	at taoensso.carmine.connections$make_connection_factory$reify__7724.makeObject(connections.clj:168)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.create(GenericKeyedObjectPool.java:796)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:444)
+	at org.apache.commons.pool2.impl.GenericKeyedObjectPool.borrowObject(GenericKeyedObjectPool.java:355)
+	at taoensso.carmine.connections.ConnectionPool.get_conn(connections.clj:64)
+	at taoensso.carmine.connections$pooled_conn.invokeStatic(connections.clj:277)
+	... 17 common frames omitted

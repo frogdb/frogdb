@@ -1,0 +1,618 @@
+0	:invoke	:score	"member-1"
+0	:ok	:score	{:member "member-1", :score nil}
+1	:invoke	:add	{:member "member-33", :score 329}
+1	:ok	:add	{:member "member-33", :score 329}
+2	:invoke	:add	{:member "member-46", :score 696}
+2	:ok	:add	{:member "member-46", :score 696}
+3	:invoke	:update-score	{:member "member-12", :score 738}
+3	:ok	:update-score	{:member "member-12", :score 738}
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-33", :score 329.0} {:member "member-46", :score 696.0}]
+0	:invoke	:rank	"member-17"
+1	:invoke	:update-score	{:member "member-21", :score 23}
+0	:ok	:rank	{:member "member-17", :rank nil}
+1	:ok	:update-score	{:member "member-21", :score 23}
+1	:invoke	:remove	"member-37"
+2	:invoke	:remove	"member-15"
+1	:ok	:remove	"member-37"
+2	:ok	:remove	"member-15"
+3	:invoke	:add	{:member "member-35", :score 434}
+3	:ok	:add	{:member "member-35", :score 434}
+4	:invoke	:add	{:member "member-46", :score 707}
+4	:ok	:add	{:member "member-46", :score 707}
+0	:invoke	:score	"member-46"
+0	:ok	:score	{:member "member-46", :score 707.0}
+0	:invoke	:score	"member-42"
+0	:ok	:score	{:member "member-42", :score nil}
+1	:invoke	:rank	"member-33"
+1	:ok	:rank	{:member "member-33", :rank 0}
+2	:invoke	:score	"member-49"
+2	:ok	:score	{:member "member-49", :score nil}
+3	:invoke	:update-score	{:member "member-5", :score 614}
+3	:ok	:update-score	{:member "member-5", :score 614}
+4	:invoke	:add	{:member "member-44", :score 948}
+4	:ok	:add	{:member "member-44", :score 948}
+0	:invoke	:add	{:member "member-1", :score 202}
+0	:ok	:add	{:member "member-1", :score 202}
+0	:invoke	:remove	"member-29"
+0	:ok	:remove	"member-29"
+1	:invoke	:update-score	{:member "member-38", :score 291}
+1	:ok	:update-score	{:member "member-38", :score 291}
+2	:invoke	:add	{:member "member-19", :score 726}
+2	:ok	:add	{:member "member-19", :score 726}
+3	:invoke	:remove	"member-4"
+3	:ok	:remove	"member-4"
+4	:invoke	:add	{:member "member-42", :score 882}
+4	:ok	:add	{:member "member-42", :score 882}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 434.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]
+0	:invoke	:score	"member-43"
+0	:ok	:score	{:member "member-43", :score nil}
+1	:invoke	:remove	"member-21"
+1	:ok	:remove	"member-21"
+2	:invoke	:score	"member-17"
+2	:ok	:score	{:member "member-17", :score nil}
+3	:invoke	:read	nil
+3	:ok	:read	[{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 434.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 434.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]
+0	:invoke	:add	{:member "member-35", :score 523}
+0	:ok	:add	{:member "member-35", :score 523}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]
+1	:invoke	:remove	"member-45"
+1	:ok	:remove	"member-45"
+2	:invoke	:rank	"member-41"
+2	:ok	:rank	{:member "member-41", :rank nil}
+3	:invoke	:update-score	{:member "member-34", :score 879}
+3	:ok	:update-score	{:member "member-34", :score 879}
+4	:invoke	:add	{:member "member-15", :score 842}
+4	:ok	:add	{:member "member-15", :score 842}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]
+0	:invoke	:rank	"member-41"
+0	:ok	:rank	{:member "member-41", :rank nil}
+1	:invoke	:add	{:member "member-27", :score 887}
+1	:ok	:add	{:member "member-27", :score 887}
+2	:invoke	:rank	"member-25"
+2	:ok	:rank	{:member "member-25", :rank nil}
+3	:invoke	:rank	"member-44"
+3	:ok	:rank	{:member "member-44", :rank 8}
+4	:invoke	:rank	"member-7"
+4	:ok	:rank	{:member "member-7", :rank nil}
+0	:invoke	:score	"member-21"
+0	:ok	:score	{:member "member-21", :score nil}
+0	:invoke	:add	{:member "member-37", :score 229}
+0	:ok	:add	{:member "member-37", :score 229}
+1	:invoke	:add	{:member "member-40", :score 846}
+1	:ok	:add	{:member "member-40", :score 846}
+2	:invoke	:add	{:member "member-20", :score 960}
+2	:ok	:add	{:member "member-20", :score 960}
+3	:invoke	:rank	"member-33"
+3	:ok	:rank	{:member "member-33", :rank 2}
+4	:invoke	:score	"member-36"
+4	:ok	:score	{:member "member-36", :score nil}
+0	:invoke	:score	"member-42"
+0	:ok	:score	{:member "member-42", :score 882.0}
+0	:invoke	:update-score	{:member "member-20", :score 32}
+0	:ok	:update-score	{:member "member-20", :score 32}
+1	:invoke	:read	nil
+1	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]
+2	:invoke	:read	nil
+2	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]
+3	:invoke	:score	"member-10"
+3	:ok	:score	{:member "member-10", :score nil}
+4	:invoke	:rank	"member-41"
+4	:ok	:rank	{:member "member-41", :rank nil}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]
+0	:invoke	:update-score	{:member "member-47", :score 788}
+0	:ok	:update-score	{:member "member-47", :score 788}
+1	:invoke	:read	nil
+1	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]
+2	:invoke	:remove	"member-35"
+2	:ok	:remove	"member-35"
+3	:invoke	:remove	"member-19"
+3	:ok	:remove	"member-19"
+4	:invoke	:rank	"member-49"
+4	:ok	:rank	{:member "member-49", :rank nil}
+0	:invoke	:add	{:member "member-11", :score 362}
+0	:ok	:add	{:member "member-11", :score 362}
+0	:invoke	:remove	"member-37"
+0	:ok	:remove	"member-37"
+1	:invoke	:update-score	{:member "member-5", :score 553}
+1	:ok	:update-score	{:member "member-5", :score 553}
+2	:invoke	:add	{:member "member-19", :score 846}
+2	:ok	:add	{:member "member-19", :score 846}
+3	:invoke	:score	"member-32"
+3	:ok	:score	{:member "member-32", :score nil}
+4	:invoke	:score	"member-5"
+4	:ok	:score	{:member "member-5", :score nil}
+0	:invoke	:add	{:member "member-5", :score 900}
+0	:ok	:add	{:member "member-5", :score 900}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]
+1	:invoke	:read	nil
+1	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]
+2	:invoke	:remove	"member-7"
+2	:ok	:remove	"member-7"
+3	:invoke	:rank	"member-3"
+3	:ok	:rank	{:member "member-3", :rank nil}
+4	:invoke	:rank	"member-43"
+4	:ok	:rank	{:member "member-43", :rank nil}
+0	:invoke	:add	{:member "member-25", :score 449}
+0	:ok	:add	{:member "member-25", :score 449}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]
+1	:invoke	:rank	"member-39"
+1	:ok	:rank	{:member "member-39", :rank nil}
+2	:invoke	:remove	"member-39"
+2	:ok	:remove	"member-39"
+3	:invoke	:read	nil
+3	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]
+4	:invoke	:update-score	{:member "member-43", :score 684}
+4	:ok	:update-score	{:member "member-43", :score 684}
+0	:invoke	:update-score	{:member "member-16", :score 220}
+0	:ok	:update-score	{:member "member-16", :score 220}
+0	:invoke	:add	{:member "member-47", :score 570}
+0	:ok	:add	{:member "member-47", :score 570}
+1	:invoke	:add	{:member "member-6", :score 347}
+1	:ok	:add	{:member "member-6", :score 347}
+2	:invoke	:remove	"member-5"
+2	:ok	:remove	"member-5"
+3	:invoke	:remove	"member-0"
+3	:ok	:remove	"member-0"
+4	:invoke	:rank	"member-3"
+4	:ok	:rank	{:member "member-3", :rank nil}
+0	:invoke	:score	"member-28"
+0	:ok	:score	{:member "member-28", :score nil}
+0	:invoke	:score	"member-30"
+0	:ok	:score	{:member "member-30", :score nil}
+1	:invoke	:score	"member-6"
+1	:ok	:score	{:member "member-6", :score 347.0}
+2	:invoke	:remove	"member-43"
+2	:ok	:remove	"member-43"
+3	:invoke	:add	{:member "member-44", :score 930}
+3	:ok	:add	{:member "member-44", :score 930}
+4	:invoke	:score	"member-11"
+4	:ok	:score	{:member "member-11", :score 362.0}
+0	:invoke	:remove	"member-45"
+0	:ok	:remove	"member-45"
+0	:invoke	:score	"member-1"
+0	:ok	:score	{:member "member-1", :score 202.0}
+1	:invoke	:score	"member-25"
+1	:ok	:score	{:member "member-25", :score 449.0}
+2	:invoke	:add	{:member "member-7", :score 7}
+2	:ok	:add	{:member "member-7", :score 7}
+3	:invoke	:score	"member-8"
+3	:ok	:score	{:member "member-8", :score nil}
+4	:invoke	:update-score	{:member "member-12", :score 570}
+4	:ok	:update-score	{:member "member-12", :score 570}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]
+0	:invoke	:rank	"member-0"
+0	:ok	:rank	{:member "member-0", :rank nil}
+1	:invoke	:add	{:member "member-28", :score 554}
+1	:ok	:add	{:member "member-28", :score 554}
+2	:invoke	:rank	"member-25"
+2	:ok	:rank	{:member "member-25", :rank 6}
+3	:invoke	:update-score	{:member "member-39", :score 263}
+3	:ok	:update-score	{:member "member-39", :score 263}
+4	:invoke	:update-score	{:member "member-23", :score 300}
+4	:ok	:update-score	{:member "member-23", :score 300}
+0	:invoke	:rank	"member-34"
+0	:ok	:rank	{:member "member-34", :rank nil}
+0	:invoke	:add	{:member "member-48", :score 642}
+0	:ok	:add	{:member "member-48", :score 642}
+1	:invoke	:add	{:member "member-22", :score 198}
+1	:ok	:add	{:member "member-22", :score 198}
+2	:invoke	:remove	"member-38"
+2	:ok	:remove	"member-38"
+3	:invoke	:add	{:member "member-18", :score 610}
+3	:ok	:add	{:member "member-18", :score 610}
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]
+0	:invoke	:update-score	{:member "member-37", :score 707}
+0	:ok	:update-score	{:member "member-37", :score 707}
+1	:invoke	:read	nil
+1	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]
+2	:invoke	:remove	"member-17"
+2	:ok	:remove	"member-17"
+3	:invoke	:read	nil
+3	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]
+4	:invoke	:rank	"member-38"
+4	:ok	:rank	{:member "member-38", :rank nil}
+0	:invoke	:update-score	{:member "member-14", :score 689}
+0	:ok	:update-score	{:member "member-14", :score 689}
+0	:invoke	:add	{:member "member-48", :score 732}
+0	:ok	:add	{:member "member-48", :score 732}
+1	:invoke	:score	"member-49"
+1	:ok	:score	{:member "member-49", :score nil}
+2	:invoke	:score	"member-17"
+2	:ok	:score	{:member "member-17", :score nil}
+3	:invoke	:add	{:member "member-26", :score 252}
+3	:ok	:add	{:member "member-26", :score 252}
+4	:invoke	:score	"member-33"
+4	:ok	:score	{:member "member-33", :score 329.0}
+0	:invoke	:remove	"member-15"
+0	:ok	:remove	"member-15"
+0	:invoke	:add	{:member "member-0", :score 982}
+0	:ok	:add	{:member "member-0", :score 982}
+1	:invoke	:update-score	{:member "member-3", :score 894}
+1	:ok	:update-score	{:member "member-3", :score 894}
+2	:invoke	:score	"member-31"
+2	:ok	:score	{:member "member-31", :score nil}
+3	:invoke	:score	"member-31"
+3	:ok	:score	{:member "member-31", :score nil}
+4	:invoke	:remove	"member-30"
+4	:ok	:remove	"member-30"
+0	:invoke	:update-score	{:member "member-9", :score 194}
+0	:ok	:update-score	{:member "member-9", :score 194}
+0	:invoke	:add	{:member "member-26", :score 544}
+0	:ok	:add	{:member "member-26", :score 544}
+1	:invoke	:read	nil
+1	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-46", :score 707.0} {:member "member-48", :score 732.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+2	:invoke	:rank	"member-14"
+2	:ok	:rank	{:member "member-14", :rank nil}
+3	:invoke	:rank	"member-10"
+3	:ok	:rank	{:member "member-10", :rank nil}
+4	:invoke	:remove	"member-19"
+4	:ok	:remove	"member-19"
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-46", :score 707.0} {:member "member-48", :score 732.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+0	:invoke	:remove	"member-48"
+0	:ok	:remove	"member-48"
+1	:invoke	:rank	"member-1"
+1	:ok	:rank	{:member "member-1", :rank 3}
+2	:invoke	:read	nil
+2	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-46", :score 707.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+3	:invoke	:remove	"member-18"
+3	:ok	:remove	"member-18"
+4	:invoke	:update-score	{:member "member-25", :score 515}
+4	:ok	:update-score	{:member "member-25", :score 515}
+0	:invoke	:update-score	{:member "member-12", :score 37}
+0	:ok	:update-score	{:member "member-12", :score 37}
+0	:invoke	:score	"member-5"
+0	:ok	:score	{:member "member-5", :score nil}
+1	:invoke	:update-score	{:member "member-45", :score 839}
+1	:ok	:update-score	{:member "member-45", :score 839}
+2	:invoke	:add	{:member "member-34", :score 808}
+2	:ok	:add	{:member "member-34", :score 808}
+3	:invoke	:update-score	{:member "member-3", :score 982}
+3	:ok	:update-score	{:member "member-3", :score 982}
+4	:invoke	:rank	"member-28"
+4	:ok	:rank	{:member "member-28", :rank 9}
+0	:invoke	:score	"member-5"
+0	:ok	:score	{:member "member-5", :score nil}
+0	:invoke	:add	{:member "member-3", :score 103}
+0	:ok	:add	{:member "member-3", :score 103}
+1	:invoke	:remove	"member-48"
+1	:ok	:remove	"member-48"
+2	:invoke	:remove	"member-18"
+2	:ok	:remove	"member-18"
+3	:invoke	:rank	"member-4"
+3	:ok	:rank	{:member "member-4", :rank nil}
+4	:invoke	:add	{:member "member-18", :score 812}
+4	:ok	:add	{:member "member-18", :score 812}
+0	:invoke	:update-score	{:member "member-42", :score 697}
+0	:ok	:update-score	{:member "member-42", :score 697}
+0	:invoke	:remove	"member-34"
+0	:ok	:remove	"member-34"
+1	:invoke	:add	{:member "member-16", :score 420}
+1	:ok	:add	{:member "member-16", :score 420}
+2	:invoke	:remove	"member-12"
+2	:ok	:remove	"member-12"
+3	:invoke	:read	nil
+3	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-16", :score 420.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-42", :score 697.0} {:member "member-46", :score 707.0} {:member "member-18", :score 812.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+4	:invoke	:remove	"member-18"
+4	:ok	:remove	"member-18"
+0	:invoke	:remove	"member-39"
+0	:ok	:remove	"member-39"
+0	:invoke	:rank	"member-5"
+0	:ok	:rank	{:member "member-5", :rank nil}
+1	:invoke	:rank	"member-21"
+1	:ok	:rank	{:member "member-21", :rank nil}
+2	:invoke	:score	"member-9"
+2	:ok	:score	{:member "member-9", :score nil}
+3	:invoke	:add	{:member "member-17", :score 712}
+4	:invoke	:update-score	{:member "member-1", :score 991}
+3	:ok	:add	{:member "member-17", :score 712}
+4	:ok	:update-score	{:member "member-1", :score 991}
+0	:invoke	:score	"member-40"
+0	:ok	:score	{:member "member-40", :score 846.0}
+0	:invoke	:add	{:member "member-42", :score 300}
+0	:ok	:add	{:member "member-42", :score 300}
+1	:invoke	:score	"member-8"
+1	:ok	:score	{:member "member-8", :score nil}
+2	:invoke	:add	{:member "member-11", :score 9}
+2	:ok	:add	{:member "member-11", :score 9}
+3	:invoke	:remove	"member-29"
+3	:ok	:remove	"member-29"
+4	:invoke	:add	{:member "member-5", :score 328}
+4	:ok	:add	{:member "member-5", :score 328}
+0	:invoke	:add	{:member "member-19", :score 715}
+0	:ok	:add	{:member "member-19", :score 715}
+0	:invoke	:rank	"member-32"
+0	:ok	:rank	{:member "member-32", :rank nil}
+1	:invoke	:update-score	{:member "member-6", :score 799}
+1	:ok	:update-score	{:member "member-6", :score 799}
+2	:invoke	:add	{:member "member-28", :score 514}
+2	:ok	:add	{:member "member-28", :score 514}
+3	:invoke	:read	nil
+3	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0} {:member "member-1", :score 991.0}]
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0} {:member "member-1", :score 991.0}]
+0	:invoke	:add	{:member "member-43", :score 337}
+0	:ok	:add	{:member "member-43", :score 337}
+0	:invoke	:remove	"member-36"
+0	:ok	:remove	"member-36"
+1	:invoke	:add	{:member "member-30", :score 298}
+1	:ok	:add	{:member "member-30", :score 298}
+2	:invoke	:rank	"member-0"
+2	:ok	:rank	{:member "member-0", :rank 22}
+3	:invoke	:read	nil
+3	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-30", :score 298.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0} {:member "member-1", :score 991.0}]
+4	:invoke	:add	{:member "member-1", :score 685}
+4	:ok	:add	{:member "member-1", :score 685}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-30", :score 298.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-1", :score 685.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+0	:invoke	:score	"member-1"
+0	:ok	:score	{:member "member-1", :score 685.0}
+1	:invoke	:read	nil
+1	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-30", :score 298.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-1", :score 685.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+2	:invoke	:add	{:member "member-11", :score 417}
+2	:ok	:add	{:member "member-11", :score 417}
+3	:invoke	:update-score	{:member "member-13", :score 273}
+3	:ok	:update-score	{:member "member-13", :score 273}
+4	:invoke	:add	{:member "member-38", :score 580}
+4	:ok	:add	{:member "member-38", :score 580}
+0	:invoke	:rank	"member-0"
+0	:ok	:rank	{:member "member-0", :rank 24}
+0	:invoke	:rank	"member-32"
+0	:ok	:rank	{:member "member-32", :rank nil}
+1	:invoke	:add	{:member "member-5", :score 272}
+1	:ok	:add	{:member "member-5", :score 272}
+2	:invoke	:remove	"member-27"
+2	:ok	:remove	"member-27"
+3	:invoke	:remove	"member-12"
+3	:ok	:remove	"member-12"
+4	:invoke	:update-score	{:member "member-37", :score 40}
+4	:ok	:update-score	{:member "member-37", :score 40}
+0	:invoke	:update-score	{:member "member-27", :score 667}
+0	:ok	:update-score	{:member "member-27", :score 667}
+0	:invoke	:score	"member-47"
+0	:ok	:score	{:member "member-47", :score 570.0}
+1	:invoke	:add	{:member "member-42", :score 783}
+1	:ok	:add	{:member "member-42", :score 783}
+2	:invoke	:add	{:member "member-46", :score 77}
+2	:ok	:add	{:member "member-46", :score 77}
+3	:invoke	:remove	"member-3"
+3	:ok	:remove	"member-3"
+4	:invoke	:add	{:member "member-23", :score 319}
+4	:ok	:add	{:member "member-23", :score 319}
+0	:invoke	:remove	"member-6"
+0	:ok	:remove	"member-6"
+0	:invoke	:add	{:member "member-0", :score 601}
+0	:ok	:add	{:member "member-0", :score 601}
+1	:invoke	:rank	"member-0"
+1	:ok	:rank	{:member "member-0", :rank 16}
+2	:invoke	:rank	"member-44"
+2	:ok	:rank	{:member "member-44", :rank 22}
+3	:invoke	:update-score	{:member "member-20", :score 445}
+3	:ok	:update-score	{:member "member-20", :score 445}
+4	:invoke	:remove	"member-42"
+4	:ok	:remove	"member-42"
+0	:invoke	:add	{:member "member-7", :score 729}
+0	:ok	:add	{:member "member-7", :score 729}
+0	:invoke	:add	{:member "member-47", :score 428}
+1	:invoke	:remove	"member-2"
+0	:ok	:add	{:member "member-47", :score 428}
+1	:ok	:remove	"member-2"
+2	:invoke	:read	nil
+2	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-23", :score 319.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-47", :score 428.0} {:member "member-20", :score 445.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-38", :score 580.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-7", :score 729.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+3	:invoke	:score	"member-2"
+3	:ok	:score	{:member "member-2", :score nil}
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-23", :score 319.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-47", :score 428.0} {:member "member-20", :score 445.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-38", :score 580.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-7", :score 729.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+0	:invoke	:remove	"member-36"
+0	:ok	:remove	"member-36"
+0	:invoke	:remove	"member-47"
+0	:ok	:remove	"member-47"
+1	:invoke	:remove	"member-7"
+1	:ok	:remove	"member-7"
+2	:invoke	:add	{:member "member-18", :score 471}
+2	:ok	:add	{:member "member-18", :score 471}
+3	:invoke	:update-score	{:member "member-38", :score 391}
+3	:ok	:update-score	{:member "member-38", :score 391}
+4	:invoke	:update-score	{:member "member-23", :score 739}
+4	:ok	:update-score	{:member "member-23", :score 739}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+0	:invoke	:rank	"member-21"
+0	:ok	:rank	{:member "member-21", :rank nil}
+1	:invoke	:rank	"member-48"
+1	:ok	:rank	{:member "member-48", :rank nil}
+2	:invoke	:score	"member-46"
+2	:ok	:score	{:member "member-46", :score 77.0}
+3	:invoke	:score	"member-24"
+3	:ok	:score	{:member "member-24", :score nil}
+4	:invoke	:update-score	{:member "member-42", :score 467}
+4	:ok	:update-score	{:member "member-42", :score 467}
+0	:invoke	:score	"member-49"
+0	:ok	:score	{:member "member-49", :score nil}
+0	:invoke	:remove	"member-42"
+0	:ok	:remove	"member-42"
+1	:invoke	:update-score	{:member "member-27", :score 597}
+1	:ok	:update-score	{:member "member-27", :score 597}
+2	:invoke	:rank	"member-25"
+2	:ok	:rank	{:member "member-25", :rank 12}
+3	:invoke	:rank	"member-26"
+3	:ok	:rank	{:member "member-26", :rank 13}
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+0	:invoke	:add	{:member "member-2", :score 407}
+0	:ok	:add	{:member "member-2", :score 407}
+1	:invoke	:remove	"member-12"
+1	:ok	:remove	"member-12"
+2	:invoke	:update-score	{:member "member-25", :score 979}
+2	:ok	:update-score	{:member "member-25", :score 979}
+3	:invoke	:score	"member-36"
+3	:ok	:score	{:member "member-36", :score nil}
+4	:invoke	:update-score	{:member "member-16", :score 266}
+4	:ok	:update-score	{:member "member-16", :score 266}
+0	:invoke	:remove	"member-21"
+0	:ok	:remove	"member-21"
+0	:invoke	:score	"member-2"
+0	:ok	:score	{:member "member-2", :score 407.0}
+1	:invoke	:update-score	{:member "member-41", :score 411}
+1	:ok	:update-score	{:member "member-41", :score 411}
+2	:invoke	:read	nil
+2	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-16", :score 266.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-2", :score 407.0} {:member "member-11", :score 417.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]
+3	:invoke	:remove	"member-38"
+3	:ok	:remove	"member-38"
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-16", :score 266.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-2", :score 407.0} {:member "member-11", :score 417.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]
+0	:invoke	:remove	"member-26"
+0	:ok	:remove	"member-26"
+0	:invoke	:rank	"member-31"
+0	:ok	:rank	{:member "member-31", :rank nil}
+1	:invoke	:read	nil
+1	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-16", :score 266.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-2", :score 407.0} {:member "member-11", :score 417.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]
+2	:invoke	:update-score	{:member "member-6", :score 406}
+2	:ok	:update-score	{:member "member-6", :score 406}
+3	:invoke	:add	{:member "member-5", :score 424}
+3	:ok	:add	{:member "member-5", :score 424}
+4	:invoke	:add	{:member "member-13", :score 383}
+4	:ok	:add	{:member "member-13", :score 383}
+0	:invoke	:add	{:member "member-47", :score 615}
+0	:ok	:add	{:member "member-47", :score 615}
+0	:invoke	:update-score	{:member "member-11", :score 210}
+0	:ok	:update-score	{:member "member-11", :score 210}
+1	:invoke	:update-score	{:member "member-12", :score 501}
+1	:ok	:update-score	{:member "member-12", :score 501}
+2	:invoke	:read	nil
+2	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-13", :score 383.0} {:member "member-2", :score 407.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]
+3	:invoke	:score	"member-14"
+3	:ok	:score	{:member "member-14", :score nil}
+4	:invoke	:rank	"member-20"
+4	:ok	:rank	{:member "member-20", :rank 10}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-13", :score 383.0} {:member "member-2", :score 407.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]
+0	:invoke	:add	{:member "member-41", :score 639}
+0	:ok	:add	{:member "member-41", :score 639}
+1	:invoke	:add	{:member "member-41", :score 368}
+1	:ok	:add	{:member "member-41", :score 368}
+2	:invoke	:rank	"member-22"
+2	:ok	:rank	{:member "member-22", :rank 1}
+3	:invoke	:score	"member-4"
+3	:ok	:score	{:member "member-4", :score nil}
+4	:invoke	:add	{:member "member-13", :score 779}
+4	:ok	:add	{:member "member-13", :score 779}
+0	:invoke	:rank	"member-16"
+0	:ok	:rank	{:member "member-16", :rank 3}
+0	:invoke	:rank	"member-15"
+0	:ok	:rank	{:member "member-15", :rank nil}
+1	:invoke	:remove	"member-25"
+1	:ok	:remove	"member-25"
+2	:invoke	:remove	"member-36"
+2	:ok	:remove	"member-36"
+3	:invoke	:add	{:member "member-12", :score 779}
+3	:ok	:add	{:member "member-12", :score 779}
+4	:invoke	:remove	"member-19"
+4	:ok	:remove	"member-19"
+0	:invoke	:add	{:member "member-27", :score 424}
+0	:ok	:add	{:member "member-27", :score 424}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+1	:invoke	:add	{:member "member-4", :score 48}
+1	:ok	:add	{:member "member-4", :score 48}
+2	:invoke	:read	nil
+2	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+3	:invoke	:remove	"member-3"
+3	:ok	:remove	"member-3"
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+0	:invoke	:update-score	{:member "member-37", :score 889}
+0	:ok	:update-score	{:member "member-37", :score 889}
+0	:invoke	:rank	"member-46"
+0	:ok	:rank	{:member "member-46", :rank 1}
+1	:invoke	:update-score	{:member "member-19", :score 606}
+1	:ok	:update-score	{:member "member-19", :score 606}
+2	:invoke	:add	{:member "member-6", :score 499}
+2	:ok	:add	{:member "member-6", :score 499}
+3	:invoke	:remove	"member-45"
+3	:ok	:remove	"member-45"
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-6", :score 499.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+0	:invoke	:update-score	{:member "member-12", :score 724}
+0	:ok	:update-score	{:member "member-12", :score 724}
+0	:invoke	:update-score	{:member "member-31", :score 196}
+0	:ok	:update-score	{:member "member-31", :score 196}
+1	:invoke	:add	{:member "member-26", :score 222}
+1	:ok	:add	{:member "member-26", :score 222}
+2	:invoke	:score	"member-17"
+2	:ok	:score	{:member "member-17", :score 712.0}
+3	:invoke	:remove	"member-31"
+3	:ok	:remove	"member-31"
+4	:invoke	:rank	"member-3"
+4	:ok	:rank	{:member "member-3", :rank nil}
+0	:invoke	:score	"member-44"
+0	:ok	:score	{:member "member-44", :score 930.0}
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-6", :score 499.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+1	:invoke	:remove	"member-31"
+1	:ok	:remove	"member-31"
+2	:invoke	:read	nil
+2	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-6", :score 499.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+3	:invoke	:update-score	{:member "member-6", :score 892}
+3	:ok	:update-score	{:member "member-6", :score 892}
+4	:invoke	:update-score	{:member "member-7", :score 978}
+4	:ok	:update-score	{:member "member-7", :score 978}
+0	:invoke	:add	{:member "member-44", :score 479}
+0	:ok	:add	{:member "member-44", :score 479}
+0	:invoke	:remove	"member-40"
+0	:ok	:remove	"member-40"
+1	:invoke	:update-score	{:member "member-3", :score 1}
+1	:ok	:update-score	{:member "member-3", :score 1}
+2	:invoke	:remove	"member-2"
+2	:ok	:remove	"member-2"
+3	:invoke	:score	"member-21"
+3	:ok	:score	{:member "member-21", :score nil}
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+1	:invoke	:read	nil
+1	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2	:invoke	:score	"member-7"
+2	:ok	:score	{:member "member-7", :score nil}
+3	:invoke	:rank	"member-32"
+3	:ok	:rank	{:member "member-32", :rank nil}
+4	:invoke	:remove	"member-48"
+4	:ok	:remove	"member-48"
+2	:invoke	:read	nil
+2	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+3	:invoke	:read	nil
+3	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+1	:invoke	:read	nil
+1	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2	:invoke	:read	nil
+2	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+3	:invoke	:read	nil
+3	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+4	:invoke	:read	nil
+4	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+0	:invoke	:read	nil
+0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]

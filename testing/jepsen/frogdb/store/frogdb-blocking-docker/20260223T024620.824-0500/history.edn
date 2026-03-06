@@ -1,0 +1,596 @@
+{:index 0, :time 8840167, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 1, :time 194789333, :type :invoke, :process 1, :f :blocking-pop, :value nil}
+{:index 2, :time 337553333, :type :invoke, :process 2, :f :push, :value nil}
+{:index 3, :time 341294458, :type :ok, :process 2, :f :push, :value "p2-1"}
+{:index 4, :time 341614292, :type :ok, :process 0, :f :blocking-pop, :value "p2-1", :duration-ms 331}
+{:index 5, :time 420817250, :type :invoke, :process 3, :f :push, :value nil}
+{:index 6, :time 422398542, :type :ok, :process 3, :f :push, :value "p3-1"}
+{:index 7, :time 422453708, :type :ok, :process 1, :f :blocking-pop, :value "p3-1", :duration-ms 227}
+{:index 8, :time 489113833, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 9, :time 500090292, :type :invoke, :process 0, :f :push, :value nil}
+{:index 10, :time 501134125, :type :ok, :process 0, :f :push, :value "p0-1"}
+{:index 11, :time 501170417, :type :ok, :process 4, :f :blocking-pop, :value "p0-1", :duration-ms 12}
+{:index 12, :time 665225917, :type :invoke, :process 0, :f :push, :value nil}
+{:index 13, :time 666964542, :type :ok, :process 0, :f :push, :value "p0-2"}
+{:index 14, :time 801146167, :type :invoke, :process 1, :f :push, :value nil}
+{:index 15, :time 802840375, :type :ok, :process 1, :f :push, :value "p1-1"}
+{:index 16, :time 943504125, :type :invoke, :process 2, :f :push, :value nil}
+{:index 17, :time 945592958, :type :ok, :process 2, :f :push, :value "p2-2"}
+{:index 18, :time 1138655000, :type :invoke, :process 3, :f :push, :value nil}
+{:index 19, :time 1140394333, :type :ok, :process 3, :f :push, :value "p3-2"}
+{:index 20, :time 1159725333, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 21, :time 1162039708, :type :ok, :process 4, :f :blocking-pop, :value "p0-2", :duration-ms 2}
+{:index 22, :time 1246303542, :type :invoke, :process 0, :f :push, :value nil}
+{:index 23, :time 1247860083, :type :ok, :process 0, :f :push, :value "p0-3"}
+{:index 24, :time 1253347083, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 25, :time 1256037417, :type :ok, :process 0, :f :immediate-pop, :value "p1-1"}
+{:index 26, :time 1275904875, :type :invoke, :process 1, :f :push, :value nil}
+{:index 27, :time 1277473417, :type :ok, :process 1, :f :push, :value "p1-2"}
+{:index 28, :time 1451755208, :type :invoke, :process 2, :f :push, :value nil}
+{:index 29, :time 1453088167, :type :ok, :process 2, :f :push, :value "p2-3"}
+{:index 30, :time 1514818833, :type :invoke, :process 3, :f :push, :value nil}
+{:index 31, :time 1516273917, :type :ok, :process 3, :f :push, :value "p3-3"}
+{:index 32, :time 1578437458, :type :invoke, :process 4, :f :push, :value nil}
+{:index 33, :time 1580127958, :type :ok, :process 4, :f :push, :value "p4-1"}
+{:index 34, :time 1682989625, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 35, :time 1684895917, :type :ok, :process 0, :f :blocking-pop, :value "p2-2", :duration-ms 1}
+{:index 36, :time 1693630667, :type :invoke, :process 0, :f :push, :value nil}
+{:index 37, :time 1695079958, :type :ok, :process 0, :f :push, :value "p0-4"}
+{:index 38, :time 1766194583, :type :invoke, :process 1, :f :push, :value nil}
+{:index 39, :time 1767677042, :type :ok, :process 1, :f :push, :value "p1-3"}
+{:index 40, :time 1917037000, :type :invoke, :process 2, :f :push, :value nil}
+{:index 41, :time 1919340125, :type :ok, :process 2, :f :push, :value "p2-4"}
+{:index 42, :time 1997133458, :type :invoke, :process 3, :f :push, :value nil}
+{:index 43, :time 1998791250, :type :ok, :process 3, :f :push, :value "p3-4"}
+{:index 44, :time 2192754125, :type :invoke, :process 4, :f :push, :value nil}
+{:index 45, :time 2195095625, :type :ok, :process 4, :f :push, :value "p4-2"}
+{:index 46, :time 2351748583, :type :invoke, :process 0, :f :push, :value nil}
+{:index 47, :time 2354562292, :type :ok, :process 0, :f :push, :value "p0-5"}
+{:index 48, :time 2400661917, :type :invoke, :process 0, :f :push, :value nil}
+{:index 49, :time 2403146750, :type :ok, :process 0, :f :push, :value "p0-6"}
+{:index 50, :time 2554096208, :type :invoke, :process 1, :f :immediate-pop, :value nil}
+{:index 51, :time 2555440000, :type :ok, :process 1, :f :immediate-pop, :value "p3-2"}
+{:index 52, :time 2601994750, :type :invoke, :process 2, :f :push, :value nil}
+{:index 53, :time 2603843917, :type :ok, :process 2, :f :push, :value "p2-5"}
+{:index 54, :time 2782345833, :type :invoke, :process 3, :f :push, :value nil}
+{:index 55, :time 2784264833, :type :ok, :process 3, :f :push, :value "p3-5"}
+{:index 56, :time 2831130083, :type :invoke, :process 4, :f :push, :value nil}
+{:index 57, :time 2833640458, :type :ok, :process 4, :f :push, :value "p4-3"}
+{:index 58, :time 2996710333, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 59, :time 2999235125, :type :ok, :process 0, :f :immediate-pop, :value "p0-3"}
+{:index 60, :time 3130901000, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 61, :time 3132487958, :type :ok, :process 0, :f :blocking-pop, :value "p1-2", :duration-ms 1}
+{:index 62, :time 3242291083, :type :invoke, :process 1, :f :push, :value nil}
+{:index 63, :time 3244536000, :type :ok, :process 1, :f :push, :value "p1-4"}
+{:index 64, :time 3317431875, :type :invoke, :process 2, :f :immediate-pop, :value nil}
+{:index 65, :time 3320160958, :type :ok, :process 2, :f :immediate-pop, :value "p2-3"}
+{:index 66, :time 3325536958, :type :invoke, :process 3, :f :push, :value nil}
+{:index 67, :time 3327152333, :type :ok, :process 3, :f :push, :value "p3-6"}
+{:index 68, :time 3332640208, :type :invoke, :process 4, :f :immediate-pop, :value nil}
+{:index 69, :time 3334414958, :type :ok, :process 4, :f :immediate-pop, :value "p3-3"}
+{:index 70, :time 3537321583, :type :invoke, :process 0, :f :push, :value nil}
+{:index 71, :time 3538698792, :type :ok, :process 0, :f :push, :value "p0-7"}
+{:index 72, :time 3638390083, :type :invoke, :process 0, :f :push, :value nil}
+{:index 73, :time 3640655625, :type :ok, :process 0, :f :push, :value "p0-8"}
+{:index 74, :time 3730559792, :type :invoke, :process 1, :f :push, :value nil}
+{:index 75, :time 3733618917, :type :ok, :process 1, :f :push, :value "p1-5"}
+{:index 76, :time 3895438667, :type :invoke, :process 2, :f :push, :value nil}
+{:index 77, :time 3897890000, :type :ok, :process 2, :f :push, :value "p2-6"}
+{:index 78, :time 4069090708, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 79, :time 4071916167, :type :ok, :process 3, :f :immediate-pop, :value "p4-1"}
+{:index 80, :time 4116512667, :type :invoke, :process 4, :f :immediate-pop, :value nil}
+{:index 81, :time 4119482875, :type :ok, :process 4, :f :immediate-pop, :value "p0-4"}
+{:index 82, :time 4153392542, :type :invoke, :process 0, :f :push, :value nil}
+{:index 83, :time 4156271208, :type :ok, :process 0, :f :push, :value "p0-9"}
+{:index 84, :time 4345715417, :type :invoke, :process 0, :f :push, :value nil}
+{:index 85, :time 4347647333, :type :ok, :process 0, :f :push, :value "p0-10"}
+{:index 86, :time 4366895792, :type :invoke, :process 1, :f :push, :value nil}
+{:index 87, :time 4369255333, :type :ok, :process 1, :f :push, :value "p1-6"}
+{:index 88, :time 4545273458, :type :invoke, :process 2, :f :push, :value nil}
+{:index 89, :time 4548105250, :type :ok, :process 2, :f :push, :value "p2-7"}
+{:index 90, :time 4649780208, :type :invoke, :process 3, :f :push, :value nil}
+{:index 91, :time 4651722625, :type :ok, :process 3, :f :push, :value "p3-7"}
+{:index 92, :time 4788685417, :type :invoke, :process 4, :f :push, :value nil}
+{:index 93, :time 4792112750, :type :ok, :process 4, :f :push, :value "p4-4"}
+{:index 94, :time 4805221375, :type :invoke, :process 0, :f :push, :value nil}
+{:index 95, :time 4807246375, :type :ok, :process 0, :f :push, :value "p0-11"}
+{:index 96, :time 4983059292, :type :invoke, :process 0, :f :push, :value nil}
+{:index 97, :time 4985396458, :type :ok, :process 0, :f :push, :value "p0-12"}
+{:index 98, :time 5027234125, :type :invoke, :process 1, :f :immediate-pop, :value nil}
+{:index 99, :time 5029907875, :type :ok, :process 1, :f :immediate-pop, :value "p1-3"}
+{:index 100, :time 5182572667, :type :invoke, :process 2, :f :push, :value nil}
+{:index 101, :time 5185703458, :type :ok, :process 2, :f :push, :value "p2-8"}
+{:index 102, :time 5247042542, :type :invoke, :process 3, :f :push, :value nil}
+{:index 103, :time 5249743583, :type :ok, :process 3, :f :push, :value "p3-8"}
+{:index 104, :time 5288126792, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 105, :time 5290078167, :type :ok, :process 4, :f :blocking-pop, :value "p2-4", :duration-ms 1}
+{:index 106, :time 5313775625, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 107, :time 5316147958, :type :ok, :process 0, :f :immediate-pop, :value "p3-4"}
+{:index 108, :time 5397212917, :type :invoke, :process 0, :f :push, :value nil}
+{:index 109, :time 5399364500, :type :ok, :process 0, :f :push, :value "p0-13"}
+{:index 110, :time 5562419125, :type :invoke, :process 1, :f :push, :value nil}
+{:index 111, :time 5565341625, :type :ok, :process 1, :f :push, :value "p1-7"}
+{:index 112, :time 5624604792, :type :invoke, :process 2, :f :blocking-pop, :value nil}
+{:index 113, :time 5626826333, :type :ok, :process 2, :f :blocking-pop, :value "p4-2", :duration-ms 2}
+{:index 114, :time 5629483042, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 115, :time 5631441000, :type :ok, :process 3, :f :immediate-pop, :value "p0-5"}
+{:index 116, :time 5659508958, :type :invoke, :process 4, :f :push, :value nil}
+{:index 117, :time 5660850125, :type :ok, :process 4, :f :push, :value "p4-5"}
+{:index 118, :time 5721540500, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 119, :time 5722777292, :type :ok, :process 0, :f :immediate-pop, :value "p0-6"}
+{:index 120, :time 5901876500, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 121, :time 5904665792, :type :ok, :process 0, :f :blocking-pop, :value "p2-5", :duration-ms 2}
+{:index 122, :time 5957749375, :type :invoke, :process 1, :f :push, :value nil}
+{:index 123, :time 5960075708, :type :ok, :process 1, :f :push, :value "p1-8"}
+{:index 124, :time 6029464917, :type :invoke, :process 2, :f :immediate-pop, :value nil}
+{:index 125, :time 6031978542, :type :ok, :process 2, :f :immediate-pop, :value "p3-5"}
+{:index 126, :time 6095219750, :type :invoke, :process 3, :f :blocking-pop, :value nil}
+{:index 127, :time 6097178625, :type :ok, :process 3, :f :blocking-pop, :value "p4-3", :duration-ms 2}
+{:index 128, :time 6142910875, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 129, :time 6145733333, :type :ok, :process 4, :f :blocking-pop, :value "p1-4", :duration-ms 2}
+{:index 130, :time 6323653708, :type :invoke, :process 0, :f :push, :value nil}
+{:index 131, :time 6325591333, :type :ok, :process 0, :f :push, :value "p0-14"}
+{:index 132, :time 6473534042, :type :invoke, :process 0, :f :push, :value nil}
+{:index 133, :time 6476363917, :type :ok, :process 0, :f :push, :value "p0-15"}
+{:index 134, :time 6521400167, :type :invoke, :process 1, :f :push, :value nil}
+{:index 135, :time 6523062833, :type :ok, :process 1, :f :push, :value "p1-9"}
+{:index 136, :time 6672161792, :type :invoke, :process 2, :f :immediate-pop, :value nil}
+{:index 137, :time 6673922958, :type :ok, :process 2, :f :immediate-pop, :value "p3-6"}
+{:index 138, :time 6685976375, :type :invoke, :process 3, :f :push, :value nil}
+{:index 139, :time 6687547250, :type :ok, :process 3, :f :push, :value "p3-9"}
+{:index 140, :time 6850998875, :type :invoke, :process 4, :f :push, :value nil}
+{:index 141, :time 6852766958, :type :ok, :process 4, :f :push, :value "p4-6"}
+{:index 142, :time 6992344458, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 143, :time 6996125458, :type :ok, :process 0, :f :blocking-pop, :value "p0-7", :duration-ms 3}
+{:index 144, :time 7090938875, :type :invoke, :process 0, :f :push, :value nil}
+{:index 145, :time 7092610875, :type :ok, :process 0, :f :push, :value "p0-16"}
+{:index 146, :time 7262673125, :type :invoke, :process 1, :f :push, :value nil}
+{:index 147, :time 7264907250, :type :ok, :process 1, :f :push, :value "p1-10"}
+{:index 148, :time 7331311708, :type :invoke, :process 2, :f :push, :value nil}
+{:index 149, :time 7333656292, :type :ok, :process 2, :f :push, :value "p2-9"}
+{:index 150, :time 7339802917, :type :invoke, :process 3, :f :push, :value nil}
+{:index 151, :time 7340657500, :type :ok, :process 3, :f :push, :value "p3-10"}
+{:index 152, :time 7440503125, :type :invoke, :process 4, :f :immediate-pop, :value nil}
+{:index 153, :time 7441944500, :type :ok, :process 4, :f :immediate-pop, :value "p0-8"}
+{:index 154, :time 7476107125, :type :invoke, :process 0, :f :push, :value nil}
+{:index 155, :time 7477615917, :type :ok, :process 0, :f :push, :value "p0-17"}
+{:index 156, :time 7603661167, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 157, :time 7606228375, :type :ok, :process 0, :f :immediate-pop, :value "p1-5"}
+{:index 158, :time 7698224708, :type :invoke, :process 1, :f :push, :value nil}
+{:index 159, :time 7700499208, :type :ok, :process 1, :f :push, :value "p1-11"}
+{:index 160, :time 7885360875, :type :invoke, :process 2, :f :push, :value nil}
+{:index 161, :time 7886604625, :type :ok, :process 2, :f :push, :value "p2-10"}
+{:index 162, :time 7931345417, :type :invoke, :process 3, :f :push, :value nil}
+{:index 163, :time 7932760542, :type :ok, :process 3, :f :push, :value "p3-11"}
+{:index 164, :time 8052084500, :type :invoke, :process 4, :f :push, :value nil}
+{:index 165, :time 8054575292, :type :ok, :process 4, :f :push, :value "p4-7"}
+{:index 166, :time 8085682000, :type :invoke, :process 0, :f :push, :value nil}
+{:index 167, :time 8086380792, :type :invoke, :process 1, :f :push, :value nil}
+{:index 168, :time 8087782792, :type :ok, :process 0, :f :push, :value "p0-18"}
+{:index 169, :time 8088004125, :type :ok, :process 1, :f :push, :value "p1-12"}
+{:index 170, :time 8184233250, :type :invoke, :process 1, :f :blocking-pop, :value nil}
+{:index 171, :time 8187326917, :type :ok, :process 1, :f :blocking-pop, :value "p2-6", :duration-ms 3}
+{:index 172, :time 8195010167, :type :invoke, :process 2, :f :push, :value nil}
+{:index 173, :time 8197404542, :type :ok, :process 2, :f :push, :value "p2-11"}
+{:index 174, :time 8366976792, :type :invoke, :process 3, :f :push, :value nil}
+{:index 175, :time 8369215750, :type :ok, :process 3, :f :push, :value "p3-12"}
+{:index 176, :time 8495034875, :type :invoke, :process 4, :f :push, :value nil}
+{:index 177, :time 8497448458, :type :ok, :process 4, :f :push, :value "p4-8"}
+{:index 178, :time 8675519708, :type :invoke, :process 0, :f :push, :value nil}
+{:index 179, :time 8677141000, :type :ok, :process 0, :f :push, :value "p0-19"}
+{:index 180, :time 8726122833, :type :invoke, :process 0, :f :push, :value nil}
+{:index 181, :time 8727469583, :type :ok, :process 0, :f :push, :value "p0-20"}
+{:index 182, :time 8784164042, :type :invoke, :process 1, :f :push, :value nil}
+{:index 183, :time 8785711375, :type :ok, :process 1, :f :push, :value "p1-13"}
+{:index 184, :time 8870428500, :type :invoke, :process 2, :f :blocking-pop, :value nil}
+{:index 185, :time 8872781875, :type :ok, :process 2, :f :blocking-pop, :value "p0-9", :duration-ms 2}
+{:index 186, :time 8974589792, :type :invoke, :process 3, :f :blocking-pop, :value nil}
+{:index 187, :time 8975939208, :type :ok, :process 3, :f :blocking-pop, :value "p0-10", :duration-ms 1}
+{:index 188, :time 9102629708, :type :invoke, :process 4, :f :push, :value nil}
+{:index 189, :time 9104081042, :type :ok, :process 4, :f :push, :value "p4-9"}
+{:index 190, :time 9191311875, :type :invoke, :process 0, :f :push, :value nil}
+{:index 191, :time 9193643167, :type :ok, :process 0, :f :push, :value "p0-21"}
+{:index 192, :time 9348130167, :type :invoke, :process 0, :f :push, :value nil}
+{:index 193, :time 9349421458, :type :ok, :process 0, :f :push, :value "p0-22"}
+{:index 194, :time 9458342500, :type :invoke, :process 1, :f :immediate-pop, :value nil}
+{:index 195, :time 9460016542, :type :ok, :process 1, :f :immediate-pop, :value "p1-6"}
+{:index 196, :time 9521279083, :type :invoke, :process 2, :f :push, :value nil}
+{:index 197, :time 9523770458, :type :ok, :process 2, :f :push, :value "p2-12"}
+{:index 198, :time 9667486000, :type :invoke, :process 3, :f :blocking-pop, :value nil}
+{:index 199, :time 9670337500, :type :ok, :process 3, :f :blocking-pop, :value "p2-7", :duration-ms 3}
+{:index 200, :time 9807814208, :type :invoke, :process 4, :f :push, :value nil}
+{:index 201, :time 9810106958, :type :ok, :process 4, :f :push, :value "p4-10"}
+{:index 202, :time 9839364083, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 203, :time 9841421375, :type :ok, :process 0, :f :blocking-pop, :value "p3-7", :duration-ms 2}
+{:index 204, :time 9902818792, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 205, :time 9905233667, :type :ok, :process 0, :f :immediate-pop, :value "p4-4"}
+{:index 206, :time 10011515250, :type :invoke, :process 1, :f :push, :value nil}
+{:index 207, :time 10013260125, :type :ok, :process 1, :f :push, :value "p1-14"}
+{:index 208, :time 10192167375, :type :invoke, :process 2, :f :push, :value nil}
+{:index 209, :time 10194660458, :type :ok, :process 2, :f :push, :value "p2-13"}
+{:index 210, :time 10338354917, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 211, :time 10340346042, :type :ok, :process 3, :f :immediate-pop, :value "p0-11"}
+{:index 212, :time 10343091167, :type :invoke, :process 4, :f :push, :value nil}
+{:index 213, :time 10346343625, :type :ok, :process 4, :f :push, :value "p4-11"}
+{:index 214, :time 10499994250, :type :invoke, :process 0, :f :push, :value nil}
+{:index 215, :time 10502587292, :type :ok, :process 0, :f :push, :value "p0-23"}
+{:index 216, :time 10559473667, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 217, :time 10562081542, :type :ok, :process 0, :f :blocking-pop, :value "p0-12", :duration-ms 2}
+{:index 218, :time 10734998250, :type :invoke, :process 1, :f :blocking-pop, :value nil}
+{:index 219, :time 10738036750, :type :ok, :process 1, :f :blocking-pop, :value "p2-8", :duration-ms 2}
+{:index 220, :time 10833022000, :type :invoke, :process 2, :f :push, :value nil}
+{:index 221, :time 10835393792, :type :ok, :process 2, :f :push, :value "p2-14"}
+{:index 222, :time 11034467875, :type :invoke, :process 3, :f :blocking-pop, :value nil}
+{:index 223, :time 11038612875, :type :ok, :process 3, :f :blocking-pop, :value "p3-8", :duration-ms 4}
+{:index 224, :time 11195752208, :type :invoke, :process 4, :f :push, :value nil}
+{:index 225, :time 11196767583, :type :ok, :process 4, :f :push, :value "p4-12"}
+{:index 226, :time 11246419250, :type :invoke, :process 0, :f :push, :value nil}
+{:index 227, :time 11247940417, :type :ok, :process 0, :f :push, :value "p0-24"}
+{:index 228, :time 11438657917, :type :invoke, :process 0, :f :push, :value nil}
+{:index 229, :time 11441226750, :type :ok, :process 0, :f :push, :value "p0-25"}
+{:index 230, :time 11579956000, :type :invoke, :process 1, :f :immediate-pop, :value nil}
+{:index 231, :time 11582381917, :type :ok, :process 1, :f :immediate-pop, :value "p0-13"}
+{:index 232, :time 11634672000, :type :invoke, :process 2, :f :push, :value nil}
+{:index 233, :time 11637039042, :type :ok, :process 2, :f :push, :value "p2-15"}
+{:index 234, :time 11702745958, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 235, :time 11705157625, :type :ok, :process 3, :f :immediate-pop, :value "p1-7"}
+{:index 236, :time 11775809708, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 237, :time 11778619958, :type :ok, :process 4, :f :blocking-pop, :value "p4-5", :duration-ms 3}
+{:index 238, :time 11909468708, :type :invoke, :process 0, :f :push, :value nil}
+{:index 239, :time 11912252500, :type :ok, :process 0, :f :push, :value "p0-26"}
+{:index 240, :time 12051341292, :type :invoke, :process 0, :f :push, :value nil}
+{:index 241, :time 12053683625, :type :ok, :process 0, :f :push, :value "p0-27"}
+{:index 242, :time 12210552417, :type :invoke, :process 1, :f :push, :value nil}
+{:index 243, :time 12211590958, :type :ok, :process 1, :f :push, :value "p1-15"}
+{:index 244, :time 12292802042, :type :invoke, :process 2, :f :blocking-pop, :value nil}
+{:index 245, :time 12294368958, :type :ok, :process 2, :f :blocking-pop, :value "p1-8", :duration-ms 2}
+{:index 246, :time 12424984750, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 247, :time 12427428417, :type :ok, :process 3, :f :immediate-pop, :value "p0-14"}
+{:index 248, :time 12488845042, :type :invoke, :process 4, :f :push, :value nil}
+{:index 249, :time 12491458875, :type :ok, :process 4, :f :push, :value "p4-13"}
+{:index 250, :time 12625493125, :type :invoke, :process 0, :f :push, :value nil}
+{:index 251, :time 12628844875, :type :ok, :process 0, :f :push, :value "p0-28"}
+{:index 252, :time 12680086917, :type :invoke, :process 0, :f :push, :value nil}
+{:index 253, :time 12682382750, :type :ok, :process 0, :f :push, :value "p0-29"}
+{:index 254, :time 12726134167, :type :invoke, :process 1, :f :immediate-pop, :value nil}
+{:index 255, :time 12728434917, :type :ok, :process 1, :f :immediate-pop, :value "p0-15"}
+{:index 256, :time 12733411375, :type :invoke, :process 2, :f :immediate-pop, :value nil}
+{:index 257, :time 12734587750, :type :ok, :process 2, :f :immediate-pop, :value "p1-9"}
+{:index 258, :time 12792808792, :type :invoke, :process 3, :f :blocking-pop, :value nil}
+{:index 259, :time 12795332833, :type :ok, :process 3, :f :blocking-pop, :value "p3-9", :duration-ms 1}
+{:index 260, :time 12890265917, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 261, :time 12893163458, :type :ok, :process 4, :f :blocking-pop, :value "p4-6", :duration-ms 2}
+{:index 262, :time 12936766083, :type :invoke, :process 0, :f :push, :value nil}
+{:index 263, :time 12939054708, :type :ok, :process 0, :f :push, :value "p0-30"}
+{:index 264, :time 13009493625, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 265, :time 13011969042, :type :ok, :process 0, :f :immediate-pop, :value "p0-16"}
+{:index 266, :time 13202466917, :type :invoke, :process 1, :f :push, :value nil}
+{:index 267, :time 13205423958, :type :ok, :process 1, :f :push, :value "p1-16"}
+{:index 268, :time 13250259917, :type :invoke, :process 2, :f :blocking-pop, :value nil}
+{:index 269, :time 13252315375, :type :ok, :process 2, :f :blocking-pop, :value "p1-10", :duration-ms 1}
+{:index 270, :time 13417844042, :type :invoke, :process 3, :f :blocking-pop, :value nil}
+{:index 271, :time 13420765583, :type :ok, :process 3, :f :blocking-pop, :value "p2-9", :duration-ms 3}
+{:index 272, :time 13572339333, :type :invoke, :process 4, :f :push, :value nil}
+{:index 273, :time 13575787750, :type :ok, :process 4, :f :push, :value "p4-14"}
+{:index 274, :time 13652922667, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 275, :time 13656284458, :type :ok, :process 0, :f :blocking-pop, :value "p3-10", :duration-ms 3}
+{:index 276, :time 13686073958, :type :invoke, :process 0, :f :push, :value nil}
+{:index 277, :time 13688759292, :type :ok, :process 0, :f :push, :value "p0-31"}
+{:index 278, :time 13718672417, :type :invoke, :process 1, :f :blocking-pop, :value nil}
+{:index 279, :time 13721832583, :type :ok, :process 1, :f :blocking-pop, :value "p0-17", :duration-ms 3}
+{:index 280, :time 13745327792, :type :invoke, :process 2, :f :push, :value nil}
+{:index 281, :time 13747999375, :type :ok, :process 2, :f :push, :value "p2-16"}
+{:index 282, :time 13946672250, :type :invoke, :process 3, :f :push, :value nil}
+{:index 283, :time 13949755875, :type :ok, :process 3, :f :push, :value "p3-13"}
+{:index 284, :time 14039766417, :type :invoke, :process 4, :f :push, :value nil}
+{:index 285, :time 14042691375, :type :ok, :process 4, :f :push, :value "p4-15"}
+{:index 286, :time 14046615667, :type :invoke, :process 0, :f :push, :value nil}
+{:index 287, :time 14047946125, :type :ok, :process 0, :f :push, :value "p0-32"}
+{:index 288, :time 14054018458, :type :invoke, :process 0, :f :push, :value nil}
+{:index 289, :time 14055778583, :type :ok, :process 0, :f :push, :value "p0-33"}
+{:index 290, :time 14178361875, :type :invoke, :process 1, :f :push, :value nil}
+{:index 291, :time 14181116250, :type :ok, :process 1, :f :push, :value "p1-17"}
+{:index 292, :time 14373448500, :type :invoke, :process 2, :f :push, :value nil}
+{:index 293, :time 14375111125, :type :ok, :process 2, :f :push, :value "p2-17"}
+{:index 294, :time 14427908583, :type :invoke, :process 3, :f :push, :value nil}
+{:index 295, :time 14430158125, :type :ok, :process 3, :f :push, :value "p3-14"}
+{:index 296, :time 14476136542, :type :invoke, :process 4, :f :push, :value nil}
+{:index 297, :time 14478063667, :type :ok, :process 4, :f :push, :value "p4-16"}
+{:index 298, :time 14551126042, :type :invoke, :process 0, :f :push, :value nil}
+{:index 299, :time 14553396917, :type :ok, :process 0, :f :push, :value "p0-34"}
+{:index 300, :time 14596624292, :type :invoke, :process 0, :f :push, :value nil}
+{:index 301, :time 14599799792, :type :ok, :process 0, :f :push, :value "p0-35"}
+{:index 302, :time 14708028583, :type :invoke, :process 1, :f :push, :value nil}
+{:index 303, :time 14710707375, :type :ok, :process 1, :f :push, :value "p1-18"}
+{:index 304, :time 14805662292, :type :invoke, :process 2, :f :immediate-pop, :value nil}
+{:index 305, :time 14808571167, :type :ok, :process 2, :f :immediate-pop, :value "p1-11"}
+{:index 306, :time 14964388125, :type :invoke, :process 3, :f :blocking-pop, :value nil}
+{:index 307, :time 14967591750, :type :ok, :process 3, :f :blocking-pop, :value "p2-10", :duration-ms 3}
+{:index 308, :time 15153992000, :type :invoke, :process 4, :f :push, :value nil}
+{:index 309, :time 15157133958, :type :ok, :process 4, :f :push, :value "p4-17"}
+{:index 310, :time 15325962250, :type :invoke, :process 0, :f :push, :value nil}
+{:index 311, :time 15328436792, :type :ok, :process 0, :f :push, :value "p0-36"}
+{:index 312, :time 15349509167, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 313, :time 15351637667, :type :ok, :process 0, :f :immediate-pop, :value "p3-11"}
+{:index 314, :time 15437566917, :type :invoke, :process 1, :f :push, :value nil}
+{:index 315, :time 15438683125, :type :ok, :process 1, :f :push, :value "p1-19"}
+{:index 316, :time 15534591625, :type :invoke, :process 2, :f :push, :value nil}
+{:index 317, :time 15536245667, :type :ok, :process 2, :f :push, :value "p2-18"}
+{:index 318, :time 15572229917, :type :invoke, :process 3, :f :push, :value nil}
+{:index 319, :time 15573805583, :type :ok, :process 3, :f :push, :value "p3-15"}
+{:index 320, :time 15759513042, :type :invoke, :process 4, :f :push, :value nil}
+{:index 321, :time 15761850417, :type :ok, :process 4, :f :push, :value "p4-18"}
+{:index 322, :time 15959460292, :type :invoke, :process 0, :f :push, :value nil}
+{:index 323, :time 15961808667, :type :ok, :process 0, :f :push, :value "p0-37"}
+{:index 324, :time 16150433958, :type :invoke, :process 0, :f :push, :value nil}
+{:index 325, :time 16153143292, :type :ok, :process 0, :f :push, :value "p0-38"}
+{:index 326, :time 16214856417, :type :invoke, :process 1, :f :push, :value nil}
+{:index 327, :time 16216394458, :type :ok, :process 1, :f :push, :value "p1-20"}
+{:index 328, :time 16344098375, :type :invoke, :process 2, :f :push, :value nil}
+{:index 329, :time 16345872000, :type :ok, :process 2, :f :push, :value "p2-19"}
+{:index 330, :time 16488727750, :type :invoke, :process 3, :f :push, :value nil}
+{:index 331, :time 16489700167, :type :ok, :process 3, :f :push, :value "p3-16"}
+{:index 332, :time 16501105417, :type :invoke, :process 4, :f :immediate-pop, :value nil}
+{:index 333, :time 16502268417, :type :ok, :process 4, :f :immediate-pop, :value "p4-7"}
+{:index 334, :time 16663872583, :type :invoke, :process 0, :f :push, :value nil}
+{:index 335, :time 16665271833, :type :ok, :process 0, :f :push, :value "p0-39"}
+{:index 336, :time 16777789708, :type :invoke, :process 0, :f :push, :value nil}
+{:index 337, :time 16779437958, :type :ok, :process 0, :f :push, :value "p0-40"}
+{:index 338, :time 16942852958, :type :invoke, :process 1, :f :push, :value nil}
+{:index 339, :time 16945591583, :type :ok, :process 1, :f :push, :value "p1-21"}
+{:index 340, :time 17002690667, :type :invoke, :process 2, :f :immediate-pop, :value nil}
+{:index 341, :time 17005907667, :type :ok, :process 2, :f :immediate-pop, :value "p0-18"}
+{:index 342, :time 17195371042, :type :invoke, :process 3, :f :push, :value nil}
+{:index 343, :time 17197717583, :type :ok, :process 3, :f :push, :value "p3-17"}
+{:index 344, :time 17322751208, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 345, :time 17326260708, :type :ok, :process 4, :f :blocking-pop, :value "p1-12", :duration-ms 3}
+{:index 346, :time 17399823958, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 347, :time 17402316833, :type :ok, :process 0, :f :blocking-pop, :value "p2-11", :duration-ms 2}
+{:index 348, :time 17501719667, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 349, :time 17504201042, :type :ok, :process 0, :f :blocking-pop, :value "p3-12", :duration-ms 2}
+{:index 350, :time 17572134625, :type :invoke, :process 1, :f :push, :value nil}
+{:index 351, :time 17573803333, :type :ok, :process 1, :f :push, :value "p1-22"}
+{:index 352, :time 17707976875, :type :invoke, :process 2, :f :push, :value nil}
+{:index 353, :time 17709856333, :type :ok, :process 2, :f :push, :value "p2-20"}
+{:index 354, :time 17734053458, :type :invoke, :process 3, :f :push, :value nil}
+{:index 355, :time 17735251167, :type :ok, :process 3, :f :push, :value "p3-18"}
+{:index 356, :time 17931563000, :type :invoke, :process 4, :f :push, :value nil}
+{:index 357, :time 17933920042, :type :ok, :process 4, :f :push, :value "p4-19"}
+{:index 358, :time 18006311125, :type :invoke, :process 0, :f :push, :value nil}
+{:index 359, :time 18008660958, :type :ok, :process 0, :f :push, :value "p0-41"}
+{:index 360, :time 18164318667, :type :invoke, :process 0, :f :push, :value nil}
+{:index 361, :time 18166601000, :type :ok, :process 0, :f :push, :value "p0-42"}
+{:index 362, :time 18327823292, :type :invoke, :process 1, :f :blocking-pop, :value nil}
+{:index 363, :time 18330431000, :type :ok, :process 1, :f :blocking-pop, :value "p4-8", :duration-ms 2}
+{:index 364, :time 18400852083, :type :invoke, :process 2, :f :push, :value nil}
+{:index 365, :time 18403205542, :type :ok, :process 2, :f :push, :value "p2-21"}
+{:index 366, :time 18567827000, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 367, :time 18570623708, :type :ok, :process 3, :f :immediate-pop, :value "p0-19"}
+{:index 368, :time 18733217667, :type :invoke, :process 4, :f :push, :value nil}
+{:index 369, :time 18734710958, :type :ok, :process 4, :f :push, :value "p4-20"}
+{:index 370, :time 18799811208, :type :invoke, :process 0, :f :push, :value nil}
+{:index 371, :time 18801434708, :type :ok, :process 0, :f :push, :value "p0-43"}
+{:index 372, :time 18975532167, :type :invoke, :process 0, :f :push, :value nil}
+{:index 373, :time 18977578958, :type :ok, :process 0, :f :push, :value "p0-44"}
+{:index 374, :time 19140025167, :type :invoke, :process 1, :f :blocking-pop, :value nil}
+{:index 375, :time 19142523000, :type :ok, :process 1, :f :blocking-pop, :value "p0-20", :duration-ms 2}
+{:index 376, :time 19293747292, :type :invoke, :process 2, :f :immediate-pop, :value nil}
+{:index 377, :time 19295152208, :type :ok, :process 2, :f :immediate-pop, :value "p1-13"}
+{:index 378, :time 19407699167, :type :invoke, :process 3, :f :blocking-pop, :value nil}
+{:index 379, :time 19409003667, :type :ok, :process 3, :f :blocking-pop, :value "p4-9", :duration-ms 1}
+{:index 380, :time 19495205667, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 381, :time 19496590583, :type :ok, :process 4, :f :blocking-pop, :value "p0-21", :duration-ms 2}
+{:index 382, :time 19614524833, :type :invoke, :process 0, :f :push, :value nil}
+{:index 383, :time 19616457292, :type :ok, :process 0, :f :push, :value "p0-45"}
+{:index 384, :time 19709580917, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 385, :time 19713119250, :type :ok, :process 0, :f :immediate-pop, :value "p0-22"}
+{:index 386, :time 19878996083, :type :invoke, :process 1, :f :immediate-pop, :value nil}
+{:index 387, :time 19880305750, :type :ok, :process 1, :f :immediate-pop, :value "p2-12"}
+{:index 388, :time 20010519833, :type :invoke, :process 2, :f :push, :value nil}
+{:index 389, :time 20013353583, :type :ok, :process 2, :f :push, :value "p2-22"}
+{:index 390, :time 20034157167, :type :invoke, :process 3, :f :push, :value nil}
+{:index 391, :time 20037171292, :type :ok, :process 3, :f :push, :value "p3-19"}
+{:index 392, :time 20154459542, :type :invoke, :process 4, :f :push, :value nil}
+{:index 393, :time 20156976208, :type :ok, :process 4, :f :push, :value "p4-21"}
+{:index 394, :time 20199822458, :type :invoke, :process 0, :f :push, :value nil}
+{:index 395, :time 20202770750, :type :ok, :process 0, :f :push, :value "p0-46"}
+{:index 396, :time 20247125083, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 397, :time 20249239042, :type :ok, :process 0, :f :blocking-pop, :value "p4-10", :duration-ms 2}
+{:index 398, :time 20284432167, :type :invoke, :process 1, :f :push, :value nil}
+{:index 399, :time 20285631542, :type :ok, :process 1, :f :push, :value "p1-23"}
+{:index 400, :time 20334046625, :type :invoke, :process 2, :f :push, :value nil}
+{:index 401, :time 20335302208, :type :ok, :process 2, :f :push, :value "p2-23"}
+{:index 402, :time 20389703792, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 403, :time 20391224708, :type :ok, :process 3, :f :immediate-pop, :value "p1-14"}
+{:index 404, :time 20563360833, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 405, :time 20564626917, :type :ok, :process 4, :f :blocking-pop, :value "p2-13", :duration-ms 1}
+{:index 406, :time 20721113583, :type :invoke, :process 0, :f :push, :value nil}
+{:index 407, :time 20722998875, :type :ok, :process 0, :f :push, :value "p0-47"}
+{:index 408, :time 20767808875, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 409, :time 20769393500, :type :ok, :process 0, :f :immediate-pop, :value "p4-11"}
+{:index 410, :time 20922300042, :type :invoke, :process 1, :f :push, :value nil}
+{:index 411, :time 20924570750, :type :ok, :process 1, :f :push, :value "p1-24"}
+{:index 412, :time 20999163250, :type :invoke, :process 2, :f :push, :value nil}
+{:index 413, :time 21001137542, :type :ok, :process 2, :f :push, :value "p2-24"}
+{:index 414, :time 21184467375, :type :invoke, :process 3, :f :blocking-pop, :value nil}
+{:index 415, :time 21187638708, :type :ok, :process 3, :f :blocking-pop, :value "p0-23", :duration-ms 3}
+{:index 416, :time 21284464833, :type :invoke, :process 4, :f :push, :value nil}
+{:index 417, :time 21286881167, :type :ok, :process 4, :f :push, :value "p4-22"}
+{:index 418, :time 21432252708, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 419, :time 21434525917, :type :ok, :process 0, :f :blocking-pop, :value "p2-14", :duration-ms 1}
+{:index 420, :time 21548151708, :type :invoke, :process 0, :f :push, :value nil}
+{:index 421, :time 21551600542, :type :ok, :process 0, :f :push, :value "p0-48"}
+{:index 422, :time 21630707917, :type :invoke, :process 1, :f :push, :value nil}
+{:index 423, :time 21633752458, :type :ok, :process 1, :f :push, :value "p1-25"}
+{:index 424, :time 21709458375, :type :invoke, :process 2, :f :push, :value nil}
+{:index 425, :time 21712567917, :type :ok, :process 2, :f :push, :value "p2-25"}
+{:index 426, :time 21850181667, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 427, :time 21853267042, :type :ok, :process 3, :f :immediate-pop, :value "p4-12"}
+{:index 428, :time 21919360958, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 429, :time 21922728292, :type :ok, :process 4, :f :blocking-pop, :value "p0-24", :duration-ms 3}
+{:index 430, :time 22092179167, :type :invoke, :process 0, :f :push, :value nil}
+{:index 431, :time 22094929417, :type :ok, :process 0, :f :push, :value "p0-49"}
+{:index 432, :time 22180814875, :type :invoke, :process 0, :f :push, :value nil}
+{:index 433, :time 22183948042, :type :ok, :process 0, :f :push, :value "p0-50"}
+{:index 434, :time 22351968958, :type :invoke, :process 1, :f :push, :value nil}
+{:index 435, :time 22354790417, :type :ok, :process 1, :f :push, :value "p1-26"}
+{:index 436, :time 22547537542, :type :invoke, :process 2, :f :blocking-pop, :value nil}
+{:index 437, :time 22549704042, :type :ok, :process 2, :f :blocking-pop, :value "p0-25", :duration-ms 2}
+{:index 438, :time 22633274167, :type :invoke, :process 3, :f :push, :value nil}
+{:index 439, :time 22635486125, :type :ok, :process 3, :f :push, :value "p3-20"}
+{:index 440, :time 22755954833, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 441, :time 22758453833, :type :ok, :process 4, :f :blocking-pop, :value "p2-15", :duration-ms 2}
+{:index 442, :time 22917331833, :type :invoke, :process 0, :f :push, :value nil}
+{:index 443, :time 22920398875, :type :ok, :process 0, :f :push, :value "p0-51"}
+{:index 444, :time 22945574583, :type :invoke, :process 0, :f :push, :value nil}
+{:index 445, :time 22948391125, :type :ok, :process 0, :f :push, :value "p0-52"}
+{:index 446, :time 23001348208, :type :invoke, :process 1, :f :push, :value nil}
+{:index 447, :time 23003310833, :type :ok, :process 1, :f :push, :value "p1-27"}
+{:index 448, :time 23182719458, :type :invoke, :process 2, :f :immediate-pop, :value nil}
+{:index 449, :time 23184789583, :type :ok, :process 2, :f :immediate-pop, :value "p0-26"}
+{:index 450, :time 23370375333, :type :invoke, :process 3, :f :push, :value nil}
+{:index 451, :time 23373315750, :type :ok, :process 3, :f :push, :value "p3-21"}
+{:index 452, :time 23545205125, :type :invoke, :process 4, :f :push, :value nil}
+{:index 453, :time 23548449667, :type :ok, :process 4, :f :push, :value "p4-23"}
+{:index 454, :time 23749734833, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 455, :time 23752654833, :type :ok, :process 0, :f :immediate-pop, :value "p0-27"}
+{:index 456, :time 23860051750, :type :invoke, :process 0, :f :push, :value nil}
+{:index 457, :time 23863817792, :type :ok, :process 0, :f :push, :value "p0-53"}
+{:index 458, :time 23995589625, :type :invoke, :process 1, :f :blocking-pop, :value nil}
+{:index 459, :time 23998944708, :type :ok, :process 1, :f :blocking-pop, :value "p1-15", :duration-ms 3}
+{:index 460, :time 24018920083, :type :invoke, :process 2, :f :push, :value nil}
+{:index 461, :time 24022249208, :type :ok, :process 2, :f :push, :value "p2-26"}
+{:index 462, :time 24209941917, :type :invoke, :process 3, :f :push, :value nil}
+{:index 463, :time 24211530708, :type :ok, :process 3, :f :push, :value "p3-22"}
+{:index 464, :time 24253483667, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 465, :time 24255218083, :type :ok, :process 4, :f :blocking-pop, :value "p4-13", :duration-ms 1}
+{:index 466, :time 24437435792, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 467, :time 24440034833, :type :ok, :process 0, :f :blocking-pop, :value "p0-28", :duration-ms 2}
+{:index 468, :time 24473254750, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 469, :time 24475414375, :type :ok, :process 0, :f :immediate-pop, :value "p0-29"}
+{:index 470, :time 24602960333, :type :invoke, :process 1, :f :push, :value nil}
+{:index 471, :time 24605669583, :type :ok, :process 1, :f :push, :value "p1-28"}
+{:index 472, :time 24722633208, :type :invoke, :process 2, :f :push, :value nil}
+{:index 473, :time 24726324792, :type :ok, :process 2, :f :push, :value "p2-27"}
+{:index 474, :time 24873769542, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 475, :time 24877618125, :type :ok, :process 3, :f :immediate-pop, :value "p0-30"}
+{:index 476, :time 25074180792, :type :invoke, :process 4, :f :blocking-pop, :value nil}
+{:index 477, :time 25077797333, :type :ok, :process 4, :f :blocking-pop, :value "p1-16", :duration-ms 2}
+{:index 478, :time 25201708125, :type :invoke, :process 0, :f :push, :value nil}
+{:index 479, :time 25204334417, :type :ok, :process 0, :f :push, :value "p0-54"}
+{:index 480, :time 25217916958, :type :invoke, :process 0, :f :push, :value nil}
+{:index 481, :time 25219933292, :type :ok, :process 0, :f :push, :value "p0-55"}
+{:index 482, :time 25260400500, :type :invoke, :process 1, :f :push, :value nil}
+{:index 483, :time 25261314958, :type :ok, :process 1, :f :push, :value "p1-29"}
+{:index 484, :time 25423021375, :type :invoke, :process 2, :f :push, :value nil}
+{:index 485, :time 25425087792, :type :ok, :process 2, :f :push, :value "p2-28"}
+{:index 486, :time 25518053042, :type :invoke, :process 3, :f :push, :value nil}
+{:index 487, :time 25520565375, :type :ok, :process 3, :f :push, :value "p3-23"}
+{:index 488, :time 25632596500, :type :invoke, :process 4, :f :push, :value nil}
+{:index 489, :time 25635307500, :type :ok, :process 4, :f :push, :value "p4-24"}
+{:index 490, :time 25683172083, :type :invoke, :process 0, :f :push, :value nil}
+{:index 491, :time 25685435125, :type :invoke, :process 1, :f :push, :value nil}
+{:index 492, :time 25687266458, :type :ok, :process 0, :f :push, :value "p0-56"}
+{:index 493, :time 25688767042, :type :ok, :process 1, :f :push, :value "p1-30"}
+{:index 494, :time 25743524750, :type :invoke, :process 1, :f :blocking-pop, :value nil}
+{:index 495, :time 25747107000, :type :ok, :process 1, :f :blocking-pop, :value "p4-14", :duration-ms 3}
+{:index 496, :time 25823210750, :type :invoke, :process 2, :f :push, :value nil}
+{:index 497, :time 25826475708, :type :ok, :process 2, :f :push, :value "p2-29"}
+{:index 498, :time 25955307333, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 499, :time 25958885292, :type :ok, :process 3, :f :immediate-pop, :value "p0-31"}
+{:index 500, :time 25986239750, :type :invoke, :process 4, :f :push, :value nil}
+{:index 501, :time 25989742250, :type :ok, :process 4, :f :push, :value "p4-25"}
+{:index 502, :time 26076071292, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 503, :time 26079311833, :type :ok, :process 0, :f :blocking-pop, :value "p2-16", :duration-ms 3}
+{:index 504, :time 26238697208, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 505, :time 26242095167, :type :ok, :process 0, :f :immediate-pop, :value "p3-13"}
+{:index 506, :time 26339980292, :type :invoke, :process 1, :f :push, :value nil}
+{:index 507, :time 26341172500, :type :ok, :process 1, :f :push, :value "p1-31"}
+{:index 508, :time 26523061917, :type :invoke, :process 2, :f :immediate-pop, :value nil}
+{:index 509, :time 26526734833, :type :ok, :process 2, :f :immediate-pop, :value "p4-15"}
+{:index 510, :time 26602741042, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 511, :time 26606053917, :type :ok, :process 3, :f :immediate-pop, :value "p0-32"}
+{:index 512, :time 26611016250, :type :invoke, :process 4, :f :immediate-pop, :value nil}
+{:index 513, :time 26612628000, :type :ok, :process 4, :f :immediate-pop, :value "p0-33"}
+{:index 514, :time 26653337083, :type :invoke, :process 0, :f :push, :value nil}
+{:index 515, :time 26655824917, :type :ok, :process 0, :f :push, :value "p0-57"}
+{:index 516, :time 26775673625, :type :invoke, :process 0, :f :push, :value nil}
+{:index 517, :time 26778248417, :type :ok, :process 0, :f :push, :value "p0-58"}
+{:index 518, :time 26851023167, :type :invoke, :process 1, :f :push, :value nil}
+{:index 519, :time 26853880000, :type :ok, :process 1, :f :push, :value "p1-32"}
+{:index 520, :time 26932166667, :type :invoke, :process 2, :f :push, :value nil}
+{:index 521, :time 26935143750, :type :ok, :process 2, :f :push, :value "p2-30"}
+{:index 522, :time 26984989750, :type :invoke, :process 3, :f :push, :value nil}
+{:index 523, :time 26987809292, :type :ok, :process 3, :f :push, :value "p3-24"}
+{:index 524, :time 27077010208, :type :invoke, :process 4, :f :push, :value nil}
+{:index 525, :time 27080300917, :type :ok, :process 4, :f :push, :value "p4-26"}
+{:index 526, :time 27081603750, :type :invoke, :process 0, :f :push, :value nil}
+{:index 527, :time 27083246000, :type :ok, :process 0, :f :push, :value "p0-59"}
+{:index 528, :time 27257499250, :type :invoke, :process 0, :f :push, :value nil}
+{:index 529, :time 27261168750, :type :ok, :process 0, :f :push, :value "p0-60"}
+{:index 530, :time 27369394917, :type :invoke, :process 1, :f :push, :value nil}
+{:index 531, :time 27370704333, :type :ok, :process 1, :f :push, :value "p1-33"}
+{:index 532, :time 27512836667, :type :invoke, :process 2, :f :push, :value nil}
+{:index 533, :time 27514431375, :type :ok, :process 2, :f :push, :value "p2-31"}
+{:index 534, :time 27645754625, :type :invoke, :process 3, :f :push, :value nil}
+{:index 535, :time 27648316875, :type :ok, :process 3, :f :push, :value "p3-25"}
+{:index 536, :time 27777583708, :type :invoke, :process 4, :f :immediate-pop, :value nil}
+{:index 537, :time 27779457250, :type :ok, :process 4, :f :immediate-pop, :value "p1-17"}
+{:index 538, :time 27866834167, :type :invoke, :process 0, :f :push, :value nil}
+{:index 539, :time 27870918792, :type :ok, :process 0, :f :push, :value "p0-61"}
+{:index 540, :time 28001452417, :type :invoke, :process 0, :f :push, :value nil}
+{:index 541, :time 28003698042, :type :ok, :process 0, :f :push, :value "p0-62"}
+{:index 542, :time 28003711625, :type :invoke, :process 1, :f :push, :value nil}
+{:index 543, :time 28004852333, :type :ok, :process 1, :f :push, :value "p1-34"}
+{:index 544, :time 28198381000, :type :invoke, :process 2, :f :push, :value nil}
+{:index 545, :time 28201659125, :type :ok, :process 2, :f :push, :value "p2-32"}
+{:index 546, :time 28326748458, :type :invoke, :process 3, :f :push, :value nil}
+{:index 547, :time 28329082458, :type :ok, :process 3, :f :push, :value "p3-26"}
+{:index 548, :time 28461975167, :type :invoke, :process 4, :f :push, :value nil}
+{:index 549, :time 28463634583, :type :ok, :process 4, :f :push, :value "p4-27"}
+{:index 550, :time 28540629292, :type :invoke, :process 0, :f :push, :value nil}
+{:index 551, :time 28542015583, :type :ok, :process 0, :f :push, :value "p0-63"}
+{:index 552, :time 28676286375, :type :invoke, :process 0, :f :immediate-pop, :value nil}
+{:index 553, :time 28678443625, :type :ok, :process 0, :f :immediate-pop, :value "p2-17"}
+{:index 554, :time 28762523708, :type :invoke, :process 1, :f :immediate-pop, :value nil}
+{:index 555, :time 28764945250, :type :ok, :process 1, :f :immediate-pop, :value "p3-14"}
+{:index 556, :time 28930093500, :type :invoke, :process 2, :f :push, :value nil}
+{:index 557, :time 28934052125, :type :ok, :process 2, :f :push, :value "p2-33"}
+{:index 558, :time 29060782500, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 559, :time 29064072208, :type :ok, :process 3, :f :immediate-pop, :value "p4-16"}
+{:index 560, :time 29112652292, :type :invoke, :process 4, :f :push, :value nil}
+{:index 561, :time 29115336833, :type :ok, :process 4, :f :push, :value "p4-28"}
+{:index 562, :time 29285866125, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 563, :time 29287926750, :type :ok, :process 0, :f :blocking-pop, :value "p0-34", :duration-ms 2}
+{:index 564, :time 29406973833, :type :invoke, :process 0, :f :blocking-pop, :value nil}
+{:index 565, :time 29408050583, :type :ok, :process 0, :f :blocking-pop, :value "p0-35", :duration-ms 1}
+{:index 566, :time 29519843375, :type :invoke, :process 1, :f :push, :value nil}
+{:index 567, :time 29522133167, :type :ok, :process 1, :f :push, :value "p1-35"}
+{:index 568, :time 29554646542, :type :invoke, :process 2, :f :push, :value nil}
+{:index 569, :time 29556275125, :type :ok, :process 2, :f :push, :value "p2-34"}
+{:index 570, :time 29558445625, :type :invoke, :process 3, :f :immediate-pop, :value nil}
+{:index 571, :time 29559800042, :type :ok, :process 3, :f :immediate-pop, :value "p1-18"}
+{:index 572, :time 29672996667, :type :invoke, :process 4, :f :immediate-pop, :value nil}
+{:index 573, :time 29674526208, :type :ok, :process 4, :f :immediate-pop, :value "p4-17"}
+{:index 574, :time 29863842667, :type :invoke, :process 0, :f :push, :value nil}
+{:index 575, :time 29866646375, :type :ok, :process 0, :f :push, :value "p0-64"}
+{:index 576, :time 34873519750, :type :invoke, :process 3, :f :read, :value nil}
+{:index 577, :time 34878330708, :type :ok, :process 3, :f :read, :value ["p0-36" "p1-19" "p2-18" "p3-15" "p4-18" "p0-37" "p0-38" "p1-20" "p2-19" "p3-16" "p0-39" "p0-40" "p1-21" "p3-17" "p1-22" "p2-20" "p3-18" "p4-19" "p0-41" "p0-42" "p2-21" "p4-20" "p0-43" "p0-44" "p0-45" "p2-22" "p3-19" "p4-21" "p0-46" "p1-23" "p2-23" "p0-47" "p1-24" "p2-24" "p4-22" "p0-48" "p1-25" "p2-25" "p0-49" "p0-50" "p1-26" "p3-20" "p0-51" "p0-52" "p1-27" "p3-21" "p4-23" "p0-53" "p2-26" "p3-22" "p1-28" "p2-27" "p0-54" "p0-55" "p1-29" "p2-28" "p3-23" "p4-24" "p0-56" "p1-30" "p2-29" "p4-25" "p1-31" "p0-57" "p0-58" "p1-32" "p2-30" "p3-24" "p4-26" "p0-59" "p0-60" "p1-33" "p2-31" "p3-25" "p0-61" "p0-62" "p1-34" "p2-32" "p3-26" "p4-27" "p0-63" "p2-33" "p4-28" "p1-35" "p2-34" "p0-64"]}
+{:index 578, :time 35071675042, :type :invoke, :process 4, :f :read, :value nil}
+{:index 579, :time 35073001875, :type :ok, :process 4, :f :read, :value ["p0-36" "p1-19" "p2-18" "p3-15" "p4-18" "p0-37" "p0-38" "p1-20" "p2-19" "p3-16" "p0-39" "p0-40" "p1-21" "p3-17" "p1-22" "p2-20" "p3-18" "p4-19" "p0-41" "p0-42" "p2-21" "p4-20" "p0-43" "p0-44" "p0-45" "p2-22" "p3-19" "p4-21" "p0-46" "p1-23" "p2-23" "p0-47" "p1-24" "p2-24" "p4-22" "p0-48" "p1-25" "p2-25" "p0-49" "p0-50" "p1-26" "p3-20" "p0-51" "p0-52" "p1-27" "p3-21" "p4-23" "p0-53" "p2-26" "p3-22" "p1-28" "p2-27" "p0-54" "p0-55" "p1-29" "p2-28" "p3-23" "p4-24" "p0-56" "p1-30" "p2-29" "p4-25" "p1-31" "p0-57" "p0-58" "p1-32" "p2-30" "p3-24" "p4-26" "p0-59" "p0-60" "p1-33" "p2-31" "p3-25" "p0-61" "p0-62" "p1-34" "p2-32" "p3-26" "p4-27" "p0-63" "p2-33" "p4-28" "p1-35" "p2-34" "p0-64"]}
+{:index 580, :time 35224053750, :type :invoke, :process 0, :f :read, :value nil}
+{:index 581, :time 35227148083, :type :ok, :process 0, :f :read, :value ["p0-36" "p1-19" "p2-18" "p3-15" "p4-18" "p0-37" "p0-38" "p1-20" "p2-19" "p3-16" "p0-39" "p0-40" "p1-21" "p3-17" "p1-22" "p2-20" "p3-18" "p4-19" "p0-41" "p0-42" "p2-21" "p4-20" "p0-43" "p0-44" "p0-45" "p2-22" "p3-19" "p4-21" "p0-46" "p1-23" "p2-23" "p0-47" "p1-24" "p2-24" "p4-22" "p0-48" "p1-25" "p2-25" "p0-49" "p0-50" "p1-26" "p3-20" "p0-51" "p0-52" "p1-27" "p3-21" "p4-23" "p0-53" "p2-26" "p3-22" "p1-28" "p2-27" "p0-54" "p0-55" "p1-29" "p2-28" "p3-23" "p4-24" "p0-56" "p1-30" "p2-29" "p4-25" "p1-31" "p0-57" "p0-58" "p1-32" "p2-30" "p3-24" "p4-26" "p0-59" "p0-60" "p1-33" "p2-31" "p3-25" "p0-61" "p0-62" "p1-34" "p2-32" "p3-26" "p4-27" "p0-63" "p2-33" "p4-28" "p1-35" "p2-34" "p0-64"]}
+{:index 582, :time 35295611250, :type :invoke, :process 0, :f :read, :value nil}
+{:index 583, :time 35298854875, :type :ok, :process 0, :f :read, :value ["p0-36" "p1-19" "p2-18" "p3-15" "p4-18" "p0-37" "p0-38" "p1-20" "p2-19" "p3-16" "p0-39" "p0-40" "p1-21" "p3-17" "p1-22" "p2-20" "p3-18" "p4-19" "p0-41" "p0-42" "p2-21" "p4-20" "p0-43" "p0-44" "p0-45" "p2-22" "p3-19" "p4-21" "p0-46" "p1-23" "p2-23" "p0-47" "p1-24" "p2-24" "p4-22" "p0-48" "p1-25" "p2-25" "p0-49" "p0-50" "p1-26" "p3-20" "p0-51" "p0-52" "p1-27" "p3-21" "p4-23" "p0-53" "p2-26" "p3-22" "p1-28" "p2-27" "p0-54" "p0-55" "p1-29" "p2-28" "p3-23" "p4-24" "p0-56" "p1-30" "p2-29" "p4-25" "p1-31" "p0-57" "p0-58" "p1-32" "p2-30" "p3-24" "p4-26" "p0-59" "p0-60" "p1-33" "p2-31" "p3-25" "p0-61" "p0-62" "p1-34" "p2-32" "p3-26" "p4-27" "p0-63" "p2-33" "p4-28" "p1-35" "p2-34" "p0-64"]}
+{:index 584, :time 35415925542, :type :invoke, :process 1, :f :read, :value nil}
+{:index 585, :time 35417472792, :type :ok, :process 1, :f :read, :value ["p0-36" "p1-19" "p2-18" "p3-15" "p4-18" "p0-37" "p0-38" "p1-20" "p2-19" "p3-16" "p0-39" "p0-40" "p1-21" "p3-17" "p1-22" "p2-20" "p3-18" "p4-19" "p0-41" "p0-42" "p2-21" "p4-20" "p0-43" "p0-44" "p0-45" "p2-22" "p3-19" "p4-21" "p0-46" "p1-23" "p2-23" "p0-47" "p1-24" "p2-24" "p4-22" "p0-48" "p1-25" "p2-25" "p0-49" "p0-50" "p1-26" "p3-20" "p0-51" "p0-52" "p1-27" "p3-21" "p4-23" "p0-53" "p2-26" "p3-22" "p1-28" "p2-27" "p0-54" "p0-55" "p1-29" "p2-28" "p3-23" "p4-24" "p0-56" "p1-30" "p2-29" "p4-25" "p1-31" "p0-57" "p0-58" "p1-32" "p2-30" "p3-24" "p4-26" "p0-59" "p0-60" "p1-33" "p2-31" "p3-25" "p0-61" "p0-62" "p1-34" "p2-32" "p3-26" "p4-27" "p0-63" "p2-33" "p4-28" "p1-35" "p2-34" "p0-64"]}
+{:index 586, :time 35445076375, :type :invoke, :process 2, :f :read, :value nil}
+{:index 587, :time 35447334125, :type :ok, :process 2, :f :read, :value ["p0-36" "p1-19" "p2-18" "p3-15" "p4-18" "p0-37" "p0-38" "p1-20" "p2-19" "p3-16" "p0-39" "p0-40" "p1-21" "p3-17" "p1-22" "p2-20" "p3-18" "p4-19" "p0-41" "p0-42" "p2-21" "p4-20" "p0-43" "p0-44" "p0-45" "p2-22" "p3-19" "p4-21" "p0-46" "p1-23" "p2-23" "p0-47" "p1-24" "p2-24" "p4-22" "p0-48" "p1-25" "p2-25" "p0-49" "p0-50" "p1-26" "p3-20" "p0-51" "p0-52" "p1-27" "p3-21" "p4-23" "p0-53" "p2-26" "p3-22" "p1-28" "p2-27" "p0-54" "p0-55" "p1-29" "p2-28" "p3-23" "p4-24" "p0-56" "p1-30" "p2-29" "p4-25" "p1-31" "p0-57" "p0-58" "p1-32" "p2-30" "p3-24" "p4-26" "p0-59" "p0-60" "p1-33" "p2-31" "p3-25" "p0-61" "p0-62" "p1-34" "p2-32" "p3-26" "p4-27" "p0-63" "p2-33" "p4-28" "p1-35" "p2-34" "p0-64"]}
+{:index 588, :time 35580244333, :type :invoke, :process 3, :f :read, :value nil}
+{:index 589, :time 35582528125, :type :ok, :process 3, :f :read, :value ["p0-36" "p1-19" "p2-18" "p3-15" "p4-18" "p0-37" "p0-38" "p1-20" "p2-19" "p3-16" "p0-39" "p0-40" "p1-21" "p3-17" "p1-22" "p2-20" "p3-18" "p4-19" "p0-41" "p0-42" "p2-21" "p4-20" "p0-43" "p0-44" "p0-45" "p2-22" "p3-19" "p4-21" "p0-46" "p1-23" "p2-23" "p0-47" "p1-24" "p2-24" "p4-22" "p0-48" "p1-25" "p2-25" "p0-49" "p0-50" "p1-26" "p3-20" "p0-51" "p0-52" "p1-27" "p3-21" "p4-23" "p0-53" "p2-26" "p3-22" "p1-28" "p2-27" "p0-54" "p0-55" "p1-29" "p2-28" "p3-23" "p4-24" "p0-56" "p1-30" "p2-29" "p4-25" "p1-31" "p0-57" "p0-58" "p1-32" "p2-30" "p3-24" "p4-26" "p0-59" "p0-60" "p1-33" "p2-31" "p3-25" "p0-61" "p0-62" "p1-34" "p2-32" "p3-26" "p4-27" "p0-63" "p2-33" "p4-28" "p1-35" "p2-34" "p0-64"]}
+{:index 590, :time 35707757625, :type :invoke, :process 4, :f :read, :value nil}
+{:index 591, :time 35710924000, :type :ok, :process 4, :f :read, :value ["p0-36" "p1-19" "p2-18" "p3-15" "p4-18" "p0-37" "p0-38" "p1-20" "p2-19" "p3-16" "p0-39" "p0-40" "p1-21" "p3-17" "p1-22" "p2-20" "p3-18" "p4-19" "p0-41" "p0-42" "p2-21" "p4-20" "p0-43" "p0-44" "p0-45" "p2-22" "p3-19" "p4-21" "p0-46" "p1-23" "p2-23" "p0-47" "p1-24" "p2-24" "p4-22" "p0-48" "p1-25" "p2-25" "p0-49" "p0-50" "p1-26" "p3-20" "p0-51" "p0-52" "p1-27" "p3-21" "p4-23" "p0-53" "p2-26" "p3-22" "p1-28" "p2-27" "p0-54" "p0-55" "p1-29" "p2-28" "p3-23" "p4-24" "p0-56" "p1-30" "p2-29" "p4-25" "p1-31" "p0-57" "p0-58" "p1-32" "p2-30" "p3-24" "p4-26" "p0-59" "p0-60" "p1-33" "p2-31" "p3-25" "p0-61" "p0-62" "p1-34" "p2-32" "p3-26" "p4-27" "p0-63" "p2-33" "p4-28" "p1-35" "p2-34" "p0-64"]}
+{:index 592, :time 35864268958, :type :invoke, :process 0, :f :read, :value nil}
+{:index 593, :time 35867250625, :type :ok, :process 0, :f :read, :value ["p0-36" "p1-19" "p2-18" "p3-15" "p4-18" "p0-37" "p0-38" "p1-20" "p2-19" "p3-16" "p0-39" "p0-40" "p1-21" "p3-17" "p1-22" "p2-20" "p3-18" "p4-19" "p0-41" "p0-42" "p2-21" "p4-20" "p0-43" "p0-44" "p0-45" "p2-22" "p3-19" "p4-21" "p0-46" "p1-23" "p2-23" "p0-47" "p1-24" "p2-24" "p4-22" "p0-48" "p1-25" "p2-25" "p0-49" "p0-50" "p1-26" "p3-20" "p0-51" "p0-52" "p1-27" "p3-21" "p4-23" "p0-53" "p2-26" "p3-22" "p1-28" "p2-27" "p0-54" "p0-55" "p1-29" "p2-28" "p3-23" "p4-24" "p0-56" "p1-30" "p2-29" "p4-25" "p1-31" "p0-57" "p0-58" "p1-32" "p2-30" "p3-24" "p4-26" "p0-59" "p0-60" "p1-33" "p2-31" "p3-25" "p0-61" "p0-62" "p1-34" "p2-32" "p3-26" "p4-27" "p0-63" "p2-33" "p4-28" "p1-35" "p2-34" "p0-64"]}
+{:index 594, :time 35935344750, :type :invoke, :process 0, :f :read, :value nil}
+{:index 595, :time 35938317667, :type :ok, :process 0, :f :read, :value ["p0-36" "p1-19" "p2-18" "p3-15" "p4-18" "p0-37" "p0-38" "p1-20" "p2-19" "p3-16" "p0-39" "p0-40" "p1-21" "p3-17" "p1-22" "p2-20" "p3-18" "p4-19" "p0-41" "p0-42" "p2-21" "p4-20" "p0-43" "p0-44" "p0-45" "p2-22" "p3-19" "p4-21" "p0-46" "p1-23" "p2-23" "p0-47" "p1-24" "p2-24" "p4-22" "p0-48" "p1-25" "p2-25" "p0-49" "p0-50" "p1-26" "p3-20" "p0-51" "p0-52" "p1-27" "p3-21" "p4-23" "p0-53" "p2-26" "p3-22" "p1-28" "p2-27" "p0-54" "p0-55" "p1-29" "p2-28" "p3-23" "p4-24" "p0-56" "p1-30" "p2-29" "p4-25" "p1-31" "p0-57" "p0-58" "p1-32" "p2-30" "p3-24" "p4-26" "p0-59" "p0-60" "p1-33" "p2-31" "p3-25" "p0-61" "p0-62" "p1-34" "p2-32" "p3-26" "p4-27" "p0-63" "p2-33" "p4-28" "p1-35" "p2-34" "p0-64"]}

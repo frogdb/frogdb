@@ -1,0 +1,208 @@
+0	:invoke	:read	nil
+0	:ok	:read	nil
+1	:invoke	:read	nil
+1	:ok	:read	nil
+2	:invoke	:cas	[68 19]
+2	:ok	:cas	[68 19]
+3	:invoke	:cas	[8 65]
+3	:ok	:cas	[8 65]
+4	:invoke	:read	nil
+4	:ok	:read	nil
+0	:invoke	:write	69
+0	:ok	:write	69
+0	:invoke	:read	nil
+0	:ok	:read	69
+1	:invoke	:write	58
+1	:ok	:write	58
+2	:invoke	:cas	[41 30]
+2	:ok	:cas	[41 30]
+3	:invoke	:write	92
+3	:ok	:write	92
+4	:invoke	:cas	[44 77]
+4	:ok	:cas	[44 77]
+0	:invoke	:read	nil
+0	:ok	:read	92
+0	:invoke	:read	nil
+0	:ok	:read	92
+1	:invoke	:read	nil
+1	:ok	:read	92
+2	:invoke	:read	nil
+2	:ok	:read	92
+3	:invoke	:cas	[79 64]
+3	:ok	:cas	[79 64]
+4	:invoke	:read	nil
+4	:ok	:read	92
+0	:invoke	:write	90
+0	:ok	:write	90
+0	:invoke	:write	2
+0	:ok	:write	2
+1	:invoke	:cas	[20 53]
+1	:ok	:cas	[20 53]
+2	:invoke	:cas	[96 86]
+2	:ok	:cas	[96 86]
+3	:invoke	:write	98
+3	:ok	:write	98
+4	:invoke	:write	36
+4	:ok	:write	36
+0	:invoke	:read	nil
+0	:ok	:read	36
+0	:invoke	:write	99
+0	:ok	:write	99
+1	:invoke	:cas	[92 85]
+1	:ok	:cas	[92 85]
+2	:invoke	:write	88
+2	:ok	:write	88
+3	:invoke	:cas	[59 88]
+3	:ok	:cas	[59 88]
+4	:invoke	:write	62
+4	:ok	:write	62
+0	:invoke	:read	nil
+0	:ok	:read	62
+0	:invoke	:read	nil
+0	:ok	:read	62
+1	:invoke	:write	23
+1	:ok	:write	23
+2	:invoke	:cas	[30 12]
+2	:ok	:cas	[30 12]
+3	:invoke	:write	90
+3	:ok	:write	90
+4	:invoke	:read	nil
+4	:ok	:read	90
+0	:invoke	:read	nil
+0	:ok	:read	90
+0	:invoke	:write	99
+0	:ok	:write	99
+1	:invoke	:cas	[68 0]
+1	:ok	:cas	[68 0]
+2	:invoke	:read	nil
+2	:ok	:read	99
+3	:invoke	:write	50
+3	:ok	:write	50
+4	:invoke	:read	nil
+4	:ok	:read	50
+0	:invoke	:cas	[92 8]
+0	:ok	:cas	[92 8]
+0	:invoke	:write	99
+0	:ok	:write	99
+1	:invoke	:cas	[42 88]
+1	:ok	:cas	[42 88]
+2	:invoke	:read	nil
+2	:ok	:read	99
+3	:invoke	:write	64
+3	:ok	:write	64
+4	:invoke	:read	nil
+4	:ok	:read	64
+0	:invoke	:write	95
+0	:ok	:write	95
+0	:invoke	:write	37
+0	:ok	:write	37
+1	:invoke	:cas	[90 15]
+1	:ok	:cas	[90 15]
+2	:invoke	:cas	[32 59]
+2	:ok	:cas	[32 59]
+3	:invoke	:cas	[44 2]
+3	:ok	:cas	[44 2]
+4	:invoke	:read	nil
+4	:ok	:read	37
+0	:invoke	:read	nil
+0	:ok	:read	37
+0	:invoke	:write	45
+0	:ok	:write	45
+1	:invoke	:read	nil
+1	:ok	:read	45
+2	:invoke	:write	69
+2	:ok	:write	69
+3	:invoke	:read	nil
+3	:ok	:read	69
+4	:invoke	:cas	[81 21]
+4	:ok	:cas	[81 21]
+0	:invoke	:read	nil
+0	:ok	:read	69
+0	:invoke	:read	nil
+0	:ok	:read	69
+1	:invoke	:cas	[42 16]
+1	:ok	:cas	[42 16]
+2	:invoke	:read	nil
+2	:ok	:read	69
+3	:invoke	:cas	[86 83]
+3	:ok	:cas	[86 83]
+4	:invoke	:cas	[34 68]
+4	:ok	:cas	[34 68]
+0	:invoke	:write	47
+0	:ok	:write	47
+0	:invoke	:cas	[64 26]
+0	:ok	:cas	[64 26]
+1	:invoke	:read	nil
+1	:ok	:read	47
+2	:invoke	:write	53
+2	:ok	:write	53
+3	:invoke	:write	31
+3	:ok	:write	31
+4	:invoke	:cas	[76 68]
+4	:ok	:cas	[76 68]
+0	:invoke	:write	6
+0	:ok	:write	6
+0	:invoke	:read	nil
+0	:ok	:read	6
+1	:invoke	:write	55
+1	:ok	:write	55
+2	:invoke	:write	53
+2	:ok	:write	53
+3	:invoke	:write	88
+3	:ok	:write	88
+4	:invoke	:read	nil
+4	:ok	:read	38
+0	:invoke	:read	nil
+0	:ok	:read	38
+0	:invoke	:write	16
+0	:ok	:write	16
+1	:invoke	:write	29
+1	:ok	:write	29
+2	:invoke	:read	nil
+2	:ok	:read	29
+3	:invoke	:read	nil
+3	:ok	:read	29
+4	:invoke	:cas	[49 8]
+4	:ok	:cas	[49 8]
+0	:invoke	:write	47
+0	:ok	:write	47
+0	:invoke	:read	nil
+0	:ok	:read	47
+1	:invoke	:read	nil
+1	:ok	:read	47
+2	:invoke	:cas	[51 77]
+2	:ok	:cas	[51 77]
+3	:invoke	:read	nil
+3	:ok	:read	15
+4	:invoke	:read	nil
+4	:ok	:read	15
+0	:invoke	:read	nil
+0	:info	:read	nil	[:io-exception nil]
+5	:invoke	:cas	[51 17]
+5	:info	:cas	[51 17]	[:io-exception Connection reset]
+1	:invoke	:write	86
+1	:info	:write	86	[:io-exception Connection reset]
+2	:invoke	:cas	[63 66]
+2	:info	:cas	[63 66]	[:io-exception Connection reset]
+3	:invoke	:read	nil
+3	:info	:read	nil	indeterminate: Connection refused
+6	:invoke	:read	nil
+6	:info	:read	nil	indeterminate: Connection refused
+7	:invoke	:read	nil
+7	:info	:read	nil	indeterminate: Connection refused
+8	:invoke	:read	nil
+8	:info	:read	nil	indeterminate: Connection refused
+4	:invoke	:read	nil
+4	:info	:read	nil	indeterminate: Connection refused
+10	:invoke	:read	nil
+10	:info	:read	nil	indeterminate: Connection refused
+15	:invoke	:read	nil
+15	:info	:read	nil	indeterminate: Connection refused
+11	:invoke	:read	nil
+11	:info	:read	nil	indeterminate: Connection refused
+12	:invoke	:read	nil
+12	:info	:read	nil	indeterminate: Connection refused
+13	:invoke	:read	nil
+13	:info	:read	nil	indeterminate: Connection refused
+9	:invoke	:read	nil
+9	:info	:read	nil	indeterminate: Connection refused

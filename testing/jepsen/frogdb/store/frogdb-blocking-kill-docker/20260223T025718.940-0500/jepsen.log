@@ -1,0 +1,1477 @@
+2026-02-23 02:57:18,980{GMT}	INFO	[jepsen test runner] jepsen.core: Test version 7e7f450504cf677eec866c0ab31ba8a9cad7ff8f
+2026-02-23 02:57:18,980{GMT}	INFO	[jepsen test runner] jepsen.core: Command line:
+lein run test --docker --workload blocking --nemesis kill --time-limit 60
+2026-02-23 02:57:19,027{GMT}	INFO	[jepsen test runner] jepsen.core: Running test:
+{:remote
+ #jepsen.control.retry.Remote{:remote #jepsen.control.scp.Remote{:cmd-remote #jepsen.control.sshj.SSHJRemote{:concurrency-limit 6,
+                                                                                                             :conn-spec nil,
+                                                                                                             :client nil,
+                                                                                                             :semaphore nil},
+                                                                 :conn-spec nil},
+                              :conn nil}
+ :concurrency 5
+ :cluster false
+ :db
+ #object[jepsen.frogdb.db$docker_db$reify__9886
+         "0x46a4eecd"
+         "jepsen.frogdb.db$docker_db$reify__9886@46a4eecd"]
+ :leave-db-running? false
+ :name "frogdb-blocking-kill-docker"
+ :logging-json? false
+ :independent false
+ :start-time
+ #object[org.joda.time.DateTime "0x18626c8c" "2026-02-23T02:57:18.940-05:00"]
+ :docker true
+ :net
+ #object[jepsen.net$reify__12635
+         "0x6ee88669"
+         "jepsen.net$reify__12635@6ee88669"]
+ :client
+ #jepsen.frogdb.blocking.BlockingClient{:conn nil,
+                                        :node nil,
+                                        :docker-host? nil,
+                                        :push-counter nil}
+ :barrier
+ #object[java.util.concurrent.CyclicBarrier
+         "0x4d1bbad3"
+         "java.util.concurrent.CyclicBarrier@4d1bbad3"]
+ :ssh {:dummy? true}
+ :rate 10
+ :checker
+ #object[jepsen.checker$compose$reify__10552
+         "0x3d850252"
+         "jepsen.checker$compose$reify__10552@3d850252"]
+ :argv
+ ("test"
+  "--docker"
+  "--workload"
+  "blocking"
+  "--nemesis"
+  "kill"
+  "--time-limit"
+  "60")
+ :nemesis
+ #unprintable "jepsen.frogdb.nemesis$process_killer$reify__11006@36881f62"
+ :nodes ["n1"]
+ :test-count 1
+ :replication false
+ :cluster-nodes ["n1"]
+ :generator
+ #object[jepsen.util.Forgettable
+         "0x3ecba23a"
+         ((jepsen.generator.Synchronize
+           {:gen (jepsen.generator.TimeLimit
+                  {:limit 60000000000,
+                   :cutoff nil,
+                   :gen (jepsen.generator.Any
+                         {:gens [(jepsen.generator.OnThreads
+                                  {:f #{:nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x572a3331"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@572a3331"],
+                                   :gen (jepsen.generator.Cycle
+                                         {:remaining -1,
+                                          :original-gen [{:type :sleep,
+                                                          :value 10}
+                                                         {:type :info, :f :kill}
+                                                         {:type :sleep,
+                                                          :value 5}
+                                                         {:type :info,
+                                                          :f :start}
+                                                         {:type :sleep,
+                                                          :value 5}],
+                                          :gen [{:type :sleep, :value 10}
+                                                {:type :info, :f :kill}
+                                                {:type :sleep, :value 5}
+                                                {:type :info, :f :start}
+                                                {:type :sleep, :value 5}]})})
+                                 (jepsen.generator.OnThreads
+                                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x4978a3f5"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@4978a3f5"],
+                                   :gen ((jepsen.generator.Synchronize
+                                          {:gen (jepsen.generator.Stagger
+                                                 {:dt 200000000,
+                                                  :next-time nil,
+                                                  :gen (jepsen.generator.Mix
+                                                        {:i 2,
+                                                         :gens [(jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.blocking$push_op
+                                                                               "0x429e4a76"
+                                                                               "jepsen.frogdb.blocking$push_op@429e4a76"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.blocking$push_op
+                                                                               "0x429e4a76"
+                                                                               "jepsen.frogdb.blocking$push_op@429e4a76"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.blocking$push_op
+                                                                               "0x429e4a76"
+                                                                               "jepsen.frogdb.blocking$push_op@429e4a76"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.blocking$blocking_pop_op
+                                                                               "0x5c0b55bc"
+                                                                               "jepsen.frogdb.blocking$blocking_pop_op@5c0b55bc"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.blocking$immediate_pop_op
+                                                                               "0x5abe46b7"
+                                                                               "jepsen.frogdb.blocking$immediate_pop_op@5abe46b7"]})]})})})
+                                         (jepsen.generator.Synchronize
+                                          {:gen {:type :sleep, :value 4}})
+                                         (jepsen.generator.Synchronize
+                                          {:gen (jepsen.generator.OnThreads
+                                                 {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                                  :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                                          "0x56d5311e"
+                                                                          "jepsen.generator.context$make_thread_filter$lazy_filter__11515@56d5311e"],
+                                                  :gen (jepsen.generator.Stagger
+                                                        {:dt 1000000000,
+                                                         :next-time nil,
+                                                         :gen (jepsen.generator.Limit
+                                                               {:remaining 5,
+                                                                :gen (jepsen.generator.Repeat
+                                                                      {:remaining -1,
+                                                                       :gen {:f :read}})})})})}))})]})})})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Recovering from faults..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #{:nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x66a81c48"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@66a81c48"],
+                   :gen (jepsen.generator.Limit
+                         {:remaining 1, :gen {:type :info, :f :start}})})})
+          (jepsen.generator.Synchronize {:gen {:type :sleep, :value 5}})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Final reads..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x60880394"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@60880394"],
+                   :gen (jepsen.generator.Stagger
+                         {:dt 200000000,
+                          :next-time nil,
+                          :gen (jepsen.generator.Limit
+                                {:remaining 10,
+                                 :gen (jepsen.generator.Repeat
+                                       {:remaining -1, :gen {:f :read}})})})})}))]
+ :interval 10
+ :os
+ #object[jepsen.frogdb.core$reify__14062
+         "0x6ac3ef0b"
+         "jepsen.frogdb.core$reify__14062@6ac3ef0b"]
+ :time-limit 60
+ :workload "blocking"
+ :local false}
+
+2026-02-23 02:57:20,351{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS setup for n1 (no-op)
+2026-02-23 02:57:20,352{GMT}	INFO	[jepsen test runner] jepsen.db: Tearing down DB
+2026-02-23 02:57:20,352{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB on n1
+2026-02-23 02:57:20,352{GMT}	INFO	[jepsen test runner] jepsen.db: Setting up DB
+2026-02-23 02:57:20,352{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Setting up FrogDB on n1
+2026-02-23 02:57:20,352{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Starting container for n1
+2026-02-23 02:57:21,457{GMT}	INFO	[jepsen test runner] jepsen.core: Relative time begins now
+2026-02-23 02:57:21,458{GMT}	INFO	[jepsen node n1] jepsen.frogdb.blocking: Opening blocking client to n1 (docker-host?: true )
+2026-02-23 02:57:21,458{GMT}	INFO	[jepsen node n1] jepsen.frogdb.blocking: Clearing blocking queue key jepsen-blocking-queue
+2026-02-23 02:57:21,467{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:21,468{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.blocking: Opening blocking client to n1 (docker-host?: true )
+2026-02-23 02:57:21,469{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-1"
+2026-02-23 02:57:21,591{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:21,591{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.blocking: Opening blocking client to n1 (docker-host?: true )
+2026-02-23 02:57:21,593{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-1"
+2026-02-23 02:57:21,738{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:21,738{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.blocking: Opening blocking client to n1 (docker-host?: true )
+2026-02-23 02:57:21,741{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p1-1"
+2026-02-23 02:57:21,783{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:21,784{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.blocking: Opening blocking client to n1 (docker-host?: true )
+2026-02-23 02:57:21,785{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-1"
+2026-02-23 02:57:21,813{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:21,813{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.blocking: Opening blocking client to n1 (docker-host?: true )
+2026-02-23 02:57:21,815{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p2-1"
+2026-02-23 02:57:21,970{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:21,972{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-1"
+2026-02-23 02:57:22,098{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:57:22,101{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p4-1"
+2026-02-23 02:57:22,268{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:22,273{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p0-1"
+2026-02-23 02:57:22,295{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:22,297{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-1"
+2026-02-23 02:57:22,459{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:57:22,460{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p3-1"
+2026-02-23 02:57:22,497{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:22,499{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-2"
+2026-02-23 02:57:22,681{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:22,683{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-3"
+2026-02-23 02:57:22,709{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:22,712{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-2"
+2026-02-23 02:57:22,793{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:22,795{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p0-2"
+2026-02-23 02:57:22,850{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:22,855{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-2"
+2026-02-23 02:57:23,006{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:23,008{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-2"
+2026-02-23 02:57:23,188{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:23,189{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:23,190{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-4"
+2026-02-23 02:57:23,192{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-3"
+2026-02-23 02:57:23,290{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:23,293{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-4"
+2026-02-23 02:57:23,465{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:23,468{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-2"
+2026-02-23 02:57:23,572{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:23,575{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-3"
+2026-02-23 02:57:23,706{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:23,709{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-3"
+2026-02-23 02:57:23,771{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:23,774{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-3"
+2026-02-23 02:57:23,864{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:23,869{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p1-2"
+2026-02-23 02:57:23,923{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:57:23,925{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p3-2"
+2026-02-23 02:57:24,085{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:24,086{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-3"
+2026-02-23 02:57:24,275{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:24,279{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p4-2"
+2026-02-23 02:57:24,400{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:24,402{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-4"
+2026-02-23 02:57:24,585{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:24,594{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-4"
+2026-02-23 02:57:24,679{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:24,682{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-5"
+2026-02-23 02:57:24,816{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:24,820{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p1-3"
+2026-02-23 02:57:24,854{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:57:24,857{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p1-4"
+2026-02-23 02:57:24,942{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:24,943{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-4"
+2026-02-23 02:57:24,999{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:57:25,001{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p2-2"
+2026-02-23 02:57:25,026{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:25,027{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-6"
+2026-02-23 02:57:25,065{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:25,066{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p3-3"
+2026-02-23 02:57:25,192{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:25,195{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p4-3"
+2026-02-23 02:57:25,310{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:25,312{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p2-3"
+2026-02-23 02:57:25,348{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:25,350{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p4-4"
+2026-02-23 02:57:25,376{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:57:25,379{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p0-5"
+2026-02-23 02:57:25,406{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:25,408{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p3-4"
+2026-02-23 02:57:25,451{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:25,453{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-7"
+2026-02-23 02:57:25,510{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:25,512{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-5"
+2026-02-23 02:57:25,558{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:25,560{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-4"
+2026-02-23 02:57:25,733{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:25,735{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-5"
+2026-02-23 02:57:25,792{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:25,794{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-5"
+2026-02-23 02:57:25,923{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:25,926{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-8"
+2026-02-23 02:57:25,939{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:25,941{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-9"
+2026-02-23 02:57:26,010{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:26,012{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-6"
+2026-02-23 02:57:26,142{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:26,144{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-5"
+2026-02-23 02:57:26,226{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:26,228{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p0-6"
+2026-02-23 02:57:26,360{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:26,362{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-6"
+2026-02-23 02:57:26,468{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:26,470{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-10"
+2026-02-23 02:57:26,624{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:26,626{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-7"
+2026-02-23 02:57:26,693{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:26,696{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-7"
+2026-02-23 02:57:26,876{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:26,879{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-6"
+2026-02-23 02:57:26,947{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:26,950{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p1-5"
+2026-02-23 02:57:27,042{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:27,044{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-7"
+2026-02-23 02:57:27,214{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:27,217{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p2-4"
+2026-02-23 02:57:27,346{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:27,348{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-11"
+2026-02-23 02:57:27,521{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:27,525{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-8"
+2026-02-23 02:57:27,673{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:27,675{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-7"
+2026-02-23 02:57:27,699{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:27,702{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p3-5"
+2026-02-23 02:57:27,702{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:57:27,704{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p4-5"
+2026-02-23 02:57:27,787{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:27,790{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-8"
+2026-02-23 02:57:27,885{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:27,888{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-12"
+2026-02-23 02:57:28,054{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:28,057{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p0-9"
+2026-02-23 02:57:28,168{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:28,171{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-8"
+2026-02-23 02:57:28,305{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:28,307{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p1-6"
+2026-02-23 02:57:28,445{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:28,448{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-8"
+2026-02-23 02:57:28,552{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:28,554{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-13"
+2026-02-23 02:57:28,678{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:28,680{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p2-5"
+2026-02-23 02:57:28,876{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:28,878{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-9"
+2026-02-23 02:57:28,907{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:57:28,909{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p4-6"
+2026-02-23 02:57:28,948{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:28,950{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-6"
+2026-02-23 02:57:28,954{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:28,955{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-9"
+2026-02-23 02:57:29,063{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:29,066{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-14"
+2026-02-23 02:57:29,159{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:29,161{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-10"
+2026-02-23 02:57:29,333{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:29,334{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p1-7"
+2026-02-23 02:57:29,443{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:29,445{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-9"
+2026-02-23 02:57:29,484{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:29,485{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-7"
+2026-02-23 02:57:29,541{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:29,543{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-10"
+2026-02-23 02:57:29,663{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:29,665{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-15"
+2026-02-23 02:57:29,864{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:29,866{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p2-6"
+2026-02-23 02:57:29,972{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:29,975{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-10"
+2026-02-23 02:57:30,025{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:57:30,028{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p4-7"
+2026-02-23 02:57:30,133{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:30,136{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p0-11"
+2026-02-23 02:57:30,184{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:57:30,188{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p1-8"
+2026-02-23 02:57:30,243{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:30,246{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-16"
+2026-02-23 02:57:30,252{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:30,254{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-17"
+2026-02-23 02:57:30,291{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:57:30,292{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:30,293{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p2-7"
+2026-02-23 02:57:30,294{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-10"
+2026-02-23 02:57:30,476{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:30,477{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p0-12"
+2026-02-23 02:57:30,497{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:30,498{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-11"
+2026-02-23 02:57:30,632{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:30,634{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-18"
+2026-02-23 02:57:30,704{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:30,705{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-19"
+2026-02-23 02:57:30,904{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:30,906{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-11"
+2026-02-23 02:57:30,921{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:30,922{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-11"
+2026-02-23 02:57:31,005{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:31,007{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-8"
+2026-02-23 02:57:31,068{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:57:31,070{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p2-8"
+2026-02-23 02:57:31,168{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:31,169{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-20"
+2026-02-23 02:57:31,362{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:31,364{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p4-8"
+2026-02-23 02:57:31,465{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:31,467{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-12"
+2026-02-23 02:57:31,472{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	nil
+2026-02-23 02:57:31,472{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Killing FrogDB on [n1]
+2026-02-23 02:57:31,472{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Killing FrogDB on n1
+2026-02-23 02:57:31,502{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:31,504{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-9"
+2026-02-23 02:57:31,556{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:31,558{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-12"
+2026-02-23 02:57:31,581{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	["n1"]
+2026-02-23 02:57:31,594{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:31,595{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-21"
+2026-02-23 02:57:31,795{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:57:31,797{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p0-13"
+2026-02-23 02:57:31,922{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:31,925{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-12"
+2026-02-23 02:57:32,009{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:32,012{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p1-9"
+2026-02-23 02:57:32,014{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:32,016{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-13"
+2026-02-23 02:57:32,189{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:32,190{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-22"
+2026-02-23 02:57:32,341{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:32,342{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-23"
+2026-02-23 02:57:32,394{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:32,399{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-13"
+2026-02-23 02:57:32,428{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:32,429{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p3-6"
+2026-02-23 02:57:32,455{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:32,456{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-10"
+2026-02-23 02:57:32,523{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:32,525{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-14"
+2026-02-23 02:57:32,630{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:32,632{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-24"
+2026-02-23 02:57:32,780{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:32,782{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p4-9"
+2026-02-23 02:57:32,886{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:32,888{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-14"
+2026-02-23 02:57:32,913{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:32,917{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-13"
+2026-02-23 02:57:33,038{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:33,039{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p0-14"
+2026-02-23 02:57:33,051{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:33,052{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-15"
+2026-02-23 02:57:33,197{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:33,199{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-25"
+2026-02-23 02:57:33,274{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:33,277{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p2-9"
+2026-02-23 02:57:33,430{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:33,432{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-15"
+2026-02-23 02:57:33,631{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:33,634{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-14"
+2026-02-23 02:57:33,640{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:33,642{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p3-7"
+2026-02-23 02:57:33,697{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:57:33,699{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p4-10"
+2026-02-23 02:57:33,733{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:33,734{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-15"
+2026-02-23 02:57:33,935{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:33,939{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p1-10"
+2026-02-23 02:57:34,002{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:34,005{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p0-16"
+2026-02-23 02:57:34,139{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:34,142{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p0-17"
+2026-02-23 02:57:34,165{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:34,167{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-11"
+2026-02-23 02:57:34,316{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:34,316{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:34,319{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p2-10"
+2026-02-23 02:57:34,319{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-16"
+2026-02-23 02:57:34,329{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:34,331{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-26"
+2026-02-23 02:57:34,434{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:34,437{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-16"
+2026-02-23 02:57:34,495{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:57:34,499{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p4-11"
+2026-02-23 02:57:34,625{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:34,627{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p0-18"
+2026-02-23 02:57:34,671{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:34,673{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-17"
+2026-02-23 02:57:34,800{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:34,801{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-27"
+2026-02-23 02:57:34,858{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:34,859{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-19"
+2026-02-23 02:57:34,909{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:57:34,910{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p1-11"
+2026-02-23 02:57:34,931{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:34,933{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-15"
+2026-02-23 02:57:34,949{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:34,951{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-12"
+2026-02-23 02:57:35,060{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:57:35,062{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p2-11"
+2026-02-23 02:57:35,116{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:35,119{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p3-8"
+2026-02-23 02:57:35,216{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:35,219{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-20"
+2026-02-23 02:57:35,224{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:35,225{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p1-12"
+2026-02-23 02:57:35,423{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:35,426{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-16"
+2026-02-23 02:57:35,513{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:35,515{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p3-9"
+2026-02-23 02:57:35,552{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:57:35,554{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p4-12"
+2026-02-23 02:57:35,729{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:35,730{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-28"
+2026-02-23 02:57:35,780{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:35,781{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-29"
+2026-02-23 02:57:35,922{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:35,923{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-17"
+2026-02-23 02:57:36,084{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:36,087{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-17"
+2026-02-23 02:57:36,230{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:36,232{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-13"
+2026-02-23 02:57:36,321{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:36,323{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-18"
+2026-02-23 02:57:36,336{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:36,339{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-30"
+2026-02-23 02:57:36,385{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:36,388{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-31"
+2026-02-23 02:57:36,458{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:36,461{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p0-21"
+2026-02-23 02:57:36,471{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:36,473{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-18"
+2026-02-23 02:57:36,586{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	nil
+2026-02-23 02:57:36,586{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Starting FrogDB on [n1]
+2026-02-23 02:57:36,586{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Starting FrogDB on n1
+2026-02-23 02:57:36,630{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:57:36,632{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p2-12"
+2026-02-23 02:57:36,776{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:36,779{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-32"
+2026-02-23 02:57:36,815{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:36,818{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-33"
+2026-02-23 02:57:37,003{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:37,005{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-18"
+2026-02-23 02:57:37,205{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:37,207{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-19"
+2026-02-23 02:57:37,383{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:37,386{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-14"
+2026-02-23 02:57:37,505{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:37,507{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-19"
+2026-02-23 02:57:37,699{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:37,702{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-34"
+2026-02-23 02:57:37,902{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:37,905{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p4-13"
+2026-02-23 02:57:38,039{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:57:38,040{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p0-22"
+2026-02-23 02:57:38,228{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:38,230{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p0-23"
+2026-02-23 02:57:38,406{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:38,408{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p1-13"
+2026-02-23 02:57:38,417{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:38,419{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-20"
+2026-02-23 02:57:38,507{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:38,510{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p3-10"
+2026-02-23 02:57:38,519{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:38,521{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-35"
+2026-02-23 02:57:38,713{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:57:38,716{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p4-14"
+2026-02-23 02:57:38,788{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:38,791{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p0-24"
+2026-02-23 02:57:38,977{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:38,979{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p1-14"
+2026-02-23 02:57:39,166{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:39,168{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-21"
+2026-02-23 02:57:39,305{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:39,306{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-36"
+2026-02-23 02:57:39,350{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:39,351{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-37"
+2026-02-23 02:57:39,453{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:39,455{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-19"
+2026-02-23 02:57:39,622{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:39,624{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-20"
+2026-02-23 02:57:39,633{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	["n1"]
+2026-02-23 02:57:39,775{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:57:39,776{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p2-13"
+2026-02-23 02:57:39,849{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:39,886{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:57:39,961{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-38"
+2026-02-23 02:57:39,966{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p4-15"
+2026-02-23 02:57:40,071{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:40,077{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-20"
+2026-02-23 02:57:40,258{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:40,259{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p0-25"
+2026-02-23 02:57:40,372{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:40,373{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p1-15"
+2026-02-23 02:57:40,470{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:40,472{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-22"
+2026-02-23 02:57:40,494{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:40,496{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p2-14"
+2026-02-23 02:57:40,547{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:40,549{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p3-11"
+2026-02-23 02:57:40,701{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:40,704{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-21"
+2026-02-23 02:57:40,748{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:57:40,749{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p4-16"
+2026-02-23 02:57:40,784{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:40,785{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-15"
+2026-02-23 02:57:40,813{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:40,814{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-23"
+2026-02-23 02:57:40,837{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:40,839{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-26"
+2026-02-23 02:57:40,877{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:40,883{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-39"
+2026-02-23 02:57:40,897{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:40,900{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-22"
+2026-02-23 02:57:40,912{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:40,916{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-21"
+2026-02-23 02:57:41,102{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:41,104{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p1-16"
+2026-02-23 02:57:41,145{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:57:41,147{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p4-17"
+2026-02-23 02:57:41,276{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:41,278{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-40"
+2026-02-23 02:57:41,354{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:41,355{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-41"
+2026-02-23 02:57:41,526{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:41,528{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-23"
+2026-02-23 02:57:41,567{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:41,569{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p0-27"
+2026-02-23 02:57:41,638{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:41,640{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p2-15"
+2026-02-23 02:57:41,797{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:41,800{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-24"
+2026-02-23 02:57:41,911{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:41,913{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p3-12"
+2026-02-23 02:57:42,078{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:42,080{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-42"
+2026-02-23 02:57:42,121{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:42,123{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-24"
+2026-02-23 02:57:42,283{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:42,285{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-22"
+2026-02-23 02:57:42,482{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:42,483{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p2-16"
+2026-02-23 02:57:42,559{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:42,560{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-25"
+2026-02-23 02:57:42,653{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:42,655{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-43"
+2026-02-23 02:57:42,816{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:42,818{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-44"
+2026-02-23 02:57:42,847{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:42,848{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-25"
+2026-02-23 02:57:42,865{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:42,866{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-23"
+2026-02-23 02:57:43,028{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:43,029{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p0-28"
+2026-02-23 02:57:43,198{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:43,201{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-26"
+2026-02-23 02:57:43,297{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:43,300{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-29"
+2026-02-23 02:57:43,414{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:43,417{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-45"
+2026-02-23 02:57:43,463{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:43,466{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p1-17"
+2026-02-23 02:57:43,642{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:43,643{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p2-17"
+2026-02-23 02:57:43,805{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:43,807{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p3-13"
+2026-02-23 02:57:43,819{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:43,821{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-27"
+2026-02-23 02:57:43,912{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:43,914{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-46"
+2026-02-23 02:57:44,110{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:44,112{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-47"
+2026-02-23 02:57:44,310{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:44,312{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-26"
+2026-02-23 02:57:44,465{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:44,468{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-24"
+2026-02-23 02:57:44,582{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:44,585{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-16"
+2026-02-23 02:57:44,721{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:44,722{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p4-18"
+2026-02-23 02:57:44,790{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:44,792{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-30"
+2026-02-23 02:57:44,807{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:44,808{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-27"
+2026-02-23 02:57:44,859{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:44,861{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-25"
+2026-02-23 02:57:44,947{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:44,948{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-17"
+2026-02-23 02:57:44,963{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:44,966{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-28"
+2026-02-23 02:57:45,055{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:45,058{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-31"
+2026-02-23 02:57:45,211{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:45,214{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p2-18"
+2026-02-23 02:57:45,288{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:57:45,291{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p0-32"
+2026-02-23 02:57:45,313{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:45,315{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-26"
+2026-02-23 02:57:45,339{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:45,341{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p0-33"
+2026-02-23 02:57:45,478{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:45,482{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-29"
+2026-02-23 02:57:45,570{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:45,572{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-48"
+2026-02-23 02:57:45,751{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:45,752{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-49"
+2026-02-23 02:57:45,806{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:45,807{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p1-18"
+2026-02-23 02:57:45,878{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:45,879{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-27"
+2026-02-23 02:57:46,045{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:46,047{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-18"
+2026-02-23 02:57:46,054{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:46,055{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-30"
+2026-02-23 02:57:46,194{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:46,196{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p2-19"
+2026-02-23 02:57:46,235{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:46,237{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p3-14"
+2026-02-23 02:57:46,337{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:46,339{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-28"
+2026-02-23 02:57:46,532{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:46,534{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p4-19"
+2026-02-23 02:57:46,647{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:46,650{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-19"
+2026-02-23 02:57:46,726{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:46,728{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-31"
+2026-02-23 02:57:46,832{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:46,833{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-50"
+2026-02-23 02:57:46,974{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:46,976{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-51"
+2026-02-23 02:57:47,000{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:47,003{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-29"
+2026-02-23 02:57:47,046{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:47,049{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p0-34"
+2026-02-23 02:57:47,082{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:47,084{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p4-20"
+2026-02-23 02:57:47,138{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:57:47,140{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p0-35"
+2026-02-23 02:57:47,173{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:47,176{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-52"
+2026-02-23 02:57:47,228{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:47,230{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p4-21"
+2026-02-23 02:57:47,385{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:47,388{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-30"
+2026-02-23 02:57:47,558{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:47,560{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-28"
+2026-02-23 02:57:47,588{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:47,589{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p0-36"
+2026-02-23 02:57:47,602{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:47,604{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-32"
+2026-02-23 02:57:47,702{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:47,704{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-37"
+2026-02-23 02:57:47,846{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:47,848{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p1-19"
+2026-02-23 02:57:47,912{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:47,913{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-31"
+2026-02-23 02:57:48,113{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:48,115{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-29"
+2026-02-23 02:57:48,293{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:48,294{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p2-20"
+2026-02-23 02:57:48,344{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:48,346{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-33"
+2026-02-23 02:57:48,390{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:48,391{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-53"
+2026-02-23 02:57:48,481{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:48,482{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-54"
+2026-02-23 02:57:48,627{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:48,629{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-32"
+2026-02-23 02:57:48,823{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:48,825{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-30"
+2026-02-23 02:57:48,899{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:48,901{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-20"
+2026-02-23 02:57:48,982{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:57:48,983{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p0-38"
+2026-02-23 02:57:49,166{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:49,167{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-55"
+2026-02-23 02:57:49,254{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:49,256{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-56"
+2026-02-23 02:57:49,281{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:49,283{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p1-20"
+2026-02-23 02:57:49,388{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:49,390{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p4-22"
+2026-02-23 02:57:49,515{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:49,517{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-21"
+2026-02-23 02:57:49,708{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:49,709{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-34"
+2026-02-23 02:57:49,864{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:49,866{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-57"
+2026-02-23 02:57:49,971{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:49,973{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p1-21"
+2026-02-23 02:57:49,975{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:57:49,976{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p3-15"
+2026-02-23 02:57:50,113{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:50,114{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-31"
+2026-02-23 02:57:50,233{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:50,236{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-22"
+2026-02-23 02:57:50,278{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:50,281{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-35"
+2026-02-23 02:57:50,305{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:50,306{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p4-23"
+2026-02-23 02:57:50,498{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:50,500{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-39"
+2026-02-23 02:57:50,607{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:50,609{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-33"
+2026-02-23 02:57:50,802{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:50,803{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p1-22"
+2026-02-23 02:57:50,967{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:50,969{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p2-21"
+2026-02-23 02:57:51,066{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:51,068{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-36"
+2026-02-23 02:57:51,118{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:51,120{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-58"
+2026-02-23 02:57:51,287{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:51,289{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-59"
+2026-02-23 02:57:51,439{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:51,442{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-34"
+2026-02-23 02:57:51,569{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:51,572{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-32"
+2026-02-23 02:57:51,591{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:51,593{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p0-40"
+2026-02-23 02:57:51,674{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:51,677{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-37"
+2026-02-23 02:57:51,699{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:51,701{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-60"
+2026-02-23 02:57:51,778{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:51,781{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-41"
+2026-02-23 02:57:51,856{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:51,858{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-35"
+2026-02-23 02:57:52,049{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:52,051{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-33"
+2026-02-23 02:57:52,079{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:52,081{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p1-23"
+2026-02-23 02:57:52,170{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:57:52,173{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p4-24"
+2026-02-23 02:57:52,269{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:52,270{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-42"
+2026-02-23 02:57:52,273{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:52,274{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-61"
+2026-02-23 02:57:52,445{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:52,448{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-36"
+2026-02-23 02:57:52,552{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:52,555{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-34"
+2026-02-23 02:57:52,579{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:52,583{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-23"
+2026-02-23 02:57:52,739{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:52,742{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-38"
+2026-02-23 02:57:52,858{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:52,859{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-62"
+2026-02-23 02:57:53,052{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:53,054{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-63"
+2026-02-23 02:57:53,213{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:53,215{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p1-24"
+2026-02-23 02:57:53,276{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:53,278{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-35"
+2026-02-23 02:57:53,351{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:53,352{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-24"
+2026-02-23 02:57:53,361{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:53,362{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-39"
+2026-02-23 02:57:53,496{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:53,498{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p2-22"
+2026-02-23 02:57:53,608{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:53,610{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-64"
+2026-02-23 02:57:53,744{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:53,747{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p4-25"
+2026-02-23 02:57:53,898{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:57:53,901{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p0-43"
+2026-02-23 02:57:53,962{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:53,964{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p0-44"
+2026-02-23 02:57:54,058{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:54,060{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-40"
+2026-02-23 02:57:54,213{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:54,216{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-65"
+2026-02-23 02:57:54,389{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:54,390{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-66"
+2026-02-23 02:57:54,484{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:54,485{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p1-25"
+2026-02-23 02:57:54,607{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:57:54,609{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p2-23"
+2026-02-23 02:57:54,644{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	nil
+2026-02-23 02:57:54,645{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Killing FrogDB on [n1]
+2026-02-23 02:57:54,645{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Killing FrogDB on n1
+2026-02-23 02:57:54,713{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:54,714{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-41"
+2026-02-23 02:57:54,759{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	["n1"]
+2026-02-23 02:57:54,904{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:54,906{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-67"
+2026-02-23 02:57:55,032{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:55,034{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-37"
+2026-02-23 02:57:55,198{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:55,200{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-36"
+2026-02-23 02:57:55,297{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:55,301{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-25"
+2026-02-23 02:57:55,321{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:55,324{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-42"
+2026-02-23 02:57:55,380{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:55,382{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-68"
+2026-02-23 02:57:55,544{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:55,545{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p4-26"
+2026-02-23 02:57:55,653{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:55,655{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-38"
+2026-02-23 02:57:55,722{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:57:55,725{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p0-45"
+2026-02-23 02:57:55,772{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:55,774{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-26"
+2026-02-23 02:57:55,806{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:55,808{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-43"
+2026-02-23 02:57:55,940{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:55,943{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p4-27"
+2026-02-23 02:57:56,112{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:56,115{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-46"
+2026-02-23 02:57:56,315{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:57:56,318{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p0-47"
+2026-02-23 02:57:56,454{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:57:56,457{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p1-26"
+2026-02-23 02:57:56,602{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:56,603{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-27"
+2026-02-23 02:57:56,725{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:57:56,727{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p2-24"
+2026-02-23 02:57:56,900{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:56,902{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-69"
+2026-02-23 02:57:56,937{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:56,939{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-70"
+2026-02-23 02:57:56,993{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:56,996{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-39"
+2026-02-23 02:57:57,163{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:57,165{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-37"
+2026-02-23 02:57:57,185{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:57,187{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-28"
+2026-02-23 02:57:57,238{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:57,240{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-44"
+2026-02-23 02:57:57,282{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:57,285{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p3-16"
+2026-02-23 02:57:57,356{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:57,358{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p1-27"
+2026-02-23 02:57:57,440{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:57,442{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-40"
+2026-02-23 02:57:57,630{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:57,632{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-38"
+2026-02-23 02:57:57,777{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:57,778{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-29"
+2026-02-23 02:57:57,935{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:57,937{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-45"
+2026-02-23 02:57:57,976{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:57,979{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p2-25"
+2026-02-23 02:57:58,073{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:58,075{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-71"
+2026-02-23 02:57:58,260{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:58,262{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-41"
+2026-02-23 02:57:58,292{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:58,295{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-39"
+2026-02-23 02:57:58,482{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:58,485{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-30"
+2026-02-23 02:57:58,550{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:57:58,553{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p3-17"
+2026-02-23 02:57:58,681{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:58,684{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-72"
+2026-02-23 02:57:58,739{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:58,741{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-73"
+2026-02-23 02:57:58,837{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:58,840{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-42"
+2026-02-23 02:57:58,930{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:58,933{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-40"
+2026-02-23 02:57:58,996{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:57:58,998{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p4-28"
+2026-02-23 02:57:59,059{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:57:59,061{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p2-26"
+2026-02-23 02:57:59,240{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:57:59,243{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p4-29"
+2026-02-23 02:57:59,345{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:59,348{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-74"
+2026-02-23 02:57:59,352{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:57:59,353{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-43"
+2026-02-23 02:57:59,378{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:57:59,380{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p0-48"
+2026-02-23 02:57:59,548{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:57:59,551{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-31"
+2026-02-23 02:57:59,554{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:57:59,556{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-46"
+2026-02-23 02:57:59,585{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:59,597{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-75"
+2026-02-23 02:57:59,630{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:59,632{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-76"
+2026-02-23 02:57:59,659{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:57:59,660{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:57:59,661{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p0-49"
+2026-02-23 02:57:59,662{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-41"
+2026-02-23 02:57:59,751{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:57:59,753{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p2-27"
+2026-02-23 02:57:59,760{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	nil
+2026-02-23 02:57:59,760{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Starting FrogDB on [n1]
+2026-02-23 02:57:59,760{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Starting FrogDB on n1
+2026-02-23 02:57:59,921{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:57:59,922{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-77"
+2026-02-23 02:57:59,996{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:57:59,997{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p3-18"
+2026-02-23 02:58:00,116{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:00,119{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p4-30"
+2026-02-23 02:58:00,153{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:00,156{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-42"
+2026-02-23 02:58:00,257{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:58:00,260{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p1-28"
+2026-02-23 02:58:00,306{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:00,307{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-47"
+2026-02-23 02:58:00,473{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:00,476{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-78"
+2026-02-23 02:58:00,535{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:00,538{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-79"
+2026-02-23 02:58:00,729{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:00,732{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p3-19"
+2026-02-23 02:58:00,824{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:00,827{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-43"
+2026-02-23 02:58:00,998{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:58:00,999{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p4-31"
+2026-02-23 02:58:01,064{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:01,065{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-48"
+2026-02-23 02:58:01,231{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:01,233{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-80"
+2026-02-23 02:58:01,396{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:01,398{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-81"
+2026-02-23 02:58:01,518{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:58:01,520{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p0-50"
+2026-02-23 02:58:01,564{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:01,567{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-44"
+2026-02-23 02:58:01,642{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:01,643{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-32"
+2026-02-23 02:58:01,702{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:58:01,703{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p0-51"
+2026-02-23 02:58:01,887{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:01,890{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p1-29"
+2026-02-23 02:58:01,961{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:01,963{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-82"
+2026-02-23 02:58:02,154{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:02,156{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-44"
+2026-02-23 02:58:02,251{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:58:02,253{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p0-52"
+2026-02-23 02:58:02,259{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:58:02,261{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p1-30"
+2026-02-23 02:58:02,280{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:02,281{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-49"
+2026-02-23 02:58:02,294{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:02,296{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-83"
+2026-02-23 02:58:02,355{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:02,357{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-84"
+2026-02-23 02:58:02,367{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:02,369{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p2-28"
+2026-02-23 02:58:02,492{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:02,494{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-45"
+2026-02-23 02:58:02,574{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:02,576{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-33"
+2026-02-23 02:58:02,747{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:02,750{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-50"
+2026-02-23 02:58:02,811{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:02,813{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	["n1"]
+2026-02-23 02:58:02,814{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-85"
+2026-02-23 02:58:02,916{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:02,917{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p4-32"
+2026-02-23 02:58:03,006{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:03,007{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-46"
+2026-02-23 02:58:03,179{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:58:03,180{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p1-31"
+2026-02-23 02:58:03,264{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:03,266{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-51"
+2026-02-23 02:58:03,446{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:03,449{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-86"
+2026-02-23 02:58:03,599{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:03,601{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p2-29"
+2026-02-23 02:58:03,661{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:58:03,663{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p4-33"
+2026-02-23 02:58:03,762{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:03,764{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-47"
+2026-02-23 02:58:03,846{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:58:03,849{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p0-53"
+2026-02-23 02:58:03,999{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:04,001{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-52"
+2026-02-23 02:58:04,162{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:04,163{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-87"
+2026-02-23 02:58:04,323{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:04,325{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-88"
+2026-02-23 02:58:04,441{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:04,444{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-45"
+2026-02-23 02:58:04,570{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:58:04,572{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p0-54"
+2026-02-23 02:58:04,611{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:04,614{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-34"
+2026-02-23 02:58:04,796{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:04,799{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-53"
+2026-02-23 02:58:04,912{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:04,915{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-89"
+2026-02-23 02:58:05,100{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:05,103{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-90"
+2026-02-23 02:58:05,209{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:05,210{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-46"
+2026-02-23 02:58:05,402{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:05,404{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-48"
+2026-02-23 02:58:05,471{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:05,474{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-35"
+2026-02-23 02:58:05,655{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:58:05,658{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p1-32"
+2026-02-23 02:58:05,674{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:05,676{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-91"
+2026-02-23 02:58:05,860{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:05,862{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p2-30"
+2026-02-23 02:58:05,925{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:05,929{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p3-20"
+2026-02-23 02:58:05,942{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:05,944{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-49"
+2026-02-23 02:58:05,974{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:05,977{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-36"
+2026-02-23 02:58:06,138{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:58:06,141{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p0-55"
+2026-02-23 02:58:06,261{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:06,263{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-92"
+2026-02-23 02:58:06,407{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:06,408{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-93"
+2026-02-23 02:58:06,526{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:06,529{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p0-56"
+2026-02-23 02:58:06,704{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:06,706{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-50"
+2026-02-23 02:58:06,755{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:58:06,758{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p3-21"
+2026-02-23 02:58:06,758{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:06,759{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-54"
+2026-02-23 02:58:06,949{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:06,951{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-94"
+2026-02-23 02:58:06,997{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:06,999{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p4-34"
+2026-02-23 02:58:07,148{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:07,150{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-47"
+2026-02-23 02:58:07,256{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:07,259{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-51"
+2026-02-23 02:58:07,372{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:07,374{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-37"
+2026-02-23 02:58:07,424{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:07,425{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-55"
+2026-02-23 02:58:07,623{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:07,625{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-95"
+2026-02-23 02:58:07,744{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:07,764{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-96"
+2026-02-23 02:58:07,912{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:58:07,914{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p0-57"
+2026-02-23 02:58:08,002{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:08,004{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-38"
+2026-02-23 02:58:08,152{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:08,155{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-56"
+2026-02-23 02:58:08,188{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:08,191{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-97"
+2026-02-23 02:58:08,370{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:08,373{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-98"
+2026-02-23 02:58:08,554{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:58:08,555{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p2-31"
+2026-02-23 02:58:08,561{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:08,562{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-52"
+2026-02-23 02:58:08,686{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:58:08,688{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p3-22"
+2026-02-23 02:58:08,705{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:08,707{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-57"
+2026-02-23 02:58:08,800{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:08,802{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-99"
+2026-02-23 02:58:08,958{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:08,961{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p4-35"
+2026-02-23 02:58:09,079{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:58:09,082{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p1-33"
+2026-02-23 02:58:09,254{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:09,257{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-53"
+2026-02-23 02:58:09,282{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:09,283{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-39"
+2026-02-23 02:58:09,403{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:09,405{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-58"
+2026-02-23 02:58:09,435{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:09,437{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-100"
+2026-02-23 02:58:09,559{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:09,561{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p4-36"
+2026-02-23 02:58:09,726{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:09,728{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-48"
+2026-02-23 02:58:09,886{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:58:09,889{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p0-58"
+2026-02-23 02:58:09,931{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:09,933{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-40"
+2026-02-23 02:58:10,000{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:10,002{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-59"
+2026-02-23 02:58:10,084{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:10,086{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-101"
+2026-02-23 02:58:10,190{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:10,193{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-59"
+2026-02-23 02:58:10,257{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:10,260{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p1-34"
+2026-02-23 02:58:10,434{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:10,437{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-54"
+2026-02-23 02:58:10,547{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:58:10,549{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p2-32"
+2026-02-23 02:58:10,639{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:10,641{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-60"
+2026-02-23 02:58:10,729{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:10,730{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p4-37"
+2026-02-23 02:58:10,917{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:10,919{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-60"
+2026-02-23 02:58:10,927{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:10,929{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p1-35"
+2026-02-23 02:58:11,060{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:11,062{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-55"
+2026-02-23 02:58:11,197{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:58:11,199{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p2-33"
+2026-02-23 02:58:11,372{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:11,376{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-61"
+2026-02-23 02:58:11,537{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:11,541{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-61"
+2026-02-23 02:58:11,555{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:11,557{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p1-36"
+2026-02-23 02:58:11,602{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:11,604{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p2-34"
+2026-02-23 02:58:11,656{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:immediate-pop	nil
+2026-02-23 02:58:11,658{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:immediate-pop	"p3-23"
+2026-02-23 02:58:11,668{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:11,670{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-41"
+2026-02-23 02:58:11,856{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:58:11,857{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p4-38"
+2026-02-23 02:58:11,909{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:11,910{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-62"
+2026-02-23 02:58:12,084{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:12,087{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-63"
+2026-02-23 02:58:12,282{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:12,285{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-49"
+2026-02-23 02:58:12,429{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:12,432{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-56"
+2026-02-23 02:58:12,593{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:12,594{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-42"
+2026-02-23 02:58:12,792{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:58:12,794{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p2-35"
+2026-02-23 02:58:12,920{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:12,921{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-102"
+2026-02-23 02:58:12,996{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:12,997{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-103"
+2026-02-23 02:58:13,057{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:13,060{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-50"
+2026-02-23 02:58:13,080{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:13,082{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-57"
+2026-02-23 02:58:13,249{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:13,252{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-43"
+2026-02-23 02:58:13,342{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:13,345{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-62"
+2026-02-23 02:58:13,474{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:13,477{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p3-24"
+2026-02-23 02:58:13,597{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:13,599{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-104"
+2026-02-23 02:58:13,716{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:13,719{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p4-39"
+2026-02-23 02:58:13,750{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:13,753{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-58"
+2026-02-23 02:58:13,815{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:58:13,818{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p0-64"
+2026-02-23 02:58:13,842{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:13,844{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-63"
+2026-02-23 02:58:13,979{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:13,980{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-105"
+2026-02-23 02:58:14,113{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:14,115{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-106"
+2026-02-23 02:58:14,296{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:14,299{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p4-40"
+2026-02-23 02:58:14,393{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:14,396{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-59"
+2026-02-23 02:58:14,448{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:14,451{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-44"
+2026-02-23 02:58:14,570{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:58:14,573{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p0-65"
+2026-02-23 02:58:14,759{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:14,761{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-66"
+2026-02-23 02:58:14,958{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:14,959{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-107"
+2026-02-23 02:58:15,011{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:15,011{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-51"
+2026-02-23 02:58:15,150{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:15,152{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-60"
+2026-02-23 02:58:15,176{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:58:15,178{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p4-41"
+2026-02-23 02:58:15,335{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:15,337{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-64"
+2026-02-23 02:58:15,407{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:15,410{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p0-67"
+2026-02-23 02:58:15,551{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:15,552{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:15,553{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p1-37"
+2026-02-23 02:58:15,554{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-52"
+2026-02-23 02:58:15,738{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:15,741{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-61"
+2026-02-23 02:58:15,908{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:15,910{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-45"
+2026-02-23 02:58:15,960{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:15,962{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-65"
+2026-02-23 02:58:15,986{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:15,988{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p2-36"
+2026-02-23 02:58:16,106{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:16,107{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p3-25"
+2026-02-23 02:58:16,123{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:58:16,124{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p4-42"
+2026-02-23 02:58:16,317{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:16,319{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-62"
+2026-02-23 02:58:16,455{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:58:16,458{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p0-68"
+2026-02-23 02:58:16,590{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:16,592{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-66"
+2026-02-23 02:58:16,629{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:16,632{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-108"
+2026-02-23 02:58:16,724{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:16,728{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p1-38"
+2026-02-23 02:58:16,844{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:58:16,847{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p3-26"
+2026-02-23 02:58:16,962{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:16,964{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-63"
+2026-02-23 02:58:17,070{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:58:17,073{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p4-43"
+2026-02-23 02:58:17,238{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:58:17,239{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p3-27"
+2026-02-23 02:58:17,355{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:17,357{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-69"
+2026-02-23 02:58:17,513{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:17,515{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-70"
+2026-02-23 02:58:17,547{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:17,549{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-53"
+2026-02-23 02:58:17,656{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:17,658{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-64"
+2026-02-23 02:58:17,724{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:58:17,726{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p1-39"
+2026-02-23 02:58:17,793{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:17,795{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-67"
+2026-02-23 02:58:17,818{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:17,819{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	nil
+2026-02-23 02:58:17,819{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Killing FrogDB on [n1]
+2026-02-23 02:58:17,819{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Killing FrogDB on n1
+2026-02-23 02:58:17,820{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-109"
+2026-02-23 02:58:17,834{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:17,835{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p2-37"
+2026-02-23 02:58:17,928{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	["n1"]
+2026-02-23 02:58:17,958{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:58:17,959{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p3-28"
+2026-02-23 02:58:17,998{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:immediate-pop	nil
+2026-02-23 02:58:18,001{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:immediate-pop	"p4-44"
+2026-02-23 02:58:18,173{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:18,175{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p1-40"
+2026-02-23 02:58:18,233{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:18,234{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-110"
+2026-02-23 02:58:18,421{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:18,423{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-54"
+2026-02-23 02:58:18,462{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:18,464{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-65"
+2026-02-23 02:58:18,538{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:18,540{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-46"
+2026-02-23 02:58:18,686{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:58:18,687{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p2-38"
+2026-02-23 02:58:18,712{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:18,713{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p3-29"
+2026-02-23 02:58:18,713{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:18,714{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-111"
+2026-02-23 02:58:18,774{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:18,776{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-55"
+2026-02-23 02:58:18,783{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:blocking-pop	nil
+2026-02-23 02:58:18,784{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:blocking-pop	"p4-45"
+2026-02-23 02:58:18,872{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:18,874{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-47"
+2026-02-23 02:58:19,018{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:19,020{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-68"
+2026-02-23 02:58:19,052{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:19,054{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-71"
+2026-02-23 02:58:19,056{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:19,057{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p1-41"
+2026-02-23 02:58:19,197{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:19,199{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-56"
+2026-02-23 02:58:19,262{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:19,264{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-66"
+2026-02-23 02:58:19,287{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:58:19,289{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p2-39"
+2026-02-23 02:58:19,425{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:blocking-pop	nil
+2026-02-23 02:58:19,427{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:blocking-pop	"p3-30"
+2026-02-23 02:58:19,475{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:19,478{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-72"
+2026-02-23 02:58:19,625{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:19,627{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-112"
+2026-02-23 02:58:19,658{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:19,660{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-57"
+2026-02-23 02:58:19,840{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:19,842{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-67"
+2026-02-23 02:58:19,916{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:blocking-pop	nil
+2026-02-23 02:58:19,918{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:blocking-pop	"p0-73"
+2026-02-23 02:58:20,070{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:20,072{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-69"
+2026-02-23 02:58:20,228{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:20,230{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-113"
+2026-02-23 02:58:20,303{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:20,305{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p1-42"
+2026-02-23 02:58:20,438{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:blocking-pop	nil
+2026-02-23 02:58:20,439{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:blocking-pop	"p2-40"
+2026-02-23 02:58:20,496{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:20,497{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-68"
+2026-02-23 02:58:20,661{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:immediate-pop	nil
+2026-02-23 02:58:20,663{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:immediate-pop	"p0-74"
+2026-02-23 02:58:20,786{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:20,789{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-70"
+2026-02-23 02:58:20,851{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:20,854{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p1-43"
+2026-02-23 02:58:20,986{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:blocking-pop	nil
+2026-02-23 02:58:20,989{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:blocking-pop	"p3-31"
+2026-02-23 02:58:21,031{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:immediate-pop	nil
+2026-02-23 02:58:21,033{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:immediate-pop	"p4-46"
+2026-02-23 02:58:21,109{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:push	nil
+2026-02-23 02:58:21,111{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:push	"p2-69"
+2026-02-23 02:58:21,214{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:push	nil
+2026-02-23 02:58:21,216{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:push	"p3-48"
+2026-02-23 02:58:21,216{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:push	nil
+2026-02-23 02:58:21,216{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:push	"p4-71"
+2026-02-23 02:58:21,333{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:push	nil
+2026-02-23 02:58:21,336{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:push	"p0-114"
+2026-02-23 02:58:21,362{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:immediate-pop	nil
+2026-02-23 02:58:21,365{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:immediate-pop	"p0-75"
+2026-02-23 02:58:21,431{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:push	nil
+2026-02-23 02:58:21,433{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:push	"p1-58"
+2026-02-23 02:58:22,931{GMT}	INFO	[jepsen worker 2] jepsen.generator.interpreter: Recovering from faults...
+2026-02-23 02:58:22,932{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	nil
+2026-02-23 02:58:22,932{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Starting FrogDB on [n1]
+2026-02-23 02:58:22,932{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Starting FrogDB on n1
+2026-02-23 02:58:25,969{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	["n1"]
+2026-02-23 02:58:30,972{GMT}	INFO	[jepsen worker nemesis] jepsen.generator.interpreter: Final reads...
+2026-02-23 02:58:30,974{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:58:30,994{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	["p0-76" "p2-41" "p0-77" "p2-42" "p4-47" "p0-78" "p0-79" "p2-43" "p4-48" "p0-80" "p0-81" "p2-44" "p3-32" "p0-82" "p1-44" "p4-49" "p0-83" "p0-84" "p2-45" "p3-33" "p4-50" "p0-85" "p2-46" "p4-51" "p0-86" "p2-47" "p4-52" "p0-87" "p0-88" "p1-45" "p3-34" "p4-53" "p0-89" "p0-90" "p1-46" "p2-48" "p3-35" "p0-91" "p2-49" "p3-36" "p0-92" "p0-93" "p2-50" "p4-54" "p0-94" "p1-47" "p2-51" "p3-37" "p4-55" "p0-95" "p0-96" "p3-38" "p4-56" "p0-97" "p0-98" "p2-52" "p4-57" "p0-99" "p2-53" "p3-39" "p4-58" "p0-100" "p1-48" "p3-40" "p4-59" "p0-101" "p2-54" "p4-60" "p2-55" "p4-61" "p3-41" "p1-49" "p2-56" "p3-42" "p0-102" "p0-103" "p1-50" "p2-57" "p3-43" "p4-62" "p0-104" "p2-58" "p4-63" "p0-105" "p0-106" "p2-59" "p3-44" "p0-107" "p1-51" "p2-60" "p4-64" "p1-52" "p2-61" "p3-45" "p4-65" "p2-62" "p4-66" "p0-108" "p2-63" "p1-53" "p2-64" "p4-67" "p0-109" "p0-110" "p1-54" "p2-65" "p3-46" "p0-111" "p1-55" "p3-47" "p4-68" "p1-56" "p2-66" "p0-112" "p1-57" "p2-67" "p4-69" "p0-113" "p2-68" "p4-70" "p2-69" "p3-48" "p4-71" "p0-114" "p1-58"]
+2026-02-23 02:58:31,034{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:58:31,037{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	["p0-76" "p2-41" "p0-77" "p2-42" "p4-47" "p0-78" "p0-79" "p2-43" "p4-48" "p0-80" "p0-81" "p2-44" "p3-32" "p0-82" "p1-44" "p4-49" "p0-83" "p0-84" "p2-45" "p3-33" "p4-50" "p0-85" "p2-46" "p4-51" "p0-86" "p2-47" "p4-52" "p0-87" "p0-88" "p1-45" "p3-34" "p4-53" "p0-89" "p0-90" "p1-46" "p2-48" "p3-35" "p0-91" "p2-49" "p3-36" "p0-92" "p0-93" "p2-50" "p4-54" "p0-94" "p1-47" "p2-51" "p3-37" "p4-55" "p0-95" "p0-96" "p3-38" "p4-56" "p0-97" "p0-98" "p2-52" "p4-57" "p0-99" "p2-53" "p3-39" "p4-58" "p0-100" "p1-48" "p3-40" "p4-59" "p0-101" "p2-54" "p4-60" "p2-55" "p4-61" "p3-41" "p1-49" "p2-56" "p3-42" "p0-102" "p0-103" "p1-50" "p2-57" "p3-43" "p4-62" "p0-104" "p2-58" "p4-63" "p0-105" "p0-106" "p2-59" "p3-44" "p0-107" "p1-51" "p2-60" "p4-64" "p1-52" "p2-61" "p3-45" "p4-65" "p2-62" "p4-66" "p0-108" "p2-63" "p1-53" "p2-64" "p4-67" "p0-109" "p0-110" "p1-54" "p2-65" "p3-46" "p0-111" "p1-55" "p3-47" "p4-68" "p1-56" "p2-66" "p0-112" "p1-57" "p2-67" "p4-69" "p0-113" "p2-68" "p4-70" "p2-69" "p3-48" "p4-71" "p0-114" "p1-58"]
+2026-02-23 02:58:31,090{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:58:31,092{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	["p0-76" "p2-41" "p0-77" "p2-42" "p4-47" "p0-78" "p0-79" "p2-43" "p4-48" "p0-80" "p0-81" "p2-44" "p3-32" "p0-82" "p1-44" "p4-49" "p0-83" "p0-84" "p2-45" "p3-33" "p4-50" "p0-85" "p2-46" "p4-51" "p0-86" "p2-47" "p4-52" "p0-87" "p0-88" "p1-45" "p3-34" "p4-53" "p0-89" "p0-90" "p1-46" "p2-48" "p3-35" "p0-91" "p2-49" "p3-36" "p0-92" "p0-93" "p2-50" "p4-54" "p0-94" "p1-47" "p2-51" "p3-37" "p4-55" "p0-95" "p0-96" "p3-38" "p4-56" "p0-97" "p0-98" "p2-52" "p4-57" "p0-99" "p2-53" "p3-39" "p4-58" "p0-100" "p1-48" "p3-40" "p4-59" "p0-101" "p2-54" "p4-60" "p2-55" "p4-61" "p3-41" "p1-49" "p2-56" "p3-42" "p0-102" "p0-103" "p1-50" "p2-57" "p3-43" "p4-62" "p0-104" "p2-58" "p4-63" "p0-105" "p0-106" "p2-59" "p3-44" "p0-107" "p1-51" "p2-60" "p4-64" "p1-52" "p2-61" "p3-45" "p4-65" "p2-62" "p4-66" "p0-108" "p2-63" "p1-53" "p2-64" "p4-67" "p0-109" "p0-110" "p1-54" "p2-65" "p3-46" "p0-111" "p1-55" "p3-47" "p4-68" "p1-56" "p2-66" "p0-112" "p1-57" "p2-67" "p4-69" "p0-113" "p2-68" "p4-70" "p2-69" "p3-48" "p4-71" "p0-114" "p1-58"]
+2026-02-23 02:58:31,139{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:58:31,141{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	["p0-76" "p2-41" "p0-77" "p2-42" "p4-47" "p0-78" "p0-79" "p2-43" "p4-48" "p0-80" "p0-81" "p2-44" "p3-32" "p0-82" "p1-44" "p4-49" "p0-83" "p0-84" "p2-45" "p3-33" "p4-50" "p0-85" "p2-46" "p4-51" "p0-86" "p2-47" "p4-52" "p0-87" "p0-88" "p1-45" "p3-34" "p4-53" "p0-89" "p0-90" "p1-46" "p2-48" "p3-35" "p0-91" "p2-49" "p3-36" "p0-92" "p0-93" "p2-50" "p4-54" "p0-94" "p1-47" "p2-51" "p3-37" "p4-55" "p0-95" "p0-96" "p3-38" "p4-56" "p0-97" "p0-98" "p2-52" "p4-57" "p0-99" "p2-53" "p3-39" "p4-58" "p0-100" "p1-48" "p3-40" "p4-59" "p0-101" "p2-54" "p4-60" "p2-55" "p4-61" "p3-41" "p1-49" "p2-56" "p3-42" "p0-102" "p0-103" "p1-50" "p2-57" "p3-43" "p4-62" "p0-104" "p2-58" "p4-63" "p0-105" "p0-106" "p2-59" "p3-44" "p0-107" "p1-51" "p2-60" "p4-64" "p1-52" "p2-61" "p3-45" "p4-65" "p2-62" "p4-66" "p0-108" "p2-63" "p1-53" "p2-64" "p4-67" "p0-109" "p0-110" "p1-54" "p2-65" "p3-46" "p0-111" "p1-55" "p3-47" "p4-68" "p1-56" "p2-66" "p0-112" "p1-57" "p2-67" "p4-69" "p0-113" "p2-68" "p4-70" "p2-69" "p3-48" "p4-71" "p0-114" "p1-58"]
+2026-02-23 02:58:31,243{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:58:31,245{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	["p0-76" "p2-41" "p0-77" "p2-42" "p4-47" "p0-78" "p0-79" "p2-43" "p4-48" "p0-80" "p0-81" "p2-44" "p3-32" "p0-82" "p1-44" "p4-49" "p0-83" "p0-84" "p2-45" "p3-33" "p4-50" "p0-85" "p2-46" "p4-51" "p0-86" "p2-47" "p4-52" "p0-87" "p0-88" "p1-45" "p3-34" "p4-53" "p0-89" "p0-90" "p1-46" "p2-48" "p3-35" "p0-91" "p2-49" "p3-36" "p0-92" "p0-93" "p2-50" "p4-54" "p0-94" "p1-47" "p2-51" "p3-37" "p4-55" "p0-95" "p0-96" "p3-38" "p4-56" "p0-97" "p0-98" "p2-52" "p4-57" "p0-99" "p2-53" "p3-39" "p4-58" "p0-100" "p1-48" "p3-40" "p4-59" "p0-101" "p2-54" "p4-60" "p2-55" "p4-61" "p3-41" "p1-49" "p2-56" "p3-42" "p0-102" "p0-103" "p1-50" "p2-57" "p3-43" "p4-62" "p0-104" "p2-58" "p4-63" "p0-105" "p0-106" "p2-59" "p3-44" "p0-107" "p1-51" "p2-60" "p4-64" "p1-52" "p2-61" "p3-45" "p4-65" "p2-62" "p4-66" "p0-108" "p2-63" "p1-53" "p2-64" "p4-67" "p0-109" "p0-110" "p1-54" "p2-65" "p3-46" "p0-111" "p1-55" "p3-47" "p4-68" "p1-56" "p2-66" "p0-112" "p1-57" "p2-67" "p4-69" "p0-113" "p2-68" "p4-70" "p2-69" "p3-48" "p4-71" "p0-114" "p1-58"]
+2026-02-23 02:58:31,444{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:58:31,446{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	["p0-76" "p2-41" "p0-77" "p2-42" "p4-47" "p0-78" "p0-79" "p2-43" "p4-48" "p0-80" "p0-81" "p2-44" "p3-32" "p0-82" "p1-44" "p4-49" "p0-83" "p0-84" "p2-45" "p3-33" "p4-50" "p0-85" "p2-46" "p4-51" "p0-86" "p2-47" "p4-52" "p0-87" "p0-88" "p1-45" "p3-34" "p4-53" "p0-89" "p0-90" "p1-46" "p2-48" "p3-35" "p0-91" "p2-49" "p3-36" "p0-92" "p0-93" "p2-50" "p4-54" "p0-94" "p1-47" "p2-51" "p3-37" "p4-55" "p0-95" "p0-96" "p3-38" "p4-56" "p0-97" "p0-98" "p2-52" "p4-57" "p0-99" "p2-53" "p3-39" "p4-58" "p0-100" "p1-48" "p3-40" "p4-59" "p0-101" "p2-54" "p4-60" "p2-55" "p4-61" "p3-41" "p1-49" "p2-56" "p3-42" "p0-102" "p0-103" "p1-50" "p2-57" "p3-43" "p4-62" "p0-104" "p2-58" "p4-63" "p0-105" "p0-106" "p2-59" "p3-44" "p0-107" "p1-51" "p2-60" "p4-64" "p1-52" "p2-61" "p3-45" "p4-65" "p2-62" "p4-66" "p0-108" "p2-63" "p1-53" "p2-64" "p4-67" "p0-109" "p0-110" "p1-54" "p2-65" "p3-46" "p0-111" "p1-55" "p3-47" "p4-68" "p1-56" "p2-66" "p0-112" "p1-57" "p2-67" "p4-69" "p0-113" "p2-68" "p4-70" "p2-69" "p3-48" "p4-71" "p0-114" "p1-58"]
+2026-02-23 02:58:31,530{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:58:31,531{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	["p0-76" "p2-41" "p0-77" "p2-42" "p4-47" "p0-78" "p0-79" "p2-43" "p4-48" "p0-80" "p0-81" "p2-44" "p3-32" "p0-82" "p1-44" "p4-49" "p0-83" "p0-84" "p2-45" "p3-33" "p4-50" "p0-85" "p2-46" "p4-51" "p0-86" "p2-47" "p4-52" "p0-87" "p0-88" "p1-45" "p3-34" "p4-53" "p0-89" "p0-90" "p1-46" "p2-48" "p3-35" "p0-91" "p2-49" "p3-36" "p0-92" "p0-93" "p2-50" "p4-54" "p0-94" "p1-47" "p2-51" "p3-37" "p4-55" "p0-95" "p0-96" "p3-38" "p4-56" "p0-97" "p0-98" "p2-52" "p4-57" "p0-99" "p2-53" "p3-39" "p4-58" "p0-100" "p1-48" "p3-40" "p4-59" "p0-101" "p2-54" "p4-60" "p2-55" "p4-61" "p3-41" "p1-49" "p2-56" "p3-42" "p0-102" "p0-103" "p1-50" "p2-57" "p3-43" "p4-62" "p0-104" "p2-58" "p4-63" "p0-105" "p0-106" "p2-59" "p3-44" "p0-107" "p1-51" "p2-60" "p4-64" "p1-52" "p2-61" "p3-45" "p4-65" "p2-62" "p4-66" "p0-108" "p2-63" "p1-53" "p2-64" "p4-67" "p0-109" "p0-110" "p1-54" "p2-65" "p3-46" "p0-111" "p1-55" "p3-47" "p4-68" "p1-56" "p2-66" "p0-112" "p1-57" "p2-67" "p4-69" "p0-113" "p2-68" "p4-70" "p2-69" "p3-48" "p4-71" "p0-114" "p1-58"]
+2026-02-23 02:58:31,636{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:58:31,638{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	["p0-76" "p2-41" "p0-77" "p2-42" "p4-47" "p0-78" "p0-79" "p2-43" "p4-48" "p0-80" "p0-81" "p2-44" "p3-32" "p0-82" "p1-44" "p4-49" "p0-83" "p0-84" "p2-45" "p3-33" "p4-50" "p0-85" "p2-46" "p4-51" "p0-86" "p2-47" "p4-52" "p0-87" "p0-88" "p1-45" "p3-34" "p4-53" "p0-89" "p0-90" "p1-46" "p2-48" "p3-35" "p0-91" "p2-49" "p3-36" "p0-92" "p0-93" "p2-50" "p4-54" "p0-94" "p1-47" "p2-51" "p3-37" "p4-55" "p0-95" "p0-96" "p3-38" "p4-56" "p0-97" "p0-98" "p2-52" "p4-57" "p0-99" "p2-53" "p3-39" "p4-58" "p0-100" "p1-48" "p3-40" "p4-59" "p0-101" "p2-54" "p4-60" "p2-55" "p4-61" "p3-41" "p1-49" "p2-56" "p3-42" "p0-102" "p0-103" "p1-50" "p2-57" "p3-43" "p4-62" "p0-104" "p2-58" "p4-63" "p0-105" "p0-106" "p2-59" "p3-44" "p0-107" "p1-51" "p2-60" "p4-64" "p1-52" "p2-61" "p3-45" "p4-65" "p2-62" "p4-66" "p0-108" "p2-63" "p1-53" "p2-64" "p4-67" "p0-109" "p0-110" "p1-54" "p2-65" "p3-46" "p0-111" "p1-55" "p3-47" "p4-68" "p1-56" "p2-66" "p0-112" "p1-57" "p2-67" "p4-69" "p0-113" "p2-68" "p4-70" "p2-69" "p3-48" "p4-71" "p0-114" "p1-58"]
+2026-02-23 02:58:31,830{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:58:31,832{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	["p0-76" "p2-41" "p0-77" "p2-42" "p4-47" "p0-78" "p0-79" "p2-43" "p4-48" "p0-80" "p0-81" "p2-44" "p3-32" "p0-82" "p1-44" "p4-49" "p0-83" "p0-84" "p2-45" "p3-33" "p4-50" "p0-85" "p2-46" "p4-51" "p0-86" "p2-47" "p4-52" "p0-87" "p0-88" "p1-45" "p3-34" "p4-53" "p0-89" "p0-90" "p1-46" "p2-48" "p3-35" "p0-91" "p2-49" "p3-36" "p0-92" "p0-93" "p2-50" "p4-54" "p0-94" "p1-47" "p2-51" "p3-37" "p4-55" "p0-95" "p0-96" "p3-38" "p4-56" "p0-97" "p0-98" "p2-52" "p4-57" "p0-99" "p2-53" "p3-39" "p4-58" "p0-100" "p1-48" "p3-40" "p4-59" "p0-101" "p2-54" "p4-60" "p2-55" "p4-61" "p3-41" "p1-49" "p2-56" "p3-42" "p0-102" "p0-103" "p1-50" "p2-57" "p3-43" "p4-62" "p0-104" "p2-58" "p4-63" "p0-105" "p0-106" "p2-59" "p3-44" "p0-107" "p1-51" "p2-60" "p4-64" "p1-52" "p2-61" "p3-45" "p4-65" "p2-62" "p4-66" "p0-108" "p2-63" "p1-53" "p2-64" "p4-67" "p0-109" "p0-110" "p1-54" "p2-65" "p3-46" "p0-111" "p1-55" "p3-47" "p4-68" "p1-56" "p2-66" "p0-112" "p1-57" "p2-67" "p4-69" "p0-113" "p2-68" "p4-70" "p2-69" "p3-48" "p4-71" "p0-114" "p1-58"]
+2026-02-23 02:58:32,016{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:58:32,018{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	["p0-76" "p2-41" "p0-77" "p2-42" "p4-47" "p0-78" "p0-79" "p2-43" "p4-48" "p0-80" "p0-81" "p2-44" "p3-32" "p0-82" "p1-44" "p4-49" "p0-83" "p0-84" "p2-45" "p3-33" "p4-50" "p0-85" "p2-46" "p4-51" "p0-86" "p2-47" "p4-52" "p0-87" "p0-88" "p1-45" "p3-34" "p4-53" "p0-89" "p0-90" "p1-46" "p2-48" "p3-35" "p0-91" "p2-49" "p3-36" "p0-92" "p0-93" "p2-50" "p4-54" "p0-94" "p1-47" "p2-51" "p3-37" "p4-55" "p0-95" "p0-96" "p3-38" "p4-56" "p0-97" "p0-98" "p2-52" "p4-57" "p0-99" "p2-53" "p3-39" "p4-58" "p0-100" "p1-48" "p3-40" "p4-59" "p0-101" "p2-54" "p4-60" "p2-55" "p4-61" "p3-41" "p1-49" "p2-56" "p3-42" "p0-102" "p0-103" "p1-50" "p2-57" "p3-43" "p4-62" "p0-104" "p2-58" "p4-63" "p0-105" "p0-106" "p2-59" "p3-44" "p0-107" "p1-51" "p2-60" "p4-64" "p1-52" "p2-61" "p3-45" "p4-65" "p2-62" "p4-66" "p0-108" "p2-63" "p1-53" "p2-64" "p4-67" "p0-109" "p0-110" "p1-54" "p2-65" "p3-46" "p0-111" "p1-55" "p3-47" "p4-68" "p1-56" "p2-66" "p0-112" "p1-57" "p2-67" "p4-69" "p0-113" "p2-68" "p4-70" "p2-69" "p3-48" "p4-71" "p0-114" "p1-58"]
+2026-02-23 02:58:32,042{GMT}	INFO	[jepsen test runner] jepsen.core: Run complete, writing
+2026-02-23 02:58:32,106{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB on n1
+2026-02-23 02:58:32,107{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS teardown for n1 (no-op)
+2026-02-23 02:58:32,107{GMT}	INFO	[jepsen test runner] jepsen.core: Analyzing...
+2026-02-23 02:58:32,351{GMT}	INFO	[jepsen test runner] jepsen.core: Analysis complete
+2026-02-23 02:58:32,356{GMT}	INFO	[jepsen results] jepsen.store: Wrote /Users/nathan/workspace/nathanjordan/workspace-1/jepsen/frogdb/store/frogdb-blocking-kill-docker/20260223T025718.940-0500/results.edn
+2026-02-23 02:58:32,376{GMT}	INFO	[jepsen test runner] jepsen.core: {:workload {:blocking {:ordering-violations nil,
+                       :valid? true,
+                       :total-pop-count 235,
+                       :stuck-ops 0,
+                       :all-values-accounted true,
+                       :immediate-pop-count 113,
+                       :duplicate-pops {},
+                       :push-count 360,
+                       :blocking-with-value 122,
+                       :remaining-count 125,
+                       :blocking-timeouts 0,
+                       :unknown-pops nil,
+                       :blocking-pop-count 122},
+            :valid? true},
+ :stats {:valid? true,
+         :count 605,
+         :ok-count 605,
+         :fail-count 0,
+         :info-count 0,
+         :by-f {:blocking-pop {:valid? true,
+                               :count 122,
+                               :ok-count 122,
+                               :fail-count 0,
+                               :info-count 0},
+                :immediate-pop {:valid? true,
+                                :count 113,
+                                :ok-count 113,
+                                :fail-count 0,
+                                :info-count 0},
+                :push {:valid? true,
+                       :count 360,
+                       :ok-count 360,
+                       :fail-count 0,
+                       :info-count 0},
+                :read {:valid? true,
+                       :count 10,
+                       :ok-count 10,
+                       :fail-count 0,
+                       :info-count 0}}},
+ :exceptions {:valid? true},
+ :perf {:latency-graph {:valid? true},
+        :rate-graph {:valid? true},
+        :valid? true},
+ :valid? true}
+
+
+Everything looks good! ヽ(‘ー`)ノ

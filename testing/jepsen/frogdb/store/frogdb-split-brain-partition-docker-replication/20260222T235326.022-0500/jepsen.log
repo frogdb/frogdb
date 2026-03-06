@@ -1,0 +1,1659 @@
+2026-02-22 23:53:26,056{GMT}	INFO	[jepsen test runner] jepsen.core: Test version 4a7760395f3d9033cc6c7a477c6947e5d983eb25 (plus uncommitted changes)
+2026-02-22 23:53:26,056{GMT}	INFO	[jepsen test runner] jepsen.core: Command line:
+lein run test --docker --workload split-brain --nemesis partition --time-limit 60
+2026-02-22 23:53:26,090{GMT}	INFO	[jepsen test runner] jepsen.core: Running test:
+{:remote
+ #jepsen.control.retry.Remote{:remote #jepsen.control.scp.Remote{:cmd-remote #jepsen.control.sshj.SSHJRemote{:concurrency-limit 6,
+                                                                                                             :conn-spec nil,
+                                                                                                             :client nil,
+                                                                                                             :semaphore nil},
+                                                                 :conn-spec nil},
+                              :conn nil}
+ :concurrency 5
+ :cluster false
+ :db
+ #object[jepsen.frogdb.db$replication_db$reify__9900
+         "0x18626c8c"
+         "jepsen.frogdb.db$replication_db$reify__9900@18626c8c"]
+ :leave-db-running? false
+ :name "frogdb-split-brain-partition-docker-replication"
+ :logging-json? false
+ :independent false
+ :start-time
+ #object[org.joda.time.DateTime "0x36881f62" "2026-02-22T23:53:26.022-05:00"]
+ :docker true
+ :net
+ #object[jepsen.net$reify__12635
+         "0x1c791c14"
+         "jepsen.net$reify__12635@1c791c14"]
+ :client
+ #jepsen.frogdb.split_brain.SplitBrainClient{:conns nil, :docker-host? nil}
+ :barrier
+ #object[java.util.concurrent.CyclicBarrier
+         "0xc24e06a"
+         "java.util.concurrent.CyclicBarrier@c24e06a"]
+ :ssh {:dummy? true}
+ :rate 10
+ :checker
+ #object[jepsen.checker$compose$reify__10552
+         "0x1926e42e"
+         "jepsen.checker$compose$reify__10552@1926e42e"]
+ :argv
+ ("test"
+  "--docker"
+  "--workload"
+  "split-brain"
+  "--nemesis"
+  "partition"
+  "--time-limit"
+  "60")
+ :nemesis
+ #unprintable "jepsen.frogdb.nemesis$partition_nemesis$reify__11056@6fa38b67"
+ :nodes ["n1" "n2" "n3"]
+ :test-count 1
+ :replication false
+ :cluster-nodes ["n1" "n2" "n3"]
+ :generator
+ #object[jepsen.util.Forgettable
+         "0x61bfee77"
+         ((jepsen.generator.Synchronize
+           {:gen (jepsen.generator.TimeLimit
+                  {:limit 60000000000,
+                   :cutoff nil,
+                   :gen (jepsen.generator.Any
+                         {:gens [(jepsen.generator.OnThreads
+                                  {:f #{:nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x5abe46b7"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@5abe46b7"],
+                                   :gen (jepsen.generator.Cycle
+                                         {:remaining -1,
+                                          :original-gen [{:type :sleep,
+                                                          :value 10}
+                                                         {:type :info,
+                                                          :f :partition,
+                                                          :value :primary-isolated}
+                                                         {:type :sleep,
+                                                          :value 10}
+                                                         {:type :info, :f :heal}
+                                                         {:type :sleep,
+                                                          :value 5}],
+                                          :gen [{:type :sleep, :value 10}
+                                                {:type :info,
+                                                 :f :partition,
+                                                 :value :primary-isolated}
+                                                {:type :sleep, :value 10}
+                                                {:type :info, :f :heal}
+                                                {:type :sleep, :value 5}]})})
+                                 (jepsen.generator.OnThreads
+                                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x56d5311e"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@56d5311e"],
+                                   :gen (jepsen.generator.Stagger
+                                         {:dt 200000000,
+                                          :next-time nil,
+                                          :gen (jepsen.generator.Mix
+                                                {:i 3,
+                                                 :gens [#object[jepsen.frogdb.split_brain$generator$fn__12347
+                                                                "0x66a81c48"
+                                                                "jepsen.frogdb.split_brain$generator$fn__12347@66a81c48"]
+                                                        #object[jepsen.frogdb.split_brain$generator$fn__12349
+                                                                "0x60880394"
+                                                                "jepsen.frogdb.split_brain$generator$fn__12349@60880394"]
+                                                        #object[jepsen.frogdb.split_brain$generator$fn__12351
+                                                                "0x482b6acc"
+                                                                "jepsen.frogdb.split_brain$generator$fn__12351@482b6acc"]
+                                                        #object[jepsen.frogdb.split_brain$generator$fn__12353
+                                                                "0x3709ef16"
+                                                                "jepsen.frogdb.split_brain$generator$fn__12353@3709ef16"]]})})})]})})})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Recovering from faults..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #{:nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x1165efe3"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@1165efe3"],
+                   :gen (jepsen.generator.Limit
+                         {:remaining 1, :gen {:type :info, :f :heal}})})})
+          (jepsen.generator.Synchronize {:gen {:type :sleep, :value 5}})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Final reads..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x3151caf8"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@3151caf8"],
+                   :gen (jepsen.generator.Stagger
+                         {:dt 200000000,
+                          :next-time nil,
+                          :gen (jepsen.generator.Limit
+                                {:remaining 10,
+                                 :gen (jepsen.generator.Repeat
+                                       {:remaining -1, :gen {:f :read}})})})})}))]
+ :interval 10
+ :os
+ #object[jepsen.frogdb.core$reify__14064
+         "0x744d556f"
+         "jepsen.frogdb.core$reify__14064@744d556f"]
+ :time-limit 60
+ :workload "split-brain"
+ :local false}
+
+2026-02-22 23:53:27,298{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS setup for n2 (no-op)
+2026-02-22 23:53:27,298{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS setup for n1 (no-op)
+2026-02-22 23:53:27,298{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS setup for n3 (no-op)
+2026-02-22 23:53:27,299{GMT}	INFO	[jepsen test runner] jepsen.db: Tearing down DB
+2026-02-22 23:53:27,299{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Tearing down FrogDB replication node n2
+2026-02-22 23:53:27,299{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Tearing down FrogDB replication node n3
+2026-02-22 23:53:27,299{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB replication node n1
+2026-02-22 23:53:27,381{GMT}	INFO	[jepsen test runner] jepsen.db: Setting up DB
+2026-02-22 23:53:27,381{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Setting up FrogDB replication node n3
+2026-02-22 23:53:27,381{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Setting up FrogDB replication node n1
+2026-02-22 23:53:27,381{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Setting up FrogDB replication node n2
+2026-02-22 23:53:28,504{GMT}	INFO	[jepsen test runner] jepsen.core: Relative time begins now
+2026-02-22 23:53:28,505{GMT}	INFO	[jepsen node n2] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:53:28,505{GMT}	INFO	[jepsen node n3] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:53:28,505{GMT}	INFO	[jepsen node n1] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:53:28,506{GMT}	INFO	[jepsen node n2] jepsen.frogdb.split-brain: Setting up split-brain test key jepsen-split
+2026-02-22 23:53:28,506{GMT}	INFO	[jepsen node n3] jepsen.frogdb.split-brain: Setting up split-brain test key jepsen-split
+2026-02-22 23:53:28,506{GMT}	INFO	[jepsen node n1] jepsen.frogdb.split-brain: Setting up split-brain test key jepsen-split
+2026-02-22 23:53:29,022{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:29,022{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:53:29,026{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 0}, "n2" {:value nil}, "n3" {:value nil}}
+2026-02-22 23:53:29,049{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:53:29,049{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:53:29,051{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 0}, "n2" {:value nil}, "n3" {:value nil}}
+2026-02-22 23:53:29,210{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:53:29,211{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:53:29,214{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 0}, "n2" {:value nil}, "n3" {:value nil}}
+2026-02-22 23:53:29,344{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 3}
+2026-02-22 23:53:29,344{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:53:29,346{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 3}
+2026-02-22 23:53:29,440{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:53:29,446{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:29,475{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 6}
+2026-02-22 23:53:29,490{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 6}
+2026-02-22 23:53:29,669{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 9}
+2026-02-22 23:53:29,669{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:53:29,672{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 9}
+2026-02-22 23:53:29,846{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 12}
+2026-02-22 23:53:29,849{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 12}
+2026-02-22 23:53:30,013{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 15}
+2026-02-22 23:53:30,031{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 15}
+2026-02-22 23:53:30,063{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:53:30,064{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:30,162{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 18}
+2026-02-22 23:53:30,164{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 18}
+2026-02-22 23:53:30,327{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:30,330{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 12}, "n2" {:value 18}, "n3" {:value 6}}
+2026-02-22 23:53:30,454{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 21}
+2026-02-22 23:53:30,456{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 21}
+2026-02-22 23:53:30,524{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 24}
+2026-02-22 23:53:30,529{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 24}
+2026-02-22 23:53:30,676{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 27}
+2026-02-22 23:53:30,678{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 27}
+2026-02-22 23:53:30,869{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:30,873{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 27}, "n2" {:value 24}, "n3" {:value 6}}
+2026-02-22 23:53:30,895{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:30,899{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 27}, "n2" {:value 24}, "n3" {:value 6}}
+2026-02-22 23:53:31,048{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:53:31,053{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:31,154{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:53:31,156{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 27}, "n2" {:value 24}, "n3" {:value 6}}
+2026-02-22 23:53:31,351{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 30}
+2026-02-22 23:53:31,353{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 30}
+2026-02-22 23:53:31,379{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n2"
+2026-02-22 23:53:31,381{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:31,579{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n3"
+2026-02-22 23:53:31,582{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:31,726{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 33}
+2026-02-22 23:53:31,728{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 33}
+2026-02-22 23:53:31,769{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:53:31,773{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:31,930{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n2", :value 36}
+2026-02-22 23:53:31,932{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n2", :value 36}
+2026-02-22 23:53:31,945{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 39}
+2026-02-22 23:53:31,947{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 39}
+2026-02-22 23:53:32,098{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n2"
+2026-02-22 23:53:32,101{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:32,223{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 42}
+2026-02-22 23:53:32,224{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 42}
+2026-02-22 23:53:32,379{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:53:32,380{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:32,580{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 45}
+2026-02-22 23:53:32,583{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 45}
+2026-02-22 23:53:32,670{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n3"
+2026-02-22 23:53:32,673{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:32,748{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 48}
+2026-02-22 23:53:32,749{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 48}
+2026-02-22 23:53:32,878{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 51}
+2026-02-22 23:53:32,880{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 51}
+2026-02-22 23:53:33,071{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:33,076{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 42}, "n2" {:value 51}, "n3" {:value 39}}
+2026-02-22 23:53:33,163{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:53:33,166{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:33,355{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:53:33,356{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:33,431{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:53:33,434{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 42}, "n2" {:value 51}, "n3" {:value 39}}
+2026-02-22 23:53:33,557{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 54}
+2026-02-22 23:53:33,560{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 54}
+2026-02-22 23:53:33,600{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 57}
+2026-02-22 23:53:33,602{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 57}
+2026-02-22 23:53:33,729{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:53:33,732{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:33,771{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 60}
+2026-02-22 23:53:33,774{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 60}
+2026-02-22 23:53:33,845{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:53:33,847{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:34,013{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 63}
+2026-02-22 23:53:34,015{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 63}
+2026-02-22 23:53:34,175{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 66}
+2026-02-22 23:53:34,178{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 66}
+2026-02-22 23:53:34,347{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n3", :value 69}
+2026-02-22 23:53:34,349{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n3", :value 69}
+2026-02-22 23:53:34,415{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:34,417{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 57}, "n2" {:value 66}, "n3" {:value 69}}
+2026-02-22 23:53:34,592{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:34,594{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 57}, "n2" {:value 66}, "n3" {:value 69}}
+2026-02-22 23:53:34,710{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:34,714{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 57}, "n2" {:value 66}, "n3" {:value 69}}
+2026-02-22 23:53:34,760{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 72}
+2026-02-22 23:53:34,763{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 72}
+2026-02-22 23:53:34,897{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 75}
+2026-02-22 23:53:34,899{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 75}
+2026-02-22 23:53:35,037{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 78}
+2026-02-22 23:53:35,038{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 78}
+2026-02-22 23:53:35,214{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:35,218{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 75}}
+2026-02-22 23:53:35,341{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:35,347{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 75}}
+2026-02-22 23:53:35,426{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:35,430{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 75}}
+2026-02-22 23:53:35,607{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 81}
+2026-02-22 23:53:35,609{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 81}
+2026-02-22 23:53:35,806{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:53:35,810{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 81}}
+2026-02-22 23:53:35,950{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n3"
+2026-02-22 23:53:35,952{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:36,137{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n2", :value 84}
+2026-02-22 23:53:36,139{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n2", :value 84}
+2026-02-22 23:53:36,320{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:36,326{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 78}, "n2" {:value 84}, "n3" {:value 81}}
+2026-02-22 23:53:36,479{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 87}
+2026-02-22 23:53:36,482{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 87}
+2026-02-22 23:53:36,637{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 90}
+2026-02-22 23:53:36,638{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 90}
+2026-02-22 23:53:36,723{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 93}
+2026-02-22 23:53:36,726{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 93}
+2026-02-22 23:53:36,898{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 96}
+2026-02-22 23:53:36,900{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 96}
+2026-02-22 23:53:37,024{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n3", :value 99}
+2026-02-22 23:53:37,026{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n3", :value 99}
+2026-02-22 23:53:37,181{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:37,186{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 96}, "n2" {:value 93}, "n3" {:value 99}}
+2026-02-22 23:53:37,342{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:53:37,345{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:37,519{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:53:37,524{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 96}, "n2" {:value 93}, "n3" {:value 99}}
+2026-02-22 23:53:37,555{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n3"
+2026-02-22 23:53:37,557{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:37,600{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 102}
+2026-02-22 23:53:37,602{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 102}
+2026-02-22 23:53:37,614{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n2", :value 105}
+2026-02-22 23:53:37,616{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n2", :value 105}
+2026-02-22 23:53:37,811{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 108}
+2026-02-22 23:53:37,813{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 108}
+2026-02-22 23:53:37,817{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 111}
+2026-02-22 23:53:37,818{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 111}
+2026-02-22 23:53:37,980{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:53:37,984{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+2026-02-22 23:53:38,179{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n2"
+2026-02-22 23:53:38,180{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:38,190{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:53:38,193{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+2026-02-22 23:53:38,243{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:38,244{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:53:38,245{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:38,247{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+2026-02-22 23:53:38,275{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:38,280{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+2026-02-22 23:53:38,421{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:53:38,426{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+2026-02-22 23:53:38,526{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n3"
+2026-02-22 23:53:38,528{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:38,717{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:53:38,720{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+2026-02-22 23:53:38,841{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 114}
+2026-02-22 23:53:38,842{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 114}
+2026-02-22 23:53:38,851{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 117}
+2026-02-22 23:53:38,852{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 117}
+2026-02-22 23:53:38,903{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 120}
+2026-02-22 23:53:38,904{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 120}
+2026-02-22 23:53:39,027{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:partition	:primary-isolated
+2026-02-22 23:53:39,027{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Partitioning: isolating primary from replicas
+2026-02-22 23:53:39,028{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n1 from n2 ( 172.20.0.3 )
+2026-02-22 23:53:39,035{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:53:39,037{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 120}, "n2" {:value 108}, "n3" {:value 117}}
+2026-02-22 23:53:39,092{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n3", :value 123}
+2026-02-22 23:53:39,093{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n3", :value 123}
+2026-02-22 23:53:39,278{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n1 from n3 ( 172.20.0.4 )
+2026-02-22 23:53:39,287{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n3"
+2026-02-22 23:53:39,288{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:39,387{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:39,389{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 120}, "n2" {:value 108}, "n3" {:value 123}}
+2026-02-22 23:53:39,429{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n2 from n1 ( 172.20.0.2 )
+2026-02-22 23:53:39,487{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 126}
+2026-02-22 23:53:39,487{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 126}
+2026-02-22 23:53:39,550{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 129}
+2026-02-22 23:53:39,550{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 129}
+2026-02-22 23:53:39,575{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n3 from n1 ( 172.20.0.2 )
+2026-02-22 23:53:39,628{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:53:39,629{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 120}, "n2" {:value 108}, "n3" {:value 129}}
+2026-02-22 23:53:39,707{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:partition	:primary-isolated
+2026-02-22 23:53:39,816{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 134}
+2026-02-22 23:53:39,817{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 134}
+2026-02-22 23:53:39,937{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:39,939{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 134}, "n2" {:value 108}, "n3" {:value 129}}
+2026-02-22 23:53:40,131{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 137}
+2026-02-22 23:53:40,132{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 137}
+2026-02-22 23:53:40,221{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n1"
+2026-02-22 23:53:40,222{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:40,415{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 140}
+2026-02-22 23:53:40,417{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 140}
+2026-02-22 23:53:40,600{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n1"
+2026-02-22 23:53:40,602{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:40,637{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 143}
+2026-02-22 23:53:40,640{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 143}
+2026-02-22 23:53:40,799{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:40,806{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 143}, "n2" {:value 108}, "n3" {:value 140}}
+2026-02-22 23:53:40,890{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:53:40,891{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:41,027{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 146}
+2026-02-22 23:53:41,029{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 146}
+2026-02-22 23:53:41,113{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:53:41,121{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 146}, "n2" {:value 108}, "n3" {:value 140}}
+2026-02-22 23:53:41,162{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:53:41,166{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 146}, "n2" {:value 108}, "n3" {:value 140}}
+2026-02-22 23:53:41,246{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:53:41,248{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:41,348{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:53:41,350{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:41,531{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:53:41,533{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:41,624{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 149}
+2026-02-22 23:53:41,627{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 149}
+2026-02-22 23:53:41,768{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n3"
+2026-02-22 23:53:41,770{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:41,799{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n3", :value 152}
+2026-02-22 23:53:41,802{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n3", :value 152}
+2026-02-22 23:53:41,976{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n3", :value 155}
+2026-02-22 23:53:41,978{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n3", :value 155}
+2026-02-22 23:53:42,059{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 158}
+2026-02-22 23:53:42,060{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 158}
+2026-02-22 23:53:42,129{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:53:42,131{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:42,332{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n1"
+2026-02-22 23:53:42,335{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:42,438{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 161}
+2026-02-22 23:53:42,440{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 161}
+2026-02-22 23:53:42,642{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 164}
+2026-02-22 23:53:42,645{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 164}
+2026-02-22 23:53:42,668{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:53:42,671{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:42,757{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:53:42,760{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:42,934{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 167}
+2026-02-22 23:53:42,936{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 167}
+2026-02-22 23:53:43,136{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 170}
+2026-02-22 23:53:43,137{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 170}
+2026-02-22 23:53:43,202{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:53:43,207{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 170}, "n2" {:value 161}, "n3" {:value 155}}
+2026-02-22 23:53:43,396{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n3"
+2026-02-22 23:53:43,398{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:43,427{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n1"
+2026-02-22 23:53:43,429{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:43,543{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 173}
+2026-02-22 23:53:43,546{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 173}
+2026-02-22 23:53:43,573{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 176}
+2026-02-22 23:53:43,575{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 176}
+2026-02-22 23:53:43,589{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 179}
+2026-02-22 23:53:43,590{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 179}
+2026-02-22 23:53:43,732{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 182}
+2026-02-22 23:53:43,735{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 182}
+2026-02-22 23:53:43,852{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:53:43,856{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 182}, "n2" {:value 161}, "n3" {:value 173}}
+2026-02-22 23:53:43,899{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:43,904{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 182}, "n2" {:value 161}, "n3" {:value 173}}
+2026-02-22 23:53:44,092{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:53:44,092{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:44,184{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 185}
+2026-02-22 23:53:44,186{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 185}
+2026-02-22 23:53:44,254{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 188}
+2026-02-22 23:53:44,257{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 188}
+2026-02-22 23:53:44,304{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 191}
+2026-02-22 23:53:44,307{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 191}
+2026-02-22 23:53:44,463{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 194}
+2026-02-22 23:53:44,465{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 194}
+2026-02-22 23:53:44,564{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n2", :value 197}
+2026-02-22 23:53:44,566{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n2", :value 197}
+2026-02-22 23:53:44,680{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:53:44,682{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:44,798{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:53:44,800{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:44,948{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:53:44,952{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 194}, "n2" {:value 197}, "n3" {:value 173}}
+2026-02-22 23:53:45,108{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 200}
+2026-02-22 23:53:45,109{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 200}
+2026-02-22 23:53:45,238{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n3"
+2026-02-22 23:53:45,239{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:45,417{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n2", :value 203}
+2026-02-22 23:53:45,420{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n2", :value 203}
+2026-02-22 23:53:45,497{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 206}
+2026-02-22 23:53:45,499{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 206}
+2026-02-22 23:53:45,567{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 209}
+2026-02-22 23:53:45,569{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 209}
+2026-02-22 23:53:45,692{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:53:45,697{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 200}, "n2" {:value 209}, "n3" {:value 206}}
+2026-02-22 23:53:45,786{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n1"
+2026-02-22 23:53:45,788{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:45,843{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n1"
+2026-02-22 23:53:45,845{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:45,910{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 212}
+2026-02-22 23:53:45,912{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 212}
+2026-02-22 23:53:46,003{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:46,006{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 212}, "n2" {:value 209}, "n3" {:value 206}}
+2026-02-22 23:53:46,138{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 215}
+2026-02-22 23:53:46,140{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 215}
+2026-02-22 23:53:46,280{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 218}
+2026-02-22 23:53:46,281{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 218}
+2026-02-22 23:53:46,370{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n1"
+2026-02-22 23:53:46,371{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:46,453{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:53:46,457{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 212}, "n2" {:value 215}, "n3" {:value 218}}
+2026-02-22 23:53:46,589{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n3", :value 221}
+2026-02-22 23:53:46,592{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n3", :value 221}
+2026-02-22 23:53:46,671{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:53:46,674{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:46,809{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:53:46,811{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:46,932{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n2", :value 224}
+2026-02-22 23:53:46,935{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n2", :value 224}
+2026-02-22 23:53:46,957{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 227}
+2026-02-22 23:53:46,959{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 227}
+2026-02-22 23:53:47,086{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:53:47,090{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 212}, "n2" {:value 224}, "n3" {:value 227}}
+2026-02-22 23:53:47,238{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:47,245{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 212}, "n2" {:value 224}, "n3" {:value 227}}
+2026-02-22 23:53:47,420{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:53:47,421{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:47,621{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 230}
+2026-02-22 23:53:47,624{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 230}
+2026-02-22 23:53:47,660{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n3"
+2026-02-22 23:53:47,662{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:47,738{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n1"
+2026-02-22 23:53:47,740{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:47,749{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 233}
+2026-02-22 23:53:47,752{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 233}
+2026-02-22 23:53:47,795{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 236}
+2026-02-22 23:53:47,797{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 236}
+2026-02-22 23:53:47,872{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 239}
+2026-02-22 23:53:47,875{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 239}
+2026-02-22 23:53:47,925{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 242}
+2026-02-22 23:53:47,927{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 242}
+2026-02-22 23:53:48,093{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n3"
+2026-02-22 23:53:48,095{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:48,282{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 245}
+2026-02-22 23:53:48,284{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 245}
+2026-02-22 23:53:48,413{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:53:48,416{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 245}, "n2" {:value 224}, "n3" {:value 242}}
+2026-02-22 23:53:48,479{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n1"
+2026-02-22 23:53:48,480{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:48,524{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:48,526{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 245}, "n2" {:value 224}, "n3" {:value 242}}
+2026-02-22 23:53:48,549{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 248}
+2026-02-22 23:53:48,550{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 248}
+2026-02-22 23:53:48,751{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:53:48,756{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 248}, "n2" {:value 224}, "n3" {:value 242}}
+2026-02-22 23:53:48,948{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 251}
+2026-02-22 23:53:48,949{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 251}
+2026-02-22 23:53:49,097{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n3"
+2026-02-22 23:53:49,099{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:49,291{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:49,296{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 242}}
+2026-02-22 23:53:49,344{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 254}
+2026-02-22 23:53:49,346{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 254}
+2026-02-22 23:53:49,544{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:49,546{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 254}}
+2026-02-22 23:53:49,567{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 257}
+2026-02-22 23:53:49,568{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 257}
+2026-02-22 23:53:49,665{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 260}
+2026-02-22 23:53:49,668{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 260}
+2026-02-22 23:53:49,713{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	nil
+2026-02-22 23:53:49,713{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Healing all network partitions
+2026-02-22 23:53:49,713{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n1
+2026-02-22 23:53:49,821{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n2
+2026-02-22 23:53:49,846{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:53:49,848{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:49,850{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 263}
+2026-02-22 23:53:49,851{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 263}
+2026-02-22 23:53:49,885{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:49,887{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 263}}
+2026-02-22 23:53:49,907{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n3
+2026-02-22 23:53:49,997{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:53:49,999{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 263}}
+2026-02-22 23:53:50,003{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	:healed
+2026-02-22 23:53:50,198{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 268}
+2026-02-22 23:53:50,200{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 268}
+2026-02-22 23:53:50,266{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:50,270{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 251}, "n2" {:value 268}, "n3" {:value 263}}
+2026-02-22 23:53:50,410{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:53:50,412{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:50,526{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 271}
+2026-02-22 23:53:50,528{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 271}
+2026-02-22 23:53:50,637{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n3"
+2026-02-22 23:53:50,639{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:50,682{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 274}
+2026-02-22 23:53:50,683{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 274}
+2026-02-22 23:53:50,874{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n3", :value 277}
+2026-02-22 23:53:50,877{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n3", :value 277}
+2026-02-22 23:53:50,999{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:51,004{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 271}, "n2" {:value 268}, "n3" {:value 277}}
+2026-02-22 23:53:51,179{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:51,185{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 271}, "n2" {:value 268}, "n3" {:value 277}}
+2026-02-22 23:53:51,242{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:53:51,245{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:51,333{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:53:51,338{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 271}, "n2" {:value 268}, "n3" {:value 277}}
+2026-02-22 23:53:51,349{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 280}
+2026-02-22 23:53:51,351{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 280}
+2026-02-22 23:53:51,440{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 283}
+2026-02-22 23:53:51,444{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 283}
+2026-02-22 23:53:51,501{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n1"
+2026-02-22 23:53:51,504{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:51,660{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:51,662{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 283}, "n2" {:value 280}, "n3" {:value 277}}
+2026-02-22 23:53:51,714{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:51,717{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 283}, "n2" {:value 280}, "n3" {:value 277}}
+2026-02-22 23:53:51,814{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n2"
+2026-02-22 23:53:51,816{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:51,835{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 286}
+2026-02-22 23:53:51,843{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 286}
+2026-02-22 23:53:51,993{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:53:51,996{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 286}, "n2" {:value 280}, "n3" {:value 277}}
+2026-02-22 23:53:52,059{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:52,062{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 286}, "n2" {:value 280}, "n3" {:value 277}}
+2026-02-22 23:53:52,154{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:53:52,156{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:52,194{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 289}
+2026-02-22 23:53:52,197{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 289}
+2026-02-22 23:53:52,349{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n2", :value 292}
+2026-02-22 23:53:52,363{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n2", :value 292}
+2026-02-22 23:53:52,529{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 295}
+2026-02-22 23:53:52,533{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 295}
+2026-02-22 23:53:52,677{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n1"
+2026-02-22 23:53:52,680{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:52,706{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 298}
+2026-02-22 23:53:52,709{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 298}
+2026-02-22 23:53:52,813{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 301}
+2026-02-22 23:53:52,814{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 301}
+2026-02-22 23:53:52,884{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 304}
+2026-02-22 23:53:52,885{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 304}
+2026-02-22 23:53:52,976{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n3"
+2026-02-22 23:53:52,977{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:53,140{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 307}
+2026-02-22 23:53:53,141{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 307}
+2026-02-22 23:53:53,314{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 310}
+2026-02-22 23:53:53,330{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 310}
+2026-02-22 23:53:53,459{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 313}
+2026-02-22 23:53:53,463{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 313}
+2026-02-22 23:53:53,515{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:53,522{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 313}, "n2" {:value 310}, "n3" {:value 307}}
+2026-02-22 23:53:53,654{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:53:53,660{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:53,827{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n1"
+2026-02-22 23:53:53,828{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:53,960{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 316}
+2026-02-22 23:53:53,962{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 316}
+2026-02-22 23:53:54,009{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 319}
+2026-02-22 23:53:54,011{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 319}
+2026-02-22 23:53:54,141{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n2", :value 322}
+2026-02-22 23:53:54,142{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n2", :value 322}
+2026-02-22 23:53:54,338{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 325}
+2026-02-22 23:53:54,341{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 325}
+2026-02-22 23:53:54,386{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:53:54,388{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:54,410{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n2"
+2026-02-22 23:53:54,412{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:54,420{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 328}
+2026-02-22 23:53:54,423{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 328}
+2026-02-22 23:53:54,541{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n3", :value 331}
+2026-02-22 23:53:54,542{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n3", :value 331}
+2026-02-22 23:53:54,621{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n1"
+2026-02-22 23:53:54,623{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:54,737{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:54,741{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 319}, "n2" {:value 328}, "n3" {:value 331}}
+2026-02-22 23:53:54,836{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 334}
+2026-02-22 23:53:54,838{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 334}
+2026-02-22 23:53:54,994{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 337}
+2026-02-22 23:53:54,996{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 337}
+2026-02-22 23:53:55,094{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n3", :value 342}
+2026-02-22 23:53:55,097{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n3", :value 342}
+2026-02-22 23:53:55,186{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:55,192{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 337}, "n2" {:value 334}, "n3" {:value 342}}
+2026-02-22 23:53:55,217{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 345}
+2026-02-22 23:53:55,220{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 345}
+2026-02-22 23:53:55,333{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 348}
+2026-02-22 23:53:55,337{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 348}
+2026-02-22 23:53:55,499{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n2", :value 351}
+2026-02-22 23:53:55,501{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n2", :value 351}
+2026-02-22 23:53:55,602{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 354}
+2026-02-22 23:53:55,605{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 354}
+2026-02-22 23:53:55,771{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 357}
+2026-02-22 23:53:55,773{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 357}
+2026-02-22 23:53:55,930{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 360}
+2026-02-22 23:53:55,933{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 360}
+2026-02-22 23:53:55,950{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:53:55,951{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:55,997{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 363}
+2026-02-22 23:53:55,999{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 363}
+2026-02-22 23:53:56,036{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 366}
+2026-02-22 23:53:56,038{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 366}
+2026-02-22 23:53:56,043{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 369}
+2026-02-22 23:53:56,043{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 369}
+2026-02-22 23:53:56,095{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n3"
+2026-02-22 23:53:56,098{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:56,281{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n3"
+2026-02-22 23:53:56,285{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:56,318{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:53:56,320{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:56,333{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:56,338{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 363}, "n2" {:value 357}, "n3" {:value 369}}
+2026-02-22 23:53:56,467{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n1"
+2026-02-22 23:53:56,469{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:56,553{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 372}
+2026-02-22 23:53:56,558{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 372}
+2026-02-22 23:53:56,566{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n3"
+2026-02-22 23:53:56,569{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:56,696{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:53:56,699{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:56,787{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:56,798{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 372}, "n2" {:value 357}, "n3" {:value 369}}
+2026-02-22 23:53:56,803{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 375}
+2026-02-22 23:53:56,805{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 375}
+2026-02-22 23:53:56,822{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 378}
+2026-02-22 23:53:56,825{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 378}
+2026-02-22 23:53:57,000{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n3"
+2026-02-22 23:53:57,001{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:57,076{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n1"
+2026-02-22 23:53:57,077{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:57,084{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:53:57,085{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:57,219{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:53:57,222{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:57,287{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:53:57,290{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:57,373{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 381}
+2026-02-22 23:53:57,376{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 381}
+2026-02-22 23:53:57,510{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 384}
+2026-02-22 23:53:57,512{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 384}
+2026-02-22 23:53:57,710{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:53:57,713{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 384}, "n2" {:value 357}, "n3" {:value 381}}
+2026-02-22 23:53:57,885{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:53:57,886{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:57,965{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 387}
+2026-02-22 23:53:57,966{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 387}
+2026-02-22 23:53:58,111{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 390}
+2026-02-22 23:53:58,112{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 390}
+2026-02-22 23:53:58,262{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n1"
+2026-02-22 23:53:58,266{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:58,381{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 393}
+2026-02-22 23:53:58,383{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 393}
+2026-02-22 23:53:58,421{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 396}
+2026-02-22 23:53:58,424{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 396}
+2026-02-22 23:53:58,597{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 399}
+2026-02-22 23:53:58,600{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 399}
+2026-02-22 23:53:58,755{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:58,760{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 399}, "n2" {:value 396}, "n3" {:value 387}}
+2026-02-22 23:53:58,787{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:58,794{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 399}, "n2" {:value 396}, "n3" {:value 387}}
+2026-02-22 23:53:58,841{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n2"
+2026-02-22 23:53:58,843{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:58,901{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 402}
+2026-02-22 23:53:58,904{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 402}
+2026-02-22 23:53:58,943{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 405}
+2026-02-22 23:53:58,945{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 405}
+2026-02-22 23:53:59,069{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:53:59,073{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 405}, "n2" {:value 396}, "n3" {:value 402}}
+2026-02-22 23:53:59,168{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:53:59,170{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 405}, "n2" {:value 396}, "n3" {:value 402}}
+2026-02-22 23:53:59,280{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:53:59,282{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:59,388{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 408}
+2026-02-22 23:53:59,391{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 408}
+2026-02-22 23:53:59,485{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n1"
+2026-02-22 23:53:59,487{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:59,602{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n3", :value 411}
+2026-02-22 23:53:59,605{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n3", :value 411}
+2026-02-22 23:53:59,702{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n3", :value 414}
+2026-02-22 23:53:59,705{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n3", :value 414}
+2026-02-22 23:53:59,828{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:53:59,830{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:53:59,957{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 417}
+2026-02-22 23:53:59,959{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 417}
+2026-02-22 23:53:59,998{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 420}
+2026-02-22 23:54:00,000{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 420}
+2026-02-22 23:54:00,035{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:00,040{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 420}, "n2" {:value 396}, "n3" {:value 414}}
+2026-02-22 23:54:00,209{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n2"
+2026-02-22 23:54:00,210{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:00,395{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:00,399{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 420}, "n2" {:value 396}, "n3" {:value 414}}
+2026-02-22 23:54:00,573{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 423}
+2026-02-22 23:54:00,577{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 423}
+2026-02-22 23:54:00,678{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:54:00,680{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:00,772{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 426}
+2026-02-22 23:54:00,775{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 426}
+2026-02-22 23:54:00,818{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 429}
+2026-02-22 23:54:00,821{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 429}
+2026-02-22 23:54:00,981{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:54:00,986{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 426}, "n2" {:value 396}, "n3" {:value 429}}
+2026-02-22 23:54:01,185{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:01,191{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 426}, "n2" {:value 396}, "n3" {:value 429}}
+2026-02-22 23:54:01,373{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 432}
+2026-02-22 23:54:01,374{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 432}
+2026-02-22 23:54:01,500{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:01,503{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 426}, "n2" {:value 432}, "n3" {:value 429}}
+2026-02-22 23:54:01,526{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n2"
+2026-02-22 23:54:01,528{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:01,679{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n3"
+2026-02-22 23:54:01,682{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:01,690{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 435}
+2026-02-22 23:54:01,693{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 435}
+2026-02-22 23:54:01,853{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 438}
+2026-02-22 23:54:01,856{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 438}
+2026-02-22 23:54:01,921{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:01,928{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 438}, "n2" {:value 432}, "n3" {:value 429}}
+2026-02-22 23:54:02,117{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 441}
+2026-02-22 23:54:02,119{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 441}
+2026-02-22 23:54:02,143{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 444}
+2026-02-22 23:54:02,144{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 444}
+2026-02-22 23:54:02,339{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 447}
+2026-02-22 23:54:02,342{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 447}
+2026-02-22 23:54:02,352{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n2"
+2026-02-22 23:54:02,355{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:02,443{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n2", :value 450}
+2026-02-22 23:54:02,444{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n2", :value 450}
+2026-02-22 23:54:02,484{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 453}
+2026-02-22 23:54:02,485{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 453}
+2026-02-22 23:54:02,627{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:54:02,635{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:02,635{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 455}
+2026-02-22 23:54:02,637{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 455}
+2026-02-22 23:54:02,781{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 459}
+2026-02-22 23:54:02,781{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 458}
+2026-02-22 23:54:02,784{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 459}
+2026-02-22 23:54:02,784{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 458}
+2026-02-22 23:54:02,797{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n3", :value 463}
+2026-02-22 23:54:02,800{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n3", :value 463}
+2026-02-22 23:54:02,976{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 466}
+2026-02-22 23:54:02,978{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 466}
+2026-02-22 23:54:03,060{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 469}
+2026-02-22 23:54:03,063{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 469}
+2026-02-22 23:54:03,221{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:03,225{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 458}, "n2" {:value 466}, "n3" {:value 469}}
+2026-02-22 23:54:03,361{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n2"
+2026-02-22 23:54:03,363{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:03,539{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 472}
+2026-02-22 23:54:03,540{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 472}
+2026-02-22 23:54:03,562{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n2", :value 475}
+2026-02-22 23:54:03,563{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n2", :value 475}
+2026-02-22 23:54:03,644{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:03,648{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 458}, "n2" {:value 475}, "n3" {:value 469}}
+2026-02-22 23:54:03,841{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:54:03,843{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:03,971{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n2", :value 478}
+2026-02-22 23:54:03,973{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n2", :value 478}
+2026-02-22 23:54:03,993{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 481}
+2026-02-22 23:54:03,996{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 481}
+2026-02-22 23:54:04,038{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 484}
+2026-02-22 23:54:04,040{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 484}
+2026-02-22 23:54:04,227{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 487}
+2026-02-22 23:54:04,229{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 487}
+2026-02-22 23:54:04,285{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:04,290{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 487}, "n2" {:value 484}, "n3" {:value 469}}
+2026-02-22 23:54:04,329{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 490}
+2026-02-22 23:54:04,331{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 490}
+2026-02-22 23:54:04,428{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n2", :value 493}
+2026-02-22 23:54:04,434{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n2", :value 493}
+2026-02-22 23:54:04,453{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n1"
+2026-02-22 23:54:04,458{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:04,473{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:54:04,477{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 487}, "n2" {:value 493}, "n3" {:value 490}}
+2026-02-22 23:54:04,545{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:04,547{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 487}, "n2" {:value 493}, "n3" {:value 490}}
+2026-02-22 23:54:04,701{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 496}
+2026-02-22 23:54:04,703{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 496}
+2026-02-22 23:54:04,779{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:54:04,781{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:04,946{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 499}
+2026-02-22 23:54:04,962{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 499}
+2026-02-22 23:54:04,962{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:04,964{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 499}, "n2" {:value 496}, "n3" {:value 490}}
+2026-02-22 23:54:05,014{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:partition	:primary-isolated
+2026-02-22 23:54:05,014{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Partitioning: isolating primary from replicas
+2026-02-22 23:54:05,014{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n1 from n2 ( 172.20.0.3 )
+2026-02-22 23:54:05,095{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n2", :value 504}
+2026-02-22 23:54:05,096{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n2", :value 504}
+2026-02-22 23:54:05,126{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:54:05,127{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:05,151{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 507}
+2026-02-22 23:54:05,151{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 507}
+2026-02-22 23:54:05,196{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:05,198{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 507}, "n2" {:value 504}, "n3" {:value 490}}
+2026-02-22 23:54:05,229{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n1"
+2026-02-22 23:54:05,230{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:05,237{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n1 from n3 ( 172.20.0.4 )
+2026-02-22 23:54:05,353{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n3", :value 510}
+2026-02-22 23:54:05,353{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n3", :value 510}
+2026-02-22 23:54:05,391{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n2 from n1 ( 172.20.0.2 )
+2026-02-22 23:54:05,403{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:05,405{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 507}, "n2" {:value 504}, "n3" {:value 510}}
+2026-02-22 23:54:05,530{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 513}
+2026-02-22 23:54:05,531{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 513}
+2026-02-22 23:54:05,531{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Partitioning n3 from n1 ( 172.20.0.2 )
+2026-02-22 23:54:05,579{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:05,581{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 513}, "n2" {:value 504}, "n3" {:value 510}}
+2026-02-22 23:54:05,644{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:05,646{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 513}, "n2" {:value 504}, "n3" {:value 510}}
+2026-02-22 23:54:05,667{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:partition	:primary-isolated
+2026-02-22 23:54:05,817{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 518}
+2026-02-22 23:54:05,818{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 518}
+2026-02-22 23:54:05,870{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:54:05,872{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:06,027{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:54:06,029{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:06,209{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:54:06,211{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:06,413{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n2"
+2026-02-22 23:54:06,415{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:06,602{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:06,606{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 513}, "n2" {:value 518}, "n3" {:value 510}}
+2026-02-22 23:54:06,689{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n1"
+2026-02-22 23:54:06,690{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:06,728{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 521}
+2026-02-22 23:54:06,729{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 521}
+2026-02-22 23:54:06,853{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:06,855{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 521}, "n2" {:value 518}, "n3" {:value 510}}
+2026-02-22 23:54:06,880{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 524}
+2026-02-22 23:54:06,882{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 524}
+2026-02-22 23:54:07,079{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 527}
+2026-02-22 23:54:07,081{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 527}
+2026-02-22 23:54:07,276{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 530}
+2026-02-22 23:54:07,278{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 530}
+2026-02-22 23:54:07,397{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n3"
+2026-02-22 23:54:07,399{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:07,579{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 533}
+2026-02-22 23:54:07,582{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 533}
+2026-02-22 23:54:07,752{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:54:07,753{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:07,849{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:07,851{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 533}, "n2" {:value 530}, "n3" {:value 527}}
+2026-02-22 23:54:07,922{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:07,924{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 533}, "n2" {:value 530}, "n3" {:value 527}}
+2026-02-22 23:54:07,955{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:07,959{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 533}, "n2" {:value 530}, "n3" {:value 527}}
+2026-02-22 23:54:08,150{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n3"
+2026-02-22 23:54:08,152{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:08,251{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n2", :value 536}
+2026-02-22 23:54:08,254{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n2", :value 536}
+2026-02-22 23:54:08,303{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 539}
+2026-02-22 23:54:08,306{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 539}
+2026-02-22 23:54:08,501{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 542}
+2026-02-22 23:54:08,504{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 542}
+2026-02-22 23:54:08,666{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:08,669{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 542}, "n2" {:value 536}, "n3" {:value 527}}
+2026-02-22 23:54:08,845{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n3"
+2026-02-22 23:54:08,846{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:08,922{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:54:08,923{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 542}, "n2" {:value 536}, "n3" {:value 527}}
+2026-02-22 23:54:09,096{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n2", :value 545}
+2026-02-22 23:54:09,099{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n2", :value 545}
+2026-02-22 23:54:09,164{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 548}
+2026-02-22 23:54:09,166{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 548}
+2026-02-22 23:54:09,366{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 551}
+2026-02-22 23:54:09,367{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 551}
+2026-02-22 23:54:09,433{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 554}
+2026-02-22 23:54:09,436{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 554}
+2026-02-22 23:54:09,472{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 557}
+2026-02-22 23:54:09,473{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 557}
+2026-02-22 23:54:09,502{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 560}
+2026-02-22 23:54:09,505{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 560}
+2026-02-22 23:54:09,579{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:09,584{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 557}, "n2" {:value 560}, "n3" {:value 548}}
+2026-02-22 23:54:09,641{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 563}
+2026-02-22 23:54:09,643{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 563}
+2026-02-22 23:54:09,778{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 566}
+2026-02-22 23:54:09,780{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 566}
+2026-02-22 23:54:09,943{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n2"
+2026-02-22 23:54:09,944{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:09,982{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n2"
+2026-02-22 23:54:09,982{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:09,987{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:54:09,988{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 566}, "n2" {:value 560}, "n3" {:value 548}}
+2026-02-22 23:54:10,111{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 569}
+2026-02-22 23:54:10,112{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 569}
+2026-02-22 23:54:10,121{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 572}
+2026-02-22 23:54:10,122{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 572}
+2026-02-22 23:54:10,266{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 575}
+2026-02-22 23:54:10,267{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 575}
+2026-02-22 23:54:10,422{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:10,427{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 575}, "n2" {:value 560}, "n3" {:value 548}}
+2026-02-22 23:54:10,570{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 578}
+2026-02-22 23:54:10,572{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 578}
+2026-02-22 23:54:10,770{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n1"
+2026-02-22 23:54:10,772{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:10,928{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:54:10,930{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:11,129{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:11,131{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 575}, "n2" {:value 578}, "n3" {:value 548}}
+2026-02-22 23:54:11,293{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:54:11,295{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:11,362{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 581}
+2026-02-22 23:54:11,364{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 581}
+2026-02-22 23:54:11,488{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:11,493{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 575}, "n2" {:value 578}, "n3" {:value 581}}
+2026-02-22 23:54:11,573{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n1"
+2026-02-22 23:54:11,575{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:11,614{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n3", :value 584}
+2026-02-22 23:54:11,616{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n3", :value 584}
+2026-02-22 23:54:11,670{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:11,675{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 575}, "n2" {:value 578}, "n3" {:value 584}}
+2026-02-22 23:54:11,837{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:54:11,838{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:11,987{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n3", :value 587}
+2026-02-22 23:54:11,989{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n3", :value 587}
+2026-02-22 23:54:12,140{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 590}
+2026-02-22 23:54:12,141{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 590}
+2026-02-22 23:54:12,270{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 593}
+2026-02-22 23:54:12,272{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 593}
+2026-02-22 23:54:12,399{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n1"
+2026-02-22 23:54:12,401{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:12,524{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 596}
+2026-02-22 23:54:12,526{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 596}
+2026-02-22 23:54:12,672{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 599}
+2026-02-22 23:54:12,674{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 599}
+2026-02-22 23:54:12,844{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:12,847{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 596}, "n2" {:value 599}, "n3" {:value 587}}
+2026-02-22 23:54:12,887{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n1"
+2026-02-22 23:54:12,888{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:12,954{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:54:12,957{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 596}, "n2" {:value 599}, "n3" {:value 587}}
+2026-02-22 23:54:13,036{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 602}
+2026-02-22 23:54:13,038{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 602}
+2026-02-22 23:54:13,163{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:54:13,165{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:13,336{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:54:13,337{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:13,520{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n2", :value 605}
+2026-02-22 23:54:13,522{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n2", :value 605}
+2026-02-22 23:54:13,564{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 608}
+2026-02-22 23:54:13,566{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 608}
+2026-02-22 23:54:13,651{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n3", :value 611}
+2026-02-22 23:54:13,653{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n3", :value 611}
+2026-02-22 23:54:13,818{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:13,823{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 608}, "n2" {:value 605}, "n3" {:value 611}}
+2026-02-22 23:54:14,014{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 614}
+2026-02-22 23:54:14,015{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 614}
+2026-02-22 23:54:14,102{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:54:14,103{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:14,188{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 617}
+2026-02-22 23:54:14,190{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 617}
+2026-02-22 23:54:14,201{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:14,207{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 617}, "n2" {:value 605}, "n3" {:value 611}}
+2026-02-22 23:54:14,388{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 620}
+2026-02-22 23:54:14,389{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 620}
+2026-02-22 23:54:14,426{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:14,428{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 620}, "n2" {:value 605}, "n3" {:value 611}}
+2026-02-22 23:54:14,505{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:14,508{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 620}, "n2" {:value 605}, "n3" {:value 611}}
+2026-02-22 23:54:14,679{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 623}
+2026-02-22 23:54:14,680{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 623}
+2026-02-22 23:54:14,704{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n1"
+2026-02-22 23:54:14,706{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:14,784{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:14,787{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 623}, "n2" {:value 605}, "n3" {:value 611}}
+2026-02-22 23:54:14,946{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 626}
+2026-02-22 23:54:14,949{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 626}
+2026-02-22 23:54:15,111{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:54:15,120{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:15,231{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 629}
+2026-02-22 23:54:15,233{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 629}
+2026-02-22 23:54:15,362{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:15,364{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 629}, "n2" {:value 626}, "n3" {:value 611}}
+2026-02-22 23:54:15,393{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n2"
+2026-02-22 23:54:15,394{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:15,421{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:15,423{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 629}, "n2" {:value 626}, "n3" {:value 611}}
+2026-02-22 23:54:15,549{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 632}
+2026-02-22 23:54:15,551{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 632}
+2026-02-22 23:54:15,673{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	nil
+2026-02-22 23:54:15,673{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Healing all network partitions
+2026-02-22 23:54:15,673{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n1
+2026-02-22 23:54:15,725{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:54:15,727{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:15,836{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 635}
+2026-02-22 23:54:15,837{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 635}
+2026-02-22 23:54:15,859{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n2
+2026-02-22 23:54:15,940{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n2", :value 638}
+2026-02-22 23:54:15,941{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n2", :value 638}
+2026-02-22 23:54:15,955{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n3
+2026-02-22 23:54:16,041{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	:healed
+2026-02-22 23:54:16,087{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:54:16,089{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 635}, "n2" {:value 638}, "n3" {:value 611}}
+2026-02-22 23:54:16,289{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n3", :value 641}
+2026-02-22 23:54:16,291{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n3", :value 641}
+2026-02-22 23:54:16,359{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 644}
+2026-02-22 23:54:16,361{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 644}
+2026-02-22 23:54:16,415{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 647}
+2026-02-22 23:54:16,416{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 647}
+2026-02-22 23:54:16,460{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n3"
+2026-02-22 23:54:16,461{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:16,490{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 650}
+2026-02-22 23:54:16,491{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 650}
+2026-02-22 23:54:16,677{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 653}
+2026-02-22 23:54:16,678{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 653}
+2026-02-22 23:54:16,809{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 656}
+2026-02-22 23:54:16,810{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 656}
+2026-02-22 23:54:16,902{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 659}
+2026-02-22 23:54:16,904{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 659}
+2026-02-22 23:54:16,975{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 662}
+2026-02-22 23:54:16,977{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 662}
+2026-02-22 23:54:17,102{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n2", :value 665}
+2026-02-22 23:54:17,105{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n2", :value 665}
+2026-02-22 23:54:17,179{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:17,183{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 659}, "n2" {:value 665}, "n3" {:value 662}}
+2026-02-22 23:54:17,251{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 668}
+2026-02-22 23:54:17,254{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 668}
+2026-02-22 23:54:17,424{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n3", :value 671}
+2026-02-22 23:54:17,426{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n3", :value 671}
+2026-02-22 23:54:17,456{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:54:17,460{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:17,642{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 674}
+2026-02-22 23:54:17,644{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 674}
+2026-02-22 23:54:17,711{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:17,716{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 674}, "n2" {:value 665}, "n3" {:value 671}}
+2026-02-22 23:54:17,761{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:17,765{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 674}, "n2" {:value 665}, "n3" {:value 671}}
+2026-02-22 23:54:17,915{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 677}
+2026-02-22 23:54:17,917{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 677}
+2026-02-22 23:54:17,998{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:18,001{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 677}, "n2" {:value 665}, "n3" {:value 671}}
+2026-02-22 23:54:18,045{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 680}
+2026-02-22 23:54:18,047{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 680}
+2026-02-22 23:54:18,172{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:54:18,174{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:18,268{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 683}
+2026-02-22 23:54:18,271{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 683}
+2026-02-22 23:54:18,325{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:18,330{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 683}, "n2" {:value 665}, "n3" {:value 671}}
+2026-02-22 23:54:18,491{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 686}
+2026-02-22 23:54:18,494{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 686}
+2026-02-22 23:54:18,668{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:18,669{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 686}, "n2" {:value 665}, "n3" {:value 671}}
+2026-02-22 23:54:18,704{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 689}
+2026-02-22 23:54:18,705{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 689}
+2026-02-22 23:54:18,726{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:18,729{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 686}, "n2" {:value 689}, "n3" {:value 671}}
+2026-02-22 23:54:18,760{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:18,763{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 686}, "n2" {:value 689}, "n3" {:value 671}}
+2026-02-22 23:54:18,917{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:18,921{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 686}, "n2" {:value 689}, "n3" {:value 671}}
+2026-02-22 23:54:18,951{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n1"
+2026-02-22 23:54:18,952{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:18,976{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 692}
+2026-02-22 23:54:18,978{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 692}
+2026-02-22 23:54:19,177{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:19,180{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 692}, "n2" {:value 689}, "n3" {:value 671}}
+2026-02-22 23:54:19,308{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:19,312{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 692}, "n2" {:value 689}, "n3" {:value 671}}
+2026-02-22 23:54:19,417{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n1"
+2026-02-22 23:54:19,420{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:19,425{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 695}
+2026-02-22 23:54:19,427{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 695}
+2026-02-22 23:54:19,627{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 698}
+2026-02-22 23:54:19,629{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 698}
+2026-02-22 23:54:19,656{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 701}
+2026-02-22 23:54:19,657{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 701}
+2026-02-22 23:54:19,715{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 704}
+2026-02-22 23:54:19,716{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 704}
+2026-02-22 23:54:19,841{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n2", :value 707}
+2026-02-22 23:54:19,842{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n2", :value 707}
+2026-02-22 23:54:19,870{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 710}
+2026-02-22 23:54:19,871{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 710}
+2026-02-22 23:54:19,933{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 713}
+2026-02-22 23:54:19,936{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 713}
+2026-02-22 23:54:20,043{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n1"
+2026-02-22 23:54:20,045{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:20,064{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:54:20,066{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:20,221{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 716}
+2026-02-22 23:54:20,223{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 716}
+2026-02-22 23:54:20,376{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:54:20,379{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:20,433{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 719}
+2026-02-22 23:54:20,435{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 719}
+2026-02-22 23:54:20,515{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 722}
+2026-02-22 23:54:20,517{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 722}
+2026-02-22 23:54:20,605{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 725}
+2026-02-22 23:54:20,607{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 725}
+2026-02-22 23:54:20,737{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n3"
+2026-02-22 23:54:20,738{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:20,756{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:54:20,757{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:20,954{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:20,957{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 719}, "n2" {:value 725}, "n3" {:value 716}}
+2026-02-22 23:54:21,048{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 730}
+2026-02-22 23:54:21,050{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 730}
+2026-02-22 23:54:21,053{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 733}
+2026-02-22 23:54:21,055{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 733}
+2026-02-22 23:54:21,254{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:54:21,256{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:21,404{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:21,408{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}
+2026-02-22 23:54:21,537{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:54:21,539{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:21,579{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:21,584{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}
+2026-02-22 23:54:21,685{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:21,690{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}
+2026-02-22 23:54:21,842{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:54:21,844{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}
+2026-02-22 23:54:21,972{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n3", :value 736}
+2026-02-22 23:54:21,974{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n3", :value 736}
+2026-02-22 23:54:22,121{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 739}
+2026-02-22 23:54:22,123{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 739}
+2026-02-22 23:54:22,260{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 742}
+2026-02-22 23:54:22,262{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 742}
+2026-02-22 23:54:22,339{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 745}
+2026-02-22 23:54:22,341{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 745}
+2026-02-22 23:54:22,480{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:22,484{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 745}, "n2" {:value 733}, "n3" {:value 736}}
+2026-02-22 23:54:22,599{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:54:22,604{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 745}, "n2" {:value 733}, "n3" {:value 736}}
+2026-02-22 23:54:22,672{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n1"
+2026-02-22 23:54:22,674{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:22,870{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:54:22,871{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:22,930{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 748}
+2026-02-22 23:54:22,931{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 748}
+2026-02-22 23:54:22,991{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n2", :value 751}
+2026-02-22 23:54:22,991{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n2", :value 751}
+2026-02-22 23:54:23,025{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 754}
+2026-02-22 23:54:23,026{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 754}
+2026-02-22 23:54:23,107{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:54:23,116{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 754}, "n2" {:value 751}, "n3" {:value 736}}
+2026-02-22 23:54:23,184{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:23,190{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 754}, "n2" {:value 751}, "n3" {:value 736}}
+2026-02-22 23:54:23,291{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:23,295{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 754}, "n2" {:value 751}, "n3" {:value 736}}
+2026-02-22 23:54:23,366{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 757}
+2026-02-22 23:54:23,368{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 757}
+2026-02-22 23:54:23,387{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n2"
+2026-02-22 23:54:23,389{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:23,430{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 760}
+2026-02-22 23:54:23,433{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 760}
+2026-02-22 23:54:23,490{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 763}
+2026-02-22 23:54:23,492{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 763}
+2026-02-22 23:54:23,575{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n2"
+2026-02-22 23:54:23,577{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:23,612{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:54:23,614{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:23,679{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 766}
+2026-02-22 23:54:23,682{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 766}
+2026-02-22 23:54:23,847{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:23,851{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 766}, "n2" {:value 751}, "n3" {:value 736}}
+2026-02-22 23:54:23,953{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:23,955{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 766}, "n2" {:value 751}, "n3" {:value 736}}
+2026-02-22 23:54:24,076{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:54:24,078{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 766}, "n2" {:value 751}, "n3" {:value 736}}
+2026-02-22 23:54:24,167{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n3", :value 769}
+2026-02-22 23:54:24,168{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n3", :value 769}
+2026-02-22 23:54:24,312{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 772}
+2026-02-22 23:54:24,315{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 772}
+2026-02-22 23:54:24,482{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 775}
+2026-02-22 23:54:24,484{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 775}
+2026-02-22 23:54:24,554{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n3"
+2026-02-22 23:54:24,556{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:24,687{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 778}
+2026-02-22 23:54:24,689{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 778}
+2026-02-22 23:54:24,884{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 781}
+2026-02-22 23:54:24,886{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 781}
+2026-02-22 23:54:25,065{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n2", :value 784}
+2026-02-22 23:54:25,066{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n2", :value 784}
+2026-02-22 23:54:25,181{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:25,184{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 781}, "n2" {:value 784}, "n3" {:value 769}}
+2026-02-22 23:54:25,302{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:25,308{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 781}, "n2" {:value 784}, "n3" {:value 769}}
+2026-02-22 23:54:25,357{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n2", :value 787}
+2026-02-22 23:54:25,360{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n2", :value 787}
+2026-02-22 23:54:25,418{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 790}
+2026-02-22 23:54:25,420{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 790}
+2026-02-22 23:54:25,485{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n3"
+2026-02-22 23:54:25,487{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:25,490{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:check-role	"n3"
+2026-02-22 23:54:25,491{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:25,572{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 793}
+2026-02-22 23:54:25,575{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 793}
+2026-02-22 23:54:25,722{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n2"
+2026-02-22 23:54:25,724{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:25,811{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:check-role	"n2"
+2026-02-22 23:54:25,813{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:25,927{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n2", :value 796}
+2026-02-22 23:54:25,929{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n2", :value 796}
+2026-02-22 23:54:26,084{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n2"
+2026-02-22 23:54:26,087{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:26,192{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 799}
+2026-02-22 23:54:26,193{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 799}
+2026-02-22 23:54:26,294{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:26,296{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 799}, "n2" {:value 796}, "n3" {:value 769}}
+2026-02-22 23:54:26,356{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:54:26,358{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:26,467{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:26,471{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 799}, "n2" {:value 796}, "n3" {:value 769}}
+2026-02-22 23:54:26,538{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n1", :value 802}
+2026-02-22 23:54:26,540{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n1", :value 802}
+2026-02-22 23:54:26,730{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n2", :value 805}
+2026-02-22 23:54:26,733{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n2", :value 805}
+2026-02-22 23:54:26,866{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:26,870{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 802}, "n2" {:value 805}, "n3" {:value 769}}
+2026-02-22 23:54:27,006{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 808}
+2026-02-22 23:54:27,008{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 808}
+2026-02-22 23:54:27,079{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 811}
+2026-02-22 23:54:27,081{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 811}
+2026-02-22 23:54:27,096{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:27,100{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 811}, "n2" {:value 805}, "n3" {:value 769}}
+2026-02-22 23:54:27,148{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n2"
+2026-02-22 23:54:27,150{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:27,298{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 814}
+2026-02-22 23:54:27,298{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 814}
+2026-02-22 23:54:27,363{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n3", :value 817}
+2026-02-22 23:54:27,364{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n3", :value 817}
+2026-02-22 23:54:27,379{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 820}
+2026-02-22 23:54:27,380{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 820}
+2026-02-22 23:54:27,425{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read-all	nil
+2026-02-22 23:54:27,431{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read-all	{"n1" {:value 814}, "n2" {:value 805}, "n3" {:value 820}}
+2026-02-22 23:54:27,540{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:write-node	{:node "n1", :value 823}
+2026-02-22 23:54:27,543{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:write-node	{:node "n1", :value 823}
+2026-02-22 23:54:27,578{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read-all	nil
+2026-02-22 23:54:27,583{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read-all	{"n1" {:value 823}, "n2" {:value 805}, "n3" {:value 820}}
+2026-02-22 23:54:27,761{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read-all	nil
+2026-02-22 23:54:27,765{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read-all	{"n1" {:value 823}, "n2" {:value 805}, "n3" {:value 820}}
+2026-02-22 23:54:27,768{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:write-node	{:node "n1", :value 826}
+2026-02-22 23:54:27,769{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:write-node	{:node "n1", :value 826}
+2026-02-22 23:54:27,867{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n3"
+2026-02-22 23:54:27,869{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:27,960{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n1", :value 829}
+2026-02-22 23:54:27,962{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n1", :value 829}
+2026-02-22 23:54:28,104{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:28,108{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 829}, "n2" {:value 805}, "n3" {:value 820}}
+2026-02-22 23:54:28,192{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:write-node	{:node "n3", :value 832}
+2026-02-22 23:54:28,194{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:write-node	{:node "n3", :value 832}
+2026-02-22 23:54:28,225{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:check-role	"n3"
+2026-02-22 23:54:28,227{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:28,246{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:28,249{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 829}, "n2" {:value 805}, "n3" {:value 832}}
+2026-02-22 23:54:28,311{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:write-node	{:node "n3", :value 835}
+2026-02-22 23:54:28,312{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:write-node	{:node "n3", :value 835}
+2026-02-22 23:54:28,439{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:check-role	"n1"
+2026-02-22 23:54:28,441{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:28,447{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read-all	nil
+2026-02-22 23:54:28,456{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read-all	{"n1" {:value 829}, "n2" {:value 805}, "n3" {:value 835}}
+2026-02-22 23:54:28,615{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:check-role	"n2"
+2026-02-22 23:54:28,617{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2026-02-22 23:54:28,814{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:write-node	{:node "n1", :value 838}
+2026-02-22 23:54:28,816{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:write-node	{:node "n1", :value 838}
+2026-02-22 23:54:28,939{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read-all	nil
+2026-02-22 23:54:28,943{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read-all	{"n1" {:value 838}, "n2" {:value 805}, "n3" {:value 835}}
+2026-02-22 23:54:31,050{GMT}	INFO	[jepsen worker nemesis] jepsen.generator.interpreter: Recovering from faults...
+2026-02-22 23:54:31,051{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	nil
+2026-02-22 23:54:31,051{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Healing all network partitions
+2026-02-22 23:54:31,051{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n1
+2026-02-22 23:54:31,220{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n2
+2026-02-22 23:54:31,299{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Healing partition on n3
+2026-02-22 23:54:31,366{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:heal	:healed
+2026-02-22 23:54:36,370{GMT}	INFO	[jepsen worker 2] jepsen.generator.interpreter: Final reads...
+2026-02-22 23:54:36,370{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-22 23:54:36,371{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 3 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.split_brain.SplitBrainClient.invoke_BANG_(split_brain.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:54:36,433{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-22 23:54:36,434{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 4 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.split_brain.SplitBrainClient.invoke_BANG_(split_brain.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:54:36,530{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-22 23:54:36,530{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 0 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.split_brain.SplitBrainClient.invoke_BANG_(split_brain.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:54:36,601{GMT}	INFO	[jepsen worker 0] jepsen.util: 5	:invoke	:read	nil
+2026-02-22 23:54:36,602{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:36,602{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 5 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.split_brain.SplitBrainClient.invoke_BANG_(split_brain.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:54:36,603{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-22 23:54:36,604{GMT}	WARN	[jepsen worker 1] jepsen.generator.interpreter: Process 1 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.split_brain.SplitBrainClient.invoke_BANG_(split_brain.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:54:36,605{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-22 23:54:36,605{GMT}	WARN	[jepsen worker 2] jepsen.generator.interpreter: Process 2 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.split_brain.SplitBrainClient.invoke_BANG_(split_brain.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:54:36,726{GMT}	INFO	[jepsen worker 3] jepsen.util: 8	:invoke	:read	nil
+2026-02-22 23:54:36,726{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:36,726{GMT}	WARN	[jepsen worker 3] jepsen.generator.interpreter: Process 8 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.split_brain.SplitBrainClient.invoke_BANG_(split_brain.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:54:36,906{GMT}	INFO	[jepsen worker 4] jepsen.util: 9	:invoke	:read	nil
+2026-02-22 23:54:36,906{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:36,906{GMT}	WARN	[jepsen worker 4] jepsen.generator.interpreter: Process 9 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.split_brain.SplitBrainClient.invoke_BANG_(split_brain.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:54:36,960{GMT}	INFO	[jepsen worker 0] jepsen.util: 10	:invoke	:read	nil
+2026-02-22 23:54:36,960{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:36,960{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 10 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.split_brain.SplitBrainClient.invoke_BANG_(split_brain.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:54:37,016{GMT}	INFO	[jepsen worker 0] jepsen.util: 15	:invoke	:read	nil
+2026-02-22 23:54:37,016{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.split-brain: Opening split-brain client (docker?: true , nodes: [n1 n2 n3] )
+2026-02-22 23:54:37,017{GMT}	WARN	[jepsen worker 0] jepsen.generator.interpreter: Process 15 crashed
+java.lang.IllegalArgumentException: No matching clause: :read
+	at jepsen.frogdb.split_brain.SplitBrainClient.invoke_BANG_(split_brain.clj:54)
+	at jepsen.client.Validate.invoke_BANG_(client.clj:83)
+	at jepsen.generator.interpreter.ClientWorker.invoke_BANG_(interpreter.clj:65)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147.invoke(interpreter.clj:140)
+	at jepsen.generator.interpreter$spawn_worker$fn__13146.invoke(interpreter.clj:123)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+2026-02-22 23:54:37,031{GMT}	INFO	[clojure-agent-send-off-pool-1] jepsen.frogdb.db: Healing partition on n1
+2026-02-22 23:54:37,114{GMT}	INFO	[clojure-agent-send-off-pool-1] jepsen.frogdb.db: Healing partition on n2
+2026-02-22 23:54:37,189{GMT}	INFO	[clojure-agent-send-off-pool-1] jepsen.frogdb.db: Healing partition on n3
+2026-02-22 23:54:37,267{GMT}	INFO	[jepsen test runner] jepsen.core: Run complete, writing
+2026-02-22 23:54:37,327{GMT}	INFO	[jepsen node n2] jepsen.frogdb.db: Tearing down FrogDB replication node n2
+2026-02-22 23:54:37,327{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB replication node n1
+2026-02-22 23:54:37,327{GMT}	INFO	[jepsen node n3] jepsen.frogdb.db: Tearing down FrogDB replication node n3
+2026-02-22 23:54:37,403{GMT}	INFO	[jepsen node n2] jepsen.frogdb.core: Docker OS teardown for n2 (no-op)
+2026-02-22 23:54:37,403{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS teardown for n1 (no-op)
+2026-02-22 23:54:37,403{GMT}	INFO	[jepsen node n3] jepsen.frogdb.core: Docker OS teardown for n3 (no-op)
+2026-02-22 23:54:37,404{GMT}	INFO	[jepsen test runner] jepsen.core: Analyzing...
+2026-02-22 23:54:37,421{GMT}	WARN	[clojure-agent-send-off-pool-0] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$rate_graph_BANG_.invokeStatic(perf.clj:626)
+	at jepsen.checker.perf$rate_graph_BANG_.invoke(perf.clj:571)
+	at jepsen.checker$rate_graph$reify__10772.check(checker.clj:843)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-22 23:54:37,423{GMT}	WARN	[clojure-agent-send-off-pool-5] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$point_graph_BANG_.invokeStatic(perf.clj:523)
+	at jepsen.checker.perf$point_graph_BANG_.invoke(perf.clj:496)
+	at jepsen.checker$latency_graph$reify__10769.check(checker.clj:830)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-22 23:54:37,423{GMT}	INFO	[jepsen test runner] jepsen.core: Analysis complete
+2026-02-22 23:54:37,433{GMT}	INFO	[jepsen results] jepsen.store: Wrote /Users/nathan/workspace/nathanjordan/workspace-1/jepsen/frogdb/store/frogdb-split-brain-partition-docker-replication/20260222T235326.022-0500/results.edn
+2026-02-22 23:54:37,451{GMT}	INFO	[jepsen test runner] jepsen.core: {:workload {:valid? false,
+            :master-nodes ("n2" "n3" "n1"),
+            :multiple-masters? true,
+            :non-primary-writes 139,
+            :readonly-rejections 0,
+            :consistent? false,
+            :final-values (838 805 835)},
+ :stats {:valid? false,
+         :count 574,
+         :ok-count 564,
+         :fail-count 0,
+         :info-count 10,
+         :by-f {:check-role {:valid? true,
+                             :count 146,
+                             :ok-count 146,
+                             :fail-count 0,
+                             :info-count 0},
+                :read {:valid? false,
+                       :count 10,
+                       :ok-count 0,
+                       :fail-count 0,
+                       :info-count 10},
+                :read-all {:valid? true,
+                           :count 142,
+                           :ok-count 142,
+                           :fail-count 0,
+                           :info-count 0},
+                :write-node {:valid? true,
+                             :count 276,
+                             :ok-count 276,
+                             :fail-count 0,
+                             :info-count 0}}},
+ :exceptions {:valid? true,
+              :exceptions ({:count 10,
+                            :class java.lang.IllegalArgumentException,
+                            :example #jepsen.history.Op{:index 1139,
+                                                        :time 67877749291,
+                                                        :type :info,
+                                                        :process 3,
+                                                        :f :read,
+                                                        :value nil,
+                                                        :exception {:via [{:type java.lang.IllegalArgumentException,
+                                                                           :message "No matching clause: :read",
+                                                                           :at [jepsen.frogdb.split_brain.SplitBrainClient
+                                                                                invoke_BANG_
+                                                                                "split_brain.clj"
+                                                                                54]}],
+                                                                    :trace [[jepsen.frogdb.split_brain.SplitBrainClient
+                                                                             invoke_BANG_
+                                                                             "split_brain.clj"
+                                                                             54]
+                                                                            [jepsen.client.Validate
+                                                                             invoke_BANG_
+                                                                             "client.clj"
+                                                                             83]
+                                                                            [jepsen.generator.interpreter.ClientWorker
+                                                                             invoke_BANG_
+                                                                             "interpreter.clj"
+                                                                             65]
+                                                                            [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147
+                                                                             invoke
+                                                                             "interpreter.clj"
+                                                                             140]
+                                                                            [jepsen.generator.interpreter$spawn_worker$fn__13146
+                                                                             invoke
+                                                                             "interpreter.clj"
+                                                                             123]
+                                                                            [clojure.core$binding_conveyor_fn$fn__5823
+                                                                             invoke
+                                                                             "core.clj"
+                                                                             2047]
+                                                                            [clojure.lang.AFn
+                                                                             call
+                                                                             "AFn.java"
+                                                                             18]
+                                                                            [java.util.concurrent.FutureTask
+                                                                             run
+                                                                             "FutureTask.java"
+                                                                             328]
+                                                                            [java.util.concurrent.ThreadPoolExecutor
+                                                                             runWorker
+                                                                             "ThreadPoolExecutor.java"
+                                                                             1090]
+                                                                            [java.util.concurrent.ThreadPoolExecutor$Worker
+                                                                             run
+                                                                             "ThreadPoolExecutor.java"
+                                                                             614]
+                                                                            [java.lang.Thread
+                                                                             run
+                                                                             "Thread.java"
+                                                                             1474]],
+                                                                    :cause "No matching clause: :read"},
+                                                        :error "indeterminate: No matching clause: :read"}})},
+ :perf {:latency-graph {:valid? :unknown,
+                        :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :rate-graph {:valid? :unknown,
+                     :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :valid? :unknown},
+ :valid? false}
+
+
+Analysis invalid! (ﾉಥ益ಥ）ﾉ ┻━┻

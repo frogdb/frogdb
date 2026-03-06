@@ -1,0 +1,207 @@
+{:workload {:valid? false,
+            :configs ({:model #knossos.model.CASRegister{:value nil},
+                       :last-op {:process 1,
+                                 :type :ok,
+                                 :f :read,
+                                 :value nil,
+                                 :index 3,
+                                 :time 138303792},
+                       :pending [{:process 2,
+                                  :type :invoke,
+                                  :f :cas,
+                                  :value [68 19],
+                                  :index 4,
+                                  :time 256605167}]}),
+            :final-paths ([{:op {:process 1,
+                                 :type :ok,
+                                 :f :read,
+                                 :value nil,
+                                 :index 3,
+                                 :time 138303792},
+                            :model #knossos.model.CASRegister{:value nil}}
+                           {:op {:process 2,
+                                 :type :ok,
+                                 :f :cas,
+                                 :value [68 19],
+                                 :index 5,
+                                 :time 278429959},
+                            :model #knossos.model.Inconsistent{:msg "can't CAS  from 68 to 19"}}]),
+            :previous-ok {:process 1,
+                          :type :ok,
+                          :f :read,
+                          :value nil,
+                          :index 3,
+                          :time 138303792},
+            :last-op {:process 1,
+                      :type :ok,
+                      :f :read,
+                      :value nil,
+                      :index 3,
+                      :time 138303792},
+            :op {:process 2,
+                 :type :ok,
+                 :f :cas,
+                 :value [68 19],
+                 :index 5,
+                 :time 278429959},
+            :analyzer :linear},
+ :stats {:valid? true,
+         :count 104,
+         :ok-count 89,
+         :fail-count 0,
+         :info-count 15,
+         :by-f {:cas {:valid? true,
+                      :count 26,
+                      :ok-count 24,
+                      :fail-count 0,
+                      :info-count 2},
+                :read {:valid? true,
+                       :count 47,
+                       :ok-count 35,
+                       :fail-count 0,
+                       :info-count 12},
+                :write {:valid? true,
+                        :count 31,
+                        :ok-count 30,
+                        :fail-count 0,
+                        :info-count 1}}},
+ :exceptions {:valid? true,
+              :exceptions ({:count 11,
+                            :class clojure.lang.ExceptionInfo,
+                            :example #jepsen.history.Op{:index 187,
+                                                        :time 10011197167,
+                                                        :type :info,
+                                                        :process 3,
+                                                        :f :read,
+                                                        :value nil,
+                                                        :exception {:via [{:type clojure.lang.ExceptionInfo,
+                                                                           :message "Carmine connection error",
+                                                                           :data {},
+                                                                           :at [taoensso.carmine.connections$pooled_conn
+                                                                                invokeStatic
+                                                                                "connections.clj"
+                                                                                282]}
+                                                                          {:type java.net.ConnectException,
+                                                                           :message "Connection refused",
+                                                                           :at [sun.nio.ch.Net
+                                                                                pollConnect
+                                                                                "Net.java"
+                                                                                -2]}],
+                                                                    :trace [[sun.nio.ch.Net
+                                                                             pollConnect
+                                                                             "Net.java"
+                                                                             -2]
+                                                                            [sun.nio.ch.Net
+                                                                             pollConnectNow
+                                                                             "Net.java"
+                                                                             639]
+                                                                            [sun.nio.ch.NioSocketImpl
+                                                                             timedFinishConnect
+                                                                             "NioSocketImpl.java"
+                                                                             550]
+                                                                            [sun.nio.ch.NioSocketImpl
+                                                                             connect
+                                                                             "NioSocketImpl.java"
+                                                                             594]
+                                                                            [java.net.SocksSocketImpl
+                                                                             connect
+                                                                             "SocksSocketImpl.java"
+                                                                             284]
+                                                                            [java.net.Socket
+                                                                             connect
+                                                                             "Socket.java"
+                                                                             659]
+                                                                            [taoensso.carmine.connections$make_new_connection
+                                                                             invokeStatic
+                                                                             "connections.clj"
+                                                                             127]
+                                                                            [taoensso.carmine.connections$make_new_connection
+                                                                             invoke
+                                                                             "connections.clj"
+                                                                             106]
+                                                                            [taoensso.carmine.connections$make_connection_factory$reify__7724
+                                                                             makeObject
+                                                                             "connections.clj"
+                                                                             168]
+                                                                            [org.apache.commons.pool2.impl.GenericKeyedObjectPool
+                                                                             create
+                                                                             "GenericKeyedObjectPool.java"
+                                                                             796]
+                                                                            [org.apache.commons.pool2.impl.GenericKeyedObjectPool
+                                                                             borrowObject
+                                                                             "GenericKeyedObjectPool.java"
+                                                                             444]
+                                                                            [org.apache.commons.pool2.impl.GenericKeyedObjectPool
+                                                                             borrowObject
+                                                                             "GenericKeyedObjectPool.java"
+                                                                             355]
+                                                                            [taoensso.carmine.connections.ConnectionPool
+                                                                             get_conn
+                                                                             "connections.clj"
+                                                                             64]
+                                                                            [taoensso.carmine.connections$pooled_conn
+                                                                             invokeStatic
+                                                                             "connections.clj"
+                                                                             277]
+                                                                            [taoensso.carmine.connections$pooled_conn
+                                                                             invoke
+                                                                             "connections.clj"
+                                                                             271]
+                                                                            [jepsen.frogdb.client$read_register
+                                                                             invokeStatic
+                                                                             "client.clj"
+                                                                             75]
+                                                                            [jepsen.frogdb.client$read_register
+                                                                             invoke
+                                                                             "client.clj"
+                                                                             72]
+                                                                            [jepsen.frogdb.register.RegisterClient
+                                                                             invoke_BANG_
+                                                                             "register.clj"
+                                                                             51]
+                                                                            [jepsen.client.Validate
+                                                                             invoke_BANG_
+                                                                             "client.clj"
+                                                                             83]
+                                                                            [jepsen.generator.interpreter.ClientWorker
+                                                                             invoke_BANG_
+                                                                             "interpreter.clj"
+                                                                             65]
+                                                                            [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147
+                                                                             invoke
+                                                                             "interpreter.clj"
+                                                                             140]
+                                                                            [jepsen.generator.interpreter$spawn_worker$fn__13146
+                                                                             invoke
+                                                                             "interpreter.clj"
+                                                                             123]
+                                                                            [clojure.core$binding_conveyor_fn$fn__5823
+                                                                             invoke
+                                                                             "core.clj"
+                                                                             2047]
+                                                                            [clojure.lang.AFn
+                                                                             call
+                                                                             "AFn.java"
+                                                                             18]
+                                                                            [java.util.concurrent.FutureTask
+                                                                             run
+                                                                             "FutureTask.java"
+                                                                             328]
+                                                                            [java.util.concurrent.ThreadPoolExecutor
+                                                                             runWorker
+                                                                             "ThreadPoolExecutor.java"
+                                                                             1090]
+                                                                            [java.util.concurrent.ThreadPoolExecutor$Worker
+                                                                             run
+                                                                             "ThreadPoolExecutor.java"
+                                                                             614]
+                                                                            [java.lang.Thread
+                                                                             run
+                                                                             "Thread.java"
+                                                                             1474]],
+                                                                    :cause "Connection refused"},
+                                                        :error "indeterminate: Connection refused"}})},
+ :perf {:latency-graph {:valid? true},
+        :rate-graph {:valid? true},
+        :valid? true},
+ :valid? false}

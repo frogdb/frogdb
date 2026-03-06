@@ -1,0 +1,608 @@
+0	:invoke	:add	74
+0	:ok	:add	74
+1	:invoke	:add	38
+1	:ok	:add	38
+2	:invoke	:add	79
+2	:ok	:add	79
+3	:invoke	:add	66
+3	:ok	:add	66
+4	:invoke	:add	80
+4	:ok	:add	80
+0	:invoke	:add	93
+0	:ok	:add	93
+0	:invoke	:remove	97
+0	:ok	:remove	97
+1	:invoke	:add	57
+1	:ok	:add	57
+2	:invoke	:remove	15
+2	:ok	:remove	15
+3	:invoke	:read	nil
+3	:ok	:read	#{74 93 66 57 79 38 80}
+4	:invoke	:remove	77
+4	:ok	:remove	77
+0	:invoke	:read	nil
+0	:ok	:read	#{74 93 66 57 79 38 80}
+0	:invoke	:read	nil
+0	:ok	:read	#{74 93 66 57 79 38 80}
+1	:invoke	:add	24
+1	:ok	:add	24
+2	:invoke	:remove	27
+2	:ok	:remove	27
+3	:invoke	:add	3
+3	:ok	:add	3
+4	:invoke	:remove	93
+4	:ok	:remove	93
+0	:invoke	:read	nil
+0	:ok	:read	#{74 24 3 66 57 79 38 80}
+0	:invoke	:remove	47
+0	:ok	:remove	47
+1	:invoke	:add	54
+1	:ok	:add	54
+2	:invoke	:read	nil
+2	:ok	:read	#{74 24 54 3 66 57 79 38 80}
+3	:invoke	:remove	46
+3	:ok	:remove	46
+4	:invoke	:read	nil
+4	:ok	:read	#{74 24 54 3 66 57 79 38 80}
+0	:invoke	:remove	79
+0	:ok	:remove	79
+0	:invoke	:add	34
+0	:ok	:add	34
+1	:invoke	:read	nil
+1	:ok	:read	#{74 24 54 34 3 66 57 38 80}
+2	:invoke	:remove	15
+2	:ok	:remove	15
+3	:invoke	:remove	44
+3	:ok	:remove	44
+4	:invoke	:add	21
+4	:ok	:add	21
+0	:invoke	:remove	0
+0	:ok	:remove	0
+0	:invoke	:read	nil
+0	:ok	:read	#{74 24 54 21 34 3 66 57 38 80}
+1	:invoke	:remove	21
+1	:ok	:remove	21
+2	:invoke	:remove	74
+2	:ok	:remove	74
+3	:invoke	:add	6
+3	:ok	:add	6
+4	:invoke	:remove	7
+4	:ok	:remove	7
+0	:invoke	:read	nil
+0	:ok	:read	#{24 54 6 34 3 66 57 38 80}
+0	:invoke	:remove	28
+0	:ok	:remove	28
+1	:invoke	:remove	36
+1	:ok	:remove	36
+2	:invoke	:add	86
+2	:ok	:add	86
+3	:invoke	:read	nil
+3	:ok	:read	#{86 24 54 6 34 3 66 57 38 80}
+4	:invoke	:read	nil
+4	:ok	:read	#{86 24 54 6 34 3 66 57 38 80}
+0	:invoke	:remove	19
+0	:ok	:remove	19
+0	:invoke	:add	39
+0	:ok	:add	39
+1	:invoke	:remove	56
+1	:ok	:remove	56
+2	:invoke	:add	92
+2	:ok	:add	92
+3	:invoke	:add	25
+3	:ok	:add	25
+4	:invoke	:read	nil
+4	:ok	:read	#{86 24 39 54 92 6 25 34 3 66 57 38 80}
+0	:invoke	:remove	38
+0	:ok	:remove	38
+0	:invoke	:read	nil
+0	:ok	:read	#{86 24 39 54 92 6 25 34 3 66 57 80}
+1	:invoke	:remove	74
+1	:ok	:remove	74
+2	:invoke	:remove	6
+2	:ok	:remove	6
+3	:invoke	:add	86
+3	:ok	:add	86
+4	:invoke	:remove	21
+4	:ok	:remove	21
+0	:invoke	:read	nil
+0	:ok	:read	#{86 24 39 54 92 25 34 3 66 57 80}
+0	:invoke	:add	40
+0	:ok	:add	40
+1	:invoke	:add	43
+1	:ok	:add	43
+2	:invoke	:remove	79
+2	:ok	:remove	79
+3	:invoke	:remove	19
+3	:ok	:remove	19
+4	:invoke	:add	38
+4	:ok	:add	38
+0	:invoke	:add	9
+0	:ok	:add	9
+0	:invoke	:remove	69
+0	:ok	:remove	69
+1	:invoke	:read	nil
+1	:ok	:read	#{86 24 39 54 92 40 43 25 34 3 66 57 9 38 80}
+2	:invoke	:read	nil
+2	:ok	:read	#{86 24 39 54 92 40 43 25 34 3 66 57 9 38 80}
+3	:invoke	:add	76
+3	:ok	:add	76
+4	:invoke	:read	nil
+4	:ok	:read	#{86 24 39 54 92 40 43 25 34 3 66 76 57 9 38 80}
+0	:invoke	:remove	86
+0	:ok	:remove	86
+0	:invoke	:read	nil
+0	:ok	:read	#{24 39 54 92 40 43 25 34 3 66 76 57 9 38 80}
+1	:invoke	:remove	82
+1	:ok	:remove	82
+2	:invoke	:read	nil
+2	:ok	:read	#{24 39 54 92 40 43 25 34 3 66 76 57 9 38 80}
+3	:invoke	:read	nil
+3	:ok	:read	#{24 39 54 92 40 43 25 34 3 66 76 57 9 38 80}
+4	:invoke	:remove	95
+4	:ok	:remove	95
+0	:invoke	:read	nil
+0	:ok	:read	#{24 39 54 92 40 43 25 34 3 66 76 57 9 38 80}
+0	:invoke	:add	72
+0	:ok	:add	72
+1	:invoke	:add	45
+1	:ok	:add	45
+2	:invoke	:add	92
+2	:ok	:add	92
+3	:invoke	:read	nil
+3	:ok	:read	#{72 24 39 54 92 40 43 25 34 3 66 76 57 9 45 38 80}
+4	:invoke	:remove	69
+4	:ok	:remove	69
+0	:invoke	:read	nil
+0	:ok	:read	#{72 24 39 54 92 40 43 25 34 3 66 76 57 9 45 38 80}
+0	:invoke	:remove	2
+0	:ok	:remove	2
+1	:invoke	:remove	40
+1	:ok	:remove	40
+2	:invoke	:read	nil
+2	:ok	:read	#{72 24 39 54 92 43 25 34 3 66 76 57 9 45 38 80}
+3	:invoke	:remove	10
+3	:ok	:remove	10
+4	:invoke	:read	nil
+4	:ok	:read	#{72 24 39 54 92 43 25 34 3 66 76 57 9 45 38 80}
+0	:invoke	:remove	33
+0	:ok	:remove	33
+0	:invoke	:remove	18
+0	:ok	:remove	18
+1	:invoke	:add	91
+1	:ok	:add	91
+2	:invoke	:read	nil
+2	:ok	:read	#{72 24 39 54 92 91 43 25 34 3 66 76 57 9 45 38 80}
+3	:invoke	:remove	41
+3	:ok	:remove	41
+4	:invoke	:add	99
+4	:ok	:add	99
+0	:invoke	:remove	98
+0	:ok	:remove	98
+0	:invoke	:remove	28
+0	:ok	:remove	28
+1	:invoke	:read	nil
+1	:ok	:read	#{72 24 39 54 92 99 91 43 25 34 3 66 76 57 9 45 38 80}
+2	:invoke	:remove	1
+2	:ok	:remove	1
+3	:invoke	:add	73
+3	:ok	:add	73
+4	:invoke	:remove	55
+4	:ok	:remove	55
+0	:invoke	:add	65
+0	:ok	:add	65
+0	:invoke	:add	49
+0	:ok	:add	49
+1	:invoke	:read	nil
+1	:ok	:read	#{65 72 24 39 54 92 99 91 43 25 34 3 66 76 57 9 45 38 73 80 49}
+2	:invoke	:remove	6
+2	:ok	:remove	6
+3	:invoke	:read	nil
+3	:ok	:read	#{65 72 24 39 54 92 99 91 43 25 34 3 66 76 57 9 45 38 73 80 49}
+4	:invoke	:add	61
+4	:ok	:add	61
+0	:invoke	:remove	55
+0	:ok	:remove	55
+0	:invoke	:read	nil
+0	:ok	:read	#{65 72 24 39 54 92 99 91 43 61 25 34 3 66 76 57 9 45 38 73 80 49}
+1	:invoke	:remove	77
+1	:ok	:remove	77
+2	:invoke	:remove	57
+2	:ok	:remove	57
+3	:invoke	:remove	45
+3	:ok	:remove	45
+4	:invoke	:remove	9
+4	:ok	:remove	9
+0	:invoke	:add	31
+0	:ok	:add	31
+0	:invoke	:remove	79
+0	:ok	:remove	79
+1	:invoke	:add	26
+1	:ok	:add	26
+2	:invoke	:read	nil
+2	:ok	:read	#{65 72 24 39 54 92 99 31 91 43 61 25 34 3 66 76 26 38 73 80 49}
+3	:invoke	:remove	34
+3	:ok	:remove	34
+4	:invoke	:read	nil
+4	:ok	:read	#{65 72 24 39 54 92 99 31 91 43 61 25 3 66 76 26 38 73 80 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 72 24 39 54 92 99 31 91 43 61 25 3 66 76 26 38 73 80 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 72 24 39 54 92 99 31 91 43 61 25 3 66 76 26 38 73 80 49}
+1	:invoke	:add	4
+1	:ok	:add	4
+2	:invoke	:remove	50
+2	:ok	:remove	50
+3	:invoke	:read	nil
+3	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 3 66 76 26 38 73 80 49}
+4	:invoke	:add	34
+4	:ok	:add	34
+0	:invoke	:read	nil
+0	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 66 76 26 38 73 80 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 66 76 26 38 73 80 49}
+1	:invoke	:read	nil
+1	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 66 76 26 38 73 80 49}
+2	:invoke	:read	nil
+2	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 66 76 26 38 73 80 49}
+3	:invoke	:read	nil
+3	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 66 76 26 38 73 80 49}
+4	:invoke	:read	nil
+4	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 66 76 26 38 73 80 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 66 76 26 38 73 80 49}
+0	:invoke	:add	72
+0	:ok	:add	72
+1	:invoke	:remove	50
+1	:ok	:remove	50
+2	:invoke	:remove	60
+2	:ok	:remove	60
+3	:invoke	:add	35
+3	:ok	:add	35
+4	:invoke	:remove	29
+4	:ok	:remove	29
+0	:invoke	:add	67
+0	:ok	:add	67
+0	:invoke	:remove	86
+0	:ok	:remove	86
+1	:invoke	:read	nil
+1	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 66 35 76 26 38 73 67 80 49}
+2	:invoke	:read	nil
+2	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 66 35 76 26 38 73 67 80 49}
+3	:invoke	:add	99
+3	:ok	:add	99
+4	:invoke	:read	nil
+4	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 66 35 76 26 38 73 67 80 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 66 35 76 26 38 73 67 80 49}
+0	:invoke	:remove	88
+0	:ok	:remove	88
+1	:invoke	:add	12
+1	:ok	:add	12
+2	:invoke	:read	nil
+2	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 12 66 35 76 26 38 73 67 80 49}
+3	:invoke	:read	nil
+3	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 12 66 35 76 26 38 73 67 80 49}
+4	:invoke	:remove	30
+4	:ok	:remove	30
+0	:invoke	:read	nil
+0	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 12 66 35 76 26 38 73 67 80 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 12 66 35 76 26 38 73 67 80 49}
+1	:invoke	:read	nil
+1	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 12 66 35 76 26 38 73 67 80 49}
+2	:invoke	:remove	15
+2	:ok	:remove	15
+3	:invoke	:remove	88
+3	:ok	:remove	88
+4	:invoke	:read	nil
+4	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 12 66 35 76 26 38 73 67 80 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 72 24 39 4 54 92 99 31 91 43 61 25 34 3 12 66 35 76 26 38 73 67 80 49}
+0	:invoke	:remove	9
+0	:ok	:remove	9
+1	:invoke	:remove	63
+1	:ok	:remove	63
+2	:invoke	:remove	39
+2	:ok	:remove	39
+3	:invoke	:remove	26
+3	:ok	:remove	26
+4	:invoke	:read	nil
+4	:ok	:read	#{65 72 24 4 54 92 99 31 91 43 61 25 34 3 12 66 35 76 38 73 67 80 49}
+0	:invoke	:remove	64
+0	:ok	:remove	64
+0	:invoke	:read	nil
+0	:ok	:read	#{65 72 24 4 54 92 99 31 91 43 61 25 34 3 12 66 35 76 38 73 67 80 49}
+1	:invoke	:remove	14
+1	:ok	:remove	14
+2	:invoke	:add	27
+2	:ok	:add	27
+3	:invoke	:read	nil
+3	:ok	:read	#{65 72 27 24 4 54 92 99 31 91 43 61 25 34 3 12 66 35 76 38 73 67 80 49}
+4	:invoke	:add	69
+4	:ok	:add	69
+0	:invoke	:remove	17
+0	:ok	:remove	17
+0	:invoke	:remove	34
+0	:ok	:remove	34
+1	:invoke	:remove	14
+1	:ok	:remove	14
+2	:invoke	:remove	10
+2	:ok	:remove	10
+3	:invoke	:read	nil
+3	:ok	:read	#{65 72 27 69 24 4 54 92 99 31 91 43 61 25 3 12 66 35 76 38 73 67 80 49}
+4	:invoke	:remove	72
+4	:ok	:remove	72
+0	:invoke	:add	65
+0	:ok	:add	65
+0	:invoke	:read	nil
+0	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 3 12 66 35 76 38 73 67 80 49}
+1	:invoke	:read	nil
+1	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 3 12 66 35 76 38 73 67 80 49}
+2	:invoke	:remove	16
+2	:ok	:remove	16
+3	:invoke	:add	17
+3	:ok	:add	17
+4	:invoke	:read	nil
+4	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 17 3 12 66 35 76 38 73 67 80 49}
+0	:invoke	:add	26
+0	:ok	:add	26
+0	:invoke	:read	nil
+0	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 17 3 12 66 35 76 26 38 73 67 80 49}
+1	:invoke	:read	nil
+1	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 17 3 12 66 35 76 26 38 73 67 80 49}
+2	:invoke	:read	nil
+2	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 17 3 12 66 35 76 26 38 73 67 80 49}
+3	:invoke	:read	nil
+3	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 17 3 12 66 35 76 26 38 73 67 80 49}
+4	:invoke	:remove	80
+4	:ok	:remove	80
+0	:invoke	:add	63
+0	:ok	:add	63
+0	:invoke	:add	94
+0	:ok	:add	94
+1	:invoke	:read	nil
+1	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 17 3 12 66 35 76 26 38 73 67 63 94 49}
+2	:invoke	:remove	18
+2	:ok	:remove	18
+3	:invoke	:read	nil
+4	:invoke	:remove	1
+4	:ok	:remove	1
+3	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 17 3 12 66 35 76 26 38 73 67 63 94 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 17 3 12 66 35 76 26 38 73 67 63 94 49}
+0	:invoke	:add	8
+0	:ok	:add	8
+1	:invoke	:read	nil
+1	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 17 3 12 66 35 76 26 38 73 67 63 94 8 49}
+2	:invoke	:read	nil
+2	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 17 3 12 66 35 76 26 38 73 67 63 94 8 49}
+3	:invoke	:read	nil
+3	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 43 61 25 17 3 12 66 35 76 26 38 73 67 63 94 8 49}
+4	:invoke	:remove	43
+4	:ok	:remove	43
+0	:invoke	:add	76
+0	:ok	:add	76
+0	:invoke	:read	nil
+0	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 25 17 3 12 66 35 76 26 38 73 67 63 94 8 49}
+1	:invoke	:add	71
+1	:ok	:add	71
+2	:invoke	:read	nil
+2	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 25 17 3 12 66 35 76 26 38 73 67 71 63 94 8 49}
+3	:invoke	:read	nil
+3	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 25 17 3 12 66 35 76 26 38 73 67 71 63 94 8 49}
+4	:invoke	:remove	10
+4	:ok	:remove	10
+0	:invoke	:read	nil
+0	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 25 17 3 12 66 35 76 26 38 73 67 71 63 94 8 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 25 17 3 12 66 35 76 26 38 73 67 71 63 94 8 49}
+1	:invoke	:read	nil
+1	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 25 17 3 12 66 35 76 26 38 73 67 71 63 94 8 49}
+2	:invoke	:add	81
+2	:ok	:add	81
+3	:invoke	:add	79
+3	:ok	:add	79
+4	:invoke	:add	93
+4	:ok	:add	93
+0	:invoke	:add	8
+0	:ok	:add	8
+0	:invoke	:remove	13
+0	:ok	:remove	13
+1	:invoke	:add	94
+1	:ok	:add	94
+2	:invoke	:remove	94
+2	:ok	:remove	94
+3	:invoke	:read	nil
+3	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 93 25 17 3 12 66 35 76 26 81 79 38 73 67 71 63 8 49}
+4	:invoke	:read	nil
+4	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 93 25 17 3 12 66 35 76 26 81 79 38 73 67 71 63 8 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 93 25 17 3 12 66 35 76 26 81 79 38 73 67 71 63 8 49}
+0	:invoke	:add	29
+0	:ok	:add	29
+1	:invoke	:add	24
+1	:ok	:add	24
+2	:invoke	:remove	72
+2	:ok	:remove	72
+3	:invoke	:read	nil
+3	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 29 93 25 17 3 12 66 35 76 26 81 79 38 73 67 71 63 8 49}
+4	:invoke	:read	nil
+4	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 29 93 25 17 3 12 66 35 76 26 81 79 38 73 67 71 63 8 49}
+0	:invoke	:add	17
+0	:ok	:add	17
+0	:invoke	:read	nil
+0	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 29 93 25 17 3 12 66 35 76 26 81 79 38 73 67 71 63 8 49}
+1	:invoke	:read	nil
+1	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 29 93 25 17 3 12 66 35 76 26 81 79 38 73 67 71 63 8 49}
+2	:invoke	:remove	95
+2	:ok	:remove	95
+3	:invoke	:add	96
+3	:ok	:add	96
+4	:invoke	:read	nil
+4	:ok	:read	#{65 27 69 24 4 54 92 99 31 91 61 29 93 25 17 3 12 66 35 76 26 81 79 38 73 96 67 71 63 8 49}
+0	:invoke	:add	5
+0	:ok	:add	5
+0	:invoke	:add	28
+0	:ok	:add	28
+1	:invoke	:remove	99
+1	:ok	:remove	99
+2	:invoke	:read	nil
+2	:ok	:read	#{65 27 69 24 4 54 92 31 91 61 29 93 28 25 17 3 12 66 35 76 5 26 81 79 38 73 96 67 71 63 8 49}
+3	:invoke	:add	40
+3	:ok	:add	40
+4	:invoke	:remove	52
+4	:ok	:remove	52
+0	:invoke	:remove	82
+0	:ok	:remove	82
+0	:invoke	:remove	54
+0	:ok	:remove	54
+1	:invoke	:add	75
+1	:ok	:add	75
+2	:invoke	:add	73
+2	:ok	:add	73
+3	:invoke	:add	51
+3	:ok	:add	51
+4	:invoke	:read	nil
+4	:ok	:read	#{65 27 69 24 4 92 75 31 40 91 61 29 93 28 51 25 17 3 12 66 35 76 5 26 81 79 38 73 96 67 71 63 8 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 27 69 24 4 92 75 31 40 91 61 29 93 28 51 25 17 3 12 66 35 76 5 26 81 79 38 73 96 67 71 63 8 49}
+0	:invoke	:add	33
+0	:ok	:add	33
+1	:invoke	:remove	45
+1	:ok	:remove	45
+2	:invoke	:read	nil
+2	:ok	:read	#{65 27 69 24 4 92 75 31 40 91 33 61 29 93 28 51 25 17 3 12 66 35 76 5 26 81 79 38 73 96 67 71 63 8 49}
+3	:invoke	:remove	51
+3	:ok	:remove	51
+4	:invoke	:remove	88
+4	:ok	:remove	88
+0	:invoke	:remove	57
+0	:ok	:remove	57
+0	:invoke	:add	51
+0	:ok	:add	51
+1	:invoke	:remove	82
+1	:ok	:remove	82
+2	:invoke	:read	nil
+2	:ok	:read	#{65 27 69 24 4 92 75 31 40 91 33 61 29 93 28 51 25 17 3 12 66 35 76 5 26 81 79 38 73 96 67 71 63 8 49}
+3	:invoke	:remove	1
+3	:ok	:remove	1
+4	:invoke	:remove	9
+4	:ok	:remove	9
+0	:invoke	:remove	75
+0	:ok	:remove	75
+0	:invoke	:remove	4
+0	:ok	:remove	4
+1	:invoke	:remove	70
+1	:ok	:remove	70
+2	:invoke	:read	nil
+2	:ok	:read	#{65 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 3 12 66 35 76 5 26 81 79 38 73 96 67 71 63 8 49}
+3	:invoke	:read	nil
+3	:ok	:read	#{65 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 3 12 66 35 76 5 26 81 79 38 73 96 67 71 63 8 49}
+4	:invoke	:read	nil
+4	:ok	:read	#{65 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 3 12 66 35 76 5 26 81 79 38 73 96 67 71 63 8 49}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 3 12 66 35 76 5 26 81 79 38 73 96 67 71 63 8 49}
+0	:invoke	:remove	47
+0	:ok	:remove	47
+1	:invoke	:read	nil
+1	:ok	:read	#{65 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 3 12 66 35 76 5 26 81 79 38 73 96 67 71 63 8 49}
+2	:invoke	:add	10
+2	:ok	:add	10
+3	:invoke	:read	nil
+3	:ok	:read	#{65 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 3 12 66 35 76 5 26 81 79 38 73 96 10 67 71 63 8 49}
+4	:invoke	:add	83
+4	:ok	:add	83
+0	:invoke	:remove	75
+0	:ok	:remove	75
+0	:invoke	:remove	14
+0	:ok	:remove	14
+1	:invoke	:remove	3
+1	:ok	:remove	3
+2	:invoke	:read	nil
+2	:ok	:read	#{65 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 12 66 35 76 5 83 26 81 79 38 73 96 10 67 71 63 8 49}
+3	:invoke	:add	80
+3	:ok	:add	80
+4	:invoke	:read	nil
+4	:ok	:read	#{65 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 12 66 35 76 5 83 26 81 79 38 73 96 10 67 71 80 63 8 49}
+0	:invoke	:add	47
+0	:ok	:add	47
+0	:invoke	:remove	2
+0	:ok	:remove	2
+1	:invoke	:add	20
+1	:ok	:add	20
+2	:invoke	:read	nil
+2	:ok	:read	#{65 20 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 12 66 47 35 76 5 83 26 81 79 38 73 96 10 67 71 80 63 8 49}
+3	:invoke	:read	nil
+3	:ok	:read	#{65 20 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 12 66 47 35 76 5 83 26 81 79 38 73 96 10 67 71 80 63 8 49}
+4	:invoke	:read	nil
+4	:ok	:read	#{65 20 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 12 66 47 35 76 5 83 26 81 79 38 73 96 10 67 71 80 63 8 49}
+0	:invoke	:add	8
+0	:ok	:add	8
+0	:invoke	:remove	10
+0	:ok	:remove	10
+1	:invoke	:add	42
+1	:ok	:add	42
+2	:invoke	:remove	78
+2	:ok	:remove	78
+3	:invoke	:read	nil
+3	:ok	:read	#{65 20 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 12 66 47 35 76 5 83 26 81 79 38 73 96 67 71 42 80 63 8 49}
+4	:invoke	:add	9
+4	:ok	:add	9
+0	:invoke	:read	nil
+0	:ok	:read	#{65 20 27 69 24 92 31 40 91 33 61 29 93 28 51 25 17 12 66 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 63 8 49}
+0	:invoke	:remove	74
+0	:ok	:remove	74
+1	:invoke	:remove	91
+1	:ok	:remove	91
+2	:invoke	:remove	49
+2	:ok	:remove	49
+3	:invoke	:read	nil
+3	:ok	:read	#{65 20 27 69 24 92 31 40 33 61 29 93 28 51 25 17 12 66 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 63 8}
+4	:invoke	:read	nil
+4	:ok	:read	#{65 20 27 69 24 92 31 40 33 61 29 93 28 51 25 17 12 66 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 63 8}
+0	:invoke	:remove	63
+0	:ok	:remove	63
+0	:invoke	:add	92
+0	:ok	:add	92
+1	:invoke	:add	61
+1	:ok	:add	61
+2	:invoke	:add	23
+2	:ok	:add	23
+3	:invoke	:add	72
+3	:ok	:add	72
+4	:invoke	:remove	2
+4	:ok	:remove	2
+0	:invoke	:add	77
+0	:ok	:add	77
+0	:invoke	:remove	49
+0	:ok	:remove	49
+1	:invoke	:add	80
+1	:ok	:add	80
+2	:invoke	:remove	16
+2	:ok	:remove	16
+3	:invoke	:remove	32
+3	:ok	:remove	32
+4	:invoke	:read	nil
+4	:ok	:read	#{65 20 72 27 69 24 77 92 31 40 33 61 29 93 28 51 25 17 12 66 23 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 8}
+0	:invoke	:remove	64
+0	:ok	:remove	64
+3	:invoke	:read	nil
+3	:ok	:read	#{65 20 72 27 69 24 77 92 31 40 33 61 29 93 28 51 25 17 12 66 23 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 8}
+4	:invoke	:read	nil
+4	:ok	:read	#{65 20 72 27 69 24 77 92 31 40 33 61 29 93 28 51 25 17 12 66 23 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 8}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 20 72 27 69 24 77 92 31 40 33 61 29 93 28 51 25 17 12 66 23 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 8}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 20 72 27 69 24 77 92 31 40 33 61 29 93 28 51 25 17 12 66 23 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 8}
+1	:invoke	:read	nil
+1	:ok	:read	#{65 20 72 27 69 24 77 92 31 40 33 61 29 93 28 51 25 17 12 66 23 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 8}
+2	:invoke	:read	nil
+2	:ok	:read	#{65 20 72 27 69 24 77 92 31 40 33 61 29 93 28 51 25 17 12 66 23 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 8}
+3	:invoke	:read	nil
+3	:ok	:read	#{65 20 72 27 69 24 77 92 31 40 33 61 29 93 28 51 25 17 12 66 23 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 8}
+4	:invoke	:read	nil
+4	:ok	:read	#{65 20 72 27 69 24 77 92 31 40 33 61 29 93 28 51 25 17 12 66 23 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 8}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 20 72 27 69 24 77 92 31 40 33 61 29 93 28 51 25 17 12 66 23 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 8}
+0	:invoke	:read	nil
+0	:ok	:read	#{65 20 72 27 69 24 77 92 31 40 33 61 29 93 28 51 25 17 12 66 23 47 35 76 9 5 83 26 81 79 38 73 96 67 71 42 80 8}

@@ -1,0 +1,870 @@
+2026-02-22 22:55:32,955{GMT}	INFO	[jepsen test runner] jepsen.core: Test version 4a7760395f3d9033cc6c7a477c6947e5d983eb25 (plus uncommitted changes)
+2026-02-22 22:55:32,955{GMT}	INFO	[jepsen test runner] jepsen.core: Command line:
+lein run test --docker --workload queue --nemesis none --time-limit 30
+2026-02-22 22:55:32,991{GMT}	INFO	[jepsen test runner] jepsen.core: Running test:
+{:remote
+ #jepsen.control.retry.Remote{:remote #jepsen.control.scp.Remote{:cmd-remote #jepsen.control.sshj.SSHJRemote{:concurrency-limit 6,
+                                                                                                             :conn-spec nil,
+                                                                                                             :client nil,
+                                                                                                             :semaphore nil},
+                                                                 :conn-spec nil},
+                              :conn nil}
+ :concurrency 5
+ :cluster false
+ :db
+ #object[jepsen.frogdb.db$docker_db$reify__9886
+         "0x6853bae"
+         "jepsen.frogdb.db$docker_db$reify__9886@6853bae"]
+ :leave-db-running? false
+ :name "frogdb-queue-docker"
+ :logging-json? false
+ :independent false
+ :start-time
+ #object[org.joda.time.DateTime "0x6953f5fc" "2026-02-22T22:55:32.911-05:00"]
+ :docker true
+ :net
+ #object[jepsen.net$reify__12635
+         "0x455cd186"
+         "jepsen.net$reify__12635@455cd186"]
+ :client
+ #jepsen.frogdb.queue.QueueClient{:conn nil,
+                                  :node nil,
+                                  :docker-host? nil,
+                                  :enqueue-counter nil}
+ :barrier
+ #object[java.util.concurrent.CyclicBarrier
+         "0x79d137fd"
+         "java.util.concurrent.CyclicBarrier@79d137fd"]
+ :ssh {:dummy? true}
+ :rate 10
+ :checker
+ #object[jepsen.checker$compose$reify__10552
+         "0x18626c8c"
+         "jepsen.checker$compose$reify__10552@18626c8c"]
+ :argv
+ ("test" "--docker" "--workload" "queue" "--nemesis" "none" "--time-limit" "30")
+ :nemesis #unprintable "jepsen.nemesis$reify__12738@6ee88669"
+ :nodes ["n1"]
+ :test-count 1
+ :replication false
+ :cluster-nodes ["n1"]
+ :generator
+ #object[jepsen.util.Forgettable
+         "0x6fa38b67"
+         ((jepsen.generator.Synchronize
+           {:gen (jepsen.generator.TimeLimit
+                  {:limit 30000000000,
+                   :cutoff nil,
+                   :gen (jepsen.generator.Any
+                         {:gens [(jepsen.generator.OnThreads
+                                  {:f #{:nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x61bfee77"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@61bfee77"],
+                                   :gen nil})
+                                 (jepsen.generator.OnThreads
+                                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x2bc41531"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@2bc41531"],
+                                   :gen ((jepsen.generator.Synchronize
+                                          {:gen (jepsen.generator.Stagger
+                                                 {:dt 200000000,
+                                                  :next-time nil,
+                                                  :gen (jepsen.generator.Mix
+                                                        {:i 1,
+                                                         :gens [(jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.queue$enqueue_op
+                                                                               "0x67af3485"
+                                                                               "jepsen.frogdb.queue$enqueue_op@67af3485"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.queue$dequeue_op
+                                                                               "0x572a3331"
+                                                                               "jepsen.frogdb.queue$dequeue_op@572a3331"]})]})})})
+                                         (jepsen.generator.Synchronize
+                                          {:gen (jepsen.generator.OnThreads
+                                                 {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                                  :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                                          "0x4978a3f5"
+                                                                          "jepsen.generator.context$make_thread_filter$lazy_filter__11515@4978a3f5"],
+                                                  :gen (jepsen.generator.Stagger
+                                                        {:dt 1000000000,
+                                                         :next-time nil,
+                                                         :gen (jepsen.generator.Limit
+                                                               {:remaining 5,
+                                                                :gen (jepsen.generator.Repeat
+                                                                      {:remaining -1,
+                                                                       :gen {:f :read}})})})})}))})]})})})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Recovering from faults..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #{:nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x429e4a76"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@429e4a76"],
+                   :gen nil})})
+          (jepsen.generator.Synchronize {:gen {:type :sleep, :value 5}})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Final reads..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x5c0b55bc"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@5c0b55bc"],
+                   :gen (jepsen.generator.Stagger
+                         {:dt 200000000,
+                          :next-time nil,
+                          :gen (jepsen.generator.Limit
+                                {:remaining 10,
+                                 :gen (jepsen.generator.Repeat
+                                       {:remaining -1, :gen {:f :read}})})})})}))]
+ :interval 10
+ :os
+ #object[jepsen.frogdb.core$reify__14064
+         "0x5a36810a"
+         "jepsen.frogdb.core$reify__14064@5a36810a"]
+ :time-limit 30
+ :workload "queue"
+ :local false}
+
+2026-02-22 22:55:34,350{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS setup for n1 (no-op)
+2026-02-22 22:55:34,350{GMT}	INFO	[jepsen test runner] jepsen.db: Tearing down DB
+2026-02-22 22:55:34,351{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB on n1
+2026-02-22 22:55:34,351{GMT}	INFO	[jepsen test runner] jepsen.db: Setting up DB
+2026-02-22 22:55:34,351{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Setting up FrogDB on n1
+2026-02-22 22:55:34,351{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Starting container for n1
+2026-02-22 22:55:35,570{GMT}	INFO	[jepsen test runner] jepsen.core: Relative time begins now
+2026-02-22 22:55:35,571{GMT}	INFO	[jepsen node n1] jepsen.frogdb.queue: Opening queue client to n1 (docker-host?: true )
+2026-02-22 22:55:35,571{GMT}	INFO	[jepsen node n1] jepsen.frogdb.queue: Clearing queue key jepsen-queue
+2026-02-22 22:55:35,587{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:35,587{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.queue: Opening queue client to n1 (docker-host?: true )
+2026-02-22 22:55:35,593{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	nil
+2026-02-22 22:55:35,753{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:35,754{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.queue: Opening queue client to n1 (docker-host?: true )
+2026-02-22 22:55:35,758{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-1"
+2026-02-22 22:55:35,795{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:35,795{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.queue: Opening queue client to n1 (docker-host?: true )
+2026-02-22 22:55:35,797{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-1"
+2026-02-22 22:55:35,936{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:35,936{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:35,936{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.queue: Opening queue client to n1 (docker-host?: true )
+2026-02-22 22:55:35,936{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.queue: Opening queue client to n1 (docker-host?: true )
+2026-02-22 22:55:35,939{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p1-1"
+2026-02-22 22:55:35,939{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p2-1"
+2026-02-22 22:55:36,101{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:36,104{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	nil
+2026-02-22 22:55:36,206{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:36,210{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-1"
+2026-02-22 22:55:36,247{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:36,249{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-2"
+2026-02-22 22:55:36,378{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:36,381{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p0-1"
+2026-02-22 22:55:36,431{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:36,433{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-1"
+2026-02-22 22:55:36,461{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:36,464{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p1-2"
+2026-02-22 22:55:36,517{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:36,520{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-2"
+2026-02-22 22:55:36,559{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:36,561{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p3-1"
+2026-02-22 22:55:36,592{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:36,594{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p0-2"
+2026-02-22 22:55:36,633{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:36,634{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-2"
+2026-02-22 22:55:36,710{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:36,711{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-2"
+2026-02-22 22:55:36,778{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:36,780{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-1"
+2026-02-22 22:55:36,864{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:36,867{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-3"
+2026-02-22 22:55:37,007{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:37,009{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-4"
+2026-02-22 22:55:37,014{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:37,015{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p2-2"
+2026-02-22 22:55:37,207{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:37,209{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p3-2"
+2026-02-22 22:55:37,376{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:37,377{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p4-1"
+2026-02-22 22:55:37,528{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:37,529{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-2"
+2026-02-22 22:55:37,532{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:37,533{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-3"
+2026-02-22 22:55:37,572{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:37,574{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-5"
+2026-02-22 22:55:37,650{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:37,651{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p0-4"
+2026-02-22 22:55:37,710{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:37,712{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p4-2"
+2026-02-22 22:55:37,794{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:37,796{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-3"
+2026-02-22 22:55:37,799{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:37,800{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p0-5"
+2026-02-22 22:55:37,926{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:37,928{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-6"
+2026-02-22 22:55:38,118{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:38,120{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-7"
+2026-02-22 22:55:38,249{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:38,251{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-3"
+2026-02-22 22:55:38,413{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:38,414{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-3"
+2026-02-22 22:55:38,599{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:38,600{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-4"
+2026-02-22 22:55:38,609{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:38,611{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p3-3"
+2026-02-22 22:55:38,721{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:38,722{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-8"
+2026-02-22 22:55:38,894{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:38,895{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-9"
+2026-02-22 22:55:38,965{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:38,967{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p0-6"
+2026-02-22 22:55:39,088{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:39,089{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-4"
+2026-02-22 22:55:39,180{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:39,182{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-5"
+2026-02-22 22:55:39,364{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:39,365{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-3"
+2026-02-22 22:55:39,567{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:39,568{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-7"
+2026-02-22 22:55:39,630{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:39,631{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p1-3"
+2026-02-22 22:55:39,775{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:39,777{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p2-3"
+2026-02-22 22:55:39,854{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:39,856{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p3-4"
+2026-02-22 22:55:39,909{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:39,911{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-6"
+2026-02-22 22:55:40,097{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:40,098{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-4"
+2026-02-22 22:55:40,237{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:40,239{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-8"
+2026-02-22 22:55:40,378{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:40,380{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-10"
+2026-02-22 22:55:40,496{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:40,497{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p0-9"
+2026-02-22 22:55:40,539{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:40,541{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p2-4"
+2026-02-22 22:55:40,549{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:40,550{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p3-5"
+2026-02-22 22:55:40,744{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:40,745{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-5"
+2026-02-22 22:55:40,763{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:40,765{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p4-3"
+2026-02-22 22:55:40,862{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:40,864{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-11"
+2026-02-22 22:55:40,919{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:40,920{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p3-6"
+2026-02-22 22:55:41,115{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:41,117{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-5"
+2026-02-22 22:55:41,251{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:41,253{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p4-4"
+2026-02-22 22:55:41,390{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:41,392{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p0-10"
+2026-02-22 22:55:41,525{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:41,527{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-12"
+2026-02-22 22:55:41,532{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:41,534{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-13"
+2026-02-22 22:55:41,634{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:41,636{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p4-5"
+2026-02-22 22:55:41,636{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:41,637{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-6"
+2026-02-22 22:55:41,729{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:41,730{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p0-11"
+2026-02-22 22:55:41,879{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:41,880{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-6"
+2026-02-22 22:55:41,911{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:41,912{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p2-5"
+2026-02-22 22:55:41,913{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:41,914{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-14"
+2026-02-22 22:55:42,072{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:42,074{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p0-12"
+2026-02-22 22:55:42,265{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:42,266{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-7"
+2026-02-22 22:55:42,273{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:42,274{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p0-13"
+2026-02-22 22:55:42,319{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:42,321{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-7"
+2026-02-22 22:55:42,482{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:42,483{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p2-6"
+2026-02-22 22:55:42,632{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:42,634{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-15"
+2026-02-22 22:55:42,825{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:42,826{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-4"
+2026-02-22 22:55:42,991{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:42,992{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p4-6"
+2026-02-22 22:55:43,128{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:43,130{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-7"
+2026-02-22 22:55:43,218{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:43,219{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-8"
+2026-02-22 22:55:43,393{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:43,395{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-16"
+2026-02-22 22:55:43,481{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:43,484{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-14"
+2026-02-22 22:55:43,525{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:43,528{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p2-7"
+2026-02-22 22:55:43,692{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:43,694{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-8"
+2026-02-22 22:55:43,757{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:43,759{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-8"
+2026-02-22 22:55:43,855{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:43,857{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p4-7"
+2026-02-22 22:55:43,874{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:43,875{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-17"
+2026-02-22 22:55:43,959{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:43,961{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-15"
+2026-02-22 22:55:44,082{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:44,084{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-5"
+2026-02-22 22:55:44,268{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:44,271{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p1-4"
+2026-02-22 22:55:44,455{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:44,458{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-9"
+2026-02-22 22:55:44,570{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:44,571{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p3-7"
+2026-02-22 22:55:44,660{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:44,662{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-18"
+2026-02-22 22:55:44,700{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:44,701{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p4-8"
+2026-02-22 22:55:44,776{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:44,778{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p0-16"
+2026-02-22 22:55:44,968{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:44,968{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-9"
+2026-02-22 22:55:45,137{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:45,138{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p2-8"
+2026-02-22 22:55:45,251{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:45,254{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-9"
+2026-02-22 22:55:45,293{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:45,295{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p3-8"
+2026-02-22 22:55:45,321{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:45,322{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-17"
+2026-02-22 22:55:45,389{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:45,391{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-6"
+2026-02-22 22:55:45,566{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:45,568{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-10"
+2026-02-22 22:55:45,743{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:45,745{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-10"
+2026-02-22 22:55:45,901{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:45,904{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-10"
+2026-02-22 22:55:45,944{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:45,945{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p1-5"
+2026-02-22 22:55:46,145{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:46,149{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p3-9"
+2026-02-22 22:55:46,210{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:46,214{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-7"
+2026-02-22 22:55:46,260{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:46,262{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p0-18"
+2026-02-22 22:55:46,465{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:46,466{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-11"
+2026-02-22 22:55:46,546{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:46,548{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-11"
+2026-02-22 22:55:46,634{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:46,636{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p2-9"
+2026-02-22 22:55:46,648{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:46,650{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p4-9"
+2026-02-22 22:55:46,669{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:46,671{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-8"
+2026-02-22 22:55:46,865{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:46,867{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p1-6"
+2026-02-22 22:55:47,056{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:47,057{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p2-10"
+2026-02-22 22:55:47,176{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:47,177{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-12"
+2026-02-22 22:55:47,305{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:47,307{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p3-10"
+2026-02-22 22:55:47,446{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:47,448{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-19"
+2026-02-22 22:55:47,542{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:47,545{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p4-10"
+2026-02-22 22:55:47,635{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:47,637{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p1-7"
+2026-02-22 22:55:47,690{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:47,692{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-12"
+2026-02-22 22:55:47,719{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:47,720{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p3-11"
+2026-02-22 22:55:47,857{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:47,859{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-20"
+2026-02-22 22:55:48,018{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:48,020{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p4-11"
+2026-02-22 22:55:48,143{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:48,144{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p1-8"
+2026-02-22 22:55:48,205{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:48,206{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-11"
+2026-02-22 22:55:48,327{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:48,329{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-13"
+2026-02-22 22:55:48,457{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:48,460{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p4-12"
+2026-02-22 22:55:48,488{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:48,490{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-21"
+2026-02-22 22:55:48,495{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:48,496{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-19"
+2026-02-22 22:55:48,646{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:48,648{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-9"
+2026-02-22 22:55:48,719{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:48,720{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p3-12"
+2026-02-22 22:55:48,736{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:48,738{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-14"
+2026-02-22 22:55:48,855{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:48,858{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-13"
+2026-02-22 22:55:49,009{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:49,011{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-20"
+2026-02-22 22:55:49,138{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:49,140{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-22"
+2026-02-22 22:55:49,230{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:49,232{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p2-11"
+2026-02-22 22:55:49,379{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:49,381{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-12"
+2026-02-22 22:55:49,425{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:49,426{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p3-13"
+2026-02-22 22:55:49,629{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:49,630{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-14"
+2026-02-22 22:55:49,703{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:49,705{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-23"
+2026-02-22 22:55:49,805{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:49,810{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-24"
+2026-02-22 22:55:49,813{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:49,814{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p0-21"
+2026-02-22 22:55:49,835{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:49,836{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p1-9"
+2026-02-22 22:55:49,902{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:49,905{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-15"
+2026-02-22 22:55:49,984{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:49,986{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-15"
+2026-02-22 22:55:50,069{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:50,071{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-25"
+2026-02-22 22:55:50,090{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:50,091{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-26"
+2026-02-22 22:55:50,266{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:50,267{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p3-14"
+2026-02-22 22:55:50,305{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:50,306{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p4-13"
+2026-02-22 22:55:50,455{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:50,457{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p0-22"
+2026-02-22 22:55:50,607{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:50,609{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-16"
+2026-02-22 22:55:50,777{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:50,778{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p2-12"
+2026-02-22 22:55:50,926{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:50,927{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-27"
+2026-02-22 22:55:51,066{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:51,067{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-10"
+2026-02-22 22:55:51,181{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:51,182{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p4-14"
+2026-02-22 22:55:51,333{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:51,334{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p0-23"
+2026-02-22 22:55:51,516{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:51,518{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p0-24"
+2026-02-22 22:55:51,589{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:51,590{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p3-15"
+2026-02-22 22:55:51,705{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:51,707{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-28"
+2026-02-22 22:55:51,892{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:51,894{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p4-15"
+2026-02-22 22:55:51,960{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:51,962{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-13"
+2026-02-22 22:55:52,026{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:52,028{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p0-25"
+2026-02-22 22:55:52,172{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:52,174{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p0-26"
+2026-02-22 22:55:52,226{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:52,227{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p4-16"
+2026-02-22 22:55:52,380{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:52,382{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-29"
+2026-02-22 22:55:52,566{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:52,567{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p0-27"
+2026-02-22 22:55:52,605{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:52,608{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-14"
+2026-02-22 22:55:52,731{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:52,732{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p1-10"
+2026-02-22 22:55:52,885{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:52,887{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p0-28"
+2026-02-22 22:55:53,071{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:53,073{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-30"
+2026-02-22 22:55:53,217{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:53,219{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p2-13"
+2026-02-22 22:55:53,380{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:53,381{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-11"
+2026-02-22 22:55:53,565{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:53,566{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p0-29"
+2026-02-22 22:55:53,735{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:53,736{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-16"
+2026-02-22 22:55:53,773{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:53,774{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p2-14"
+2026-02-22 22:55:53,797{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:53,798{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-30"
+2026-02-22 22:55:53,928{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:53,930{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-31"
+2026-02-22 22:55:53,963{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:53,965{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-12"
+2026-02-22 22:55:54,115{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:54,117{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-15"
+2026-02-22 22:55:54,230{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:54,232{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p1-11"
+2026-02-22 22:55:54,342{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:54,345{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-17"
+2026-02-22 22:55:54,424{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:54,426{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p3-16"
+2026-02-22 22:55:54,480{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:54,482{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-32"
+2026-02-22 22:55:54,617{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:54,618{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p0-31"
+2026-02-22 22:55:54,719{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:54,720{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-16"
+2026-02-22 22:55:54,833{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:54,835{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p1-12"
+2026-02-22 22:55:54,839{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:54,840{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-18"
+2026-02-22 22:55:55,029{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:55,032{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-33"
+2026-02-22 22:55:55,101{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:55,102{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-34"
+2026-02-22 22:55:55,288{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:55,290{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p2-15"
+2026-02-22 22:55:55,437{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:55,439{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-17"
+2026-02-22 22:55:55,553{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:55,556{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p4-17"
+2026-02-22 22:55:55,673{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:55,674{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p0-32"
+2026-02-22 22:55:55,819{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:55,820{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-35"
+2026-02-22 22:55:55,930{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:55,932{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p2-16"
+2026-02-22 22:55:56,025{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:56,026{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-13"
+2026-02-22 22:55:56,151{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:56,154{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p4-18"
+2026-02-22 22:55:56,159{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:56,161{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p0-33"
+2026-02-22 22:55:56,258{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:56,259{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-19"
+2026-02-22 22:55:56,435{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:56,437{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-36"
+2026-02-22 22:55:56,510{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:56,512{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-34"
+2026-02-22 22:55:56,694{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:56,697{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-14"
+2026-02-22 22:55:56,779{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:56,780{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p2-17"
+2026-02-22 22:55:56,913{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:56,915{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-17"
+2026-02-22 22:55:56,927{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:56,929{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-20"
+2026-02-22 22:55:56,954{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:56,956{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-35"
+2026-02-22 22:55:57,064{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:57,067{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p1-13"
+2026-02-22 22:55:57,092{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:57,096{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-15"
+2026-02-22 22:55:57,122{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:57,124{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-18"
+2026-02-22 22:55:57,320{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:57,323{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p4-19"
+2026-02-22 22:55:57,352{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:57,354{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p0-36"
+2026-02-22 22:55:57,425{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:57,428{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p1-14"
+2026-02-22 22:55:57,434{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:57,436{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-37"
+2026-02-22 22:55:57,576{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:57,579{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-16"
+2026-02-22 22:55:57,775{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:57,776{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p3-17"
+2026-02-22 22:55:57,811{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:57,812{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p4-20"
+2026-02-22 22:55:57,870{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:57,871{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-21"
+2026-02-22 22:55:57,935{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:57,936{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-38"
+2026-02-22 22:55:58,022{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:58,024{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p1-15"
+2026-02-22 22:55:58,180{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:58,181{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-17"
+2026-02-22 22:55:58,305{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:55:58,307{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-19"
+2026-02-22 22:55:58,487{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:55:58,489{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-18"
+2026-02-22 22:55:58,582{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:55:58,585{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p2-18"
+2026-02-22 22:55:58,705{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:55:58,707{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-39"
+2026-02-22 22:55:58,820{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:58,821{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-37"
+2026-02-22 22:55:58,902{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:55:58,903{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-18"
+2026-02-22 22:55:59,099{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:59,101{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p1-16"
+2026-02-22 22:55:59,150{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:59,151{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p4-21"
+2026-02-22 22:55:59,168{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:59,168{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:59,169{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-22"
+2026-02-22 22:55:59,169{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-38"
+2026-02-22 22:55:59,280{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:59,282{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p1-17"
+2026-02-22 22:55:59,353{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:55:59,356{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p2-19"
+2026-02-22 22:55:59,554{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:55:59,555{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p3-18"
+2026-02-22 22:55:59,644{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:55:59,645{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p0-39"
+2026-02-22 22:55:59,799{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:55:59,801{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-23"
+2026-02-22 22:55:59,942{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:59,943{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p1-18"
+2026-02-22 22:55:59,981{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:55:59,982{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p4-22"
+2026-02-22 22:56:00,185{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:56:00,187{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p4-23"
+2026-02-22 22:56:00,252{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:56:00,255{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-20"
+2026-02-22 22:56:00,268{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:56:00,270{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p2-20"
+2026-02-22 22:56:00,281{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:56:00,284{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	nil
+2026-02-22 22:56:00,408{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:56:00,410{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	nil
+2026-02-22 22:56:00,464{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:56:00,466{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	nil
+2026-02-22 22:56:00,592{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:56:00,595{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	nil
+2026-02-22 22:56:00,768{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:56:00,771{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	nil
+2026-02-22 22:56:00,818{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:56:00,820{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	nil
+2026-02-22 22:56:01,014{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:56:01,015{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	nil
+2026-02-22 22:56:01,147{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:56:01,148{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-40"
+2026-02-22 22:56:01,200{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:56:01,201{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-41"
+2026-02-22 22:56:01,230{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:56:01,232{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p0-40"
+2026-02-22 22:56:01,265{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:56:01,267{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-21"
+2026-02-22 22:56:01,280{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:56:01,282{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-19"
+2026-02-22 22:56:01,429{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:56:01,431{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:56:01,431{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-24"
+2026-02-22 22:56:01,431{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-42"
+2026-02-22 22:56:01,633{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:56:01,634{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-43"
+2026-02-22 22:56:01,696{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:56:01,698{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-19"
+2026-02-22 22:56:01,872{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:56:01,873{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p0-41"
+2026-02-22 22:56:01,892{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:56:01,893{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p2-21"
+2026-02-22 22:56:01,931{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:56:01,932{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p3-19"
+2026-02-22 22:56:02,097{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:56:02,098{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p4-24"
+2026-02-22 22:56:02,115{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:56:02,116{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-44"
+2026-02-22 22:56:02,205{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:56:02,206{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-20"
+2026-02-22 22:56:02,338{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:enqueue	nil
+2026-02-22 22:56:02,340{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:enqueue	"p2-22"
+2026-02-22 22:56:02,531{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:56:02,533{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p0-42"
+2026-02-22 22:56:02,642{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:56:02,643{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p0-43"
+2026-02-22 22:56:02,697{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:56:02,699{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-45"
+2026-02-22 22:56:02,750{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:56:02,751{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-46"
+2026-02-22 22:56:02,896{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:56:02,897{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p1-19"
+2026-02-22 22:56:03,005{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:56:03,007{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p0-44"
+2026-02-22 22:56:03,016{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:56:03,017{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p1-20"
+2026-02-22 22:56:03,168{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:56:03,170{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-25"
+2026-02-22 22:56:03,234{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:56:03,235{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p2-22"
+2026-02-22 22:56:03,340{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:56:03,341{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-45"
+2026-02-22 22:56:03,441{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:56:03,443{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-21"
+2026-02-22 22:56:03,584{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:56:03,586{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p0-46"
+2026-02-22 22:56:03,651{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:56:03,653{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p4-25"
+2026-02-22 22:56:03,701{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:56:03,703{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-26"
+2026-02-22 22:56:03,867{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:56:03,868{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p1-21"
+2026-02-22 22:56:04,011{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:56:04,012{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-47"
+2026-02-22 22:56:04,014{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:56:04,015{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-22"
+2026-02-22 22:56:04,214{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:56:04,217{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p4-26"
+2026-02-22 22:56:04,219{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:56:04,221{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-20"
+2026-02-22 22:56:04,224{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:56:04,225{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p0-47"
+2026-02-22 22:56:04,343{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:56:04,344{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-48"
+2026-02-22 22:56:04,506{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:56:04,508{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-49"
+2026-02-22 22:56:04,677{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:enqueue	nil
+2026-02-22 22:56:04,679{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:enqueue	"p1-23"
+2026-02-22 22:56:04,750{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:56:04,752{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p1-22"
+2026-02-22 22:56:04,851{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:dequeue	nil
+2026-02-22 22:56:04,853{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:dequeue	"p3-20"
+2026-02-22 22:56:04,897{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:dequeue	nil
+2026-02-22 22:56:04,900{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:dequeue	"p0-48"
+2026-02-22 22:56:05,022{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:dequeue	nil
+2026-02-22 22:56:05,025{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:dequeue	"p0-49"
+2026-02-22 22:56:05,118{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:enqueue	nil
+2026-02-22 22:56:05,121{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:enqueue	"p0-50"
+2026-02-22 22:56:05,267{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:dequeue	nil
+2026-02-22 22:56:05,268{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:dequeue	"p1-23"
+2026-02-22 22:56:05,423{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:dequeue	nil
+2026-02-22 22:56:05,424{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:dequeue	"p0-50"
+2026-02-22 22:56:05,511{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:enqueue	nil
+2026-02-22 22:56:05,513{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:enqueue	"p3-21"
+2026-02-22 22:56:05,580{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:enqueue	nil
+2026-02-22 22:56:05,583{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:enqueue	"p4-27"
+2026-02-22 22:56:05,583{GMT}	INFO	[jepsen worker nemesis] jepsen.generator.interpreter: Recovering from faults...
+2026-02-22 22:56:10,589{GMT}	INFO	[jepsen worker 1] jepsen.generator.interpreter: Final reads...
+2026-02-22 22:56:10,589{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-22 22:56:10,595{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	["p3-21" "p4-27"]
+2026-02-22 22:56:10,629{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-22 22:56:10,631{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	["p3-21" "p4-27"]
+2026-02-22 22:56:10,634{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-22 22:56:10,635{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	["p3-21" "p4-27"]
+2026-02-22 22:56:10,798{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-22 22:56:10,799{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	["p3-21" "p4-27"]
+2026-02-22 22:56:10,861{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-22 22:56:10,862{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	["p3-21" "p4-27"]
+2026-02-22 22:56:11,027{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-22 22:56:11,030{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	["p3-21" "p4-27"]
+2026-02-22 22:56:11,197{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-22 22:56:11,199{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	["p3-21" "p4-27"]
+2026-02-22 22:56:11,207{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-22 22:56:11,209{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	["p3-21" "p4-27"]
+2026-02-22 22:56:11,404{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-22 22:56:11,407{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	["p3-21" "p4-27"]
+2026-02-22 22:56:11,494{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-22 22:56:11,497{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	["p3-21" "p4-27"]
+2026-02-22 22:56:11,554{GMT}	INFO	[jepsen test runner] jepsen.core: Run complete, writing
+2026-02-22 22:56:11,602{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB on n1
+2026-02-22 22:56:11,602{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS teardown for n1 (no-op)
+2026-02-22 22:56:11,602{GMT}	INFO	[jepsen test runner] jepsen.core: Analyzing...
+2026-02-22 22:56:11,624{GMT}	WARN	[clojure-agent-send-off-pool-6] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$rate_graph_BANG_.invokeStatic(perf.clj:626)
+	at jepsen.checker.perf$rate_graph_BANG_.invoke(perf.clj:571)
+	at jepsen.checker$rate_graph$reify__10772.check(checker.clj:843)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-22 22:56:11,626{GMT}	WARN	[clojure-agent-send-off-pool-5] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$point_graph_BANG_.invokeStatic(perf.clj:523)
+	at jepsen.checker.perf$point_graph_BANG_.invoke(perf.clj:496)
+	at jepsen.checker$latency_graph$reify__10769.check(checker.clj:830)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-22 22:56:11,627{GMT}	INFO	[jepsen test runner] jepsen.core: Analysis complete
+2026-02-22 22:56:11,632{GMT}	INFO	[jepsen results] jepsen.store: Wrote /Users/nathan/workspace/nathanjordan/workspace-1/jepsen/frogdb/store/frogdb-queue-docker/20260222T225532.911-0500/results.edn
+2026-02-22 22:56:11,680{GMT}	INFO	[jepsen test runner] jepsen.core: {:workload {:queue {:valid? true,
+                    :enqueue-count 143,
+                    :dequeue-count 141,
+                    :remaining-count 2,
+                    :duplicate-dequeues {},
+                    :unknown-dequeues nil,
+                    :ordering-violations nil,
+                    :all-values-accounted true},
+            :valid? true},
+ :stats {:valid? true,
+         :count 303,
+         :ok-count 303,
+         :fail-count 0,
+         :info-count 0,
+         :by-f {:dequeue {:valid? true,
+                          :count 150,
+                          :ok-count 150,
+                          :fail-count 0,
+                          :info-count 0},
+                :enqueue {:valid? true,
+                          :count 143,
+                          :ok-count 143,
+                          :fail-count 0,
+                          :info-count 0},
+                :read {:valid? true,
+                       :count 10,
+                       :ok-count 10,
+                       :fail-count 0,
+                       :info-count 0}}},
+ :exceptions {:valid? true},
+ :perf {:latency-graph {:valid? :unknown,
+                        :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :rate-graph {:valid? :unknown,
+                     :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :valid? :unknown},
+ :valid? :unknown}
+
+
+Errors occurred during analysis, but no anomalies found. ಠ~ಠ

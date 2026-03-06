@@ -1,0 +1,1158 @@
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 0}, "n2" {:value nil}, "n3" {:value nil}}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 0}, "n2" {:value nil}, "n3" {:value nil}}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 0}, "n2" {:value nil}, "n3" {:value nil}}
+4	:invoke	:write-node	{:node "n1", :value 3}
+4	:ok	:write-node	{:node "n1", :value 3}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n3", :value 6}
+0	:ok	:write-node	{:node "n3", :value 6}
+1	:invoke	:write-node	{:node "n1", :value 9}
+1	:ok	:write-node	{:node "n1", :value 9}
+2	:invoke	:write-node	{:node "n1", :value 12}
+2	:ok	:write-node	{:node "n1", :value 12}
+3	:invoke	:write-node	{:node "n2", :value 15}
+3	:ok	:write-node	{:node "n2", :value 15}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n2", :value 18}
+0	:ok	:write-node	{:node "n2", :value 18}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 12}, "n2" {:value 18}, "n3" {:value 6}}
+1	:invoke	:write-node	{:node "n1", :value 21}
+1	:ok	:write-node	{:node "n1", :value 21}
+2	:invoke	:write-node	{:node "n2", :value 24}
+2	:ok	:write-node	{:node "n2", :value 24}
+3	:invoke	:write-node	{:node "n1", :value 27}
+3	:ok	:write-node	{:node "n1", :value 27}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 27}, "n2" {:value 24}, "n3" {:value 6}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 27}, "n2" {:value 24}, "n3" {:value 6}}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 27}, "n2" {:value 24}, "n3" {:value 6}}
+2	:invoke	:write-node	{:node "n1", :value 30}
+2	:ok	:write-node	{:node "n1", :value 30}
+3	:invoke	:check-role	"n2"
+3	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+4	:invoke	:check-role	"n3"
+4	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n2", :value 33}
+0	:ok	:write-node	{:node "n2", :value 33}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n2", :value 36}
+1	:ok	:write-node	{:node "n2", :value 36}
+2	:invoke	:write-node	{:node "n3", :value 39}
+2	:ok	:write-node	{:node "n3", :value 39}
+3	:invoke	:check-role	"n2"
+3	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n1", :value 42}
+4	:ok	:write-node	{:node "n1", :value 42}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n2", :value 45}
+0	:ok	:write-node	{:node "n2", :value 45}
+1	:invoke	:check-role	"n3"
+1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n2", :value 48}
+2	:ok	:write-node	{:node "n2", :value 48}
+3	:invoke	:write-node	{:node "n2", :value 51}
+3	:ok	:write-node	{:node "n2", :value 51}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 42}, "n2" {:value 51}, "n3" {:value 39}}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 42}, "n2" {:value 51}, "n3" {:value 39}}
+2	:invoke	:write-node	{:node "n1", :value 54}
+2	:ok	:write-node	{:node "n1", :value 54}
+3	:invoke	:write-node	{:node "n1", :value 57}
+3	:ok	:write-node	{:node "n1", :value 57}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n2", :value 60}
+0	:ok	:write-node	{:node "n2", :value 60}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n3", :value 63}
+1	:ok	:write-node	{:node "n3", :value 63}
+2	:invoke	:write-node	{:node "n2", :value 66}
+2	:ok	:write-node	{:node "n2", :value 66}
+3	:invoke	:write-node	{:node "n3", :value 69}
+3	:ok	:write-node	{:node "n3", :value 69}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 57}, "n2" {:value 66}, "n3" {:value 69}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 57}, "n2" {:value 66}, "n3" {:value 69}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 57}, "n2" {:value 66}, "n3" {:value 69}}
+1	:invoke	:write-node	{:node "n1", :value 72}
+1	:ok	:write-node	{:node "n1", :value 72}
+2	:invoke	:write-node	{:node "n3", :value 75}
+2	:ok	:write-node	{:node "n3", :value 75}
+3	:invoke	:write-node	{:node "n1", :value 78}
+3	:ok	:write-node	{:node "n1", :value 78}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 75}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 75}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 75}}
+1	:invoke	:write-node	{:node "n3", :value 81}
+1	:ok	:write-node	{:node "n3", :value 81}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 81}}
+3	:invoke	:check-role	"n3"
+3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n2", :value 84}
+4	:ok	:write-node	{:node "n2", :value 84}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 78}, "n2" {:value 84}, "n3" {:value 81}}
+0	:invoke	:write-node	{:node "n1", :value 87}
+0	:ok	:write-node	{:node "n1", :value 87}
+1	:invoke	:write-node	{:node "n3", :value 90}
+1	:ok	:write-node	{:node "n3", :value 90}
+2	:invoke	:write-node	{:node "n2", :value 93}
+2	:ok	:write-node	{:node "n2", :value 93}
+3	:invoke	:write-node	{:node "n1", :value 96}
+3	:ok	:write-node	{:node "n1", :value 96}
+4	:invoke	:write-node	{:node "n3", :value 99}
+4	:ok	:write-node	{:node "n3", :value 99}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 96}, "n2" {:value 93}, "n3" {:value 99}}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 96}, "n2" {:value 93}, "n3" {:value 99}}
+2	:invoke	:check-role	"n3"
+2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+3	:invoke	:write-node	{:node "n1", :value 102}
+3	:ok	:write-node	{:node "n1", :value 102}
+4	:invoke	:write-node	{:node "n2", :value 105}
+4	:ok	:write-node	{:node "n2", :value 105}
+0	:invoke	:write-node	{:node "n2", :value 108}
+0	:ok	:write-node	{:node "n2", :value 108}
+0	:invoke	:write-node	{:node "n3", :value 111}
+0	:ok	:write-node	{:node "n3", :value 111}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+2	:invoke	:check-role	"n2"
+2	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+4	:invoke	:read-all	nil
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+4	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+2	:invoke	:check-role	"n3"
+2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}
+4	:invoke	:write-node	{:node "n1", :value 114}
+4	:ok	:write-node	{:node "n1", :value 114}
+0	:invoke	:write-node	{:node "n3", :value 117}
+0	:ok	:write-node	{:node "n3", :value 117}
+0	:invoke	:write-node	{:node "n1", :value 120}
+0	:ok	:write-node	{:node "n1", :value 120}
+:nemesis	:info	:partition	:primary-isolated
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 120}, "n2" {:value 108}, "n3" {:value 117}}
+3	:invoke	:write-node	{:node "n3", :value 123}
+3	:ok	:write-node	{:node "n3", :value 123}
+4	:invoke	:check-role	"n3"
+4	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 120}, "n2" {:value 108}, "n3" {:value 123}}
+0	:invoke	:write-node	{:node "n3", :value 126}
+0	:ok	:write-node	{:node "n3", :value 126}
+1	:invoke	:write-node	{:node "n3", :value 129}
+1	:ok	:write-node	{:node "n3", :value 129}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 120}, "n2" {:value 108}, "n3" {:value 129}}
+:nemesis	:info	:partition	:primary-isolated
+4	:invoke	:write-node	{:node "n1", :value 134}
+4	:ok	:write-node	{:node "n1", :value 134}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 134}, "n2" {:value 108}, "n3" {:value 129}}
+0	:invoke	:write-node	{:node "n3", :value 137}
+0	:ok	:write-node	{:node "n3", :value 137}
+1	:invoke	:check-role	"n1"
+1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n3", :value 140}
+2	:ok	:write-node	{:node "n3", :value 140}
+3	:invoke	:check-role	"n1"
+3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n1", :value 143}
+4	:ok	:write-node	{:node "n1", :value 143}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 143}, "n2" {:value 108}, "n3" {:value 140}}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n1", :value 146}
+1	:ok	:write-node	{:node "n1", :value 146}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 146}, "n2" {:value 108}, "n3" {:value 140}}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 146}, "n2" {:value 108}, "n3" {:value 140}}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n1", :value 149}
+1	:ok	:write-node	{:node "n1", :value 149}
+2	:invoke	:check-role	"n3"
+2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+3	:invoke	:write-node	{:node "n3", :value 152}
+3	:ok	:write-node	{:node "n3", :value 152}
+4	:invoke	:write-node	{:node "n3", :value 155}
+4	:ok	:write-node	{:node "n3", :value 155}
+0	:invoke	:write-node	{:node "n2", :value 158}
+0	:ok	:write-node	{:node "n2", :value 158}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+1	:invoke	:check-role	"n1"
+1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n2", :value 161}
+2	:ok	:write-node	{:node "n2", :value 161}
+3	:invoke	:write-node	{:node "n1", :value 164}
+3	:ok	:write-node	{:node "n1", :value 164}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 167}
+0	:ok	:write-node	{:node "n1", :value 167}
+1	:invoke	:write-node	{:node "n1", :value 170}
+1	:ok	:write-node	{:node "n1", :value 170}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 170}, "n2" {:value 161}, "n3" {:value 155}}
+3	:invoke	:check-role	"n3"
+3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+4	:invoke	:check-role	"n1"
+4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n3", :value 173}
+0	:ok	:write-node	{:node "n3", :value 173}
+0	:invoke	:write-node	{:node "n1", :value 176}
+0	:ok	:write-node	{:node "n1", :value 176}
+1	:invoke	:write-node	{:node "n1", :value 179}
+1	:ok	:write-node	{:node "n1", :value 179}
+2	:invoke	:write-node	{:node "n1", :value 182}
+2	:ok	:write-node	{:node "n1", :value 182}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 182}, "n2" {:value 161}, "n3" {:value 173}}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 182}, "n2" {:value 161}, "n3" {:value 173}}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 185}
+0	:ok	:write-node	{:node "n1", :value 185}
+1	:invoke	:write-node	{:node "n1", :value 188}
+1	:ok	:write-node	{:node "n1", :value 188}
+2	:invoke	:write-node	{:node "n1", :value 191}
+2	:ok	:write-node	{:node "n1", :value 191}
+3	:invoke	:write-node	{:node "n1", :value 194}
+3	:ok	:write-node	{:node "n1", :value 194}
+4	:invoke	:write-node	{:node "n2", :value 197}
+4	:ok	:write-node	{:node "n2", :value 197}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 194}, "n2" {:value 197}, "n3" {:value 173}}
+2	:invoke	:write-node	{:node "n1", :value 200}
+2	:ok	:write-node	{:node "n1", :value 200}
+3	:invoke	:check-role	"n3"
+3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n2", :value 203}
+4	:ok	:write-node	{:node "n2", :value 203}
+0	:invoke	:write-node	{:node "n3", :value 206}
+0	:ok	:write-node	{:node "n3", :value 206}
+0	:invoke	:write-node	{:node "n2", :value 209}
+0	:ok	:write-node	{:node "n2", :value 209}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 200}, "n2" {:value 209}, "n3" {:value 206}}
+2	:invoke	:check-role	"n1"
+2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+3	:invoke	:check-role	"n1"
+3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n1", :value 212}
+4	:ok	:write-node	{:node "n1", :value 212}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 212}, "n2" {:value 209}, "n3" {:value 206}}
+0	:invoke	:write-node	{:node "n2", :value 215}
+0	:ok	:write-node	{:node "n2", :value 215}
+1	:invoke	:write-node	{:node "n3", :value 218}
+1	:ok	:write-node	{:node "n3", :value 218}
+2	:invoke	:check-role	"n1"
+2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 212}, "n2" {:value 215}, "n3" {:value 218}}
+4	:invoke	:write-node	{:node "n3", :value 221}
+4	:ok	:write-node	{:node "n3", :value 221}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n2", :value 224}
+1	:ok	:write-node	{:node "n2", :value 224}
+2	:invoke	:write-node	{:node "n3", :value 227}
+2	:ok	:write-node	{:node "n3", :value 227}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 212}, "n2" {:value 224}, "n3" {:value 227}}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 212}, "n2" {:value 224}, "n3" {:value 227}}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 230}
+0	:ok	:write-node	{:node "n1", :value 230}
+1	:invoke	:check-role	"n3"
+1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2	:invoke	:check-role	"n1"
+2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+3	:invoke	:write-node	{:node "n1", :value 233}
+3	:ok	:write-node	{:node "n1", :value 233}
+4	:invoke	:write-node	{:node "n1", :value 236}
+4	:ok	:write-node	{:node "n1", :value 236}
+0	:invoke	:write-node	{:node "n3", :value 239}
+0	:ok	:write-node	{:node "n3", :value 239}
+0	:invoke	:write-node	{:node "n3", :value 242}
+0	:ok	:write-node	{:node "n3", :value 242}
+1	:invoke	:check-role	"n3"
+1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n1", :value 245}
+2	:ok	:write-node	{:node "n1", :value 245}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 245}, "n2" {:value 224}, "n3" {:value 242}}
+4	:invoke	:check-role	"n1"
+4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 245}, "n2" {:value 224}, "n3" {:value 242}}
+0	:invoke	:write-node	{:node "n1", :value 248}
+0	:ok	:write-node	{:node "n1", :value 248}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 248}, "n2" {:value 224}, "n3" {:value 242}}
+2	:invoke	:write-node	{:node "n1", :value 251}
+2	:ok	:write-node	{:node "n1", :value 251}
+3	:invoke	:check-role	"n3"
+3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 242}}
+0	:invoke	:write-node	{:node "n3", :value 254}
+0	:ok	:write-node	{:node "n3", :value 254}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 254}}
+1	:invoke	:write-node	{:node "n3", :value 257}
+1	:ok	:write-node	{:node "n3", :value 257}
+2	:invoke	:write-node	{:node "n3", :value 260}
+2	:ok	:write-node	{:node "n3", :value 260}
+:nemesis	:info	:heal	nil
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n3", :value 263}
+0	:ok	:write-node	{:node "n3", :value 263}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 263}}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 263}}
+:nemesis	:info	:heal	:healed
+3	:invoke	:write-node	{:node "n2", :value 268}
+3	:ok	:write-node	{:node "n2", :value 268}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 251}, "n2" {:value 268}, "n3" {:value 263}}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 271}
+0	:ok	:write-node	{:node "n1", :value 271}
+1	:invoke	:check-role	"n3"
+1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n3", :value 274}
+2	:ok	:write-node	{:node "n3", :value 274}
+3	:invoke	:write-node	{:node "n3", :value 277}
+3	:ok	:write-node	{:node "n3", :value 277}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 271}, "n2" {:value 268}, "n3" {:value 277}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 271}, "n2" {:value 268}, "n3" {:value 277}}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 271}, "n2" {:value 268}, "n3" {:value 277}}
+2	:invoke	:write-node	{:node "n2", :value 280}
+2	:ok	:write-node	{:node "n2", :value 280}
+3	:invoke	:write-node	{:node "n1", :value 283}
+3	:ok	:write-node	{:node "n1", :value 283}
+4	:invoke	:check-role	"n1"
+4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 283}, "n2" {:value 280}, "n3" {:value 277}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 283}, "n2" {:value 280}, "n3" {:value 277}}
+1	:invoke	:check-role	"n2"
+1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n1", :value 286}
+2	:ok	:write-node	{:node "n1", :value 286}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 286}, "n2" {:value 280}, "n3" {:value 277}}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 286}, "n2" {:value 280}, "n3" {:value 277}}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 289}
+0	:ok	:write-node	{:node "n1", :value 289}
+1	:invoke	:write-node	{:node "n2", :value 292}
+1	:ok	:write-node	{:node "n2", :value 292}
+2	:invoke	:write-node	{:node "n3", :value 295}
+2	:ok	:write-node	{:node "n3", :value 295}
+3	:invoke	:check-role	"n1"
+3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n1", :value 298}
+4	:ok	:write-node	{:node "n1", :value 298}
+0	:invoke	:write-node	{:node "n2", :value 301}
+0	:ok	:write-node	{:node "n2", :value 301}
+0	:invoke	:write-node	{:node "n1", :value 304}
+0	:ok	:write-node	{:node "n1", :value 304}
+1	:invoke	:check-role	"n3"
+1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n3", :value 307}
+2	:ok	:write-node	{:node "n3", :value 307}
+3	:invoke	:write-node	{:node "n2", :value 310}
+3	:ok	:write-node	{:node "n2", :value 310}
+4	:invoke	:write-node	{:node "n1", :value 313}
+4	:ok	:write-node	{:node "n1", :value 313}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 313}, "n2" {:value 310}, "n3" {:value 307}}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+1	:invoke	:check-role	"n1"
+1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n1", :value 316}
+2	:ok	:write-node	{:node "n1", :value 316}
+3	:invoke	:write-node	{:node "n1", :value 319}
+3	:ok	:write-node	{:node "n1", :value 319}
+4	:invoke	:write-node	{:node "n2", :value 322}
+4	:ok	:write-node	{:node "n2", :value 322}
+0	:invoke	:write-node	{:node "n3", :value 325}
+0	:ok	:write-node	{:node "n3", :value 325}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+1	:invoke	:check-role	"n2"
+1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n2", :value 328}
+2	:ok	:write-node	{:node "n2", :value 328}
+3	:invoke	:write-node	{:node "n3", :value 331}
+3	:ok	:write-node	{:node "n3", :value 331}
+4	:invoke	:check-role	"n1"
+4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 319}, "n2" {:value 328}, "n3" {:value 331}}
+0	:invoke	:write-node	{:node "n2", :value 334}
+0	:ok	:write-node	{:node "n2", :value 334}
+1	:invoke	:write-node	{:node "n1", :value 337}
+1	:ok	:write-node	{:node "n1", :value 337}
+3	:invoke	:write-node	{:node "n3", :value 342}
+3	:ok	:write-node	{:node "n3", :value 342}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 337}, "n2" {:value 334}, "n3" {:value 342}}
+0	:invoke	:write-node	{:node "n2", :value 345}
+0	:ok	:write-node	{:node "n2", :value 345}
+0	:invoke	:write-node	{:node "n1", :value 348}
+0	:ok	:write-node	{:node "n1", :value 348}
+1	:invoke	:write-node	{:node "n2", :value 351}
+1	:ok	:write-node	{:node "n2", :value 351}
+2	:invoke	:write-node	{:node "n2", :value 354}
+2	:ok	:write-node	{:node "n2", :value 354}
+3	:invoke	:write-node	{:node "n2", :value 357}
+3	:ok	:write-node	{:node "n2", :value 357}
+4	:invoke	:write-node	{:node "n1", :value 360}
+4	:ok	:write-node	{:node "n1", :value 360}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 363}
+0	:ok	:write-node	{:node "n1", :value 363}
+1	:invoke	:write-node	{:node "n3", :value 366}
+1	:ok	:write-node	{:node "n3", :value 366}
+2	:invoke	:write-node	{:node "n3", :value 369}
+2	:ok	:write-node	{:node "n3", :value 369}
+3	:invoke	:check-role	"n3"
+3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+4	:invoke	:check-role	"n3"
+4	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 363}, "n2" {:value 357}, "n3" {:value 369}}
+1	:invoke	:check-role	"n1"
+1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n1", :value 372}
+2	:ok	:write-node	{:node "n1", :value 372}
+3	:invoke	:check-role	"n3"
+3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 372}, "n2" {:value 357}, "n3" {:value 369}}
+0	:invoke	:write-node	{:node "n1", :value 375}
+0	:ok	:write-node	{:node "n1", :value 375}
+1	:invoke	:write-node	{:node "n3", :value 378}
+1	:ok	:write-node	{:node "n3", :value 378}
+2	:invoke	:check-role	"n3"
+2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+3	:invoke	:check-role	"n1"
+3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n3", :value 381}
+1	:ok	:write-node	{:node "n3", :value 381}
+2	:invoke	:write-node	{:node "n1", :value 384}
+2	:ok	:write-node	{:node "n1", :value 384}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 384}, "n2" {:value 357}, "n3" {:value 381}}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n3", :value 387}
+0	:ok	:write-node	{:node "n3", :value 387}
+0	:invoke	:write-node	{:node "n2", :value 390}
+0	:ok	:write-node	{:node "n2", :value 390}
+1	:invoke	:check-role	"n1"
+1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n1", :value 393}
+2	:ok	:write-node	{:node "n1", :value 393}
+3	:invoke	:write-node	{:node "n2", :value 396}
+3	:ok	:write-node	{:node "n2", :value 396}
+4	:invoke	:write-node	{:node "n1", :value 399}
+4	:ok	:write-node	{:node "n1", :value 399}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 399}, "n2" {:value 396}, "n3" {:value 387}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 399}, "n2" {:value 396}, "n3" {:value 387}}
+1	:invoke	:check-role	"n2"
+1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n3", :value 402}
+2	:ok	:write-node	{:node "n3", :value 402}
+3	:invoke	:write-node	{:node "n1", :value 405}
+3	:ok	:write-node	{:node "n1", :value 405}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 405}, "n2" {:value 396}, "n3" {:value 402}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 405}, "n2" {:value 396}, "n3" {:value 402}}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n1", :value 408}
+1	:ok	:write-node	{:node "n1", :value 408}
+2	:invoke	:check-role	"n1"
+2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+3	:invoke	:write-node	{:node "n3", :value 411}
+3	:ok	:write-node	{:node "n3", :value 411}
+4	:invoke	:write-node	{:node "n3", :value 414}
+4	:ok	:write-node	{:node "n3", :value 414}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 417}
+0	:ok	:write-node	{:node "n1", :value 417}
+1	:invoke	:write-node	{:node "n1", :value 420}
+1	:ok	:write-node	{:node "n1", :value 420}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 420}, "n2" {:value 396}, "n3" {:value 414}}
+3	:invoke	:check-role	"n2"
+3	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 420}, "n2" {:value 396}, "n3" {:value 414}}
+0	:invoke	:write-node	{:node "n1", :value 423}
+0	:ok	:write-node	{:node "n1", :value 423}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n1", :value 426}
+1	:ok	:write-node	{:node "n1", :value 426}
+2	:invoke	:write-node	{:node "n3", :value 429}
+2	:ok	:write-node	{:node "n3", :value 429}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 426}, "n2" {:value 396}, "n3" {:value 429}}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 426}, "n2" {:value 396}, "n3" {:value 429}}
+0	:invoke	:write-node	{:node "n2", :value 432}
+0	:ok	:write-node	{:node "n2", :value 432}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 426}, "n2" {:value 432}, "n3" {:value 429}}
+1	:invoke	:check-role	"n2"
+1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2	:invoke	:check-role	"n3"
+2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+3	:invoke	:write-node	{:node "n1", :value 435}
+3	:ok	:write-node	{:node "n1", :value 435}
+4	:invoke	:write-node	{:node "n1", :value 438}
+4	:ok	:write-node	{:node "n1", :value 438}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 438}, "n2" {:value 432}, "n3" {:value 429}}
+0	:invoke	:write-node	{:node "n3", :value 441}
+0	:ok	:write-node	{:node "n3", :value 441}
+1	:invoke	:write-node	{:node "n1", :value 444}
+1	:ok	:write-node	{:node "n1", :value 444}
+2	:invoke	:write-node	{:node "n1", :value 447}
+2	:ok	:write-node	{:node "n1", :value 447}
+3	:invoke	:check-role	"n2"
+3	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n2", :value 450}
+4	:ok	:write-node	{:node "n2", :value 450}
+0	:invoke	:write-node	{:node "n1", :value 453}
+0	:ok	:write-node	{:node "n1", :value 453}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n3", :value 455}
+1	:ok	:write-node	{:node "n3", :value 455}
+2	:invoke	:write-node	{:node "n1", :value 458}
+3	:invoke	:write-node	{:node "n2", :value 459}
+3	:ok	:write-node	{:node "n2", :value 459}
+2	:ok	:write-node	{:node "n1", :value 458}
+4	:invoke	:write-node	{:node "n3", :value 463}
+4	:ok	:write-node	{:node "n3", :value 463}
+0	:invoke	:write-node	{:node "n2", :value 466}
+0	:ok	:write-node	{:node "n2", :value 466}
+0	:invoke	:write-node	{:node "n3", :value 469}
+0	:ok	:write-node	{:node "n3", :value 469}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 458}, "n2" {:value 466}, "n3" {:value 469}}
+2	:invoke	:check-role	"n2"
+2	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+3	:invoke	:write-node	{:node "n2", :value 472}
+3	:ok	:write-node	{:node "n2", :value 472}
+4	:invoke	:write-node	{:node "n2", :value 475}
+4	:ok	:write-node	{:node "n2", :value 475}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 458}, "n2" {:value 475}, "n3" {:value 469}}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n2", :value 478}
+1	:ok	:write-node	{:node "n2", :value 478}
+2	:invoke	:write-node	{:node "n1", :value 481}
+2	:ok	:write-node	{:node "n1", :value 481}
+3	:invoke	:write-node	{:node "n2", :value 484}
+3	:ok	:write-node	{:node "n2", :value 484}
+4	:invoke	:write-node	{:node "n1", :value 487}
+4	:ok	:write-node	{:node "n1", :value 487}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 487}, "n2" {:value 484}, "n3" {:value 469}}
+0	:invoke	:write-node	{:node "n3", :value 490}
+0	:ok	:write-node	{:node "n3", :value 490}
+1	:invoke	:write-node	{:node "n2", :value 493}
+1	:ok	:write-node	{:node "n2", :value 493}
+2	:invoke	:check-role	"n1"
+2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 487}, "n2" {:value 493}, "n3" {:value 490}}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 487}, "n2" {:value 493}, "n3" {:value 490}}
+0	:invoke	:write-node	{:node "n2", :value 496}
+0	:ok	:write-node	{:node "n2", :value 496}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n1", :value 499}
+1	:ok	:write-node	{:node "n1", :value 499}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 499}, "n2" {:value 496}, "n3" {:value 490}}
+:nemesis	:info	:partition	:primary-isolated
+4	:invoke	:write-node	{:node "n2", :value 504}
+4	:ok	:write-node	{:node "n2", :value 504}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 507}
+0	:ok	:write-node	{:node "n1", :value 507}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 507}, "n2" {:value 504}, "n3" {:value 490}}
+2	:invoke	:check-role	"n1"
+2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+3	:invoke	:write-node	{:node "n3", :value 510}
+3	:ok	:write-node	{:node "n3", :value 510}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 507}, "n2" {:value 504}, "n3" {:value 510}}
+0	:invoke	:write-node	{:node "n1", :value 513}
+0	:ok	:write-node	{:node "n1", :value 513}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 513}, "n2" {:value 504}, "n3" {:value 510}}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 513}, "n2" {:value 504}, "n3" {:value 510}}
+:nemesis	:info	:partition	:primary-isolated
+3	:invoke	:write-node	{:node "n2", :value 518}
+3	:ok	:write-node	{:node "n2", :value 518}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:check-role	"n2"
+1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 513}, "n2" {:value 518}, "n3" {:value 510}}
+3	:invoke	:check-role	"n1"
+3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n1", :value 521}
+4	:ok	:write-node	{:node "n1", :value 521}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 521}, "n2" {:value 518}, "n3" {:value 510}}
+0	:invoke	:write-node	{:node "n2", :value 524}
+0	:ok	:write-node	{:node "n2", :value 524}
+1	:invoke	:write-node	{:node "n3", :value 527}
+1	:ok	:write-node	{:node "n3", :value 527}
+2	:invoke	:write-node	{:node "n2", :value 530}
+2	:ok	:write-node	{:node "n2", :value 530}
+3	:invoke	:check-role	"n3"
+3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n1", :value 533}
+4	:ok	:write-node	{:node "n1", :value 533}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 533}, "n2" {:value 530}, "n3" {:value 527}}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 533}, "n2" {:value 530}, "n3" {:value 527}}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 533}, "n2" {:value 530}, "n3" {:value 527}}
+3	:invoke	:check-role	"n3"
+3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n2", :value 536}
+4	:ok	:write-node	{:node "n2", :value 536}
+0	:invoke	:write-node	{:node "n1", :value 539}
+0	:ok	:write-node	{:node "n1", :value 539}
+0	:invoke	:write-node	{:node "n1", :value 542}
+0	:ok	:write-node	{:node "n1", :value 542}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 542}, "n2" {:value 536}, "n3" {:value 527}}
+2	:invoke	:check-role	"n3"
+2	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 542}, "n2" {:value 536}, "n3" {:value 527}}
+4	:invoke	:write-node	{:node "n2", :value 545}
+4	:ok	:write-node	{:node "n2", :value 545}
+0	:invoke	:write-node	{:node "n3", :value 548}
+0	:ok	:write-node	{:node "n3", :value 548}
+0	:invoke	:write-node	{:node "n1", :value 551}
+0	:ok	:write-node	{:node "n1", :value 551}
+1	:invoke	:write-node	{:node "n1", :value 554}
+1	:ok	:write-node	{:node "n1", :value 554}
+2	:invoke	:write-node	{:node "n1", :value 557}
+2	:ok	:write-node	{:node "n1", :value 557}
+3	:invoke	:write-node	{:node "n2", :value 560}
+3	:ok	:write-node	{:node "n2", :value 560}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 557}, "n2" {:value 560}, "n3" {:value 548}}
+0	:invoke	:write-node	{:node "n1", :value 563}
+0	:ok	:write-node	{:node "n1", :value 563}
+0	:invoke	:write-node	{:node "n1", :value 566}
+0	:ok	:write-node	{:node "n1", :value 566}
+1	:invoke	:check-role	"n2"
+1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2	:invoke	:check-role	"n2"
+2	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 566}, "n2" {:value 560}, "n3" {:value 548}}
+4	:invoke	:write-node	{:node "n1", :value 569}
+4	:ok	:write-node	{:node "n1", :value 569}
+0	:invoke	:write-node	{:node "n1", :value 572}
+0	:ok	:write-node	{:node "n1", :value 572}
+0	:invoke	:write-node	{:node "n1", :value 575}
+0	:ok	:write-node	{:node "n1", :value 575}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 575}, "n2" {:value 560}, "n3" {:value 548}}
+2	:invoke	:write-node	{:node "n2", :value 578}
+2	:ok	:write-node	{:node "n2", :value 578}
+3	:invoke	:check-role	"n1"
+3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 575}, "n2" {:value 578}, "n3" {:value 548}}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n3", :value 581}
+1	:ok	:write-node	{:node "n3", :value 581}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 575}, "n2" {:value 578}, "n3" {:value 581}}
+3	:invoke	:check-role	"n1"
+3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n3", :value 584}
+4	:ok	:write-node	{:node "n3", :value 584}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 575}, "n2" {:value 578}, "n3" {:value 584}}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n3", :value 587}
+1	:ok	:write-node	{:node "n3", :value 587}
+2	:invoke	:write-node	{:node "n1", :value 590}
+2	:ok	:write-node	{:node "n1", :value 590}
+3	:invoke	:write-node	{:node "n1", :value 593}
+3	:ok	:write-node	{:node "n1", :value 593}
+4	:invoke	:check-role	"n1"
+4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 596}
+0	:ok	:write-node	{:node "n1", :value 596}
+0	:invoke	:write-node	{:node "n2", :value 599}
+0	:ok	:write-node	{:node "n2", :value 599}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 596}, "n2" {:value 599}, "n3" {:value 587}}
+2	:invoke	:check-role	"n1"
+2	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 596}, "n2" {:value 599}, "n3" {:value 587}}
+4	:invoke	:write-node	{:node "n1", :value 602}
+4	:ok	:write-node	{:node "n1", :value 602}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n2", :value 605}
+1	:ok	:write-node	{:node "n2", :value 605}
+2	:invoke	:write-node	{:node "n1", :value 608}
+2	:ok	:write-node	{:node "n1", :value 608}
+3	:invoke	:write-node	{:node "n3", :value 611}
+3	:ok	:write-node	{:node "n3", :value 611}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 608}, "n2" {:value 605}, "n3" {:value 611}}
+0	:invoke	:write-node	{:node "n1", :value 614}
+0	:ok	:write-node	{:node "n1", :value 614}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n1", :value 617}
+1	:ok	:write-node	{:node "n1", :value 617}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 617}, "n2" {:value 605}, "n3" {:value 611}}
+3	:invoke	:write-node	{:node "n1", :value 620}
+3	:ok	:write-node	{:node "n1", :value 620}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 620}, "n2" {:value 605}, "n3" {:value 611}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 620}, "n2" {:value 605}, "n3" {:value 611}}
+0	:invoke	:write-node	{:node "n1", :value 623}
+0	:ok	:write-node	{:node "n1", :value 623}
+1	:invoke	:check-role	"n1"
+1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 623}, "n2" {:value 605}, "n3" {:value 611}}
+3	:invoke	:write-node	{:node "n2", :value 626}
+3	:ok	:write-node	{:node "n2", :value 626}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 629}
+0	:ok	:write-node	{:node "n1", :value 629}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 629}, "n2" {:value 626}, "n3" {:value 611}}
+1	:invoke	:check-role	"n2"
+1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 629}, "n2" {:value 626}, "n3" {:value 611}}
+3	:invoke	:write-node	{:node "n1", :value 632}
+3	:ok	:write-node	{:node "n1", :value 632}
+:nemesis	:info	:heal	nil
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 635}
+0	:ok	:write-node	{:node "n1", :value 635}
+1	:invoke	:write-node	{:node "n2", :value 638}
+1	:ok	:write-node	{:node "n2", :value 638}
+:nemesis	:info	:heal	:healed
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 635}, "n2" {:value 638}, "n3" {:value 611}}
+4	:invoke	:write-node	{:node "n3", :value 641}
+4	:ok	:write-node	{:node "n3", :value 641}
+0	:invoke	:write-node	{:node "n1", :value 644}
+0	:ok	:write-node	{:node "n1", :value 644}
+0	:invoke	:write-node	{:node "n1", :value 647}
+0	:ok	:write-node	{:node "n1", :value 647}
+1	:invoke	:check-role	"n3"
+1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n3", :value 650}
+2	:ok	:write-node	{:node "n3", :value 650}
+3	:invoke	:write-node	{:node "n1", :value 653}
+3	:ok	:write-node	{:node "n1", :value 653}
+4	:invoke	:write-node	{:node "n1", :value 656}
+4	:ok	:write-node	{:node "n1", :value 656}
+0	:invoke	:write-node	{:node "n1", :value 659}
+0	:ok	:write-node	{:node "n1", :value 659}
+0	:invoke	:write-node	{:node "n3", :value 662}
+0	:ok	:write-node	{:node "n3", :value 662}
+1	:invoke	:write-node	{:node "n2", :value 665}
+1	:ok	:write-node	{:node "n2", :value 665}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 659}, "n2" {:value 665}, "n3" {:value 662}}
+3	:invoke	:write-node	{:node "n1", :value 668}
+3	:ok	:write-node	{:node "n1", :value 668}
+4	:invoke	:write-node	{:node "n3", :value 671}
+4	:ok	:write-node	{:node "n3", :value 671}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 674}
+0	:ok	:write-node	{:node "n1", :value 674}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 674}, "n2" {:value 665}, "n3" {:value 671}}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 674}, "n2" {:value 665}, "n3" {:value 671}}
+3	:invoke	:write-node	{:node "n1", :value 677}
+3	:ok	:write-node	{:node "n1", :value 677}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 677}, "n2" {:value 665}, "n3" {:value 671}}
+0	:invoke	:write-node	{:node "n1", :value 680}
+0	:ok	:write-node	{:node "n1", :value 680}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n1", :value 683}
+1	:ok	:write-node	{:node "n1", :value 683}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 683}, "n2" {:value 665}, "n3" {:value 671}}
+3	:invoke	:write-node	{:node "n1", :value 686}
+3	:ok	:write-node	{:node "n1", :value 686}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 686}, "n2" {:value 665}, "n3" {:value 671}}
+0	:invoke	:write-node	{:node "n2", :value 689}
+0	:ok	:write-node	{:node "n2", :value 689}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 686}, "n2" {:value 689}, "n3" {:value 671}}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 686}, "n2" {:value 689}, "n3" {:value 671}}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 686}, "n2" {:value 689}, "n3" {:value 671}}
+3	:invoke	:check-role	"n1"
+3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n1", :value 692}
+4	:ok	:write-node	{:node "n1", :value 692}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 692}, "n2" {:value 689}, "n3" {:value 671}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 692}, "n2" {:value 689}, "n3" {:value 671}}
+1	:invoke	:check-role	"n1"
+1	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n3", :value 695}
+2	:ok	:write-node	{:node "n3", :value 695}
+3	:invoke	:write-node	{:node "n2", :value 698}
+3	:ok	:write-node	{:node "n2", :value 698}
+4	:invoke	:write-node	{:node "n1", :value 701}
+4	:ok	:write-node	{:node "n1", :value 701}
+0	:invoke	:write-node	{:node "n1", :value 704}
+0	:ok	:write-node	{:node "n1", :value 704}
+0	:invoke	:write-node	{:node "n2", :value 707}
+0	:ok	:write-node	{:node "n2", :value 707}
+1	:invoke	:write-node	{:node "n1", :value 710}
+1	:ok	:write-node	{:node "n1", :value 710}
+2	:invoke	:write-node	{:node "n2", :value 713}
+2	:ok	:write-node	{:node "n2", :value 713}
+3	:invoke	:check-role	"n1"
+3	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n3", :value 716}
+0	:ok	:write-node	{:node "n3", :value 716}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:write-node	{:node "n1", :value 719}
+1	:ok	:write-node	{:node "n1", :value 719}
+2	:invoke	:write-node	{:node "n2", :value 722}
+2	:ok	:write-node	{:node "n2", :value 722}
+3	:invoke	:write-node	{:node "n2", :value 725}
+3	:ok	:write-node	{:node "n2", :value 725}
+4	:invoke	:check-role	"n3"
+4	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 719}, "n2" {:value 725}, "n3" {:value 716}}
+2	:invoke	:write-node	{:node "n1", :value 730}
+2	:ok	:write-node	{:node "n1", :value 730}
+3	:invoke	:write-node	{:node "n2", :value 733}
+3	:ok	:write-node	{:node "n2", :value 733}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}
+4	:invoke	:write-node	{:node "n3", :value 736}
+4	:ok	:write-node	{:node "n3", :value 736}
+0	:invoke	:write-node	{:node "n1", :value 739}
+0	:ok	:write-node	{:node "n1", :value 739}
+0	:invoke	:write-node	{:node "n1", :value 742}
+0	:ok	:write-node	{:node "n1", :value 742}
+1	:invoke	:write-node	{:node "n1", :value 745}
+1	:ok	:write-node	{:node "n1", :value 745}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 745}, "n2" {:value 733}, "n3" {:value 736}}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 745}, "n2" {:value 733}, "n3" {:value 736}}
+4	:invoke	:check-role	"n1"
+4	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 748}
+0	:ok	:write-node	{:node "n1", :value 748}
+1	:invoke	:write-node	{:node "n2", :value 751}
+1	:ok	:write-node	{:node "n2", :value 751}
+2	:invoke	:write-node	{:node "n1", :value 754}
+2	:ok	:write-node	{:node "n1", :value 754}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 754}, "n2" {:value 751}, "n3" {:value 736}}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 754}, "n2" {:value 751}, "n3" {:value 736}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 754}, "n2" {:value 751}, "n3" {:value 736}}
+0	:invoke	:write-node	{:node "n1", :value 757}
+0	:ok	:write-node	{:node "n1", :value 757}
+1	:invoke	:check-role	"n2"
+1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n1", :value 760}
+2	:ok	:write-node	{:node "n1", :value 760}
+3	:invoke	:write-node	{:node "n1", :value 763}
+3	:ok	:write-node	{:node "n1", :value 763}
+4	:invoke	:check-role	"n2"
+4	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 766}
+0	:ok	:write-node	{:node "n1", :value 766}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 766}, "n2" {:value 751}, "n3" {:value 736}}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 766}, "n2" {:value 751}, "n3" {:value 736}}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 766}, "n2" {:value 751}, "n3" {:value 736}}
+4	:invoke	:write-node	{:node "n3", :value 769}
+4	:ok	:write-node	{:node "n3", :value 769}
+0	:invoke	:write-node	{:node "n1", :value 772}
+0	:ok	:write-node	{:node "n1", :value 772}
+0	:invoke	:write-node	{:node "n1", :value 775}
+0	:ok	:write-node	{:node "n1", :value 775}
+1	:invoke	:check-role	"n3"
+1	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n2", :value 778}
+2	:ok	:write-node	{:node "n2", :value 778}
+3	:invoke	:write-node	{:node "n1", :value 781}
+3	:ok	:write-node	{:node "n1", :value 781}
+4	:invoke	:write-node	{:node "n2", :value 784}
+4	:ok	:write-node	{:node "n2", :value 784}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 781}, "n2" {:value 784}, "n3" {:value 769}}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 781}, "n2" {:value 784}, "n3" {:value 769}}
+1	:invoke	:write-node	{:node "n2", :value 787}
+1	:ok	:write-node	{:node "n2", :value 787}
+2	:invoke	:write-node	{:node "n1", :value 790}
+2	:ok	:write-node	{:node "n1", :value 790}
+3	:invoke	:check-role	"n3"
+3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+4	:invoke	:check-role	"n3"
+4	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 793}
+0	:ok	:write-node	{:node "n1", :value 793}
+0	:invoke	:check-role	"n2"
+0	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+1	:invoke	:check-role	"n2"
+1	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+2	:invoke	:write-node	{:node "n2", :value 796}
+2	:ok	:write-node	{:node "n2", :value 796}
+3	:invoke	:check-role	"n2"
+3	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+4	:invoke	:write-node	{:node "n1", :value 799}
+4	:ok	:write-node	{:node "n1", :value 799}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 799}, "n2" {:value 796}, "n3" {:value 769}}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 799}, "n2" {:value 796}, "n3" {:value 769}}
+2	:invoke	:write-node	{:node "n1", :value 802}
+2	:ok	:write-node	{:node "n1", :value 802}
+3	:invoke	:write-node	{:node "n2", :value 805}
+3	:ok	:write-node	{:node "n2", :value 805}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 802}, "n2" {:value 805}, "n3" {:value 769}}
+0	:invoke	:write-node	{:node "n1", :value 808}
+0	:ok	:write-node	{:node "n1", :value 808}
+0	:invoke	:write-node	{:node "n1", :value 811}
+0	:ok	:write-node	{:node "n1", :value 811}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 811}, "n2" {:value 805}, "n3" {:value 769}}
+2	:invoke	:check-role	"n2"
+2	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+3	:invoke	:write-node	{:node "n1", :value 814}
+3	:ok	:write-node	{:node "n1", :value 814}
+4	:invoke	:write-node	{:node "n3", :value 817}
+4	:ok	:write-node	{:node "n3", :value 817}
+0	:invoke	:write-node	{:node "n3", :value 820}
+0	:ok	:write-node	{:node "n3", :value 820}
+0	:invoke	:read-all	nil
+0	:ok	:read-all	{"n1" {:value 814}, "n2" {:value 805}, "n3" {:value 820}}
+1	:invoke	:write-node	{:node "n1", :value 823}
+1	:ok	:write-node	{:node "n1", :value 823}
+2	:invoke	:read-all	nil
+2	:ok	:read-all	{"n1" {:value 823}, "n2" {:value 805}, "n3" {:value 820}}
+3	:invoke	:read-all	nil
+3	:ok	:read-all	{"n1" {:value 823}, "n2" {:value 805}, "n3" {:value 820}}
+4	:invoke	:write-node	{:node "n1", :value 826}
+4	:ok	:write-node	{:node "n1", :value 826}
+0	:invoke	:check-role	"n3"
+0	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+0	:invoke	:write-node	{:node "n1", :value 829}
+0	:ok	:write-node	{:node "n1", :value 829}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 829}, "n2" {:value 805}, "n3" {:value 820}}
+2	:invoke	:write-node	{:node "n3", :value 832}
+2	:ok	:write-node	{:node "n3", :value 832}
+3	:invoke	:check-role	"n3"
+3	:ok	:check-role	{:node "n3", :role "master", :info ["master" 0 []]}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 829}, "n2" {:value 805}, "n3" {:value 832}}
+0	:invoke	:write-node	{:node "n3", :value 835}
+0	:ok	:write-node	{:node "n3", :value 835}
+0	:invoke	:check-role	"n1"
+0	:ok	:check-role	{:node "n1", :role "master", :info ["master" 0 []]}
+1	:invoke	:read-all	nil
+1	:ok	:read-all	{"n1" {:value 829}, "n2" {:value 805}, "n3" {:value 835}}
+2	:invoke	:check-role	"n2"
+2	:ok	:check-role	{:node "n2", :role "master", :info ["master" 0 []]}
+3	:invoke	:write-node	{:node "n1", :value 838}
+3	:ok	:write-node	{:node "n1", :value 838}
+4	:invoke	:read-all	nil
+4	:ok	:read-all	{"n1" {:value 838}, "n2" {:value 805}, "n3" {:value 835}}
+:nemesis	:info	:heal	nil
+:nemesis	:info	:heal	:healed
+3	:invoke	:read	nil
+3	:info	:read	nil	indeterminate: No matching clause: :read
+4	:invoke	:read	nil
+4	:info	:read	nil	indeterminate: No matching clause: :read
+0	:invoke	:read	nil
+0	:info	:read	nil	indeterminate: No matching clause: :read
+5	:invoke	:read	nil
+5	:info	:read	nil	indeterminate: No matching clause: :read
+1	:invoke	:read	nil
+1	:info	:read	nil	indeterminate: No matching clause: :read
+2	:invoke	:read	nil
+2	:info	:read	nil	indeterminate: No matching clause: :read
+8	:invoke	:read	nil
+8	:info	:read	nil	indeterminate: No matching clause: :read
+9	:invoke	:read	nil
+9	:info	:read	nil	indeterminate: No matching clause: :read
+10	:invoke	:read	nil
+10	:info	:read	nil	indeterminate: No matching clause: :read
+15	:invoke	:read	nil
+15	:info	:read	nil	indeterminate: No matching clause: :read

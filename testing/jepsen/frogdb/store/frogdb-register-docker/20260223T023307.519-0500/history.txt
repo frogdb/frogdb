@@ -1,0 +1,216 @@
+0	:invoke	:read	nil
+0	:ok	:read	nil
+1	:invoke	:cas	[8 77]
+1	:ok	:cas	[8 77]
+2	:invoke	:cas	[51 37]
+2	:ok	:cas	[51 37]
+3	:invoke	:write	38
+3	:ok	:write	38
+4	:invoke	:read	nil
+4	:ok	:read	38
+0	:invoke	:cas	[59 82]
+0	:ok	:cas	[59 82]
+0	:invoke	:read	nil
+0	:ok	:read	16
+1	:invoke	:read	nil
+1	:ok	:read	29
+2	:invoke	:write	31
+2	:ok	:write	31
+3	:invoke	:write	78
+3	:ok	:write	78
+4	:invoke	:read	nil
+4	:ok	:read	47
+0	:invoke	:write	33
+0	:ok	:write	33
+0	:invoke	:read	nil
+0	:ok	:read	33
+1	:invoke	:write	47
+1	:ok	:write	47
+2	:invoke	:write	15
+2	:ok	:write	15
+3	:invoke	:cas	[78 45]
+3	:ok	:cas	[78 45]
+4	:invoke	:cas	[85 17]
+4	:ok	:cas	[85 17]
+0	:invoke	:write	79
+0	:ok	:write	79
+0	:invoke	:read	nil
+0	:info	:read	nil	[:io-exception nil]
+1	:invoke	:read	nil
+1	:info	:read	nil	indeterminate: Connection refused
+2	:invoke	:write	79
+2	:info	:write	79	indeterminate: Connection refused
+3	:invoke	:write	55
+3	:info	:write	55	indeterminate: Connection refused
+4	:invoke	:cas	[4 1]
+4	:info	:cas	[4 1]	indeterminate: Connection refused
+5	:invoke	:read	nil
+5	:info	:read	nil	indeterminate: Connection refused
+10	:invoke	:write	21
+10	:info	:write	21	indeterminate: Connection refused
+6	:invoke	:write	10
+6	:info	:write	10	indeterminate: Connection refused
+7	:invoke	:cas	[56 35]
+7	:info	:cas	[56 35]	indeterminate: Connection refused
+8	:invoke	:cas	[47 24]
+8	:info	:cas	[47 24]	indeterminate: Connection refused
+9	:invoke	:cas	[5 70]
+9	:info	:cas	[5 70]	indeterminate: Connection refused
+15	:invoke	:read	nil
+15	:info	:read	nil	indeterminate: Connection refused
+20	:invoke	:cas	[3 74]
+20	:info	:cas	[3 74]	indeterminate: Connection refused
+11	:invoke	:cas	[65 51]
+11	:info	:cas	[65 51]	indeterminate: Connection refused
+12	:invoke	:cas	[94 74]
+12	:info	:cas	[94 74]	indeterminate: Connection refused
+13	:invoke	:read	nil
+13	:info	:read	nil	indeterminate: Connection refused
+14	:invoke	:read	nil
+14	:info	:read	nil	indeterminate: Connection refused
+25	:invoke	:write	1
+25	:info	:write	1	indeterminate: Connection refused
+30	:invoke	:write	12
+30	:info	:write	12	indeterminate: Connection refused
+16	:invoke	:read	nil
+16	:info	:read	nil	indeterminate: Connection refused
+17	:invoke	:write	2
+17	:info	:write	2	indeterminate: Connection refused
+18	:invoke	:read	nil
+18	:info	:read	nil	indeterminate: Connection refused
+19	:invoke	:write	2
+19	:info	:write	2	indeterminate: Connection refused
+35	:invoke	:write	4
+35	:info	:write	4	indeterminate: Connection refused
+40	:invoke	:cas	[61 81]
+40	:info	:cas	[61 81]	indeterminate: Connection refused
+21	:invoke	:read	nil
+21	:info	:read	nil	indeterminate: Connection refused
+22	:invoke	:write	86
+22	:info	:write	86	indeterminate: Connection refused
+23	:invoke	:read	nil
+23	:info	:read	nil	indeterminate: Connection refused
+24	:invoke	:write	4
+24	:info	:write	4	indeterminate: Connection refused
+45	:invoke	:read	nil
+45	:info	:read	nil	indeterminate: Connection refused
+50	:invoke	:read	nil
+50	:info	:read	nil	indeterminate: Connection refused
+26	:invoke	:read	nil
+26	:info	:read	nil	indeterminate: Connection refused
+27	:invoke	:cas	[40 38]
+27	:info	:cas	[40 38]	indeterminate: Connection refused
+28	:invoke	:write	98
+28	:info	:write	98	indeterminate: Connection refused
+29	:invoke	:write	33
+29	:info	:write	33	indeterminate: Connection refused
+55	:invoke	:write	21
+55	:info	:write	21	indeterminate: Connection refused
+60	:invoke	:read	nil
+60	:info	:read	nil	indeterminate: Connection refused
+31	:invoke	:read	nil
+31	:info	:read	nil	indeterminate: Connection refused
+32	:invoke	:read	nil
+32	:info	:read	nil	indeterminate: Connection refused
+33	:invoke	:read	nil
+33	:info	:read	nil	indeterminate: Connection refused
+34	:invoke	:write	66
+34	:info	:write	66	indeterminate: Connection refused
+65	:invoke	:cas	[4 95]
+65	:info	:cas	[4 95]	indeterminate: Connection refused
+70	:invoke	:write	81
+70	:info	:write	81	indeterminate: Connection refused
+36	:invoke	:read	nil
+36	:info	:read	nil	indeterminate: Connection refused
+37	:invoke	:read	nil
+37	:info	:read	nil	indeterminate: Connection refused
+38	:invoke	:read	nil
+38	:info	:read	nil	indeterminate: Connection refused
+39	:invoke	:write	18
+39	:info	:write	18	indeterminate: Connection refused
+75	:invoke	:write	51
+75	:info	:write	51	indeterminate: Connection refused
+80	:invoke	:write	56
+80	:info	:write	56	indeterminate: Connection refused
+41	:invoke	:cas	[79 11]
+41	:info	:cas	[79 11]	indeterminate: Connection refused
+42	:invoke	:write	81
+42	:info	:write	81	indeterminate: Connection refused
+43	:invoke	:cas	[12 44]
+43	:info	:cas	[12 44]	indeterminate: Connection refused
+44	:invoke	:write	70
+44	:info	:write	70	indeterminate: Connection refused
+85	:invoke	:cas	[62 20]
+85	:info	:cas	[62 20]	indeterminate: Connection refused
+90	:invoke	:cas	[19 50]
+90	:info	:cas	[19 50]	indeterminate: Connection refused
+46	:invoke	:write	68
+46	:info	:write	68	indeterminate: Connection refused
+47	:invoke	:write	65
+47	:info	:write	65	indeterminate: Connection refused
+48	:invoke	:cas	[7 8]
+48	:info	:cas	[7 8]	indeterminate: Connection refused
+49	:invoke	:read	nil
+49	:info	:read	nil	indeterminate: Connection refused
+95	:invoke	:cas	[84 81]
+95	:info	:cas	[84 81]	indeterminate: Connection refused
+100	:invoke	:cas	[64 8]
+100	:info	:cas	[64 8]	indeterminate: Connection refused
+51	:invoke	:cas	[2 82]
+51	:info	:cas	[2 82]	indeterminate: Connection refused
+52	:invoke	:write	18
+52	:info	:write	18	indeterminate: Connection refused
+53	:invoke	:read	nil
+53	:info	:read	nil	indeterminate: Connection refused
+54	:invoke	:cas	[31 80]
+54	:info	:cas	[31 80]	indeterminate: Connection refused
+105	:invoke	:write	17
+105	:info	:write	17	indeterminate: Connection refused
+110	:invoke	:read	nil
+110	:info	:read	nil	indeterminate: Connection refused
+56	:invoke	:cas	[45 86]
+56	:info	:cas	[45 86]	indeterminate: Connection refused
+57	:invoke	:cas	[75 42]
+57	:info	:cas	[75 42]	indeterminate: Connection refused
+58	:invoke	:write	24
+58	:info	:write	24	indeterminate: Connection refused
+59	:invoke	:cas	[72 24]
+59	:info	:cas	[72 24]	indeterminate: Connection refused
+115	:invoke	:write	75
+115	:info	:write	75	indeterminate: Connection refused
+120	:invoke	:write	91
+120	:info	:write	91	indeterminate: Connection refused
+61	:invoke	:read	nil
+61	:info	:read	nil	indeterminate: Connection refused
+62	:invoke	:cas	[36 69]
+62	:info	:cas	[36 69]	indeterminate: Connection refused
+63	:invoke	:write	13
+63	:info	:write	13	indeterminate: Connection refused
+64	:invoke	:write	84
+64	:info	:write	84	indeterminate: Connection refused
+125	:invoke	:read	nil
+125	:info	:read	nil	indeterminate: Connection refused
+130	:invoke	:write	90
+130	:info	:write	90	indeterminate: Connection refused
+66	:invoke	:write	84
+66	:info	:write	84	indeterminate: Connection refused
+135	:invoke	:read	nil
+135	:info	:read	nil	indeterminate: Connection refused
+140	:invoke	:read	nil
+140	:info	:read	nil	indeterminate: Connection refused
+71	:invoke	:read	nil
+71	:info	:read	nil	indeterminate: Connection refused
+67	:invoke	:read	nil
+67	:info	:read	nil	indeterminate: Connection refused
+68	:invoke	:read	nil
+68	:info	:read	nil	indeterminate: Connection refused
+69	:invoke	:read	nil
+69	:info	:read	nil	indeterminate: Connection refused
+145	:invoke	:read	nil
+145	:info	:read	nil	indeterminate: Connection refused
+150	:invoke	:read	nil
+150	:info	:read	nil	indeterminate: Connection refused
+76	:invoke	:read	nil
+76	:info	:read	nil	indeterminate: Connection refused
+72	:invoke	:read	nil
+72	:info	:read	nil	indeterminate: Connection refused

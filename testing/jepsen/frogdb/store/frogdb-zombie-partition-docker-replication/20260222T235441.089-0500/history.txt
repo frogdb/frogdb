@@ -1,0 +1,770 @@
+1	:invoke	:read-quorum	nil
+1	:fail	:read-quorum	nil	:no-quorum
+2	:invoke	:write-async	3
+2	:ok	:write-async	3
+3	:invoke	:write-durable	6
+4	:invoke	:read-quorum	nil
+4	:fail	:read-quorum	nil	:no-quorum
+0	:invoke	:read-quorum	nil
+0	:fail	:read-quorum	nil	:no-quorum
+0	:invoke	:write-async	9
+0	:ok	:write-async	9
+1	:invoke	:write-async	12
+1	:ok	:write-async	12
+2	:invoke	:read-quorum	nil
+2	:fail	:read-quorum	nil	:no-quorum
+4	:invoke	:write-async	15
+4	:ok	:write-async	15
+4	:invoke	:write-async	18
+4	:ok	:write-async	18
+0	:invoke	:read-quorum	nil
+0	:fail	:read-quorum	nil	:no-quorum
+0	:invoke	:write-async	21
+0	:ok	:write-async	21
+1	:invoke	:write-async	24
+1	:ok	:write-async	24
+2	:invoke	:read-quorum	nil
+2	:fail	:read-quorum	nil	:no-quorum
+4	:invoke	:write-async	27
+4	:ok	:write-async	27
+4	:invoke	:write-durable	30
+0	:invoke	:read-quorum	nil
+0	:fail	:read-quorum	nil	:no-quorum
+0	:invoke	:write-durable	33
+1	:invoke	:write-async	35
+1	:ok	:write-async	35
+3	:info	:write-durable	6	:sync-timeout
+2	:invoke	:read-quorum	nil
+2	:fail	:read-quorum	nil	:no-quorum
+8	:invoke	:read-quorum	nil
+8	:fail	:read-quorum	nil	:no-quorum
+1	:invoke	:write-durable	38
+2	:invoke	:read-quorum	nil
+2	:fail	:read-quorum	nil	:no-quorum
+2	:invoke	:write-durable	41
+8	:invoke	:write-async	43
+8	:ok	:write-async	43
+8	:invoke	:write-async	49
+8	:ok	:write-async	49
+8	:invoke	:write-async	53
+8	:ok	:write-async	53
+8	:invoke	:read-quorum	nil
+8	:fail	:read-quorum	nil	:no-quorum
+8	:invoke	:write-async	58
+8	:ok	:write-async	58
+8	:invoke	:read-quorum	nil
+8	:fail	:read-quorum	nil	:no-quorum
+8	:invoke	:write-async	64
+8	:ok	:write-async	64
+8	:invoke	:write-async	68
+8	:ok	:write-async	68
+8	:invoke	:write-durable	72
+4	:info	:write-durable	30	:sync-timeout
+9	:invoke	:read-quorum	nil
+9	:fail	:read-quorum	nil	:no-quorum
+0	:info	:write-durable	33	:sync-timeout
+5	:invoke	:read-quorum	nil
+5	:fail	:read-quorum	nil	:no-quorum
+5	:invoke	:read-quorum	nil
+5	:fail	:read-quorum	nil	:no-quorum
+9	:invoke	:write-async	75
+9	:ok	:write-async	75
+1	:info	:write-durable	38	:sync-timeout
+9	:invoke	:read-quorum	nil
+9	:fail	:read-quorum	nil	:no-quorum
+9	:invoke	:read-quorum	nil
+9	:fail	:read-quorum	nil	:no-quorum
+2	:info	:write-durable	41	:sync-timeout
+9	:invoke	:write-durable	79
+5	:invoke	:write-durable	81
+6	:invoke	:write-durable	83
+7	:invoke	:write-durable	85
+8	:info	:write-durable	72	:sync-timeout
+13	:invoke	:read-quorum	nil
+13	:fail	:read-quorum	nil	:no-quorum
+13	:invoke	:write-async	92
+13	:ok	:write-async	92
+13	:invoke	:write-async	95
+13	:ok	:write-async	95
+13	:invoke	:write-async	99
+13	:ok	:write-async	99
+13	:invoke	:write-async	103
+13	:ok	:write-async	103
+13	:invoke	:read-quorum	nil
+13	:fail	:read-quorum	nil	:no-quorum
+13	:invoke	:read-quorum	nil
+13	:fail	:read-quorum	nil	:no-quorum
+13	:invoke	:write-async	107
+13	:ok	:write-async	107
+13	:invoke	:read-quorum	nil
+13	:fail	:read-quorum	nil	:no-quorum
+9	:info	:write-durable	79	:sync-timeout
+5	:info	:write-durable	81	:sync-timeout
+10	:invoke	:read-quorum	nil
+10	:fail	:read-quorum	nil	:no-quorum
+10	:invoke	:write-durable	110
+6	:info	:write-durable	83	:sync-timeout
+11	:invoke	:write-durable	113
+7	:info	:write-durable	85	:sync-timeout
+12	:invoke	:read-quorum	nil
+12	:fail	:read-quorum	nil	:no-quorum
+13	:invoke	:read-quorum	nil
+13	:fail	:read-quorum	nil	:no-quorum
+14	:invoke	:read-quorum	nil
+14	:fail	:read-quorum	nil	:no-quorum
+12	:invoke	:write-durable	116
+13	:invoke	:read-quorum	nil
+13	:fail	:read-quorum	nil	:no-quorum
+13	:invoke	:write-async	119
+13	:ok	:write-async	119
+13	:invoke	:read-quorum	nil
+13	:fail	:read-quorum	nil	:no-quorum
+13	:invoke	:read-quorum	nil
+13	:fail	:read-quorum	nil	:no-quorum
+14	:invoke	:read-quorum	nil
+14	:fail	:read-quorum	nil	:no-quorum
+13	:invoke	:read-quorum	nil
+13	:fail	:read-quorum	nil	:no-quorum
+13	:invoke	:write-durable	122
+14	:invoke	:write-async	124
+14	:ok	:write-async	124
+14	:invoke	:write-durable	129
+10	:info	:write-durable	110	:sync-timeout
+15	:invoke	:write-async	492
+15	:ok	:write-async	492
+11	:info	:write-durable	113	:sync-timeout
+15	:invoke	:write-async	497
+15	:ok	:write-async	497
+15	:invoke	:write-async	500
+15	:ok	:write-async	500
+15	:invoke	:read-quorum	nil
+15	:fail	:read-quorum	nil	:no-quorum
+12	:info	:write-durable	116	:sync-timeout
+16	:invoke	:read-quorum	nil
+16	:fail	:read-quorum	nil	:no-quorum
+17	:invoke	:read-quorum	nil
+17	:fail	:read-quorum	nil	:no-quorum
+15	:invoke	:read-quorum	nil
+15	:fail	:read-quorum	nil	:no-quorum
+15	:invoke	:write-async	503
+15	:ok	:write-async	503
+15	:invoke	:read-quorum	nil
+15	:fail	:read-quorum	nil	:no-quorum
+15	:invoke	:write-durable	506
+:nemesis	:info	:partition	:primary-isolated
+17	:invoke	:write-async	510
+17	:ok	:write-async	510
+13	:info	:write-durable	122	:sync-timeout
+18	:invoke	:write-async	514
+18	:ok	:write-async	514
+16	:invoke	:read-quorum	nil
+16	:fail	:read-quorum	nil	:no-quorum
+16	:invoke	:write-async	517
+16	:ok	:write-async	517
+16	:invoke	:write-async	520
+16	:ok	:write-async	520
+16	:invoke	:read-quorum	nil
+16	:fail	:read-quorum	nil	:no-quorum
+14	:info	:write-durable	129	:sync-timeout
+17	:invoke	:read-quorum	nil
+17	:fail	:read-quorum	nil	:no-quorum
+18	:invoke	:write-durable	523
+:nemesis	:info	:partition	:primary-isolated
+16	:invoke	:read-quorum	nil
+16	:fail	:read-quorum	nil	:no-quorum
+16	:invoke	:write-async	526
+16	:ok	:write-async	526
+16	:invoke	:write-durable	529
+17	:invoke	:write-async	531
+17	:ok	:write-async	531
+19	:invoke	:write-durable	534
+17	:invoke	:read-quorum	nil
+17	:fail	:read-quorum	nil	:no-quorum
+17	:invoke	:write-async	540
+17	:ok	:write-async	540
+17	:invoke	:write-durable	544
+15	:info	:write-durable	506	:sync-timeout
+20	:invoke	:write-durable	1018
+18	:info	:write-durable	523	:sync-timeout
+23	:invoke	:write-durable	1520
+16	:info	:write-durable	529	:sync-timeout
+21	:invoke	:write-durable	1725
+19	:info	:write-durable	534	:sync-timeout
+24	:invoke	:write-durable	1911
+17	:info	:write-durable	544	:sync-timeout
+22	:invoke	:read-quorum	nil
+22	:fail	:read-quorum	nil	:no-quorum
+22	:invoke	:write-async	1915
+22	:ok	:write-async	1915
+22	:invoke	:read-quorum	nil
+22	:fail	:read-quorum	nil	:no-quorum
+22	:invoke	:read-quorum	nil
+22	:fail	:read-quorum	nil	:no-quorum
+22	:invoke	:read-quorum	nil
+22	:fail	:read-quorum	nil	:no-quorum
+20	:info	:write-durable	1018	:sync-timeout
+25	:invoke	:write-durable	1922
+22	:invoke	:write-durable	1924
+23	:info	:write-durable	1520	:sync-timeout
+28	:invoke	:read-quorum	nil
+28	:fail	:read-quorum	nil	:no-quorum
+28	:invoke	:read-quorum	nil
+28	:fail	:read-quorum	nil	:no-quorum
+28	:invoke	:read-quorum	nil
+28	:fail	:read-quorum	nil	:no-quorum
+28	:invoke	:write-durable	1931
+21	:info	:write-durable	1725	:sync-timeout
+26	:invoke	:read-quorum	nil
+26	:fail	:read-quorum	nil	:no-quorum
+26	:invoke	:write-async	1938
+26	:ok	:write-async	1938
+26	:invoke	:write-durable	1942
+24	:info	:write-durable	1911	:sync-timeout
+29	:invoke	:read-quorum	nil
+29	:fail	:read-quorum	nil	:no-quorum
+29	:invoke	:write-async	1948
+29	:ok	:write-async	1948
+29	:invoke	:read-quorum	nil
+29	:fail	:read-quorum	nil	:no-quorum
+29	:invoke	:write-durable	1953
+25	:info	:write-durable	1922	:sync-timeout
+30	:invoke	:write-durable	2270
+22	:info	:write-durable	1924	:sync-timeout
+27	:invoke	:read-quorum	nil
+27	:fail	:read-quorum	nil	:no-quorum
+27	:invoke	:write-async	2274
+27	:ok	:write-async	2274
+27	:invoke	:write-durable	2278
+28	:info	:write-durable	1931	:sync-timeout
+33	:invoke	:write-async	2789
+33	:ok	:write-async	2789
+33	:invoke	:write-durable	2793
+26	:info	:write-durable	1942	:sync-timeout
+31	:invoke	:read-quorum	nil
+31	:fail	:read-quorum	nil	:no-quorum
+31	:invoke	:write-durable	2798
+29	:info	:write-durable	1953	:sync-timeout
+34	:invoke	:write-async	3127
+34	:ok	:write-async	3127
+34	:invoke	:write-async	3131
+34	:ok	:write-async	3131
+34	:invoke	:read-quorum	nil
+34	:fail	:read-quorum	nil	:no-quorum
+34	:invoke	:write-durable	3136
+30	:info	:write-durable	2270	:sync-timeout
+35	:invoke	:read-quorum	nil
+35	:fail	:read-quorum	nil	:no-quorum
+35	:invoke	:read-quorum	nil
+35	:fail	:read-quorum	nil	:no-quorum
+35	:invoke	:write-async	3141
+35	:ok	:write-async	3141
+27	:info	:write-durable	2278	:sync-timeout
+32	:invoke	:write-async	3145
+32	:ok	:write-async	3145
+35	:invoke	:write-durable	3148
+32	:invoke	:write-async	3150
+32	:ok	:write-async	3150
+32	:invoke	:write-async	3155
+32	:ok	:write-async	3155
+33	:info	:write-durable	2793	:sync-timeout
+32	:invoke	:write-durable	3161
+38	:invoke	:read-quorum	nil
+38	:fail	:read-quorum	nil	:no-quorum
+31	:info	:write-durable	2798	:sync-timeout
+38	:invoke	:write-durable	3168
+36	:invoke	:write-durable	3170
+34	:info	:write-durable	3136	:sync-timeout
+39	:invoke	:write-async	3640
+39	:ok	:write-async	3640
+39	:invoke	:write-durable	3644
+35	:info	:write-durable	3148	:sync-timeout
+40	:invoke	:read-quorum	nil
+40	:fail	:read-quorum	nil	:no-quorum
+40	:invoke	:write-async	3649
+40	:ok	:write-async	3649
+:nemesis	:info	:heal	nil
+40	:invoke	:write-async	3656
+40	:ok	:write-async	3656
+40	:invoke	:write-async	3660
+40	:ok	:write-async	3660
+40	:invoke	:write-durable	3663
+32	:info	:write-durable	3161	:sync-timeout
+:nemesis	:info	:heal	:healed
+37	:invoke	:read-quorum	nil
+37	:fail	:read-quorum	nil	:no-quorum
+38	:info	:write-durable	3168	:sync-timeout
+36	:info	:write-durable	3170	:sync-timeout
+37	:invoke	:write-async	3669
+37	:ok	:write-async	3669
+43	:invoke	:write-durable	3672
+41	:invoke	:write-durable	3674
+37	:invoke	:read-quorum	nil
+37	:fail	:read-quorum	nil	:no-quorum
+37	:invoke	:write-durable	3679
+39	:info	:write-durable	3644	:sync-timeout
+44	:invoke	:write-durable	3935
+40	:info	:write-durable	3663	:sync-timeout
+45	:invoke	:write-async	4745
+45	:ok	:write-async	4745
+45	:invoke	:write-async	4749
+45	:ok	:write-async	4749
+45	:invoke	:write-async	4753
+45	:ok	:write-async	4753
+45	:invoke	:write-async	4756
+45	:ok	:write-async	4756
+45	:invoke	:write-durable	4760
+43	:info	:write-durable	3672	:sync-timeout
+41	:info	:write-durable	3674	:sync-timeout
+46	:invoke	:read-quorum	nil
+46	:fail	:read-quorum	nil	:no-quorum
+48	:invoke	:read-quorum	nil
+48	:fail	:read-quorum	nil	:no-quorum
+48	:invoke	:read-quorum	nil
+48	:fail	:read-quorum	nil	:no-quorum
+37	:info	:write-durable	3679	:sync-timeout
+46	:invoke	:write-async	4764
+46	:ok	:write-async	4764
+46	:invoke	:write-async	4767
+46	:ok	:write-async	4767
+46	:invoke	:read-quorum	nil
+46	:fail	:read-quorum	nil	:no-quorum
+44	:info	:write-durable	3935	:sync-timeout
+46	:invoke	:write-durable	4771
+42	:invoke	:read-quorum	nil
+42	:fail	:read-quorum	nil	:no-quorum
+48	:invoke	:read-quorum	nil
+48	:fail	:read-quorum	nil	:no-quorum
+49	:invoke	:write-durable	4774
+42	:invoke	:read-quorum	nil
+42	:fail	:read-quorum	nil	:no-quorum
+42	:invoke	:write-durable	4777
+48	:invoke	:write-async	4779
+48	:ok	:write-async	4779
+48	:invoke	:write-durable	4783
+45	:info	:write-durable	4760	:sync-timeout
+50	:invoke	:write-durable	5143
+46	:info	:write-durable	4771	:sync-timeout
+51	:invoke	:write-async	5675
+51	:ok	:write-async	5675
+51	:invoke	:write-async	5681
+51	:ok	:write-async	5681
+51	:invoke	:read-quorum	nil
+51	:fail	:read-quorum	nil	:no-quorum
+51	:invoke	:write-durable	5686
+49	:info	:write-durable	4774	:sync-timeout
+54	:invoke	:write-durable	5689
+42	:info	:write-durable	4777	:sync-timeout
+47	:invoke	:read-quorum	nil
+47	:fail	:read-quorum	nil	:no-quorum
+47	:invoke	:write-durable	5694
+48	:info	:write-durable	4783	:sync-timeout
+53	:invoke	:read-quorum	nil
+53	:fail	:read-quorum	nil	:no-quorum
+53	:invoke	:write-async	5699
+53	:ok	:write-async	5699
+53	:invoke	:read-quorum	nil
+53	:fail	:read-quorum	nil	:no-quorum
+53	:invoke	:write-durable	5704
+50	:info	:write-durable	5143	:sync-timeout
+55	:invoke	:write-async	5873
+55	:ok	:write-async	5873
+55	:invoke	:read-quorum	nil
+55	:fail	:read-quorum	nil	:no-quorum
+55	:invoke	:write-durable	5879
+54	:info	:write-durable	5689	:sync-timeout
+51	:info	:write-durable	5686	:sync-timeout
+56	:invoke	:write-durable	6548
+59	:invoke	:write-durable	6550
+47	:info	:write-durable	5694	:sync-timeout
+52	:invoke	:write-async	6917
+52	:ok	:write-async	6917
+52	:invoke	:read-quorum	nil
+52	:fail	:read-quorum	nil	:no-quorum
+52	:invoke	:read-quorum	nil
+52	:fail	:read-quorum	nil	:no-quorum
+53	:info	:write-durable	5704	:sync-timeout
+52	:invoke	:write-durable	6924
+58	:invoke	:read-quorum	nil
+58	:fail	:read-quorum	nil	:no-quorum
+58	:invoke	:read-quorum	nil
+58	:fail	:read-quorum	nil	:no-quorum
+55	:info	:write-durable	5879	:sync-timeout
+58	:invoke	:read-quorum	nil
+58	:fail	:read-quorum	nil	:no-quorum
+60	:invoke	:write-durable	6927
+58	:invoke	:write-durable	6929
+56	:info	:write-durable	6548	:sync-timeout
+61	:invoke	:read-quorum	nil
+61	:fail	:read-quorum	nil	:no-quorum
+59	:info	:write-durable	6550	:sync-timeout
+61	:invoke	:write-durable	6934
+64	:invoke	:read-quorum	nil
+64	:fail	:read-quorum	nil	:no-quorum
+64	:invoke	:read-quorum	nil
+64	:fail	:read-quorum	nil	:no-quorum
+64	:invoke	:write-async	6938
+64	:ok	:write-async	6938
+64	:invoke	:write-async	6941
+64	:ok	:write-async	6941
+64	:invoke	:read-quorum	nil
+64	:fail	:read-quorum	nil	:no-quorum
+64	:invoke	:read-quorum	nil
+64	:fail	:read-quorum	nil	:no-quorum
+52	:info	:write-durable	6924	:sync-timeout
+57	:invoke	:write-durable	6947
+64	:invoke	:write-durable	6949
+60	:info	:write-durable	6927	:sync-timeout
+65	:invoke	:write-durable	7138
+58	:info	:write-durable	6929	:sync-timeout
+63	:invoke	:read-quorum	nil
+63	:fail	:read-quorum	nil	:no-quorum
+63	:invoke	:write-async	7142
+63	:ok	:write-async	7142
+63	:invoke	:read-quorum	nil
+63	:fail	:read-quorum	nil	:no-quorum
+63	:invoke	:read-quorum	nil
+63	:fail	:read-quorum	nil	:no-quorum
+63	:invoke	:write-durable	7146
+61	:info	:write-durable	6934	:sync-timeout
+66	:invoke	:write-durable	7278
+57	:info	:write-durable	6947	:sync-timeout
+62	:invoke	:read-quorum	nil
+62	:fail	:read-quorum	nil	:no-quorum
+64	:info	:write-durable	6949	:sync-timeout
+62	:invoke	:read-quorum	nil
+62	:fail	:read-quorum	nil	:no-quorum
+62	:invoke	:read-quorum	nil
+62	:fail	:read-quorum	nil	:no-quorum
+65	:info	:write-durable	7138	:sync-timeout
+62	:invoke	:write-durable	7282
+69	:invoke	:write-async	7284
+69	:ok	:write-async	7284
+69	:invoke	:write-async	7287
+69	:ok	:write-async	7287
+70	:invoke	:read-quorum	nil
+70	:fail	:read-quorum	nil	:no-quorum
+70	:invoke	:write-async	7290
+70	:ok	:write-async	7290
+69	:invoke	:read-quorum	nil
+69	:fail	:read-quorum	nil	:no-quorum
+69	:invoke	:write-async	7293
+69	:ok	:write-async	7293
+63	:info	:write-durable	7146	:sync-timeout
+68	:invoke	:write-durable	7297
+69	:invoke	:write-async	7299
+69	:ok	:write-async	7299
+66	:info	:write-durable	7278	:sync-timeout
+70	:invoke	:write-durable	7303
+71	:invoke	:read-quorum	nil
+71	:fail	:read-quorum	nil	:no-quorum
+71	:invoke	:write-async	7306
+71	:ok	:write-async	7306
+69	:invoke	:write-async	7309
+69	:ok	:write-async	7309
+69	:invoke	:write-durable	7312
+71	:invoke	:write-durable	7314
+62	:info	:write-durable	7282	:sync-timeout
+67	:invoke	:read-quorum	nil
+67	:fail	:read-quorum	nil	:no-quorum
+67	:invoke	:read-quorum	nil
+67	:fail	:read-quorum	nil	:no-quorum
+67	:invoke	:write-durable	7319
+:nemesis	:info	:partition	:primary-isolated
+68	:info	:write-durable	7297	:sync-timeout
+73	:invoke	:write-durable	7609
+70	:info	:write-durable	7303	:sync-timeout
+75	:invoke	:write-durable	7785
+:nemesis	:info	:partition	:primary-isolated
+69	:info	:write-durable	7312	:sync-timeout
+74	:invoke	:write-durable	8076
+71	:info	:write-durable	7314	:sync-timeout
+76	:invoke	:read-quorum	nil
+76	:fail	:read-quorum	nil	:no-quorum
+76	:invoke	:write-durable	8080
+67	:info	:write-durable	7319	:sync-timeout
+72	:invoke	:read-quorum	nil
+72	:fail	:read-quorum	nil	:no-quorum
+72	:invoke	:read-quorum	nil
+72	:fail	:read-quorum	nil	:no-quorum
+72	:invoke	:write-async	8085
+72	:ok	:write-async	8085
+72	:invoke	:read-quorum	nil
+72	:fail	:read-quorum	nil	:no-quorum
+73	:info	:write-durable	7609	:sync-timeout
+72	:invoke	:read-quorum	nil
+78	:invoke	:write-durable	8087
+72	:fail	:read-quorum	nil	:no-quorum
+75	:info	:write-durable	7785	:sync-timeout
+80	:invoke	:read-quorum	nil
+80	:fail	:read-quorum	nil	:no-quorum
+80	:invoke	:write-durable	8090
+72	:invoke	:write-async	8092
+72	:ok	:write-async	8092
+74	:info	:write-durable	8076	:sync-timeout
+72	:invoke	:write-async	8097
+72	:ok	:write-async	8097
+76	:info	:write-durable	8080	:sync-timeout
+81	:invoke	:write-async	8101
+81	:ok	:write-async	8101
+72	:invoke	:write-durable	8104
+79	:invoke	:write-async	8106
+79	:ok	:write-async	8106
+79	:invoke	:write-async	8109
+79	:ok	:write-async	8109
+81	:invoke	:write-durable	8112
+79	:invoke	:write-async	8114
+79	:ok	:write-async	8114
+79	:invoke	:write-durable	8119
+78	:info	:write-durable	8087	:sync-timeout
+83	:invoke	:read-quorum	nil
+83	:fail	:read-quorum	nil	:no-quorum
+83	:invoke	:read-quorum	nil
+83	:fail	:read-quorum	nil	:no-quorum
+80	:info	:write-durable	8090	:sync-timeout
+85	:invoke	:write-durable	8124
+83	:invoke	:read-quorum	nil
+83	:fail	:read-quorum	nil	:no-quorum
+83	:invoke	:write-durable	8129
+72	:info	:write-durable	8104	:sync-timeout
+77	:invoke	:write-durable	8332
+81	:info	:write-durable	8112	:sync-timeout
+86	:invoke	:read-quorum	nil
+86	:fail	:read-quorum	nil	:no-quorum
+86	:invoke	:write-durable	8336
+79	:info	:write-durable	8119	:sync-timeout
+84	:invoke	:write-durable	8511
+85	:info	:write-durable	8124	:sync-timeout
+90	:invoke	:read-quorum	nil
+90	:fail	:read-quorum	nil	:no-quorum
+90	:invoke	:write-async	8516
+90	:ok	:write-async	8516
+83	:info	:write-durable	8129	:sync-timeout
+88	:invoke	:write-durable	8521
+90	:invoke	:write-durable	8523
+77	:info	:write-durable	8332	:sync-timeout
+82	:invoke	:write-async	8587
+82	:ok	:write-async	8587
+82	:invoke	:write-durable	8590
+86	:info	:write-durable	8336	:sync-timeout
+91	:invoke	:write-async	8842
+91	:ok	:write-async	8842
+91	:invoke	:write-async	8845
+91	:ok	:write-async	8845
+84	:info	:write-durable	8511	:sync-timeout
+91	:invoke	:read-quorum	nil
+91	:fail	:read-quorum	nil	:no-quorum
+89	:invoke	:read-quorum	nil
+89	:fail	:read-quorum	nil	:no-quorum
+89	:invoke	:read-quorum	nil
+89	:fail	:read-quorum	nil	:no-quorum
+89	:invoke	:write-durable	8848
+91	:invoke	:write-async	8850
+91	:ok	:write-async	8850
+91	:invoke	:write-durable	8854
+88	:info	:write-durable	8521	:sync-timeout
+93	:invoke	:write-durable	9354
+90	:info	:write-durable	8523	:sync-timeout
+95	:invoke	:read-quorum	nil
+95	:fail	:read-quorum	nil	:no-quorum
+82	:info	:write-durable	8590	:sync-timeout
+95	:invoke	:read-quorum	nil
+95	:fail	:read-quorum	nil	:no-quorum
+95	:invoke	:write-async	9357
+95	:ok	:write-async	9357
+95	:invoke	:write-async	9360
+95	:ok	:write-async	9360
+95	:invoke	:read-quorum	nil
+95	:fail	:read-quorum	nil	:no-quorum
+87	:invoke	:read-quorum	nil
+87	:fail	:read-quorum	nil	:no-quorum
+87	:invoke	:write-async	9363
+87	:ok	:write-async	9363
+95	:invoke	:write-durable	9366
+87	:invoke	:write-async	9368
+87	:ok	:write-async	9368
+89	:info	:write-durable	8848	:sync-timeout
+87	:invoke	:write-durable	9372
+91	:info	:write-durable	8854	:sync-timeout
+96	:invoke	:read-quorum	nil
+96	:fail	:read-quorum	nil	:no-quorum
+96	:invoke	:write-async	9375
+96	:ok	:write-async	9375
+94	:invoke	:write-async	9378
+94	:ok	:write-async	9378
+:nemesis	:info	:heal	nil
+94	:invoke	:write-async	9383
+94	:ok	:write-async	9383
+96	:invoke	:write-durable	9386
+94	:invoke	:write-durable	9388
+:nemesis	:info	:heal	:healed
+93	:info	:write-durable	9354	:sync-timeout
+98	:invoke	:read-quorum	nil
+98	:fail	:read-quorum	nil	:no-quorum
+98	:invoke	:write-durable	9391
+95	:info	:write-durable	9366	:sync-timeout
+100	:invoke	:read-quorum	nil
+100	:fail	:read-quorum	nil	:no-quorum
+100	:invoke	:write-durable	9394
+87	:info	:write-durable	9372	:sync-timeout
+92	:invoke	:read-quorum	nil
+92	:fail	:read-quorum	nil	:no-quorum
+92	:invoke	:write-durable	9399
+96	:info	:write-durable	9386	:sync-timeout
+101	:invoke	:read-quorum	nil
+101	:fail	:read-quorum	nil	:no-quorum
+101	:invoke	:write-async	9404
+101	:ok	:write-async	9404
+94	:info	:write-durable	9388	:sync-timeout
+99	:invoke	:read-quorum	nil
+99	:fail	:read-quorum	nil	:no-quorum
+98	:info	:write-durable	9391	:sync-timeout
+101	:invoke	:read-quorum	nil
+101	:fail	:read-quorum	nil	:no-quorum
+101	:invoke	:write-durable	9407
+103	:invoke	:write-async	9409
+103	:ok	:write-async	9409
+103	:invoke	:write-durable	9412
+99	:invoke	:write-durable	9414
+100	:info	:write-durable	9394	:sync-timeout
+105	:invoke	:read-quorum	nil
+105	:fail	:read-quorum	nil	:no-quorum
+92	:info	:write-durable	9399	:sync-timeout
+105	:invoke	:write-async	9419
+105	:ok	:write-async	9419
+105	:invoke	:write-async	9422
+105	:ok	:write-async	9422
+97	:invoke	:write-async	9425
+97	:ok	:write-async	9425
+97	:invoke	:write-durable	9428
+105	:invoke	:write-async	9430
+105	:ok	:write-async	9430
+105	:invoke	:read-quorum	nil
+105	:fail	:read-quorum	nil	:no-quorum
+105	:invoke	:write-async	9435
+105	:ok	:write-async	9435
+105	:invoke	:read-quorum	nil
+105	:fail	:read-quorum	nil	:no-quorum
+101	:info	:write-durable	9407	:sync-timeout
+106	:invoke	:write-durable	9441
+103	:info	:write-durable	9412	:sync-timeout
+108	:invoke	:read-quorum	nil
+108	:fail	:read-quorum	nil	:no-quorum
+108	:invoke	:write-async	9444
+108	:ok	:write-async	9444
+99	:info	:write-durable	9414	:sync-timeout
+104	:invoke	:write-async	9448
+104	:ok	:write-async	9448
+105	:invoke	:read-quorum	nil
+105	:fail	:read-quorum	nil	:no-quorum
+105	:invoke	:write-durable	9451
+108	:invoke	:read-quorum	nil
+108	:fail	:read-quorum	nil	:no-quorum
+108	:invoke	:write-durable	9456
+104	:invoke	:write-async	9458
+104	:ok	:write-async	9458
+104	:invoke	:read-quorum	nil
+104	:fail	:read-quorum	nil	:no-quorum
+104	:invoke	:read-quorum	nil
+104	:fail	:read-quorum	nil	:no-quorum
+104	:invoke	:write-durable	9463
+97	:info	:write-durable	9428	:sync-timeout
+102	:invoke	:read-quorum	nil
+102	:fail	:read-quorum	nil	:no-quorum
+102	:invoke	:read-quorum	nil
+102	:fail	:read-quorum	nil	:no-quorum
+102	:invoke	:read-quorum	nil
+102	:fail	:read-quorum	nil	:no-quorum
+102	:invoke	:write-async	9467
+102	:ok	:write-async	9467
+102	:invoke	:write-durable	9470
+106	:info	:write-durable	9441	:sync-timeout
+111	:invoke	:write-async	9685
+111	:ok	:write-async	9685
+111	:invoke	:write-durable	9689
+105	:info	:write-durable	9451	:sync-timeout
+110	:invoke	:read-quorum	nil
+110	:fail	:read-quorum	nil	:no-quorum
+108	:info	:write-durable	9456	:sync-timeout
+110	:invoke	:write-async	9695
+110	:ok	:write-async	9695
+110	:invoke	:write-durable	9698
+113	:invoke	:write-async	9700
+113	:ok	:write-async	9700
+113	:invoke	:write-async	9704
+113	:ok	:write-async	9704
+104	:info	:write-durable	9463	:sync-timeout
+113	:invoke	:write-durable	9708
+109	:invoke	:write-durable	9710
+102	:info	:write-durable	9470	:sync-timeout
+107	:invoke	:read-quorum	nil
+107	:fail	:read-quorum	nil	:no-quorum
+107	:invoke	:write-async	9715
+107	:ok	:write-async	9715
+107	:invoke	:write-async	9718
+107	:ok	:write-async	9718
+107	:invoke	:write-durable	9722
+111	:info	:write-durable	9689	:sync-timeout
+116	:invoke	:write-async	9824
+116	:ok	:write-async	9824
+116	:invoke	:write-durable	9828
+110	:info	:write-durable	9698	:sync-timeout
+115	:invoke	:write-durable	10246
+113	:info	:write-durable	9708	:sync-timeout
+118	:invoke	:write-async	10558
+118	:ok	:write-async	10558
+118	:invoke	:write-durable	10562
+109	:info	:write-durable	9710	:sync-timeout
+114	:invoke	:read-quorum	nil
+114	:fail	:read-quorum	nil	:no-quorum
+114	:invoke	:write-durable	10568
+107	:info	:write-durable	9722	:sync-timeout
+112	:invoke	:write-durable	10847
+116	:info	:write-durable	9828	:sync-timeout
+121	:invoke	:write-async	11105
+121	:ok	:write-async	11105
+121	:invoke	:write-durable	11109
+115	:info	:write-durable	10246	:sync-timeout
+120	:invoke	:write-durable	11382
+118	:info	:write-durable	10562	:sync-timeout
+123	:invoke	:write-async	11812
+123	:ok	:write-async	11812
+123	:invoke	:read-quorum	nil
+123	:fail	:read-quorum	nil	:no-quorum
+123	:invoke	:read-quorum	nil
+123	:fail	:read-quorum	nil	:no-quorum
+114	:info	:write-durable	10568	:sync-timeout
+119	:invoke	:write-durable	11817
+123	:invoke	:read-quorum	nil
+123	:fail	:read-quorum	nil	:no-quorum
+112	:info	:write-durable	10847	:sync-timeout
+117	:invoke	:write-durable	11824
+123	:invoke	:write-durable	11826
+121	:info	:write-durable	11109	:sync-timeout
+126	:invoke	:write-durable	12191
+120	:info	:write-durable	11382	:sync-timeout
+119	:info	:write-durable	11817	:sync-timeout
+117	:info	:write-durable	11824	:sync-timeout
+123	:info	:write-durable	11826	:sync-timeout
+126	:info	:write-durable	12191	:sync-timeout
+:nemesis	:info	:heal	nil
+:nemesis	:info	:heal	:healed
+131	:invoke	:read	nil
+131	:info	:read	nil	indeterminate: No matching clause: :read
+122	:invoke	:read	nil
+122	:info	:read	nil	indeterminate: No matching clause: :read
+128	:invoke	:read	nil
+128	:info	:read	nil	indeterminate: No matching clause: :read
+124	:invoke	:read	nil
+124	:info	:read	nil	indeterminate: No matching clause: :read
+125	:invoke	:read	nil
+125	:info	:read	nil	indeterminate: No matching clause: :read
+130	:invoke	:read	nil
+130	:info	:read	nil	indeterminate: No matching clause: :read
+136	:invoke	:read	nil
+136	:info	:read	nil	indeterminate: No matching clause: :read
+127	:invoke	:read	nil
+127	:info	:read	nil	indeterminate: No matching clause: :read
+133	:invoke	:read	nil
+133	:info	:read	nil	indeterminate: No matching clause: :read
+129	:invoke	:read	nil
+129	:info	:read	nil	indeterminate: No matching clause: :read
