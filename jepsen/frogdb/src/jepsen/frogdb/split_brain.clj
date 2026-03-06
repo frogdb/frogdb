@@ -37,7 +37,7 @@
     (let [docker? (:docker test)
           base-port (get test :base-port frogdb/default-base-port)
           nodes (or (:nodes test) ["n1" "n2" "n3"])
-          all-conns (frogdb/all-node-conns nodes docker? base-port)]
+          all-conns (frogdb/all-node-conns-single nodes docker? base-port)]
       (info "Opening split-brain client (docker?:" docker? ", nodes:" nodes ")")
       (assoc this
              :conns all-conns
@@ -114,7 +114,7 @@
     nil)
 
   (close! [this test]
-    nil))
+    (doseq [[_ c] conns] (frogdb/close-conn! c))))
 
 (defn create-client
   "Create a new split-brain client."

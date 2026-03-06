@@ -21,6 +21,7 @@
             [jepsen.nemesis.combined :as nc]
             [jepsen.util :as util]
             [jepsen.frogdb.db :as frogdb-db]
+            [jepsen.frogdb.membership :as membership]
             [slingshot.slingshot :refer [try+ throw+]])
   (:import [java.lang ProcessBuilder]
            [java.io BufferedReader InputStreamReader]))
@@ -1220,6 +1221,34 @@
                       (gen/once {:type :info :f :resume})
                       (gen/once {:type :info :f :start}))})
 
+(defn raft-cluster-membership
+  "Raft cluster nemesis with membership changes (join/leave).
+   Composes the raft-cluster nemesis with dynamic membership operations.
+
+   Options:
+   - :interval - time between faults"
+  [opts]
+  (let [raft-nem (raft-cluster-nemesis)
+        mem-nem (membership/membership-nemesis opts)
+        composed (nemesis/compose
+                   {{:kill :kill
+                     :start :start} (process-killer)
+                    {:pause :pause
+                     :resume :resume} (process-pauser)
+                    {:partition :partition
+                     :heal :heal} (raft-cluster-partition-nemesis)
+                    {:join :join
+                     :leave :leave
+                     :membership-status :membership-status} mem-nem})]
+    {:nemesis composed
+     :generator (gen/mix [(raft-cluster-generator opts)
+                          (membership/membership-generator opts)])
+     :final-generator (gen/phases
+                        (gen/once {:type :info :f :heal})
+                        (gen/once {:type :info :f :resume})
+                        (gen/once {:type :info :f :start})
+                        (gen/once {:type :info :f :membership-status}))}))
+
 (defn nemesis-package
   "Select a nemesis package by name.
 
@@ -1235,7 +1264,8 @@
    - :memory-pressure - memory exhaustion
    - :all - combined single-node faults
    - :all-replication - combined replication faults
-   - :raft-cluster - combined Raft cluster faults"
+   - :raft-cluster - combined Raft cluster faults
+   - :raft-cluster-membership - Raft cluster faults + membership changes"
   [name opts]
   (case name
     :none (none)
@@ -1250,5 +1280,6 @@
     :all (all opts)
     :all-replication (all-replication opts)
     :raft-cluster (raft-cluster opts)
+    :raft-cluster-membership (raft-cluster-membership opts)
     ;; Default to none
     (none)))

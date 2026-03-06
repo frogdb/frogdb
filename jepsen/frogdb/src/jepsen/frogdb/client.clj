@@ -352,6 +352,69 @@
               [node (conn-for-node node docker-host? base-port)]))))
 
 ;; ===========================================================================
+;; Single-Connection Pool Support
+;; ===========================================================================
+
+(defn single-conn-pool-opts
+  "Pool options that create a dedicated single-connection pool.
+   Uses unique :id to prevent Carmine's memoization from sharing pools
+   between threads."
+  []
+  {:max-total-per-key 1
+   :max-idle-per-key  1
+   :min-idle-per-key  1
+   :id (java.util.UUID/randomUUID)})
+
+(defn conn-spec-single
+  "Like conn-spec but with a dedicated single-connection pool per thread.
+   Each call returns a conn-spec with its own pool (unique :id)."
+  ([node]
+   (conn-spec-single node default-port false))
+  ([node port]
+   (conn-spec-single node port false))
+  ([node port docker-host?]
+   (conn-spec-single node port docker-host? default-base-port))
+  ([node port docker-host? base-port]
+   (let [host-map (docker-host-map base-port)
+         resolved (if (and docker-host? (get host-map node))
+                    (get host-map node)
+                    {:host node :port port})]
+     {:pool (single-conn-pool-opts)
+      :spec {:host (:host resolved)
+             :port (:port resolved)
+             :timeout-ms default-timeout-ms}})))
+
+(defn conn-for-node-single
+  "Like conn-for-node but with a dedicated single-connection pool."
+  ([node docker-host?]
+   (conn-for-node-single node docker-host? default-base-port))
+  ([node docker-host? base-port]
+   (let [host-map (docker-host-map base-port)
+         resolved (if docker-host?
+                    (get host-map node {:host node :port default-port})
+                    {:host node :port default-port})]
+     {:pool (single-conn-pool-opts)
+      :spec {:host (:host resolved)
+             :port (:port resolved)
+             :timeout-ms default-timeout-ms}})))
+
+(defn all-node-conns-single
+  "Like all-node-conns but with dedicated single-connection pools."
+  ([nodes docker-host?]
+   (all-node-conns-single nodes docker-host? default-base-port))
+  ([nodes docker-host? base-port]
+   (into {} (for [node nodes]
+              [node (conn-for-node-single node docker-host? base-port)]))))
+
+(defn close-conn!
+  "Close a single-connection pool. Safe to call on regular conn-specs (no-op
+   since pool options maps aren't Closeable)."
+  [conn]
+  (when-let [pool (:pool conn)]
+    (when (instance? java.io.Closeable pool)
+      (.close ^java.io.Closeable pool))))
+
+;; ===========================================================================
 ;; Replication Commands
 ;; ===========================================================================
 
