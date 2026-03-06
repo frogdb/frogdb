@@ -107,10 +107,12 @@ pub struct ConnectionHandler {
     scatter_gather_timeout: Duration,
 
     /// Sender for pub/sub messages (cloned to shards when subscribing).
-    pubsub_tx: PubSubSender,
+    /// Lazily initialized on first pub/sub command (~1% of connections use pub/sub).
+    pubsub_tx: Option<PubSubSender>,
 
     /// Receiver for pub/sub messages from shards.
-    pubsub_rx: mpsc::UnboundedReceiver<PubSubMessage>,
+    /// Lazily initialized on first pub/sub command.
+    pubsub_rx: Option<mpsc::UnboundedReceiver<PubSubMessage>>,
 
     /// Metrics recorder.
     metrics_recorder: Arc<dyn MetricsRecorder>,
@@ -223,9 +225,6 @@ impl ConnectionHandler {
         let requires_auth = core.acl_manager.requires_auth();
         let state = ConnectionState::new(conn_id, addr, requires_auth);
 
-        // Create pub/sub channel
-        let (pubsub_tx, pubsub_rx) = mpsc::unbounded_channel();
-
         debug!(conn_id = conn_id, addr = %addr, "Connection established");
 
         Self {
@@ -240,8 +239,8 @@ impl ConnectionHandler {
             shard_senders: core.shard_senders,
             allow_cross_slot: config.allow_cross_slot,
             scatter_gather_timeout: config.scatter_gather_timeout,
-            pubsub_tx,
-            pubsub_rx,
+            pubsub_tx: None,
+            pubsub_rx: None,
             metrics_recorder: core.metrics_recorder,
             acl_manager: core.acl_manager,
             snapshot_coordinator: admin.snapshot_coordinator,
@@ -260,7 +259,7 @@ impl ConnectionHandler {
             network_factory: cluster.network_factory,
             primary_replication_handler: cluster.primary_replication_handler,
             pending_psync_handoff: None,
-            resp3_buf: BytesMut::new(),
+            resp3_buf: BytesMut::with_capacity(4096),
             per_request_spans: config.per_request_spans,
         }
     }
@@ -398,13 +397,12 @@ impl ConnectionHandler {
                     return self.framed.get_mut().flush().await;
                 }
                 ProtocolVersion::Resp3 => {
-                    // RESP3 Null (_\r\n) - use the normal encoding path
                     let frame = response.to_resp3_frame();
-                    let mut buf = BytesMut::new();
-                    redis_protocol::resp3::encode::complete::extend_encode(&mut buf, &frame)
+                    self.resp3_buf.clear();
+                    redis_protocol::resp3::encode::complete::extend_encode(&mut self.resp3_buf, &frame)
                         .map_err(|e| std::io::Error::other(e.to_string()))?;
-                    self.state.local_stats.add_bytes_sent(buf.len() as u64);
-                    self.framed.get_mut().write_all(&buf).await?;
+                    self.state.local_stats.add_bytes_sent(self.resp3_buf.len() as u64);
+                    self.framed.get_mut().write_all(&self.resp3_buf).await?;
                     return self.framed.get_mut().flush().await;
                 }
             }
@@ -459,11 +457,13 @@ impl ConnectionHandler {
                 }
                 ProtocolVersion::Resp3 => {
                     let frame = response.to_resp3_frame();
-                    let mut buf = BytesMut::new();
-                    redis_protocol::resp3::encode::complete::extend_encode(&mut buf, &frame)
+                    self.resp3_buf.clear();
+                    redis_protocol::resp3::encode::complete::extend_encode(&mut self.resp3_buf, &frame)
                         .map_err(|e| std::io::Error::other(e.to_string()))?;
-                    self.state.local_stats.add_bytes_sent(buf.len() as u64);
-                    return self.framed.get_mut().write_all(&buf).await;
+                    self.state.local_stats.add_bytes_sent(self.resp3_buf.len() as u64);
+                    self.framed.get_mut().write_all(&self.resp3_buf).await?;
+                    self.resp3_buf.clear();
+                    return Ok(());
                 }
             }
         }
@@ -666,6 +666,19 @@ impl ConnectionHandler {
         FrameAction::Continue
     }
 
+    /// Ensure the pub/sub channel is initialized, returning a clone of the sender.
+    /// Called lazily on the first pub/sub command to avoid allocating channels
+    /// for the ~99% of connections that never use pub/sub.
+    fn ensure_pubsub_channel(&mut self) -> PubSubSender {
+        if let Some(ref tx) = self.pubsub_tx {
+            return tx.clone();
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.pubsub_tx = Some(tx.clone());
+        self.pubsub_rx = Some(rx);
+        tx
+    }
+
     /// Run the connection handling loop.
     pub async fn run(mut self) -> Result<()> {
         debug!(conn_id = self.state.id, "Connection handler started");
@@ -679,7 +692,12 @@ impl ConnectionHandler {
                 }
 
                 // Handle pub/sub messages from shards
-                Some(pubsub_msg) = self.pubsub_rx.recv() => {
+                Some(pubsub_msg) = async {
+                    match self.pubsub_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
                     // Buffer the first pub/sub message
                     let response = pubsub_msg.to_response_with_protocol(self.state.protocol_version);
                     if self.feed_response(response).await.is_err() {
@@ -687,10 +705,16 @@ impl ConnectionHandler {
                         break;
                     }
                     // Drain additional pub/sub messages from the channel
-                    while let Ok(msg) = self.pubsub_rx.try_recv() {
-                        let response = msg.to_response_with_protocol(self.state.protocol_version);
-                        if self.feed_response(response).await.is_err() {
-                            break;
+                    if let Some(ref mut rx) = self.pubsub_rx {
+                        let mut extra = Vec::new();
+                        while let Ok(msg) = rx.try_recv() {
+                            extra.push(msg);
+                        }
+                        for msg in extra {
+                            let response = msg.to_response_with_protocol(self.state.protocol_version);
+                            if self.feed_response(response).await.is_err() {
+                                break;
+                            }
                         }
                     }
                     // Single flush for all pub/sub messages

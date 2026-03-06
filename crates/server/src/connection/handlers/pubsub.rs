@@ -57,12 +57,13 @@ impl ConnectionHandler {
             // Broadcast pub/sub uses shard 0 as the coordinator so each
             // subscriber is registered exactly once and PUBLISH delivers
             // each message exactly once.
+            let pubsub_tx = self.ensure_pubsub_channel();
             let (response_tx, _response_rx) = oneshot::channel();
             let _ = self.shard_senders[0]
                 .send(ShardMessage::Subscribe {
                     channels: vec![channel.clone()],
                     conn_id: self.state.id,
-                    sender: self.pubsub_tx.clone(),
+                    sender: pubsub_tx,
                     response_tx,
                 })
                 .await;
@@ -146,12 +147,13 @@ impl ConnectionHandler {
             self.state.pubsub.patterns.insert(pattern.clone());
 
             // Broadcast pub/sub uses shard 0 as the coordinator.
+            let pubsub_tx = self.ensure_pubsub_channel();
             let (response_tx, _response_rx) = oneshot::channel();
             let _ = self.shard_senders[0]
                 .send(ShardMessage::PSubscribe {
                     patterns: vec![pattern.clone()],
                     conn_id: self.state.id,
-                    sender: self.pubsub_tx.clone(),
+                    sender: pubsub_tx,
                     response_tx,
                 })
                 .await;
@@ -263,13 +265,14 @@ impl ConnectionHandler {
                 .insert(channel.clone());
 
             // Route to the owning shard only
+            let pubsub_tx = self.ensure_pubsub_channel();
             let shard_id = shard_for_key(channel, self.num_shards);
             let (response_tx, _response_rx) = oneshot::channel();
             let _ = self.shard_senders[shard_id]
                 .send(ShardMessage::ShardedSubscribe {
                     channels: vec![channel.clone()],
                     conn_id: self.state.id,
-                    sender: self.pubsub_tx.clone(),
+                    sender: pubsub_tx,
                     response_tx,
                 })
                 .await;
