@@ -1,0 +1,858 @@
+2026-02-23 02:44:54,473{GMT}	INFO	[jepsen test runner] jepsen.core: Test version 7e7f450504cf677eec866c0ab31ba8a9cad7ff8f
+2026-02-23 02:44:54,473{GMT}	INFO	[jepsen test runner] jepsen.core: Command line:
+lein run test --docker --workload sortedset --nemesis none --time-limit 30
+2026-02-23 02:44:54,515{GMT}	INFO	[jepsen test runner] jepsen.core: Running test:
+{:remote
+ #jepsen.control.retry.Remote{:remote #jepsen.control.scp.Remote{:cmd-remote #jepsen.control.sshj.SSHJRemote{:concurrency-limit 6,
+                                                                                                             :conn-spec nil,
+                                                                                                             :client nil,
+                                                                                                             :semaphore nil},
+                                                                 :conn-spec nil},
+                              :conn nil}
+ :concurrency 5
+ :cluster false
+ :db
+ #object[jepsen.frogdb.db$docker_db$reify__9886
+         "0x26714a4a"
+         "jepsen.frogdb.db$docker_db$reify__9886@26714a4a"]
+ :leave-db-running? false
+ :name "frogdb-sortedset-docker"
+ :logging-json? false
+ :independent false
+ :start-time
+ #object[org.joda.time.DateTime "0x455cd186" "2026-02-23T02:44:54.436-05:00"]
+ :docker true
+ :net
+ #object[jepsen.net$reify__12635
+         "0x79d137fd"
+         "jepsen.net$reify__12635@79d137fd"]
+ :client
+ #jepsen.frogdb.sortedset.SortedSetClient{:conn nil,
+                                          :node nil,
+                                          :docker-host? nil}
+ :barrier
+ #object[java.util.concurrent.CyclicBarrier
+         "0x18626c8c"
+         "java.util.concurrent.CyclicBarrier@18626c8c"]
+ :ssh {:dummy? true}
+ :rate 10
+ :checker
+ #object[jepsen.checker$compose$reify__10552
+         "0x6ee88669"
+         "jepsen.checker$compose$reify__10552@6ee88669"]
+ :argv
+ ("test"
+  "--docker"
+  "--workload"
+  "sortedset"
+  "--nemesis"
+  "none"
+  "--time-limit"
+  "30")
+ :nemesis #unprintable "jepsen.nemesis$reify__12738@4d1bbad3"
+ :nodes ["n1"]
+ :test-count 1
+ :replication false
+ :cluster-nodes ["n1"]
+ :generator
+ #object[jepsen.util.Forgettable
+         "0x3b6ea33b"
+         ((jepsen.generator.Synchronize
+           {:gen (jepsen.generator.TimeLimit
+                  {:limit 30000000000,
+                   :cutoff nil,
+                   :gen (jepsen.generator.Any
+                         {:gens [(jepsen.generator.OnThreads
+                                  {:f #{:nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x2bc41531"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@2bc41531"],
+                                   :gen nil})
+                                 (jepsen.generator.OnThreads
+                                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x67af3485"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@67af3485"],
+                                   :gen ((jepsen.generator.Synchronize
+                                          {:gen (jepsen.generator.Stagger
+                                                 {:dt 200000000,
+                                                  :next-time nil,
+                                                  :gen (jepsen.generator.Mix
+                                                        {:i 4,
+                                                         :gens [(jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.sortedset$add_op
+                                                                               "0x572a3331"
+                                                                               "jepsen.frogdb.sortedset$add_op@572a3331"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.sortedset$add_op
+                                                                               "0x572a3331"
+                                                                               "jepsen.frogdb.sortedset$add_op@572a3331"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.sortedset$update_score_op
+                                                                               "0x4978a3f5"
+                                                                               "jepsen.frogdb.sortedset$update_score_op@4978a3f5"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.sortedset$remove_op
+                                                                               "0x429e4a76"
+                                                                               "jepsen.frogdb.sortedset$remove_op@429e4a76"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.sortedset$score_op
+                                                                               "0x5c0b55bc"
+                                                                               "jepsen.frogdb.sortedset$score_op@5c0b55bc"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.sortedset$rank_op
+                                                                               "0x5abe46b7"
+                                                                               "jepsen.frogdb.sortedset$rank_op@5abe46b7"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.sortedset$read_op
+                                                                               "0x56d5311e"
+                                                                               "jepsen.frogdb.sortedset$read_op@56d5311e"]})]})})})
+                                         (jepsen.generator.Synchronize
+                                          {:gen (jepsen.generator.OnThreads
+                                                 {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                                  :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                                          "0x66a81c48"
+                                                                          "jepsen.generator.context$make_thread_filter$lazy_filter__11515@66a81c48"],
+                                                  :gen (jepsen.generator.Stagger
+                                                        {:dt 1000000000,
+                                                         :next-time nil,
+                                                         :gen (jepsen.generator.Limit
+                                                               {:remaining 5,
+                                                                :gen (jepsen.generator.Repeat
+                                                                      {:remaining -1,
+                                                                       :gen {:f :read}})})})})}))})]})})})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Recovering from faults..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #{:nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x60880394"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@60880394"],
+                   :gen nil})})
+          (jepsen.generator.Synchronize {:gen {:type :sleep, :value 5}})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Final reads..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x482b6acc"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@482b6acc"],
+                   :gen (jepsen.generator.Stagger
+                         {:dt 200000000,
+                          :next-time nil,
+                          :gen (jepsen.generator.Limit
+                                {:remaining 10,
+                                 :gen (jepsen.generator.Repeat
+                                       {:remaining -1, :gen {:f :read}})})})})}))]
+ :interval 10
+ :os
+ #object[jepsen.frogdb.core$reify__14062
+         "0x1d1cfdac"
+         "jepsen.frogdb.core$reify__14062@1d1cfdac"]
+ :time-limit 30
+ :workload "sortedset"
+ :local false}
+
+2026-02-23 02:44:55,818{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS setup for n1 (no-op)
+2026-02-23 02:44:55,818{GMT}	INFO	[jepsen test runner] jepsen.db: Tearing down DB
+2026-02-23 02:44:55,818{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB on n1
+2026-02-23 02:44:55,819{GMT}	INFO	[jepsen test runner] jepsen.db: Setting up DB
+2026-02-23 02:44:55,819{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Setting up FrogDB on n1
+2026-02-23 02:44:55,819{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Starting container for n1
+2026-02-23 02:44:56,939{GMT}	INFO	[jepsen test runner] jepsen.core: Relative time begins now
+2026-02-23 02:44:56,940{GMT}	INFO	[jepsen node n1] jepsen.frogdb.sortedset: Opening sortedset client to n1 (docker-host?: true )
+2026-02-23 02:44:56,940{GMT}	INFO	[jepsen node n1] jepsen.frogdb.sortedset: Clearing sortedset key jepsen-sortedset
+2026-02-23 02:44:56,950{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-1"
+2026-02-23 02:44:56,950{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.sortedset: Opening sortedset client to n1 (docker-host?: true )
+2026-02-23 02:44:56,954{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-1", :score nil}
+2026-02-23 02:44:57,034{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-33", :score 329}
+2026-02-23 02:44:57,034{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.sortedset: Opening sortedset client to n1 (docker-host?: true )
+2026-02-23 02:44:57,045{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-33", :score 329}
+2026-02-23 02:44:57,107{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-46", :score 696}
+2026-02-23 02:44:57,108{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.sortedset: Opening sortedset client to n1 (docker-host?: true )
+2026-02-23 02:44:57,110{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-46", :score 696}
+2026-02-23 02:44:57,271{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:update-score	{:member "member-12", :score 738}
+2026-02-23 02:44:57,272{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.sortedset: Opening sortedset client to n1 (docker-host?: true )
+2026-02-23 02:44:57,275{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:update-score	{:member "member-12", :score 738}
+2026-02-23 02:44:57,311{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:44:57,311{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.sortedset: Opening sortedset client to n1 (docker-host?: true )
+2026-02-23 02:44:57,320{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-33", :score 329.0} {:member "member-46", :score 696.0}]
+2026-02-23 02:44:57,515{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-17"
+2026-02-23 02:44:57,517{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:update-score	{:member "member-21", :score 23}
+2026-02-23 02:44:57,518{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-17", :rank nil}
+2026-02-23 02:44:57,520{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:update-score	{:member "member-21", :score 23}
+2026-02-23 02:44:57,704{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:remove	"member-37"
+2026-02-23 02:44:57,704{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-15"
+2026-02-23 02:44:57,709{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:remove	"member-37"
+2026-02-23 02:44:57,709{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-15"
+2026-02-23 02:44:57,908{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:add	{:member "member-35", :score 434}
+2026-02-23 02:44:57,910{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:add	{:member "member-35", :score 434}
+2026-02-23 02:44:58,053{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:add	{:member "member-46", :score 707}
+2026-02-23 02:44:58,059{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:add	{:member "member-46", :score 707}
+2026-02-23 02:44:58,099{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-46"
+2026-02-23 02:44:58,102{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-46", :score 707.0}
+2026-02-23 02:44:58,198{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-42"
+2026-02-23 02:44:58,201{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-42", :score nil}
+2026-02-23 02:44:58,333{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:rank	"member-33"
+2026-02-23 02:44:58,336{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:rank	{:member "member-33", :rank 0}
+2026-02-23 02:44:58,499{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:score	"member-49"
+2026-02-23 02:44:58,501{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:score	{:member "member-49", :score nil}
+2026-02-23 02:44:58,515{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:update-score	{:member "member-5", :score 614}
+2026-02-23 02:44:58,517{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:update-score	{:member "member-5", :score 614}
+2026-02-23 02:44:58,657{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:add	{:member "member-44", :score 948}
+2026-02-23 02:44:58,660{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:add	{:member "member-44", :score 948}
+2026-02-23 02:44:58,761{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-1", :score 202}
+2026-02-23 02:44:58,765{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-1", :score 202}
+2026-02-23 02:44:58,777{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-29"
+2026-02-23 02:44:58,780{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-29"
+2026-02-23 02:44:58,867{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:update-score	{:member "member-38", :score 291}
+2026-02-23 02:44:58,870{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:update-score	{:member "member-38", :score 291}
+2026-02-23 02:44:58,968{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-19", :score 726}
+2026-02-23 02:44:58,969{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-19", :score 726}
+2026-02-23 02:44:59,158{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:remove	"member-4"
+2026-02-23 02:44:59,160{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:remove	"member-4"
+2026-02-23 02:44:59,197{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:add	{:member "member-42", :score 882}
+2026-02-23 02:44:59,199{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:add	{:member "member-42", :score 882}
+2026-02-23 02:44:59,377{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:44:59,381{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 434.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:44:59,548{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-43"
+2026-02-23 02:44:59,550{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-43", :score nil}
+2026-02-23 02:44:59,596{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:remove	"member-21"
+2026-02-23 02:44:59,598{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:remove	"member-21"
+2026-02-23 02:44:59,680{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:score	"member-17"
+2026-02-23 02:44:59,683{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:score	{:member "member-17", :score nil}
+2026-02-23 02:44:59,732{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:44:59,735{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	[{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 434.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:44:59,927{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:44:59,930{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 434.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:44:59,992{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-35", :score 523}
+2026-02-23 02:44:59,996{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-35", :score 523}
+2026-02-23 02:45:00,143{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:00,146{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:45:00,337{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:remove	"member-45"
+2026-02-23 02:45:00,338{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:remove	"member-45"
+2026-02-23 02:45:00,349{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:rank	"member-41"
+2026-02-23 02:45:00,350{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:rank	{:member "member-41", :rank nil}
+2026-02-23 02:45:00,359{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:update-score	{:member "member-34", :score 879}
+2026-02-23 02:45:00,360{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:update-score	{:member "member-34", :score 879}
+2026-02-23 02:45:00,438{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:add	{:member "member-15", :score 842}
+2026-02-23 02:45:00,440{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:add	{:member "member-15", :score 842}
+2026-02-23 02:45:00,563{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:00,565{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:45:00,748{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-41"
+2026-02-23 02:45:00,751{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-41", :rank nil}
+2026-02-23 02:45:00,907{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-27", :score 887}
+2026-02-23 02:45:00,910{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-27", :score 887}
+2026-02-23 02:45:01,028{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:rank	"member-25"
+2026-02-23 02:45:01,030{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:rank	{:member "member-25", :rank nil}
+2026-02-23 02:45:01,173{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:rank	"member-44"
+2026-02-23 02:45:01,174{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:rank	{:member "member-44", :rank 8}
+2026-02-23 02:45:01,262{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:rank	"member-7"
+2026-02-23 02:45:01,264{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:rank	{:member "member-7", :rank nil}
+2026-02-23 02:45:01,355{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-21"
+2026-02-23 02:45:01,357{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-21", :score nil}
+2026-02-23 02:45:01,453{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-37", :score 229}
+2026-02-23 02:45:01,455{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-37", :score 229}
+2026-02-23 02:45:01,535{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-40", :score 846}
+2026-02-23 02:45:01,537{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-40", :score 846}
+2026-02-23 02:45:01,707{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-20", :score 960}
+2026-02-23 02:45:01,710{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-20", :score 960}
+2026-02-23 02:45:01,763{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:rank	"member-33"
+2026-02-23 02:45:01,765{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:rank	{:member "member-33", :rank 2}
+2026-02-23 02:45:01,936{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:score	"member-36"
+2026-02-23 02:45:01,937{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:score	{:member "member-36", :score nil}
+2026-02-23 02:45:01,993{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-42"
+2026-02-23 02:45:01,995{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-42", :score 882.0}
+2026-02-23 02:45:02,051{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-20", :score 32}
+2026-02-23 02:45:02,055{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-20", :score 32}
+2026-02-23 02:45:02,143{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:45:02,145{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:45:02,253{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:45:02,254{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:45:02,435{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:score	"member-10"
+2026-02-23 02:45:02,437{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:score	{:member "member-10", :score nil}
+2026-02-23 02:45:02,567{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:rank	"member-41"
+2026-02-23 02:45:02,569{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:rank	{:member "member-41", :rank nil}
+2026-02-23 02:45:02,761{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:02,762{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:45:02,925{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-47", :score 788}
+2026-02-23 02:45:02,927{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-47", :score 788}
+2026-02-23 02:45:02,978{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:45:02,981{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:45:03,043{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-35"
+2026-02-23 02:45:03,046{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-35"
+2026-02-23 02:45:03,099{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:remove	"member-19"
+2026-02-23 02:45:03,102{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:remove	"member-19"
+2026-02-23 02:45:03,155{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:rank	"member-49"
+2026-02-23 02:45:03,157{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:rank	{:member "member-49", :rank nil}
+2026-02-23 02:45:03,176{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-11", :score 362}
+2026-02-23 02:45:03,179{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-11", :score 362}
+2026-02-23 02:45:03,189{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-37"
+2026-02-23 02:45:03,192{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-37"
+2026-02-23 02:45:03,356{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:update-score	{:member "member-5", :score 553}
+2026-02-23 02:45:03,359{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:update-score	{:member "member-5", :score 553}
+2026-02-23 02:45:03,369{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-19", :score 846}
+2026-02-23 02:45:03,370{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-19", :score 846}
+2026-02-23 02:45:03,424{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:score	"member-32"
+2026-02-23 02:45:03,426{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:score	{:member "member-32", :score nil}
+2026-02-23 02:45:03,516{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:score	"member-5"
+2026-02-23 02:45:03,518{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:score	{:member "member-5", :score nil}
+2026-02-23 02:45:03,585{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-5", :score 900}
+2026-02-23 02:45:03,588{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-5", :score 900}
+2026-02-23 02:45:03,703{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:03,706{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:45:03,772{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:45:03,774{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:45:03,828{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-7"
+2026-02-23 02:45:03,829{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-7"
+2026-02-23 02:45:03,844{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:rank	"member-3"
+2026-02-23 02:45:03,846{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:rank	{:member "member-3", :rank nil}
+2026-02-23 02:45:03,974{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:rank	"member-43"
+2026-02-23 02:45:03,976{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:rank	{:member "member-43", :rank nil}
+2026-02-23 02:45:04,083{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-25", :score 449}
+2026-02-23 02:45:04,085{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-25", :score 449}
+2026-02-23 02:45:04,129{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:04,131{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:45:04,157{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:rank	"member-39"
+2026-02-23 02:45:04,159{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:rank	{:member "member-39", :rank nil}
+2026-02-23 02:45:04,179{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-39"
+2026-02-23 02:45:04,180{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-39"
+2026-02-23 02:45:04,184{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:45:04,185{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	[{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]
+2026-02-23 02:45:04,217{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:update-score	{:member "member-43", :score 684}
+2026-02-23 02:45:04,219{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:update-score	{:member "member-43", :score 684}
+2026-02-23 02:45:04,387{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-16", :score 220}
+2026-02-23 02:45:04,391{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-16", :score 220}
+2026-02-23 02:45:04,438{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-47", :score 570}
+2026-02-23 02:45:04,441{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-47", :score 570}
+2026-02-23 02:45:04,556{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-6", :score 347}
+2026-02-23 02:45:04,557{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-6", :score 347}
+2026-02-23 02:45:04,741{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-5"
+2026-02-23 02:45:04,745{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-5"
+2026-02-23 02:45:04,912{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:remove	"member-0"
+2026-02-23 02:45:04,915{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:remove	"member-0"
+2026-02-23 02:45:05,100{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:rank	"member-3"
+2026-02-23 02:45:05,102{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:rank	{:member "member-3", :rank nil}
+2026-02-23 02:45:05,153{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-28"
+2026-02-23 02:45:05,155{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-28", :score nil}
+2026-02-23 02:45:05,278{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-30"
+2026-02-23 02:45:05,280{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-30", :score nil}
+2026-02-23 02:45:05,473{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:score	"member-6"
+2026-02-23 02:45:05,475{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:score	{:member "member-6", :score 347.0}
+2026-02-23 02:45:05,639{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-43"
+2026-02-23 02:45:05,641{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-43"
+2026-02-23 02:45:05,694{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:add	{:member "member-44", :score 930}
+2026-02-23 02:45:05,696{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:add	{:member "member-44", :score 930}
+2026-02-23 02:45:05,858{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:score	"member-11"
+2026-02-23 02:45:05,861{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:score	{:member "member-11", :score 362.0}
+2026-02-23 02:45:05,898{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-45"
+2026-02-23 02:45:05,901{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-45"
+2026-02-23 02:45:05,957{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-1"
+2026-02-23 02:45:05,959{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-1", :score 202.0}
+2026-02-23 02:45:06,082{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:score	"member-25"
+2026-02-23 02:45:06,084{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:score	{:member "member-25", :score 449.0}
+2026-02-23 02:45:06,097{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-7", :score 7}
+2026-02-23 02:45:06,098{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-7", :score 7}
+2026-02-23 02:45:06,208{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:score	"member-8"
+2026-02-23 02:45:06,210{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:score	{:member "member-8", :score nil}
+2026-02-23 02:45:06,385{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:update-score	{:member "member-12", :score 570}
+2026-02-23 02:45:06,387{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:update-score	{:member "member-12", :score 570}
+2026-02-23 02:45:06,503{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:06,505{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:06,506{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-0"
+2026-02-23 02:45:06,508{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-0", :rank nil}
+2026-02-23 02:45:06,585{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-28", :score 554}
+2026-02-23 02:45:06,586{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-28", :score 554}
+2026-02-23 02:45:06,681{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:rank	"member-25"
+2026-02-23 02:45:06,682{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:rank	{:member "member-25", :rank 6}
+2026-02-23 02:45:06,773{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:update-score	{:member "member-39", :score 263}
+2026-02-23 02:45:06,775{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:update-score	{:member "member-39", :score 263}
+2026-02-23 02:45:06,779{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:update-score	{:member "member-23", :score 300}
+2026-02-23 02:45:06,781{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:update-score	{:member "member-23", :score 300}
+2026-02-23 02:45:06,931{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-34"
+2026-02-23 02:45:06,933{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-34", :rank nil}
+2026-02-23 02:45:07,104{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-48", :score 642}
+2026-02-23 02:45:07,106{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-48", :score 642}
+2026-02-23 02:45:07,214{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-22", :score 198}
+2026-02-23 02:45:07,217{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-22", :score 198}
+2026-02-23 02:45:07,227{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-38"
+2026-02-23 02:45:07,229{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-38"
+2026-02-23 02:45:07,313{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:add	{:member "member-18", :score 610}
+2026-02-23 02:45:07,314{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:add	{:member "member-18", :score 610}
+2026-02-23 02:45:07,345{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:45:07,347{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:07,362{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:07,364{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:07,446{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-37", :score 707}
+2026-02-23 02:45:07,448{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-37", :score 707}
+2026-02-23 02:45:07,625{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:45:07,627{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:07,653{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-17"
+2026-02-23 02:45:07,654{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-17"
+2026-02-23 02:45:07,655{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:45:07,656{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:07,664{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:rank	"member-38"
+2026-02-23 02:45:07,665{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:rank	{:member "member-38", :rank nil}
+2026-02-23 02:45:07,718{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-14", :score 689}
+2026-02-23 02:45:07,719{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-14", :score 689}
+2026-02-23 02:45:07,854{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-48", :score 732}
+2026-02-23 02:45:07,857{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-48", :score 732}
+2026-02-23 02:45:07,927{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:score	"member-49"
+2026-02-23 02:45:07,929{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:score	{:member "member-49", :score nil}
+2026-02-23 02:45:07,932{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:score	"member-17"
+2026-02-23 02:45:07,933{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:score	{:member "member-17", :score nil}
+2026-02-23 02:45:08,101{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:add	{:member "member-26", :score 252}
+2026-02-23 02:45:08,102{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:add	{:member "member-26", :score 252}
+2026-02-23 02:45:08,106{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:score	"member-33"
+2026-02-23 02:45:08,107{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:score	{:member "member-33", :score 329.0}
+2026-02-23 02:45:08,241{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-15"
+2026-02-23 02:45:08,243{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-15"
+2026-02-23 02:45:08,296{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-0", :score 982}
+2026-02-23 02:45:08,298{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-0", :score 982}
+2026-02-23 02:45:08,397{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:update-score	{:member "member-3", :score 894}
+2026-02-23 02:45:08,400{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:update-score	{:member "member-3", :score 894}
+2026-02-23 02:45:08,442{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:score	"member-31"
+2026-02-23 02:45:08,444{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:score	{:member "member-31", :score nil}
+2026-02-23 02:45:08,510{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:score	"member-31"
+2026-02-23 02:45:08,511{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:score	{:member "member-31", :score nil}
+2026-02-23 02:45:08,566{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:remove	"member-30"
+2026-02-23 02:45:08,569{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:remove	"member-30"
+2026-02-23 02:45:08,758{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-9", :score 194}
+2026-02-23 02:45:08,761{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-9", :score 194}
+2026-02-23 02:45:08,855{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-26", :score 544}
+2026-02-23 02:45:08,857{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-26", :score 544}
+2026-02-23 02:45:08,918{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:45:08,921{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-46", :score 707.0} {:member "member-48", :score 732.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+2026-02-23 02:45:09,034{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:rank	"member-14"
+2026-02-23 02:45:09,036{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:rank	{:member "member-14", :rank nil}
+2026-02-23 02:45:09,092{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:rank	"member-10"
+2026-02-23 02:45:09,097{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:rank	{:member "member-10", :rank nil}
+2026-02-23 02:45:09,289{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:remove	"member-19"
+2026-02-23 02:45:09,291{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:remove	"member-19"
+2026-02-23 02:45:09,379{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:09,381{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-46", :score 707.0} {:member "member-48", :score 732.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+2026-02-23 02:45:09,580{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-48"
+2026-02-23 02:45:09,582{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-48"
+2026-02-23 02:45:09,701{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:rank	"member-1"
+2026-02-23 02:45:09,703{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:rank	{:member "member-1", :rank 3}
+2026-02-23 02:45:09,886{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:45:09,888{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-46", :score 707.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+2026-02-23 02:45:10,034{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:remove	"member-18"
+2026-02-23 02:45:10,036{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:remove	"member-18"
+2026-02-23 02:45:10,072{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:update-score	{:member "member-25", :score 515}
+2026-02-23 02:45:10,074{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:update-score	{:member "member-25", :score 515}
+2026-02-23 02:45:10,262{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-12", :score 37}
+2026-02-23 02:45:10,265{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-12", :score 37}
+2026-02-23 02:45:10,309{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-5"
+2026-02-23 02:45:10,310{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-5", :score nil}
+2026-02-23 02:45:10,461{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:update-score	{:member "member-45", :score 839}
+2026-02-23 02:45:10,463{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:update-score	{:member "member-45", :score 839}
+2026-02-23 02:45:10,614{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-34", :score 808}
+2026-02-23 02:45:10,616{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-34", :score 808}
+2026-02-23 02:45:10,677{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:update-score	{:member "member-3", :score 982}
+2026-02-23 02:45:10,680{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:update-score	{:member "member-3", :score 982}
+2026-02-23 02:45:10,833{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:rank	"member-28"
+2026-02-23 02:45:10,835{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:rank	{:member "member-28", :rank 9}
+2026-02-23 02:45:10,914{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-5"
+2026-02-23 02:45:10,915{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-5", :score nil}
+2026-02-23 02:45:10,948{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-3", :score 103}
+2026-02-23 02:45:10,950{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-3", :score 103}
+2026-02-23 02:45:11,151{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:remove	"member-48"
+2026-02-23 02:45:11,154{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:remove	"member-48"
+2026-02-23 02:45:11,267{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-18"
+2026-02-23 02:45:11,270{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-18"
+2026-02-23 02:45:11,340{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:rank	"member-4"
+2026-02-23 02:45:11,343{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:rank	{:member "member-4", :rank nil}
+2026-02-23 02:45:11,538{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:add	{:member "member-18", :score 812}
+2026-02-23 02:45:11,540{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:add	{:member "member-18", :score 812}
+2026-02-23 02:45:11,617{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-42", :score 697}
+2026-02-23 02:45:11,620{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-42", :score 697}
+2026-02-23 02:45:11,643{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-34"
+2026-02-23 02:45:11,645{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-34"
+2026-02-23 02:45:11,836{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-16", :score 420}
+2026-02-23 02:45:11,837{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-16", :score 420}
+2026-02-23 02:45:12,011{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-12"
+2026-02-23 02:45:12,012{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-12"
+2026-02-23 02:45:12,199{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:45:12,202{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-16", :score 420.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-42", :score 697.0} {:member "member-46", :score 707.0} {:member "member-18", :score 812.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+2026-02-23 02:45:12,400{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:remove	"member-18"
+2026-02-23 02:45:12,402{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:remove	"member-18"
+2026-02-23 02:45:12,552{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-39"
+2026-02-23 02:45:12,554{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-39"
+2026-02-23 02:45:12,728{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-5"
+2026-02-23 02:45:12,730{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-5", :rank nil}
+2026-02-23 02:45:12,864{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:rank	"member-21"
+2026-02-23 02:45:12,866{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:rank	{:member "member-21", :rank nil}
+2026-02-23 02:45:12,969{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:score	"member-9"
+2026-02-23 02:45:12,971{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:score	{:member "member-9", :score nil}
+2026-02-23 02:45:13,027{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:add	{:member "member-17", :score 712}
+2026-02-23 02:45:13,029{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:update-score	{:member "member-1", :score 991}
+2026-02-23 02:45:13,029{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:add	{:member "member-17", :score 712}
+2026-02-23 02:45:13,029{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:update-score	{:member "member-1", :score 991}
+2026-02-23 02:45:13,087{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-40"
+2026-02-23 02:45:13,089{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-40", :score 846.0}
+2026-02-23 02:45:13,277{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-42", :score 300}
+2026-02-23 02:45:13,280{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-42", :score 300}
+2026-02-23 02:45:13,322{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:score	"member-8"
+2026-02-23 02:45:13,325{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:score	{:member "member-8", :score nil}
+2026-02-23 02:45:13,401{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-11", :score 9}
+2026-02-23 02:45:13,404{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-11", :score 9}
+2026-02-23 02:45:13,437{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:remove	"member-29"
+2026-02-23 02:45:13,440{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:remove	"member-29"
+2026-02-23 02:45:13,510{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:add	{:member "member-5", :score 328}
+2026-02-23 02:45:13,513{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:add	{:member "member-5", :score 328}
+2026-02-23 02:45:13,594{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-19", :score 715}
+2026-02-23 02:45:13,597{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-19", :score 715}
+2026-02-23 02:45:13,613{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-32"
+2026-02-23 02:45:13,615{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-32", :rank nil}
+2026-02-23 02:45:13,618{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:update-score	{:member "member-6", :score 799}
+2026-02-23 02:45:13,620{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:update-score	{:member "member-6", :score 799}
+2026-02-23 02:45:13,731{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-28", :score 514}
+2026-02-23 02:45:13,733{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-28", :score 514}
+2026-02-23 02:45:13,843{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:45:13,846{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0} {:member "member-1", :score 991.0}]
+2026-02-23 02:45:13,847{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:45:13,848{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0} {:member "member-1", :score 991.0}]
+2026-02-23 02:45:13,977{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-43", :score 337}
+2026-02-23 02:45:13,980{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-43", :score 337}
+2026-02-23 02:45:14,122{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-36"
+2026-02-23 02:45:14,123{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-36"
+2026-02-23 02:45:14,302{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-30", :score 298}
+2026-02-23 02:45:14,304{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-30", :score 298}
+2026-02-23 02:45:14,319{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:rank	"member-0"
+2026-02-23 02:45:14,321{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:rank	{:member "member-0", :rank 22}
+2026-02-23 02:45:14,326{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:45:14,327{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-30", :score 298.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0} {:member "member-1", :score 991.0}]
+2026-02-23 02:45:14,347{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:add	{:member "member-1", :score 685}
+2026-02-23 02:45:14,350{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:add	{:member "member-1", :score 685}
+2026-02-23 02:45:14,487{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:14,490{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-30", :score 298.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-1", :score 685.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+2026-02-23 02:45:14,579{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-1"
+2026-02-23 02:45:14,582{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-1", :score 685.0}
+2026-02-23 02:45:14,582{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:45:14,584{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	[{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-30", :score 298.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-1", :score 685.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]
+2026-02-23 02:45:14,704{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-11", :score 417}
+2026-02-23 02:45:14,707{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-11", :score 417}
+2026-02-23 02:45:14,832{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:update-score	{:member "member-13", :score 273}
+2026-02-23 02:45:14,834{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:update-score	{:member "member-13", :score 273}
+2026-02-23 02:45:14,835{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:add	{:member "member-38", :score 580}
+2026-02-23 02:45:14,836{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:add	{:member "member-38", :score 580}
+2026-02-23 02:45:14,906{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-0"
+2026-02-23 02:45:14,909{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-0", :rank 24}
+2026-02-23 02:45:15,061{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-32"
+2026-02-23 02:45:15,063{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-32", :rank nil}
+2026-02-23 02:45:15,156{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-5", :score 272}
+2026-02-23 02:45:15,159{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-5", :score 272}
+2026-02-23 02:45:15,245{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-27"
+2026-02-23 02:45:15,247{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-27"
+2026-02-23 02:45:15,389{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:remove	"member-12"
+2026-02-23 02:45:15,391{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:remove	"member-12"
+2026-02-23 02:45:15,570{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:update-score	{:member "member-37", :score 40}
+2026-02-23 02:45:15,573{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:update-score	{:member "member-37", :score 40}
+2026-02-23 02:45:15,768{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-27", :score 667}
+2026-02-23 02:45:15,771{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-27", :score 667}
+2026-02-23 02:45:15,927{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-47"
+2026-02-23 02:45:15,929{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-47", :score 570.0}
+2026-02-23 02:45:16,115{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-42", :score 783}
+2026-02-23 02:45:16,117{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-42", :score 783}
+2026-02-23 02:45:16,258{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-46", :score 77}
+2026-02-23 02:45:16,261{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-46", :score 77}
+2026-02-23 02:45:16,332{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:remove	"member-3"
+2026-02-23 02:45:16,333{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:remove	"member-3"
+2026-02-23 02:45:16,528{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:add	{:member "member-23", :score 319}
+2026-02-23 02:45:16,531{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:add	{:member "member-23", :score 319}
+2026-02-23 02:45:16,664{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-6"
+2026-02-23 02:45:16,667{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-6"
+2026-02-23 02:45:16,775{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-0", :score 601}
+2026-02-23 02:45:16,778{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-0", :score 601}
+2026-02-23 02:45:16,892{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:rank	"member-0"
+2026-02-23 02:45:16,894{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:rank	{:member "member-0", :rank 16}
+2026-02-23 02:45:16,946{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:rank	"member-44"
+2026-02-23 02:45:16,948{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:rank	{:member "member-44", :rank 22}
+2026-02-23 02:45:16,994{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:update-score	{:member "member-20", :score 445}
+2026-02-23 02:45:16,996{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:update-score	{:member "member-20", :score 445}
+2026-02-23 02:45:17,120{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:remove	"member-42"
+2026-02-23 02:45:17,122{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:remove	"member-42"
+2026-02-23 02:45:17,135{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-7", :score 729}
+2026-02-23 02:45:17,137{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-7", :score 729}
+2026-02-23 02:45:17,326{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-47", :score 428}
+2026-02-23 02:45:17,328{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:remove	"member-2"
+2026-02-23 02:45:17,328{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-47", :score 428}
+2026-02-23 02:45:17,329{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:remove	"member-2"
+2026-02-23 02:45:17,503{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:45:17,505{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-23", :score 319.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-47", :score 428.0} {:member "member-20", :score 445.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-38", :score 580.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-7", :score 729.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:17,567{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:score	"member-2"
+2026-02-23 02:45:17,569{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:score	{:member "member-2", :score nil}
+2026-02-23 02:45:17,712{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:45:17,715{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-23", :score 319.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-47", :score 428.0} {:member "member-20", :score 445.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-38", :score 580.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-7", :score 729.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:17,851{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-36"
+2026-02-23 02:45:17,854{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-36"
+2026-02-23 02:45:17,966{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-47"
+2026-02-23 02:45:17,968{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-47"
+2026-02-23 02:45:18,008{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:remove	"member-7"
+2026-02-23 02:45:18,011{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:remove	"member-7"
+2026-02-23 02:45:18,135{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-18", :score 471}
+2026-02-23 02:45:18,137{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-18", :score 471}
+2026-02-23 02:45:18,189{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:update-score	{:member "member-38", :score 391}
+2026-02-23 02:45:18,192{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:update-score	{:member "member-38", :score 391}
+2026-02-23 02:45:18,294{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:update-score	{:member "member-23", :score 739}
+2026-02-23 02:45:18,297{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:update-score	{:member "member-23", :score 739}
+2026-02-23 02:45:18,355{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:18,358{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:18,498{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-21"
+2026-02-23 02:45:18,501{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-21", :rank nil}
+2026-02-23 02:45:18,670{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:rank	"member-48"
+2026-02-23 02:45:18,671{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:rank	{:member "member-48", :rank nil}
+2026-02-23 02:45:18,698{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:score	"member-46"
+2026-02-23 02:45:18,699{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:score	{:member "member-46", :score 77.0}
+2026-02-23 02:45:18,802{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:score	"member-24"
+2026-02-23 02:45:18,804{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:score	{:member "member-24", :score nil}
+2026-02-23 02:45:18,894{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:update-score	{:member "member-42", :score 467}
+2026-02-23 02:45:18,896{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:update-score	{:member "member-42", :score 467}
+2026-02-23 02:45:19,013{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-49"
+2026-02-23 02:45:19,016{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-49", :score nil}
+2026-02-23 02:45:19,184{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-42"
+2026-02-23 02:45:19,187{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-42"
+2026-02-23 02:45:19,225{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:update-score	{:member "member-27", :score 597}
+2026-02-23 02:45:19,227{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:update-score	{:member "member-27", :score 597}
+2026-02-23 02:45:19,419{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:rank	"member-25"
+2026-02-23 02:45:19,422{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:rank	{:member "member-25", :rank 12}
+2026-02-23 02:45:19,526{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:rank	"member-26"
+2026-02-23 02:45:19,529{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:rank	{:member "member-26", :rank 13}
+2026-02-23 02:45:19,572{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:45:19,574{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:19,727{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:19,730{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:19,787{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-2", :score 407}
+2026-02-23 02:45:19,789{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-2", :score 407}
+2026-02-23 02:45:19,945{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:remove	"member-12"
+2026-02-23 02:45:19,948{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:remove	"member-12"
+2026-02-23 02:45:19,994{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:update-score	{:member "member-25", :score 979}
+2026-02-23 02:45:19,996{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:update-score	{:member "member-25", :score 979}
+2026-02-23 02:45:19,997{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:score	"member-36"
+2026-02-23 02:45:19,998{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:score	{:member "member-36", :score nil}
+2026-02-23 02:45:20,025{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:update-score	{:member "member-16", :score 266}
+2026-02-23 02:45:20,027{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:update-score	{:member "member-16", :score 266}
+2026-02-23 02:45:20,202{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-21"
+2026-02-23 02:45:20,204{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-21"
+2026-02-23 02:45:20,207{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-2"
+2026-02-23 02:45:20,209{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-2", :score 407.0}
+2026-02-23 02:45:20,377{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:update-score	{:member "member-41", :score 411}
+2026-02-23 02:45:20,380{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:update-score	{:member "member-41", :score 411}
+2026-02-23 02:45:20,532{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:45:20,535{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-16", :score 266.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-2", :score 407.0} {:member "member-11", :score 417.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]
+2026-02-23 02:45:20,685{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:remove	"member-38"
+2026-02-23 02:45:20,687{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:remove	"member-38"
+2026-02-23 02:45:20,852{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:45:20,855{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-16", :score 266.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-2", :score 407.0} {:member "member-11", :score 417.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]
+2026-02-23 02:45:20,952{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-26"
+2026-02-23 02:45:20,955{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-26"
+2026-02-23 02:45:21,115{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-31"
+2026-02-23 02:45:21,118{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-31", :rank nil}
+2026-02-23 02:45:21,258{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:45:21,261{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-16", :score 266.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-2", :score 407.0} {:member "member-11", :score 417.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]
+2026-02-23 02:45:21,435{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:update-score	{:member "member-6", :score 406}
+2026-02-23 02:45:21,438{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:update-score	{:member "member-6", :score 406}
+2026-02-23 02:45:21,562{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:add	{:member "member-5", :score 424}
+2026-02-23 02:45:21,565{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:add	{:member "member-5", :score 424}
+2026-02-23 02:45:21,573{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:add	{:member "member-13", :score 383}
+2026-02-23 02:45:21,575{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:add	{:member "member-13", :score 383}
+2026-02-23 02:45:21,724{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-47", :score 615}
+2026-02-23 02:45:21,726{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-47", :score 615}
+2026-02-23 02:45:21,785{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-11", :score 210}
+2026-02-23 02:45:21,787{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-11", :score 210}
+2026-02-23 02:45:21,990{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:update-score	{:member "member-12", :score 501}
+2026-02-23 02:45:21,992{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:update-score	{:member "member-12", :score 501}
+2026-02-23 02:45:22,177{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:45:22,180{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-13", :score 383.0} {:member "member-2", :score 407.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]
+2026-02-23 02:45:22,246{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:score	"member-14"
+2026-02-23 02:45:22,248{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:score	{:member "member-14", :score nil}
+2026-02-23 02:45:22,298{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:rank	"member-20"
+2026-02-23 02:45:22,301{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:rank	{:member "member-20", :rank 10}
+2026-02-23 02:45:22,406{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:22,408{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-13", :score 383.0} {:member "member-2", :score 407.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]
+2026-02-23 02:45:22,501{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-41", :score 639}
+2026-02-23 02:45:22,502{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-41", :score 639}
+2026-02-23 02:45:22,580{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-41", :score 368}
+2026-02-23 02:45:22,582{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-41", :score 368}
+2026-02-23 02:45:22,610{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:rank	"member-22"
+2026-02-23 02:45:22,612{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:rank	{:member "member-22", :rank 1}
+2026-02-23 02:45:22,769{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:score	"member-4"
+2026-02-23 02:45:22,770{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:score	{:member "member-4", :score nil}
+2026-02-23 02:45:22,823{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:add	{:member "member-13", :score 779}
+2026-02-23 02:45:22,824{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:add	{:member "member-13", :score 779}
+2026-02-23 02:45:22,890{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-16"
+2026-02-23 02:45:22,890{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-16", :rank 3}
+2026-02-23 02:45:22,981{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-15"
+2026-02-23 02:45:22,983{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-15", :rank nil}
+2026-02-23 02:45:23,162{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:remove	"member-25"
+2026-02-23 02:45:23,163{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:remove	"member-25"
+2026-02-23 02:45:23,225{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-36"
+2026-02-23 02:45:23,228{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-36"
+2026-02-23 02:45:23,275{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:add	{:member "member-12", :score 779}
+2026-02-23 02:45:23,277{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:add	{:member "member-12", :score 779}
+2026-02-23 02:45:23,278{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:remove	"member-19"
+2026-02-23 02:45:23,279{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:remove	"member-19"
+2026-02-23 02:45:23,458{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-27", :score 424}
+2026-02-23 02:45:23,460{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-27", :score 424}
+2026-02-23 02:45:23,468{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:23,470{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:23,494{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-4", :score 48}
+2026-02-23 02:45:23,497{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-4", :score 48}
+2026-02-23 02:45:23,587{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:45:23,589{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:23,688{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:remove	"member-3"
+2026-02-23 02:45:23,689{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:remove	"member-3"
+2026-02-23 02:45:23,831{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:45:23,833{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:23,888{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-37", :score 889}
+2026-02-23 02:45:23,889{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-37", :score 889}
+2026-02-23 02:45:23,983{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:rank	"member-46"
+2026-02-23 02:45:23,984{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:rank	{:member "member-46", :rank 1}
+2026-02-23 02:45:24,042{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:update-score	{:member "member-19", :score 606}
+2026-02-23 02:45:24,044{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:update-score	{:member "member-19", :score 606}
+2026-02-23 02:45:24,131{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:add	{:member "member-6", :score 499}
+2026-02-23 02:45:24,132{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:add	{:member "member-6", :score 499}
+2026-02-23 02:45:24,285{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:remove	"member-45"
+2026-02-23 02:45:24,286{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:remove	"member-45"
+2026-02-23 02:45:24,369{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:45:24,370{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-6", :score 499.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:24,476{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-12", :score 724}
+2026-02-23 02:45:24,478{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-12", :score 724}
+2026-02-23 02:45:24,488{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:update-score	{:member "member-31", :score 196}
+2026-02-23 02:45:24,490{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:update-score	{:member "member-31", :score 196}
+2026-02-23 02:45:24,527{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:add	{:member "member-26", :score 222}
+2026-02-23 02:45:24,529{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:add	{:member "member-26", :score 222}
+2026-02-23 02:45:24,689{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:score	"member-17"
+2026-02-23 02:45:24,690{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:score	{:member "member-17", :score 712.0}
+2026-02-23 02:45:24,730{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:remove	"member-31"
+2026-02-23 02:45:24,731{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:remove	"member-31"
+2026-02-23 02:45:24,772{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:rank	"member-3"
+2026-02-23 02:45:24,774{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:rank	{:member "member-3", :rank nil}
+2026-02-23 02:45:24,928{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:score	"member-44"
+2026-02-23 02:45:24,929{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:score	{:member "member-44", :score 930.0}
+2026-02-23 02:45:25,043{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:25,045{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-6", :score 499.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:25,195{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:remove	"member-31"
+2026-02-23 02:45:25,197{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:remove	"member-31"
+2026-02-23 02:45:25,327{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:45:25,329{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-6", :score 499.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]
+2026-02-23 02:45:25,392{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:update-score	{:member "member-6", :score 892}
+2026-02-23 02:45:25,393{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:update-score	{:member "member-6", :score 892}
+2026-02-23 02:45:25,556{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:update-score	{:member "member-7", :score 978}
+2026-02-23 02:45:25,558{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:update-score	{:member "member-7", :score 978}
+2026-02-23 02:45:25,700{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:add	{:member "member-44", :score 479}
+2026-02-23 02:45:25,701{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:add	{:member "member-44", :score 479}
+2026-02-23 02:45:25,893{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:remove	"member-40"
+2026-02-23 02:45:25,895{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:remove	"member-40"
+2026-02-23 02:45:26,093{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:update-score	{:member "member-3", :score 1}
+2026-02-23 02:45:26,095{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:update-score	{:member "member-3", :score 1}
+2026-02-23 02:45:26,158{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:remove	"member-2"
+2026-02-23 02:45:26,160{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:remove	"member-2"
+2026-02-23 02:45:26,285{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:score	"member-21"
+2026-02-23 02:45:26,286{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:score	{:member "member-21", :score nil}
+2026-02-23 02:45:26,324{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:45:26,325{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:26,494{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:26,496{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:26,505{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:26,506{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:26,620{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:45:26,621{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:26,777{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:score	"member-7"
+2026-02-23 02:45:26,779{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:score	{:member "member-7", :score nil}
+2026-02-23 02:45:26,787{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:rank	"member-32"
+2026-02-23 02:45:26,788{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:rank	{:member "member-32", :rank nil}
+2026-02-23 02:45:26,789{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:remove	"member-48"
+2026-02-23 02:45:26,791{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:remove	"member-48"
+2026-02-23 02:45:26,791{GMT}	INFO	[jepsen worker nemesis] jepsen.generator.interpreter: Recovering from faults...
+2026-02-23 02:45:31,797{GMT}	INFO	[jepsen worker 1] jepsen.generator.interpreter: Final reads...
+2026-02-23 02:45:31,797{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:45:31,800{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:31,874{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:45:31,876{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:32,042{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:45:32,043{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:32,221{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:32,222{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:32,327{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:32,329{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:32,334{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-23 02:45:32,336{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:32,511{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-23 02:45:32,512{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:32,682{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-23 02:45:32,683{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:32,783{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-23 02:45:32,783{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:32,987{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-23 02:45:32,989{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	[{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]
+2026-02-23 02:45:33,011{GMT}	INFO	[jepsen test runner] jepsen.core: Run complete, writing
+2026-02-23 02:45:33,064{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB on n1
+2026-02-23 02:45:33,064{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS teardown for n1 (no-op)
+2026-02-23 02:45:33,064{GMT}	INFO	[jepsen test runner] jepsen.core: Analyzing...
+2026-02-23 02:45:33,282{GMT}	INFO	[jepsen test runner] jepsen.core: Analysis complete
+2026-02-23 02:45:33,303{GMT}	INFO	[jepsen results] jepsen.store: Wrote /Users/nathan/workspace/nathanjordan/workspace-1/jepsen/frogdb/store/frogdb-sortedset-docker/20260223T024454.436-0500/results.edn
+2026-02-23 02:45:33,333{GMT}	INFO	[jepsen test runner] jepsen.core: {:workload {:sortedset {:score-read-count 43,
+                        :ordering-violations nil,
+                        :valid? true,
+                        :remove-count 54,
+                        :read-count 58,
+                        :rank-read-count 43,
+                        :add-count 66,
+                        :phantom-members nil,
+                        :update-count 45,
+                        :final-size 24},
+            :valid? true},
+ :stats {:valid? true,
+         :count 309,
+         :ok-count 309,
+         :fail-count 0,
+         :info-count 0,
+         :by-f {:add {:valid? true,
+                      :count 66,
+                      :ok-count 66,
+                      :fail-count 0,
+                      :info-count 0},
+                :rank {:valid? true,
+                       :count 43,
+                       :ok-count 43,
+                       :fail-count 0,
+                       :info-count 0},
+                :read {:valid? true,
+                       :count 58,
+                       :ok-count 58,
+                       :fail-count 0,
+                       :info-count 0},
+                :remove {:valid? true,
+                         :count 54,
+                         :ok-count 54,
+                         :fail-count 0,
+                         :info-count 0},
+                :score {:valid? true,
+                        :count 43,
+                        :ok-count 43,
+                        :fail-count 0,
+                        :info-count 0},
+                :update-score {:valid? true,
+                               :count 45,
+                               :ok-count 45,
+                               :fail-count 0,
+                               :info-count 0}}},
+ :exceptions {:valid? true},
+ :perf {:latency-graph {:valid? true},
+        :rate-graph {:valid? true},
+        :valid? true},
+ :valid? true}
+
+
+Everything looks good! ヽ(‘ー`)ノ

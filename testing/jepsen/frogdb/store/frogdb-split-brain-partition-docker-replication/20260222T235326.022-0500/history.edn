@@ -1,0 +1,1158 @@
+{:index 0, :time 515341416, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 1, :time 520826166, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 0}, "n2" {:value nil}, "n3" {:value nil}}}
+{:index 2, :time 544561750, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 3, :time 546574958, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 0}, "n2" {:value nil}, "n3" {:value nil}}}
+{:index 4, :time 705678583, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 5, :time 709644916, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 0}, "n2" {:value nil}, "n3" {:value nil}}}
+{:index 6, :time 839151041, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 3}}
+{:index 7, :time 841346791, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 3}}
+{:index 8, :time 935223541, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 9, :time 942132041, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 10, :time 971154125, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 6}}
+{:index 11, :time 985829000, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 6}}
+{:index 12, :time 1164127333, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 9}}
+{:index 13, :time 1167890416, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 9}}
+{:index 14, :time 1341775875, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 12}}
+{:index 15, :time 1344512375, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 12}}
+{:index 16, :time 1508531333, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 15}}
+{:index 17, :time 1526901083, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 15}}
+{:index 18, :time 1558145916, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 19, :time 1560262458, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 20, :time 1657554458, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 18}}
+{:index 21, :time 1659664541, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 18}}
+{:index 22, :time 1821869833, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 23, :time 1825792000, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 12}, "n2" {:value 18}, "n3" {:value 6}}}
+{:index 24, :time 1949130291, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 21}}
+{:index 25, :time 1951919000, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 21}}
+{:index 26, :time 2019552750, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 24}}
+{:index 27, :time 2024425666, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 24}}
+{:index 28, :time 2171747375, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 27}}
+{:index 29, :time 2174174916, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 27}}
+{:index 30, :time 2364917791, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 31, :time 2369115666, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 27}, "n2" {:value 24}, "n3" {:value 6}}}
+{:index 32, :time 2390876625, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 33, :time 2395147541, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 27}, "n2" {:value 24}, "n3" {:value 6}}}
+{:index 34, :time 2543719875, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 35, :time 2548863291, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 36, :time 2648913541, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 37, :time 2651909583, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 27}, "n2" {:value 24}, "n3" {:value 6}}}
+{:index 38, :time 2846519666, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 30}}
+{:index 39, :time 2849047250, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 30}}
+{:index 40, :time 2874603083, :type :invoke, :process 3, :f :check-role, :value "n2"}
+{:index 41, :time 2876588375, :type :ok, :process 3, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 42, :time 3074716041, :type :invoke, :process 4, :f :check-role, :value "n3"}
+{:index 43, :time 3077388583, :type :ok, :process 4, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 44, :time 3221598250, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 33}}
+{:index 45, :time 3224230208, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 33}}
+{:index 46, :time 3264428375, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 47, :time 3269061500, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 48, :time 3425058458, :type :invoke, :process 1, :f :write-node, :value {:node "n2", :value 36}}
+{:index 49, :time 3427731916, :type :ok, :process 1, :f :write-node, :value {:node "n2", :value 36}}
+{:index 50, :time 3440392583, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 39}}
+{:index 51, :time 3442958958, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 39}}
+{:index 52, :time 3593230125, :type :invoke, :process 3, :f :check-role, :value "n2"}
+{:index 53, :time 3597124708, :type :ok, :process 3, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 54, :time 3718100916, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 42}}
+{:index 55, :time 3720297291, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 42}}
+{:index 56, :time 3874330333, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 57, :time 3876229625, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 58, :time 4075725166, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 45}}
+{:index 59, :time 4079158375, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 45}}
+{:index 60, :time 4165394333, :type :invoke, :process 1, :f :check-role, :value "n3"}
+{:index 61, :time 4168562250, :type :ok, :process 1, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 62, :time 4242580000, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 48}}
+{:index 63, :time 4245212250, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 48}}
+{:index 64, :time 4373417833, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 51}}
+{:index 65, :time 4376023958, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 51}}
+{:index 66, :time 4566555708, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 67, :time 4572194833, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 42}, "n2" {:value 51}, "n3" {:value 39}}}
+{:index 68, :time 4658579333, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 69, :time 4661848458, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 70, :time 4849956375, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 71, :time 4851577958, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 72, :time 4927086041, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 73, :time 4929444083, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 42}, "n2" {:value 51}, "n3" {:value 39}}}
+{:index 74, :time 5051910750, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 54}}
+{:index 75, :time 5055924500, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 54}}
+{:index 76, :time 5095231458, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 57}}
+{:index 77, :time 5098262875, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 57}}
+{:index 78, :time 5225049000, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 79, :time 5227349125, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 80, :time 5266927916, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 60}}
+{:index 81, :time 5269475208, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 60}}
+{:index 82, :time 5341154916, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 83, :time 5342822166, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 84, :time 5508492791, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 63}}
+{:index 85, :time 5511170666, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 63}}
+{:index 86, :time 5670673583, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 66}}
+{:index 87, :time 5674084291, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 66}}
+{:index 88, :time 5842001333, :type :invoke, :process 3, :f :write-node, :value {:node "n3", :value 69}}
+{:index 89, :time 5845242291, :type :ok, :process 3, :f :write-node, :value {:node "n3", :value 69}}
+{:index 90, :time 5910258833, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 91, :time 5913243500, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 57}, "n2" {:value 66}, "n3" {:value 69}}}
+{:index 92, :time 6087139375, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 93, :time 6089955208, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 57}, "n2" {:value 66}, "n3" {:value 69}}}
+{:index 94, :time 6205413875, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 95, :time 6209430666, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 57}, "n2" {:value 66}, "n3" {:value 69}}}
+{:index 96, :time 6256068708, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 72}}
+{:index 97, :time 6258540250, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 72}}
+{:index 98, :time 6392190541, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 75}}
+{:index 99, :time 6394895416, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 75}}
+{:index 100, :time 6532264791, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 78}}
+{:index 101, :time 6533731458, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 78}}
+{:index 102, :time 6709352791, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 103, :time 6714012916, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 75}}}
+{:index 104, :time 6836221125, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 105, :time 6842430666, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 75}}}
+{:index 106, :time 6921805416, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 107, :time 6925744250, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 75}}}
+{:index 108, :time 7102963958, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 81}}
+{:index 109, :time 7104669666, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 81}}
+{:index 110, :time 7302030416, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 111, :time 7305655708, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 78}, "n2" {:value 66}, "n3" {:value 81}}}
+{:index 112, :time 7445176833, :type :invoke, :process 3, :f :check-role, :value "n3"}
+{:index 113, :time 7447405958, :type :ok, :process 3, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 114, :time 7632590791, :type :invoke, :process 4, :f :write-node, :value {:node "n2", :value 84}}
+{:index 115, :time 7635064166, :type :ok, :process 4, :f :write-node, :value {:node "n2", :value 84}}
+{:index 116, :time 7814773541, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 117, :time 7821558958, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 78}, "n2" {:value 84}, "n3" {:value 81}}}
+{:index 118, :time 7974412125, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 87}}
+{:index 119, :time 7977895791, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 87}}
+{:index 120, :time 8132439666, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 90}}
+{:index 121, :time 8134048000, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 90}}
+{:index 122, :time 8218639666, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 93}}
+{:index 123, :time 8221299833, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 93}}
+{:index 124, :time 8393535375, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 96}}
+{:index 125, :time 8395951958, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 96}}
+{:index 126, :time 8519415375, :type :invoke, :process 4, :f :write-node, :value {:node "n3", :value 99}}
+{:index 127, :time 8521909500, :type :ok, :process 4, :f :write-node, :value {:node "n3", :value 99}}
+{:index 128, :time 8676306708, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 129, :time 8681419333, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 96}, "n2" {:value 93}, "n3" {:value 99}}}
+{:index 130, :time 8837078625, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 131, :time 8840366875, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 132, :time 9014345500, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 133, :time 9020189000, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 96}, "n2" {:value 93}, "n3" {:value 99}}}
+{:index 134, :time 9050140458, :type :invoke, :process 2, :f :check-role, :value "n3"}
+{:index 135, :time 9052564041, :type :ok, :process 2, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 136, :time 9095048833, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 102}}
+{:index 137, :time 9097553166, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 102}}
+{:index 138, :time 9110144500, :type :invoke, :process 4, :f :write-node, :value {:node "n2", :value 105}}
+{:index 139, :time 9111674583, :type :ok, :process 4, :f :write-node, :value {:node "n2", :value 105}}
+{:index 140, :time 9306090666, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 108}}
+{:index 141, :time 9308578000, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 108}}
+{:index 142, :time 9312134666, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 111}}
+{:index 143, :time 9314125791, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 111}}
+{:index 144, :time 9475759916, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 145, :time 9479625958, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}}
+{:index 146, :time 9674598416, :type :invoke, :process 2, :f :check-role, :value "n2"}
+{:index 147, :time 9676160500, :type :ok, :process 2, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 148, :time 9686006083, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 149, :time 9688835250, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}}
+{:index 150, :time 9739024458, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 151, :time 9739795791, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 152, :time 9740937583, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 153, :time 9742475708, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}}
+{:index 154, :time 9770550208, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 155, :time 9775429000, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}}
+{:index 156, :time 9916614541, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 157, :time 9921611166, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}}
+{:index 158, :time 10021797416, :type :invoke, :process 2, :f :check-role, :value "n3"}
+{:index 159, :time 10023842291, :type :ok, :process 2, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 160, :time 10212030125, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 161, :time 10215946916, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 102}, "n2" {:value 108}, "n3" {:value 111}}}
+{:index 162, :time 10336313291, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 114}}
+{:index 163, :time 10337428625, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 114}}
+{:index 164, :time 10346449541, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 117}}
+{:index 165, :time 10347496041, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 117}}
+{:index 166, :time 10398379750, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 120}}
+{:index 167, :time 10400192666, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 120}}
+{:index 168, :time 10522951083, :type :info, :process :nemesis, :f :partition, :value :primary-isolated}
+{:index 169, :time 10530501625, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 170, :time 10533012375, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 120}, "n2" {:value 108}, "n3" {:value 117}}}
+{:index 171, :time 10587616000, :type :invoke, :process 3, :f :write-node, :value {:node "n3", :value 123}}
+{:index 172, :time 10589349958, :type :ok, :process 3, :f :write-node, :value {:node "n3", :value 123}}
+{:index 173, :time 10782679333, :type :invoke, :process 4, :f :check-role, :value "n3"}
+{:index 174, :time 10783610916, :type :ok, :process 4, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 175, :time 10883154250, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 176, :time 10884788166, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 120}, "n2" {:value 108}, "n3" {:value 123}}}
+{:index 177, :time 10982161750, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 126}}
+{:index 178, :time 10983252750, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 126}}
+{:index 179, :time 11045320041, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 129}}
+{:index 180, :time 11046215583, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 129}}
+{:index 181, :time 11123855125, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 182, :time 11125244500, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 120}, "n2" {:value 108}, "n3" {:value 129}}}
+{:index 183, :time 11203107083, :type :info, :process :nemesis, :f :partition, :value :primary-isolated}
+{:index 184, :time 11311664333, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 134}}
+{:index 185, :time 11312878750, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 134}}
+{:index 186, :time 11433106000, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 187, :time 11434740000, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 134}, "n2" {:value 108}, "n3" {:value 129}}}
+{:index 188, :time 11626225458, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 137}}
+{:index 189, :time 11627783083, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 137}}
+{:index 190, :time 11716664208, :type :invoke, :process 1, :f :check-role, :value "n1"}
+{:index 191, :time 11717969500, :type :ok, :process 1, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 192, :time 11910545083, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 140}}
+{:index 193, :time 11913164583, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 140}}
+{:index 194, :time 12095683541, :type :invoke, :process 3, :f :check-role, :value "n1"}
+{:index 195, :time 12097779541, :type :ok, :process 3, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 196, :time 12132756000, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 143}}
+{:index 197, :time 12135797208, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 143}}
+{:index 198, :time 12294509750, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 199, :time 12301314541, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 143}, "n2" {:value 108}, "n3" {:value 140}}}
+{:index 200, :time 12385649750, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 201, :time 12386865750, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 202, :time 12522361166, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 146}}
+{:index 203, :time 12524881000, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 146}}
+{:index 204, :time 12608565583, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 205, :time 12617113625, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 146}, "n2" {:value 108}, "n3" {:value 140}}}
+{:index 206, :time 12657681083, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 207, :time 12661753916, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 146}, "n2" {:value 108}, "n3" {:value 140}}}
+{:index 208, :time 12742061916, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 209, :time 12744008000, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 210, :time 12843665583, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 211, :time 12846177958, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 212, :time 13026272458, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 213, :time 13028581833, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 214, :time 13119664750, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 149}}
+{:index 215, :time 13122727791, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 149}}
+{:index 216, :time 13263386375, :type :invoke, :process 2, :f :check-role, :value "n3"}
+{:index 217, :time 13265996083, :type :ok, :process 2, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 218, :time 13294970958, :type :invoke, :process 3, :f :write-node, :value {:node "n3", :value 152}}
+{:index 219, :time 13297534166, :type :ok, :process 3, :f :write-node, :value {:node "n3", :value 152}}
+{:index 220, :time 13472023208, :type :invoke, :process 4, :f :write-node, :value {:node "n3", :value 155}}
+{:index 221, :time 13473726958, :type :ok, :process 4, :f :write-node, :value {:node "n3", :value 155}}
+{:index 222, :time 13554231958, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 158}}
+{:index 223, :time 13556006291, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 158}}
+{:index 224, :time 13624260291, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 225, :time 13626334916, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 226, :time 13827421583, :type :invoke, :process 1, :f :check-role, :value "n1"}
+{:index 227, :time 13830716750, :type :ok, :process 1, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 228, :time 13933267375, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 161}}
+{:index 229, :time 13936106583, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 161}}
+{:index 230, :time 14136805541, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 164}}
+{:index 231, :time 14140689250, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 164}}
+{:index 232, :time 14163276625, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 233, :time 14166322750, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 234, :time 14252478208, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 235, :time 14255403500, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 236, :time 14430174083, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 167}}
+{:index 237, :time 14431847500, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 167}}
+{:index 238, :time 14631598875, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 170}}
+{:index 239, :time 14633225041, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 170}}
+{:index 240, :time 14697095291, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 241, :time 14703259041, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 170}, "n2" {:value 161}, "n3" {:value 155}}}
+{:index 242, :time 14891336333, :type :invoke, :process 3, :f :check-role, :value "n3"}
+{:index 243, :time 14894158166, :type :ok, :process 3, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 244, :time 14922776125, :type :invoke, :process 4, :f :check-role, :value "n1"}
+{:index 245, :time 14925242625, :type :ok, :process 4, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 246, :time 15038922833, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 173}}
+{:index 247, :time 15041960125, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 173}}
+{:index 248, :time 15068076375, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 176}}
+{:index 249, :time 15070532416, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 176}}
+{:index 250, :time 15084266041, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 179}}
+{:index 251, :time 15086235500, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 179}}
+{:index 252, :time 15227380583, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 182}}
+{:index 253, :time 15230508041, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 182}}
+{:index 254, :time 15347306958, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 255, :time 15351613375, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 182}, "n2" {:value 161}, "n3" {:value 173}}}
+{:index 256, :time 15394960500, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 257, :time 15399609375, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 182}, "n2" {:value 161}, "n3" {:value 173}}}
+{:index 258, :time 15587258458, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 259, :time 15588226416, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 260, :time 15680090458, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 185}}
+{:index 261, :time 15682116833, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 185}}
+{:index 262, :time 15749915458, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 188}}
+{:index 263, :time 15752517750, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 188}}
+{:index 264, :time 15799890541, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 191}}
+{:index 265, :time 15802925041, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 191}}
+{:index 266, :time 15958215333, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 194}}
+{:index 267, :time 15960587833, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 194}}
+{:index 268, :time 16059723416, :type :invoke, :process 4, :f :write-node, :value {:node "n2", :value 197}}
+{:index 269, :time 16062111958, :type :ok, :process 4, :f :write-node, :value {:node "n2", :value 197}}
+{:index 270, :time 16175991208, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 271, :time 16178256125, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 272, :time 16293675291, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 273, :time 16296223291, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 274, :time 16443615916, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 275, :time 16447720291, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 194}, "n2" {:value 197}, "n3" {:value 173}}}
+{:index 276, :time 16603019583, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 200}}
+{:index 277, :time 16605035083, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 200}}
+{:index 278, :time 16733846500, :type :invoke, :process 3, :f :check-role, :value "n3"}
+{:index 279, :time 16734913041, :type :ok, :process 3, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 280, :time 16912946083, :type :invoke, :process 4, :f :write-node, :value {:node "n2", :value 203}}
+{:index 281, :time 16915791708, :type :ok, :process 4, :f :write-node, :value {:node "n2", :value 203}}
+{:index 282, :time 16992846458, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 206}}
+{:index 283, :time 16995149041, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 206}}
+{:index 284, :time 17062191541, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 209}}
+{:index 285, :time 17064658166, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 209}}
+{:index 286, :time 17187962416, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 287, :time 17192731625, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 200}, "n2" {:value 209}, "n3" {:value 206}}}
+{:index 288, :time 17282061666, :type :invoke, :process 2, :f :check-role, :value "n1"}
+{:index 289, :time 17284159791, :type :ok, :process 2, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 290, :time 17338902791, :type :invoke, :process 3, :f :check-role, :value "n1"}
+{:index 291, :time 17340816958, :type :ok, :process 3, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 292, :time 17405991333, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 212}}
+{:index 293, :time 17408246916, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 212}}
+{:index 294, :time 17498758375, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 295, :time 17501885208, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 212}, "n2" {:value 209}, "n3" {:value 206}}}
+{:index 296, :time 17633918458, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 215}}
+{:index 297, :time 17635536958, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 215}}
+{:index 298, :time 17775988541, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 218}}
+{:index 299, :time 17777124458, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 218}}
+{:index 300, :time 17865977208, :type :invoke, :process 2, :f :check-role, :value "n1"}
+{:index 301, :time 17867351958, :type :ok, :process 2, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 302, :time 17948598583, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 303, :time 17953228625, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 212}, "n2" {:value 215}, "n3" {:value 218}}}
+{:index 304, :time 18084408750, :type :invoke, :process 4, :f :write-node, :value {:node "n3", :value 221}}
+{:index 305, :time 18087400416, :type :ok, :process 4, :f :write-node, :value {:node "n3", :value 221}}
+{:index 306, :time 18166571125, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 307, :time 18169491541, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 308, :time 18304371541, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 309, :time 18306714666, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 310, :time 18427996250, :type :invoke, :process 1, :f :write-node, :value {:node "n2", :value 224}}
+{:index 311, :time 18431057375, :type :ok, :process 1, :f :write-node, :value {:node "n2", :value 224}}
+{:index 312, :time 18452485708, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 227}}
+{:index 313, :time 18454710291, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 227}}
+{:index 314, :time 18581346541, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 315, :time 18586303416, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 212}, "n2" {:value 224}, "n3" {:value 227}}}
+{:index 316, :time 18733603666, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 317, :time 18741060916, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 212}, "n2" {:value 224}, "n3" {:value 227}}}
+{:index 318, :time 18915279958, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 319, :time 18916600666, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 320, :time 19116677833, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 230}}
+{:index 321, :time 19120322000, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 230}}
+{:index 322, :time 19155517708, :type :invoke, :process 1, :f :check-role, :value "n3"}
+{:index 323, :time 19157748625, :type :ok, :process 1, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 324, :time 19233818083, :type :invoke, :process 2, :f :check-role, :value "n1"}
+{:index 325, :time 19235684125, :type :ok, :process 2, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 326, :time 19245271958, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 233}}
+{:index 327, :time 19247585916, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 233}}
+{:index 328, :time 19290337208, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 236}}
+{:index 329, :time 19292944916, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 236}}
+{:index 330, :time 19367582500, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 239}}
+{:index 331, :time 19370602583, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 239}}
+{:index 332, :time 19420548291, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 242}}
+{:index 333, :time 19423066541, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 242}}
+{:index 334, :time 19589124666, :type :invoke, :process 1, :f :check-role, :value "n3"}
+{:index 335, :time 19591089291, :type :ok, :process 1, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 336, :time 19777770125, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 245}}
+{:index 337, :time 19779764625, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 245}}
+{:index 338, :time 19909201083, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 339, :time 19912073291, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 245}, "n2" {:value 224}, "n3" {:value 242}}}
+{:index 340, :time 19974905625, :type :invoke, :process 4, :f :check-role, :value "n1"}
+{:index 341, :time 19975953791, :type :ok, :process 4, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 342, :time 20020008041, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 343, :time 20022341041, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 245}, "n2" {:value 224}, "n3" {:value 242}}}
+{:index 344, :time 20044756833, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 248}}
+{:index 345, :time 20046169000, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 248}}
+{:index 346, :time 20247029416, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 347, :time 20251953916, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 248}, "n2" {:value 224}, "n3" {:value 242}}}
+{:index 348, :time 20443506375, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 251}}
+{:index 349, :time 20444824708, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 251}}
+{:index 350, :time 20592431500, :type :invoke, :process 3, :f :check-role, :value "n3"}
+{:index 351, :time 20594907250, :type :ok, :process 3, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 352, :time 20786745833, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 353, :time 20791882041, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 242}}}
+{:index 354, :time 20839136541, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 254}}
+{:index 355, :time 20841848833, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 254}}
+{:index 356, :time 21039142375, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 357, :time 21041643458, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 254}}}
+{:index 358, :time 21062707625, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 257}}
+{:index 359, :time 21063785708, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 257}}
+{:index 360, :time 21160194166, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 260}}
+{:index 361, :time 21164038875, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 260}}
+{:index 362, :time 21208434458, :type :info, :process :nemesis, :f :heal, :value nil}
+{:index 363, :time 21342177041, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 364, :time 21343454375, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 365, :time 21346283875, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 263}}
+{:index 366, :time 21347208916, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 263}}
+{:index 367, :time 21381196791, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 368, :time 21382599041, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 263}}}
+{:index 369, :time 21493203041, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 370, :time 21495277583, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 251}, "n2" {:value 224}, "n3" {:value 263}}}
+{:index 371, :time 21499292250, :type :info, :process :nemesis, :f :heal, :value :healed}
+{:index 372, :time 21693921666, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 268}}
+{:index 373, :time 21695471416, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 268}}
+{:index 374, :time 21761567000, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 375, :time 21766348000, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 251}, "n2" {:value 268}, "n3" {:value 263}}}
+{:index 376, :time 21905476416, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 377, :time 21907890500, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 378, :time 22020534916, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 271}}
+{:index 379, :time 22023394291, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 271}}
+{:index 380, :time 22132774000, :type :invoke, :process 1, :f :check-role, :value "n3"}
+{:index 381, :time 22134357291, :type :ok, :process 1, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 382, :time 22177161750, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 274}}
+{:index 383, :time 22178863250, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 274}}
+{:index 384, :time 22369778875, :type :invoke, :process 3, :f :write-node, :value {:node "n3", :value 277}}
+{:index 385, :time 22372978750, :type :ok, :process 3, :f :write-node, :value {:node "n3", :value 277}}
+{:index 386, :time 22494595500, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 387, :time 22499589625, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 271}, "n2" {:value 268}, "n3" {:value 277}}}
+{:index 388, :time 22674832041, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 389, :time 22680653250, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 271}, "n2" {:value 268}, "n3" {:value 277}}}
+{:index 390, :time 22737443333, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 391, :time 22740482583, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 392, :time 22828881208, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 393, :time 22833449291, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 271}, "n2" {:value 268}, "n3" {:value 277}}}
+{:index 394, :time 22844382791, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 280}}
+{:index 395, :time 22846870666, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 280}}
+{:index 396, :time 22935321458, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 283}}
+{:index 397, :time 22939769583, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 283}}
+{:index 398, :time 22996777541, :type :invoke, :process 4, :f :check-role, :value "n1"}
+{:index 399, :time 22999969583, :type :ok, :process 4, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 400, :time 23155080416, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 401, :time 23157617625, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 283}, "n2" {:value 280}, "n3" {:value 277}}}
+{:index 402, :time 23209859375, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 403, :time 23212527125, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 283}, "n2" {:value 280}, "n3" {:value 277}}}
+{:index 404, :time 23309051625, :type :invoke, :process 1, :f :check-role, :value "n2"}
+{:index 405, :time 23312098833, :type :ok, :process 1, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 406, :time 23330758291, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 286}}
+{:index 407, :time 23338960750, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 286}}
+{:index 408, :time 23488763500, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 409, :time 23492195333, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 286}, "n2" {:value 280}, "n3" {:value 277}}}
+{:index 410, :time 23554443083, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 411, :time 23558011875, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 286}, "n2" {:value 280}, "n3" {:value 277}}}
+{:index 412, :time 23649741458, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 413, :time 23652218750, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 414, :time 23689428041, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 289}}
+{:index 415, :time 23692794083, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 289}}
+{:index 416, :time 23844455500, :type :invoke, :process 1, :f :write-node, :value {:node "n2", :value 292}}
+{:index 417, :time 23858408916, :type :ok, :process 1, :f :write-node, :value {:node "n2", :value 292}}
+{:index 418, :time 24024469166, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 295}}
+{:index 419, :time 24028560958, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 295}}
+{:index 420, :time 24171860416, :type :invoke, :process 3, :f :check-role, :value "n1"}
+{:index 421, :time 24175459791, :type :ok, :process 3, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 422, :time 24201197708, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 298}}
+{:index 423, :time 24204463625, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 298}}
+{:index 424, :time 24308957750, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 301}}
+{:index 425, :time 24310020125, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 301}}
+{:index 426, :time 24379258875, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 304}}
+{:index 427, :time 24380735125, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 304}}
+{:index 428, :time 24471300833, :type :invoke, :process 1, :f :check-role, :value "n3"}
+{:index 429, :time 24472791791, :type :ok, :process 1, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 430, :time 24635720458, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 307}}
+{:index 431, :time 24637239916, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 307}}
+{:index 432, :time 24809366375, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 310}}
+{:index 433, :time 24825379208, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 310}}
+{:index 434, :time 24954318375, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 313}}
+{:index 435, :time 24966917041, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 313}}
+{:index 436, :time 25010371791, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 437, :time 25018537333, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 313}, "n2" {:value 310}, "n3" {:value 307}}}
+{:index 438, :time 25149288291, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 439, :time 25155479208, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 440, :time 25322165375, :type :invoke, :process 1, :f :check-role, :value "n1"}
+{:index 441, :time 25323470458, :type :ok, :process 1, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 442, :time 25455310500, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 316}}
+{:index 443, :time 25457397208, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 316}}
+{:index 444, :time 25504845625, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 319}}
+{:index 445, :time 25506579833, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 319}}
+{:index 446, :time 25636799333, :type :invoke, :process 4, :f :write-node, :value {:node "n2", :value 322}}
+{:index 447, :time 25638069208, :type :ok, :process 4, :f :write-node, :value {:node "n2", :value 322}}
+{:index 448, :time 25833453791, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 325}}
+{:index 449, :time 25836749875, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 325}}
+{:index 450, :time 25881984625, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 451, :time 25884002500, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 452, :time 25905492833, :type :invoke, :process 1, :f :check-role, :value "n2"}
+{:index 453, :time 25908103375, :type :ok, :process 1, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 454, :time 25916185875, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 328}}
+{:index 455, :time 25918447125, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 328}}
+{:index 456, :time 26036472375, :type :invoke, :process 3, :f :write-node, :value {:node "n3", :value 331}}
+{:index 457, :time 26038204541, :type :ok, :process 3, :f :write-node, :value {:node "n3", :value 331}}
+{:index 458, :time 26117075458, :type :invoke, :process 4, :f :check-role, :value "n1"}
+{:index 459, :time 26119213208, :type :ok, :process 4, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 460, :time 26232457916, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 461, :time 26237131708, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 319}, "n2" {:value 328}, "n3" {:value 331}}}
+{:index 462, :time 26331865625, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 334}}
+{:index 463, :time 26333789125, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 334}}
+{:index 464, :time 26489892291, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 337}}
+{:index 465, :time 26492019333, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 337}}
+{:index 466, :time 26589463916, :type :invoke, :process 3, :f :write-node, :value {:node "n3", :value 342}}
+{:index 467, :time 26592925458, :type :ok, :process 3, :f :write-node, :value {:node "n3", :value 342}}
+{:index 468, :time 26681604541, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 469, :time 26687992958, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 337}, "n2" {:value 334}, "n3" {:value 342}}}
+{:index 470, :time 26712972791, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 345}}
+{:index 471, :time 26716114625, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 345}}
+{:index 472, :time 26828487000, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 348}}
+{:index 473, :time 26832692375, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 348}}
+{:index 474, :time 26994238583, :type :invoke, :process 1, :f :write-node, :value {:node "n2", :value 351}}
+{:index 475, :time 26997058000, :type :ok, :process 1, :f :write-node, :value {:node "n2", :value 351}}
+{:index 476, :time 27097244916, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 354}}
+{:index 477, :time 27100579791, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 354}}
+{:index 478, :time 27266499500, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 357}}
+{:index 479, :time 27268775666, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 357}}
+{:index 480, :time 27425028291, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 360}}
+{:index 481, :time 27428876250, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 360}}
+{:index 482, :time 27445468541, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 483, :time 27447343291, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 484, :time 27493131500, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 363}}
+{:index 485, :time 27494778958, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 363}}
+{:index 486, :time 27531985083, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 366}}
+{:index 487, :time 27533663500, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 366}}
+{:index 488, :time 27538393458, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 369}}
+{:index 489, :time 27539281041, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 369}}
+{:index 490, :time 27590874125, :type :invoke, :process 3, :f :check-role, :value "n3"}
+{:index 491, :time 27593760583, :type :ok, :process 3, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 492, :time 27776752375, :type :invoke, :process 4, :f :check-role, :value "n3"}
+{:index 493, :time 27781122583, :type :ok, :process 4, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 494, :time 27813188666, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 495, :time 27816238375, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 496, :time 27829140833, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 497, :time 27834215791, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 363}, "n2" {:value 357}, "n3" {:value 369}}}
+{:index 498, :time 27962277166, :type :invoke, :process 1, :f :check-role, :value "n1"}
+{:index 499, :time 27964558333, :type :ok, :process 1, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 500, :time 28048520000, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 372}}
+{:index 501, :time 28053558166, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 372}}
+{:index 502, :time 28062108416, :type :invoke, :process 3, :f :check-role, :value "n3"}
+{:index 503, :time 28065312875, :type :ok, :process 3, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 504, :time 28191401166, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 505, :time 28194890083, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 506, :time 28282588791, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 507, :time 28293800791, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 372}, "n2" {:value 357}, "n3" {:value 369}}}
+{:index 508, :time 28298448083, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 375}}
+{:index 509, :time 28300988291, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 375}}
+{:index 510, :time 28318016708, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 378}}
+{:index 511, :time 28321116541, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 378}}
+{:index 512, :time 28495740833, :type :invoke, :process 2, :f :check-role, :value "n3"}
+{:index 513, :time 28497140208, :type :ok, :process 2, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 514, :time 28571790291, :type :invoke, :process 3, :f :check-role, :value "n1"}
+{:index 515, :time 28573004250, :type :ok, :process 3, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 516, :time 28579809000, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 517, :time 28580926041, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 518, :time 28715057375, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 519, :time 28717725041, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 520, :time 28782868791, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 521, :time 28785504500, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 522, :time 28868846875, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 381}}
+{:index 523, :time 28871683458, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 381}}
+{:index 524, :time 29005182500, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 384}}
+{:index 525, :time 29008206375, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 384}}
+{:index 526, :time 29205901625, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 527, :time 29209266333, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 384}, "n2" {:value 357}, "n3" {:value 381}}}
+{:index 528, :time 29380317166, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 529, :time 29382207583, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 530, :time 29460389625, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 387}}
+{:index 531, :time 29461832583, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 387}}
+{:index 532, :time 29606533541, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 390}}
+{:index 533, :time 29607998458, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 390}}
+{:index 534, :time 29757261583, :type :invoke, :process 1, :f :check-role, :value "n1"}
+{:index 535, :time 29761725750, :type :ok, :process 1, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 536, :time 29876753500, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 393}}
+{:index 537, :time 29879149166, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 393}}
+{:index 538, :time 29916903333, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 396}}
+{:index 539, :time 29919632875, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 396}}
+{:index 540, :time 30092266708, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 399}}
+{:index 541, :time 30095453208, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 399}}
+{:index 542, :time 30250376541, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 543, :time 30255836625, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 399}, "n2" {:value 396}, "n3" {:value 387}}}
+{:index 544, :time 30283001041, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 545, :time 30289698625, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 399}, "n2" {:value 396}, "n3" {:value 387}}}
+{:index 546, :time 30336137041, :type :invoke, :process 1, :f :check-role, :value "n2"}
+{:index 547, :time 30339090416, :type :ok, :process 1, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 548, :time 30396899000, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 402}}
+{:index 549, :time 30399950625, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 402}}
+{:index 550, :time 30438323125, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 405}}
+{:index 551, :time 30440973416, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 405}}
+{:index 552, :time 30564315791, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 553, :time 30569228583, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 405}, "n2" {:value 396}, "n3" {:value 402}}}
+{:index 554, :time 30663180625, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 555, :time 30666154041, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 405}, "n2" {:value 396}, "n3" {:value 402}}}
+{:index 556, :time 30775873000, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 557, :time 30777647625, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 558, :time 30883806000, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 408}}
+{:index 559, :time 30886726333, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 408}}
+{:index 560, :time 30980340333, :type :invoke, :process 2, :f :check-role, :value "n1"}
+{:index 561, :time 30983116416, :type :ok, :process 2, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 562, :time 31097744875, :type :invoke, :process 3, :f :write-node, :value {:node "n3", :value 411}}
+{:index 563, :time 31101073958, :type :ok, :process 3, :f :write-node, :value {:node "n3", :value 411}}
+{:index 564, :time 31197291083, :type :invoke, :process 4, :f :write-node, :value {:node "n3", :value 414}}
+{:index 565, :time 31201060833, :type :ok, :process 4, :f :write-node, :value {:node "n3", :value 414}}
+{:index 566, :time 31323835666, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 567, :time 31325873750, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 568, :time 31452568166, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 417}}
+{:index 569, :time 31455194708, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 417}}
+{:index 570, :time 31494140916, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 420}}
+{:index 571, :time 31496329458, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 420}}
+{:index 572, :time 31530933250, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 573, :time 31536104500, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 420}, "n2" {:value 396}, "n3" {:value 414}}}
+{:index 574, :time 31705206750, :type :invoke, :process 3, :f :check-role, :value "n2"}
+{:index 575, :time 31706208375, :type :ok, :process 3, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 576, :time 31890983958, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 577, :time 31894692375, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 420}, "n2" {:value 396}, "n3" {:value 414}}}
+{:index 578, :time 32068951666, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 423}}
+{:index 579, :time 32072438791, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 423}}
+{:index 580, :time 32173292041, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 581, :time 32176321833, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 582, :time 32267373500, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 426}}
+{:index 583, :time 32270384333, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 426}}
+{:index 584, :time 32313193583, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 429}}
+{:index 585, :time 32316746166, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 429}}
+{:index 586, :time 32476558666, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 587, :time 32481656083, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 426}, "n2" {:value 396}, "n3" {:value 429}}}
+{:index 588, :time 32680748958, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 589, :time 32686508041, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 426}, "n2" {:value 396}, "n3" {:value 429}}}
+{:index 590, :time 32868232708, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 432}}
+{:index 591, :time 32870241041, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 432}}
+{:index 592, :time 32995785166, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 593, :time 32998826333, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 426}, "n2" {:value 432}, "n3" {:value 429}}}
+{:index 594, :time 33021232958, :type :invoke, :process 1, :f :check-role, :value "n2"}
+{:index 595, :time 33023741041, :type :ok, :process 1, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 596, :time 33174870041, :type :invoke, :process 2, :f :check-role, :value "n3"}
+{:index 597, :time 33178243833, :type :ok, :process 2, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 598, :time 33185794583, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 435}}
+{:index 599, :time 33188804875, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 435}}
+{:index 600, :time 33348992041, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 438}}
+{:index 601, :time 33351916500, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 438}}
+{:index 602, :time 33417014666, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 603, :time 33424254166, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 438}, "n2" {:value 432}, "n3" {:value 429}}}
+{:index 604, :time 33612821375, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 441}}
+{:index 605, :time 33614757041, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 441}}
+{:index 606, :time 33638516000, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 444}}
+{:index 607, :time 33640376791, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 444}}
+{:index 608, :time 33834613083, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 447}}
+{:index 609, :time 33838077583, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 447}}
+{:index 610, :time 33846975125, :type :invoke, :process 3, :f :check-role, :value "n2"}
+{:index 611, :time 33850641375, :type :ok, :process 3, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 612, :time 33938846125, :type :invoke, :process 4, :f :write-node, :value {:node "n2", :value 450}}
+{:index 613, :time 33940113666, :type :ok, :process 4, :f :write-node, :value {:node "n2", :value 450}}
+{:index 614, :time 33979412083, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 453}}
+{:index 615, :time 33980581916, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 453}}
+{:index 616, :time 34122339083, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 617, :time 34130417291, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 618, :time 34130462541, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 455}}
+{:index 619, :time 34133020416, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 455}}
+{:index 620, :time 34276812541, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 458}}
+{:index 621, :time 34277028416, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 459}}
+{:index 622, :time 34280227250, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 459}}
+{:index 623, :time 34280271833, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 458}}
+{:index 624, :time 34292519708, :type :invoke, :process 4, :f :write-node, :value {:node "n3", :value 463}}
+{:index 625, :time 34295734291, :type :ok, :process 4, :f :write-node, :value {:node "n3", :value 463}}
+{:index 626, :time 34471733833, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 466}}
+{:index 627, :time 34474213125, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 466}}
+{:index 628, :time 34556127583, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 469}}
+{:index 629, :time 34558636708, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 469}}
+{:index 630, :time 34716372458, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 631, :time 34720764416, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 458}, "n2" {:value 466}, "n3" {:value 469}}}
+{:index 632, :time 34856928708, :type :invoke, :process 2, :f :check-role, :value "n2"}
+{:index 633, :time 34859184041, :type :ok, :process 2, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 634, :time 35034145041, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 472}}
+{:index 635, :time 35035689416, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 472}}
+{:index 636, :time 35057743250, :type :invoke, :process 4, :f :write-node, :value {:node "n2", :value 475}}
+{:index 637, :time 35059101958, :type :ok, :process 4, :f :write-node, :value {:node "n2", :value 475}}
+{:index 638, :time 35140032375, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 639, :time 35143534500, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 458}, "n2" {:value 475}, "n3" {:value 469}}}
+{:index 640, :time 35336435083, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 641, :time 35338843500, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 642, :time 35466854250, :type :invoke, :process 1, :f :write-node, :value {:node "n2", :value 478}}
+{:index 643, :time 35469126416, :type :ok, :process 1, :f :write-node, :value {:node "n2", :value 478}}
+{:index 644, :time 35489163416, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 481}}
+{:index 645, :time 35491430041, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 481}}
+{:index 646, :time 35533517416, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 484}}
+{:index 647, :time 35535631916, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 484}}
+{:index 648, :time 35721949041, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 487}}
+{:index 649, :time 35725012291, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 487}}
+{:index 650, :time 35780781333, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 651, :time 35785939541, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 487}, "n2" {:value 484}, "n3" {:value 469}}}
+{:index 652, :time 35824167500, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 490}}
+{:index 653, :time 35826571583, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 490}}
+{:index 654, :time 35923157250, :type :invoke, :process 1, :f :write-node, :value {:node "n2", :value 493}}
+{:index 655, :time 35929535625, :type :ok, :process 1, :f :write-node, :value {:node "n2", :value 493}}
+{:index 656, :time 35948783916, :type :invoke, :process 2, :f :check-role, :value "n1"}
+{:index 657, :time 35953936916, :type :ok, :process 2, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 658, :time 35968585333, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 659, :time 35973343458, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 487}, "n2" {:value 493}, "n3" {:value 490}}}
+{:index 660, :time 36040188416, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 661, :time 36042907250, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 487}, "n2" {:value 493}, "n3" {:value 490}}}
+{:index 662, :time 36196681916, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 496}}
+{:index 663, :time 36198828791, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 496}}
+{:index 664, :time 36274403125, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 665, :time 36277119958, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 666, :time 36441737750, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 499}}
+{:index 667, :time 36457740375, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 499}}
+{:index 668, :time 36457780041, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 669, :time 36459553333, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 499}, "n2" {:value 496}, "n3" {:value 490}}}
+{:index 670, :time 36509810208, :type :info, :process :nemesis, :f :partition, :value :primary-isolated}
+{:index 671, :time 36590948458, :type :invoke, :process 4, :f :write-node, :value {:node "n2", :value 504}}
+{:index 672, :time 36592016291, :type :ok, :process 4, :f :write-node, :value {:node "n2", :value 504}}
+{:index 673, :time 36621542541, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 674, :time 36622409250, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 675, :time 36646606041, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 507}}
+{:index 676, :time 36647358916, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 507}}
+{:index 677, :time 36692147291, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 678, :time 36693453041, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 507}, "n2" {:value 504}, "n3" {:value 490}}}
+{:index 679, :time 36724917625, :type :invoke, :process 2, :f :check-role, :value "n1"}
+{:index 680, :time 36725634750, :type :ok, :process 2, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 681, :time 36848441916, :type :invoke, :process 3, :f :write-node, :value {:node "n3", :value 510}}
+{:index 682, :time 36849391000, :type :ok, :process 3, :f :write-node, :value {:node "n3", :value 510}}
+{:index 683, :time 36899096375, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 684, :time 36901147916, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 507}, "n2" {:value 504}, "n3" {:value 510}}}
+{:index 685, :time 37025967458, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 513}}
+{:index 686, :time 37026888000, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 513}}
+{:index 687, :time 37075156750, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 688, :time 37077300416, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 513}, "n2" {:value 504}, "n3" {:value 510}}}
+{:index 689, :time 37139928708, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 690, :time 37141413000, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 513}, "n2" {:value 504}, "n3" {:value 510}}}
+{:index 691, :time 37163223958, :type :info, :process :nemesis, :f :partition, :value :primary-isolated}
+{:index 692, :time 37312526041, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 518}}
+{:index 693, :time 37313692375, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 518}}
+{:index 694, :time 37366092875, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 695, :time 37367508875, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 696, :time 37523118500, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 697, :time 37525209625, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 698, :time 37704502208, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 699, :time 37706688291, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 700, :time 37907946083, :type :invoke, :process 1, :f :check-role, :value "n2"}
+{:index 701, :time 37910657208, :type :ok, :process 1, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 702, :time 38097491083, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 703, :time 38101599791, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 513}, "n2" {:value 518}, "n3" {:value 510}}}
+{:index 704, :time 38184481083, :type :invoke, :process 3, :f :check-role, :value "n1"}
+{:index 705, :time 38185578458, :type :ok, :process 3, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 706, :time 38223800083, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 521}}
+{:index 707, :time 38224953833, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 521}}
+{:index 708, :time 38348249541, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 709, :time 38350837750, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 521}, "n2" {:value 518}, "n3" {:value 510}}}
+{:index 710, :time 38375781250, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 524}}
+{:index 711, :time 38377721291, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 524}}
+{:index 712, :time 38574951125, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 527}}
+{:index 713, :time 38577356916, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 527}}
+{:index 714, :time 38771301583, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 530}}
+{:index 715, :time 38774176583, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 530}}
+{:index 716, :time 38892571750, :type :invoke, :process 3, :f :check-role, :value "n3"}
+{:index 717, :time 38895060750, :type :ok, :process 3, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 718, :time 39074951333, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 533}}
+{:index 719, :time 39078148375, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 533}}
+{:index 720, :time 39247162750, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 721, :time 39248975708, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 722, :time 39344205166, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 723, :time 39346792583, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 533}, "n2" {:value 530}, "n3" {:value 527}}}
+{:index 724, :time 39417692375, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 725, :time 39420128958, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 533}, "n2" {:value 530}, "n3" {:value 527}}}
+{:index 726, :time 39450490291, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 727, :time 39454612666, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 533}, "n2" {:value 530}, "n3" {:value 527}}}
+{:index 728, :time 39645497791, :type :invoke, :process 3, :f :check-role, :value "n3"}
+{:index 729, :time 39648009458, :type :ok, :process 3, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 730, :time 39746834083, :type :invoke, :process 4, :f :write-node, :value {:node "n2", :value 536}}
+{:index 731, :time 39749920583, :type :ok, :process 4, :f :write-node, :value {:node "n2", :value 536}}
+{:index 732, :time 39798775625, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 539}}
+{:index 733, :time 39801558041, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 539}}
+{:index 734, :time 39997001041, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 542}}
+{:index 735, :time 40000052500, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 542}}
+{:index 736, :time 40161681791, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 737, :time 40164425541, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 542}, "n2" {:value 536}, "n3" {:value 527}}}
+{:index 738, :time 40340887500, :type :invoke, :process 2, :f :check-role, :value "n3"}
+{:index 739, :time 40341872708, :type :ok, :process 2, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 740, :time 40417705333, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 741, :time 40419350125, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 542}, "n2" {:value 536}, "n3" {:value 527}}}
+{:index 742, :time 40592199500, :type :invoke, :process 4, :f :write-node, :value {:node "n2", :value 545}}
+{:index 743, :time 40594582833, :type :ok, :process 4, :f :write-node, :value {:node "n2", :value 545}}
+{:index 744, :time 40659407958, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 548}}
+{:index 745, :time 40661437375, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 548}}
+{:index 746, :time 40861458750, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 551}}
+{:index 747, :time 40863057875, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 551}}
+{:index 748, :time 40929142541, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 554}}
+{:index 749, :time 40931472958, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 554}}
+{:index 750, :time 40967525375, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 557}}
+{:index 751, :time 40969337916, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 557}}
+{:index 752, :time 40997812625, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 560}}
+{:index 753, :time 41000435166, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 560}}
+{:index 754, :time 41074899000, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 755, :time 41079838625, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 557}, "n2" {:value 560}, "n3" {:value 548}}}
+{:index 756, :time 41137036666, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 563}}
+{:index 757, :time 41138620000, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 563}}
+{:index 758, :time 41273962125, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 566}}
+{:index 759, :time 41275785375, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 566}}
+{:index 760, :time 41438746541, :type :invoke, :process 1, :f :check-role, :value "n2"}
+{:index 761, :time 41439562208, :type :ok, :process 1, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 762, :time 41477564208, :type :invoke, :process 2, :f :check-role, :value "n2"}
+{:index 763, :time 41478304416, :type :ok, :process 2, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 764, :time 41483040375, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 765, :time 41484276708, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 566}, "n2" {:value 560}, "n3" {:value 548}}}
+{:index 766, :time 41606623375, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 569}}
+{:index 767, :time 41608327541, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 569}}
+{:index 768, :time 41616923833, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 572}}
+{:index 769, :time 41618324208, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 572}}
+{:index 770, :time 41761487750, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 575}}
+{:index 771, :time 41763382291, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 575}}
+{:index 772, :time 41918157666, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 773, :time 41922681541, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 575}, "n2" {:value 560}, "n3" {:value 548}}}
+{:index 774, :time 42065876583, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 578}}
+{:index 775, :time 42068322500, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 578}}
+{:index 776, :time 42265992000, :type :invoke, :process 3, :f :check-role, :value "n1"}
+{:index 777, :time 42268129708, :type :ok, :process 3, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 778, :time 42423614666, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 779, :time 42425857291, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 780, :time 42624409958, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 781, :time 42626773333, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 575}, "n2" {:value 578}, "n3" {:value 548}}}
+{:index 782, :time 42788298666, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 783, :time 42791106458, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 784, :time 42858039791, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 581}}
+{:index 785, :time 42860244458, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 581}}
+{:index 786, :time 42983823791, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 787, :time 42989105333, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 575}, "n2" {:value 578}, "n3" {:value 581}}}
+{:index 788, :time 43068974041, :type :invoke, :process 3, :f :check-role, :value "n1"}
+{:index 789, :time 43071126333, :type :ok, :process 3, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 790, :time 43108922000, :type :invoke, :process 4, :f :write-node, :value {:node "n3", :value 584}}
+{:index 791, :time 43111704958, :type :ok, :process 4, :f :write-node, :value {:node "n3", :value 584}}
+{:index 792, :time 43165477041, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 793, :time 43171034625, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 575}, "n2" {:value 578}, "n3" {:value 584}}}
+{:index 794, :time 43332548750, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 795, :time 43334351750, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 796, :time 43482826083, :type :invoke, :process 1, :f :write-node, :value {:node "n3", :value 587}}
+{:index 797, :time 43484547625, :type :ok, :process 1, :f :write-node, :value {:node "n3", :value 587}}
+{:index 798, :time 43635090208, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 590}}
+{:index 799, :time 43636637791, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 590}}
+{:index 800, :time 43765849916, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 593}}
+{:index 801, :time 43767460875, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 593}}
+{:index 802, :time 43894032208, :type :invoke, :process 4, :f :check-role, :value "n1"}
+{:index 803, :time 43896974500, :type :ok, :process 4, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 804, :time 44019449250, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 596}}
+{:index 805, :time 44022009875, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 596}}
+{:index 806, :time 44166964250, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 599}}
+{:index 807, :time 44169582916, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 599}}
+{:index 808, :time 44340062416, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 809, :time 44343234708, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 596}, "n2" {:value 599}, "n3" {:value 587}}}
+{:index 810, :time 44382566625, :type :invoke, :process 2, :f :check-role, :value "n1"}
+{:index 811, :time 44384391125, :type :ok, :process 2, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 812, :time 44449295791, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 813, :time 44453058666, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 596}, "n2" {:value 599}, "n3" {:value 587}}}
+{:index 814, :time 44531374833, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 602}}
+{:index 815, :time 44533484875, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 602}}
+{:index 816, :time 44659116625, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 817, :time 44660865708, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 818, :time 44831718833, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 819, :time 44833297291, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 820, :time 45015395958, :type :invoke, :process 1, :f :write-node, :value {:node "n2", :value 605}}
+{:index 821, :time 45018337291, :type :ok, :process 1, :f :write-node, :value {:node "n2", :value 605}}
+{:index 822, :time 45059246708, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 608}}
+{:index 823, :time 45062358541, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 608}}
+{:index 824, :time 45146594708, :type :invoke, :process 3, :f :write-node, :value {:node "n3", :value 611}}
+{:index 825, :time 45149093666, :type :ok, :process 3, :f :write-node, :value {:node "n3", :value 611}}
+{:index 826, :time 45313762458, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 827, :time 45318770375, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 608}, "n2" {:value 605}, "n3" {:value 611}}}
+{:index 828, :time 45509275125, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 614}}
+{:index 829, :time 45511305791, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 614}}
+{:index 830, :time 45597291250, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 831, :time 45599209958, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 832, :time 45683352291, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 617}}
+{:index 833, :time 45685675125, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 617}}
+{:index 834, :time 45696483416, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 835, :time 45703180166, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 617}, "n2" {:value 605}, "n3" {:value 611}}}
+{:index 836, :time 45883559750, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 620}}
+{:index 837, :time 45885057833, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 620}}
+{:index 838, :time 45921700000, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 839, :time 45923616333, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 620}, "n2" {:value 605}, "n3" {:value 611}}}
+{:index 840, :time 46000871875, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 841, :time 46003565208, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 620}, "n2" {:value 605}, "n3" {:value 611}}}
+{:index 842, :time 46174827375, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 623}}
+{:index 843, :time 46176235083, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 623}}
+{:index 844, :time 46199757833, :type :invoke, :process 1, :f :check-role, :value "n1"}
+{:index 845, :time 46201758083, :type :ok, :process 1, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 846, :time 46279877041, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 847, :time 46283325958, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 623}, "n2" {:value 605}, "n3" {:value 611}}}
+{:index 848, :time 46441972333, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 626}}
+{:index 849, :time 46444860833, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 626}}
+{:index 850, :time 46606648000, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 851, :time 46616019833, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 852, :time 46726767916, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 629}}
+{:index 853, :time 46728604708, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 629}}
+{:index 854, :time 46858139166, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 855, :time 46859628291, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 629}, "n2" {:value 626}, "n3" {:value 611}}}
+{:index 856, :time 46889152291, :type :invoke, :process 1, :f :check-role, :value "n2"}
+{:index 857, :time 46889906041, :type :ok, :process 1, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 858, :time 46916951583, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 859, :time 46918955458, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 629}, "n2" {:value 626}, "n3" {:value 611}}}
+{:index 860, :time 47044073000, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 632}}
+{:index 861, :time 47047007208, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 632}}
+{:index 862, :time 47168638000, :type :info, :process :nemesis, :f :heal, :value nil}
+{:index 863, :time 47221060041, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 864, :time 47222949291, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 865, :time 47331467958, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 635}}
+{:index 866, :time 47332499041, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 635}}
+{:index 867, :time 47436228583, :type :invoke, :process 1, :f :write-node, :value {:node "n2", :value 638}}
+{:index 868, :time 47436978916, :type :ok, :process 1, :f :write-node, :value {:node "n2", :value 638}}
+{:index 869, :time 47536751541, :type :info, :process :nemesis, :f :heal, :value :healed}
+{:index 870, :time 47582895750, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 871, :time 47585047833, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 635}, "n2" {:value 638}, "n3" {:value 611}}}
+{:index 872, :time 47784673875, :type :invoke, :process 4, :f :write-node, :value {:node "n3", :value 641}}
+{:index 873, :time 47787045125, :type :ok, :process 4, :f :write-node, :value {:node "n3", :value 641}}
+{:index 874, :time 47854291250, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 644}}
+{:index 875, :time 47856813875, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 644}}
+{:index 876, :time 47910168875, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 647}}
+{:index 877, :time 47911667875, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 647}}
+{:index 878, :time 47955491416, :type :invoke, :process 1, :f :check-role, :value "n3"}
+{:index 879, :time 47956954125, :type :ok, :process 1, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 880, :time 47985184583, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 650}}
+{:index 881, :time 47986526208, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 650}}
+{:index 882, :time 48172198833, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 653}}
+{:index 883, :time 48174360875, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 653}}
+{:index 884, :time 48304188791, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 656}}
+{:index 885, :time 48306374791, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 656}}
+{:index 886, :time 48397577666, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 659}}
+{:index 887, :time 48400124666, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 659}}
+{:index 888, :time 48470159291, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 662}}
+{:index 889, :time 48472981208, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 662}}
+{:index 890, :time 48597386833, :type :invoke, :process 1, :f :write-node, :value {:node "n2", :value 665}}
+{:index 891, :time 48600605541, :type :ok, :process 1, :f :write-node, :value {:node "n2", :value 665}}
+{:index 892, :time 48674597083, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 893, :time 48679162916, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 659}, "n2" {:value 665}, "n3" {:value 662}}}
+{:index 894, :time 48746448000, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 668}}
+{:index 895, :time 48749426166, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 668}}
+{:index 896, :time 48919428000, :type :invoke, :process 4, :f :write-node, :value {:node "n3", :value 671}}
+{:index 897, :time 48921865833, :type :ok, :process 4, :f :write-node, :value {:node "n3", :value 671}}
+{:index 898, :time 48952238833, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 899, :time 48956370958, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 900, :time 49137726708, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 674}}
+{:index 901, :time 49140100125, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 674}}
+{:index 902, :time 49206008416, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 903, :time 49212103166, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 674}, "n2" {:value 665}, "n3" {:value 671}}}
+{:index 904, :time 49256402625, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 905, :time 49261314416, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 674}, "n2" {:value 665}, "n3" {:value 671}}}
+{:index 906, :time 49410868208, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 677}}
+{:index 907, :time 49412952083, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 677}}
+{:index 908, :time 49493368416, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 909, :time 49496592416, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 677}, "n2" {:value 665}, "n3" {:value 671}}}
+{:index 910, :time 49540913416, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 680}}
+{:index 911, :time 49542826333, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 680}}
+{:index 912, :time 49668071291, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 913, :time 49670183416, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 914, :time 49763189458, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 683}}
+{:index 915, :time 49766724916, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 683}}
+{:index 916, :time 49820748458, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 917, :time 49826055250, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 683}, "n2" {:value 665}, "n3" {:value 671}}}
+{:index 918, :time 49986834750, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 686}}
+{:index 919, :time 49989923666, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 686}}
+{:index 920, :time 50163191916, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 921, :time 50165311583, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 686}, "n2" {:value 665}, "n3" {:value 671}}}
+{:index 922, :time 50199246791, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 689}}
+{:index 923, :time 50200541375, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 689}}
+{:index 924, :time 50221846083, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 925, :time 50224375875, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 686}, "n2" {:value 689}, "n3" {:value 671}}}
+{:index 926, :time 50255549833, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 927, :time 50259237625, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 686}, "n2" {:value 689}, "n3" {:value 671}}}
+{:index 928, :time 50412654458, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 929, :time 50416963208, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 686}, "n2" {:value 689}, "n3" {:value 671}}}
+{:index 930, :time 50447195500, :type :invoke, :process 3, :f :check-role, :value "n1"}
+{:index 931, :time 50448371250, :type :ok, :process 3, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 932, :time 50471973291, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 692}}
+{:index 933, :time 50473602083, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 692}}
+{:index 934, :time 50672488083, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 935, :time 50676289541, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 692}, "n2" {:value 689}, "n3" {:value 671}}}
+{:index 936, :time 50803662625, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 937, :time 50808308291, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 692}, "n2" {:value 689}, "n3" {:value 671}}}
+{:index 938, :time 50912617916, :type :invoke, :process 1, :f :check-role, :value "n1"}
+{:index 939, :time 50915395583, :type :ok, :process 1, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 940, :time 50920714875, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 695}}
+{:index 941, :time 50922950916, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 695}}
+{:index 942, :time 51122453333, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 698}}
+{:index 943, :time 51125056916, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 698}}
+{:index 944, :time 51151240750, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 701}}
+{:index 945, :time 51152419250, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 701}}
+{:index 946, :time 51210763041, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 704}}
+{:index 947, :time 51211674958, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 704}}
+{:index 948, :time 51336298333, :type :invoke, :process 0, :f :write-node, :value {:node "n2", :value 707}}
+{:index 949, :time 51337674041, :type :ok, :process 0, :f :write-node, :value {:node "n2", :value 707}}
+{:index 950, :time 51365387125, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 710}}
+{:index 951, :time 51367028500, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 710}}
+{:index 952, :time 51429090333, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 713}}
+{:index 953, :time 51431763208, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 713}}
+{:index 954, :time 51538711125, :type :invoke, :process 3, :f :check-role, :value "n1"}
+{:index 955, :time 51541142000, :type :ok, :process 3, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 956, :time 51560170000, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 957, :time 51562095583, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 958, :time 51716789416, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 716}}
+{:index 959, :time 51718586375, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 716}}
+{:index 960, :time 51871857125, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 961, :time 51874551625, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 962, :time 51928281833, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 719}}
+{:index 963, :time 51931122041, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 719}}
+{:index 964, :time 52010235708, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 722}}
+{:index 965, :time 52013207291, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 722}}
+{:index 966, :time 52100997916, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 725}}
+{:index 967, :time 52103324875, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 725}}
+{:index 968, :time 52232193125, :type :invoke, :process 4, :f :check-role, :value "n3"}
+{:index 969, :time 52233784416, :type :ok, :process 4, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 970, :time 52251307166, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 971, :time 52252793375, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 972, :time 52449708458, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 973, :time 52452570083, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 719}, "n2" {:value 725}, "n3" {:value 716}}}
+{:index 974, :time 52543493916, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 730}}
+{:index 975, :time 52546312500, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 730}}
+{:index 976, :time 52549196291, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 733}}
+{:index 977, :time 52551244916, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 733}}
+{:index 978, :time 52749478583, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 979, :time 52752155833, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 980, :time 52899461000, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 981, :time 52904207541, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}}
+{:index 982, :time 53032354458, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 983, :time 53034624250, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 984, :time 53075053958, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 985, :time 53079750750, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}}
+{:index 986, :time 53181029750, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 987, :time 53185824458, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}}
+{:index 988, :time 53337968458, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 989, :time 53340263250, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 730}, "n2" {:value 733}, "n3" {:value 716}}}
+{:index 990, :time 53467413166, :type :invoke, :process 4, :f :write-node, :value {:node "n3", :value 736}}
+{:index 991, :time 53469744333, :type :ok, :process 4, :f :write-node, :value {:node "n3", :value 736}}
+{:index 992, :time 53616668958, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 739}}
+{:index 993, :time 53618740958, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 739}}
+{:index 994, :time 53755238458, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 742}}
+{:index 995, :time 53757790125, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 742}}
+{:index 996, :time 53834261916, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 745}}
+{:index 997, :time 53837137208, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 745}}
+{:index 998, :time 53975509583, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 999, :time 53979459416, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 745}, "n2" {:value 733}, "n3" {:value 736}}}
+{:index 1000, :time 54094476750, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 1001, :time 54099675166, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 745}, "n2" {:value 733}, "n3" {:value 736}}}
+{:index 1002, :time 54167706875, :type :invoke, :process 4, :f :check-role, :value "n1"}
+{:index 1003, :time 54169837916, :type :ok, :process 4, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 1004, :time 54365957916, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 1005, :time 54366837833, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 1006, :time 54426036041, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 748}}
+{:index 1007, :time 54427053666, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 748}}
+{:index 1008, :time 54486353375, :type :invoke, :process 1, :f :write-node, :value {:node "n2", :value 751}}
+{:index 1009, :time 54487411875, :type :ok, :process 1, :f :write-node, :value {:node "n2", :value 751}}
+{:index 1010, :time 54520652250, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 754}}
+{:index 1011, :time 54521809833, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 754}}
+{:index 1012, :time 54602881541, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 1013, :time 54611795833, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 754}, "n2" {:value 751}, "n3" {:value 736}}}
+{:index 1014, :time 54680013208, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 1015, :time 54685771125, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 754}, "n2" {:value 751}, "n3" {:value 736}}}
+{:index 1016, :time 54786287625, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 1017, :time 54791050083, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 754}, "n2" {:value 751}, "n3" {:value 736}}}
+{:index 1018, :time 54861561250, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 757}}
+{:index 1019, :time 54863757250, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 757}}
+{:index 1020, :time 54882498750, :type :invoke, :process 1, :f :check-role, :value "n2"}
+{:index 1021, :time 54885216083, :type :ok, :process 1, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 1022, :time 54926152208, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 760}}
+{:index 1023, :time 54928895625, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 760}}
+{:index 1024, :time 54985328625, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 763}}
+{:index 1025, :time 54988288291, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 763}}
+{:index 1026, :time 55070219833, :type :invoke, :process 4, :f :check-role, :value "n2"}
+{:index 1027, :time 55072879875, :type :ok, :process 4, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 1028, :time 55107647750, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 1029, :time 55109984708, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 1030, :time 55174780666, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 766}}
+{:index 1031, :time 55177516291, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 766}}
+{:index 1032, :time 55343072583, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 1033, :time 55347387541, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 766}, "n2" {:value 751}, "n3" {:value 736}}}
+{:index 1034, :time 55448511375, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 1035, :time 55450879458, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 766}, "n2" {:value 751}, "n3" {:value 736}}}
+{:index 1036, :time 55571595250, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 1037, :time 55574095791, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 766}, "n2" {:value 751}, "n3" {:value 736}}}
+{:index 1038, :time 55662464666, :type :invoke, :process 4, :f :write-node, :value {:node "n3", :value 769}}
+{:index 1039, :time 55664224916, :type :ok, :process 4, :f :write-node, :value {:node "n3", :value 769}}
+{:index 1040, :time 55807553375, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 772}}
+{:index 1041, :time 55810731416, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 772}}
+{:index 1042, :time 55977495375, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 775}}
+{:index 1043, :time 55979550666, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 775}}
+{:index 1044, :time 56048817125, :type :invoke, :process 1, :f :check-role, :value "n3"}
+{:index 1045, :time 56052064791, :type :ok, :process 1, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 1046, :time 56182715708, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 778}}
+{:index 1047, :time 56185412333, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 778}}
+{:index 1048, :time 56380127208, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 781}}
+{:index 1049, :time 56381927791, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 781}}
+{:index 1050, :time 56560188000, :type :invoke, :process 4, :f :write-node, :value {:node "n2", :value 784}}
+{:index 1051, :time 56561606583, :type :ok, :process 4, :f :write-node, :value {:node "n2", :value 784}}
+{:index 1052, :time 56676961000, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 1053, :time 56679539875, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 781}, "n2" {:value 784}, "n3" {:value 769}}}
+{:index 1054, :time 56797991916, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 1055, :time 56804066625, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 781}, "n2" {:value 784}, "n3" {:value 769}}}
+{:index 1056, :time 56852411000, :type :invoke, :process 1, :f :write-node, :value {:node "n2", :value 787}}
+{:index 1057, :time 56856047583, :type :ok, :process 1, :f :write-node, :value {:node "n2", :value 787}}
+{:index 1058, :time 56913546041, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 790}}
+{:index 1059, :time 56916325416, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 790}}
+{:index 1060, :time 56980680041, :type :invoke, :process 3, :f :check-role, :value "n3"}
+{:index 1061, :time 56983213083, :type :ok, :process 3, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 1062, :time 56985772583, :type :invoke, :process 4, :f :check-role, :value "n3"}
+{:index 1063, :time 56986869833, :type :ok, :process 4, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 1064, :time 57067785166, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 793}}
+{:index 1065, :time 57070436583, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 793}}
+{:index 1066, :time 57218085458, :type :invoke, :process 0, :f :check-role, :value "n2"}
+{:index 1067, :time 57219753958, :type :ok, :process 0, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 1068, :time 57306929125, :type :invoke, :process 1, :f :check-role, :value "n2"}
+{:index 1069, :time 57308880125, :type :ok, :process 1, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 1070, :time 57422678583, :type :invoke, :process 2, :f :write-node, :value {:node "n2", :value 796}}
+{:index 1071, :time 57424808458, :type :ok, :process 2, :f :write-node, :value {:node "n2", :value 796}}
+{:index 1072, :time 57579636541, :type :invoke, :process 3, :f :check-role, :value "n2"}
+{:index 1073, :time 57582472625, :type :ok, :process 3, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 1074, :time 57687369416, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 799}}
+{:index 1075, :time 57688574750, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 799}}
+{:index 1076, :time 57789397333, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 1077, :time 57792148416, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 799}, "n2" {:value 796}, "n3" {:value 769}}}
+{:index 1078, :time 57851878750, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 1079, :time 57853436208, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 1080, :time 57962830916, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 1081, :time 57967238833, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 799}, "n2" {:value 796}, "n3" {:value 769}}}
+{:index 1082, :time 58033802458, :type :invoke, :process 2, :f :write-node, :value {:node "n1", :value 802}}
+{:index 1083, :time 58036235250, :type :ok, :process 2, :f :write-node, :value {:node "n1", :value 802}}
+{:index 1084, :time 58225669666, :type :invoke, :process 3, :f :write-node, :value {:node "n2", :value 805}}
+{:index 1085, :time 58228518625, :type :ok, :process 3, :f :write-node, :value {:node "n2", :value 805}}
+{:index 1086, :time 58361142708, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 1087, :time 58366063375, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 802}, "n2" {:value 805}, "n3" {:value 769}}}
+{:index 1088, :time 58501855000, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 808}}
+{:index 1089, :time 58503981250, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 808}}
+{:index 1090, :time 58574621708, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 811}}
+{:index 1091, :time 58576725625, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 811}}
+{:index 1092, :time 58591954750, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 1093, :time 58595596291, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 811}, "n2" {:value 805}, "n3" {:value 769}}}
+{:index 1094, :time 58643633750, :type :invoke, :process 2, :f :check-role, :value "n2"}
+{:index 1095, :time 58645818250, :type :ok, :process 2, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 1096, :time 58793218666, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 814}}
+{:index 1097, :time 58794340541, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 814}}
+{:index 1098, :time 58858167291, :type :invoke, :process 4, :f :write-node, :value {:node "n3", :value 817}}
+{:index 1099, :time 58860258500, :type :ok, :process 4, :f :write-node, :value {:node "n3", :value 817}}
+{:index 1100, :time 58874206916, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 820}}
+{:index 1101, :time 58876110750, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 820}}
+{:index 1102, :time 58920333833, :type :invoke, :process 0, :f :read-all, :value nil}
+{:index 1103, :time 58926493416, :type :ok, :process 0, :f :read-all, :value {"n1" {:value 814}, "n2" {:value 805}, "n3" {:value 820}}}
+{:index 1104, :time 59035460583, :type :invoke, :process 1, :f :write-node, :value {:node "n1", :value 823}}
+{:index 1105, :time 59038583000, :type :ok, :process 1, :f :write-node, :value {:node "n1", :value 823}}
+{:index 1106, :time 59073876041, :type :invoke, :process 2, :f :read-all, :value nil}
+{:index 1107, :time 59078762750, :type :ok, :process 2, :f :read-all, :value {"n1" {:value 823}, "n2" {:value 805}, "n3" {:value 820}}}
+{:index 1108, :time 59256490458, :type :invoke, :process 3, :f :read-all, :value nil}
+{:index 1109, :time 59261273875, :type :ok, :process 3, :f :read-all, :value {"n1" {:value 823}, "n2" {:value 805}, "n3" {:value 820}}}
+{:index 1110, :time 59264140708, :type :invoke, :process 4, :f :write-node, :value {:node "n1", :value 826}}
+{:index 1111, :time 59265339958, :type :ok, :process 4, :f :write-node, :value {:node "n1", :value 826}}
+{:index 1112, :time 59362923708, :type :invoke, :process 0, :f :check-role, :value "n3"}
+{:index 1113, :time 59365200083, :type :ok, :process 0, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 1114, :time 59456029666, :type :invoke, :process 0, :f :write-node, :value {:node "n1", :value 829}}
+{:index 1115, :time 59458051083, :type :ok, :process 0, :f :write-node, :value {:node "n1", :value 829}}
+{:index 1116, :time 59599436250, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 1117, :time 59603412666, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 829}, "n2" {:value 805}, "n3" {:value 820}}}
+{:index 1118, :time 59687358916, :type :invoke, :process 2, :f :write-node, :value {:node "n3", :value 832}}
+{:index 1119, :time 59689440958, :type :ok, :process 2, :f :write-node, :value {:node "n3", :value 832}}
+{:index 1120, :time 59721316916, :type :invoke, :process 3, :f :check-role, :value "n3"}
+{:index 1121, :time 59722599125, :type :ok, :process 3, :f :check-role, :value {:node "n3", :role "master", :info ["master" 0 []]}}
+{:index 1122, :time 59741611041, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 1123, :time 59744501750, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 829}, "n2" {:value 805}, "n3" {:value 832}}}
+{:index 1124, :time 59806937000, :type :invoke, :process 0, :f :write-node, :value {:node "n3", :value 835}}
+{:index 1125, :time 59807985333, :type :ok, :process 0, :f :write-node, :value {:node "n3", :value 835}}
+{:index 1126, :time 59935106166, :type :invoke, :process 0, :f :check-role, :value "n1"}
+{:index 1127, :time 59936852500, :type :ok, :process 0, :f :check-role, :value {:node "n1", :role "master", :info ["master" 0 []]}}
+{:index 1128, :time 59942797083, :type :invoke, :process 1, :f :read-all, :value nil}
+{:index 1129, :time 59951462333, :type :ok, :process 1, :f :read-all, :value {"n1" {:value 829}, "n2" {:value 805}, "n3" {:value 835}}}
+{:index 1130, :time 60110252041, :type :invoke, :process 2, :f :check-role, :value "n2"}
+{:index 1131, :time 60113123375, :type :ok, :process 2, :f :check-role, :value {:node "n2", :role "master", :info ["master" 0 []]}}
+{:index 1132, :time 60309471375, :type :invoke, :process 3, :f :write-node, :value {:node "n1", :value 838}}
+{:index 1133, :time 60311833875, :type :ok, :process 3, :f :write-node, :value {:node "n1", :value 838}}
+{:index 1134, :time 60434623333, :type :invoke, :process 4, :f :read-all, :value nil}
+{:index 1135, :time 60438881041, :type :ok, :process 4, :f :read-all, :value {"n1" {:value 838}, "n2" {:value 805}, "n3" {:value 835}}}
+{:index 1136, :time 62546617000, :type :info, :process :nemesis, :f :heal, :value nil}
+{:index 1137, :time 62862045333, :type :info, :process :nemesis, :f :heal, :value :healed}
+{:index 1138, :time 67865957583, :type :invoke, :process 3, :f :read, :value nil}
+{:index 1139, :time 67877749291, :type :info, :process 3, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54]}], :trace [[jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 1140, :time 67928886000, :type :invoke, :process 4, :f :read, :value nil}
+{:index 1141, :time 67929747166, :type :info, :process 4, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54]}], :trace [[jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 1142, :time 68025173625, :type :invoke, :process 0, :f :read, :value nil}
+{:index 1143, :time 68026026458, :type :info, :process 0, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54]}], :trace [[jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 1144, :time 68097288541, :type :invoke, :process 5, :f :read, :value nil}
+{:index 1145, :time 68098311166, :type :info, :process 5, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54]}], :trace [[jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 1146, :time 68099372958, :type :invoke, :process 1, :f :read, :value nil}
+{:index 1147, :time 68099658208, :type :info, :process 1, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54]}], :trace [[jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 1148, :time 68100618541, :type :invoke, :process 2, :f :read, :value nil}
+{:index 1149, :time 68100872500, :type :info, :process 2, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54]}], :trace [[jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 1150, :time 68221614000, :type :invoke, :process 8, :f :read, :value nil}
+{:index 1151, :time 68222619041, :type :info, :process 8, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54]}], :trace [[jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 1152, :time 68401485166, :type :invoke, :process 9, :f :read, :value nil}
+{:index 1153, :time 68401888916, :type :info, :process 9, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54]}], :trace [[jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 1154, :time 68455992666, :type :invoke, :process 10, :f :read, :value nil}
+{:index 1155, :time 68456421125, :type :info, :process 10, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54]}], :trace [[jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 1156, :time 68512121375, :type :invoke, :process 15, :f :read, :value nil}
+{:index 1157, :time 68512604125, :type :info, :process 15, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54]}], :trace [[jepsen.frogdb.split_brain.SplitBrainClient invoke_BANG_ "split_brain.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}

@@ -1,0 +1,1570 @@
+2026-02-22 23:08:33,828{GMT}	INFO	[jepsen test runner] jepsen.core: Test version 4a7760395f3d9033cc6c7a477c6947e5d983eb25 (plus uncommitted changes)
+2026-02-22 23:08:33,828{GMT}	INFO	[jepsen test runner] jepsen.core: Command line:
+lein run test --docker --workload expiry --nemesis kill --time-limit 60
+2026-02-22 23:08:33,879{GMT}	INFO	[jepsen test runner] jepsen.core: Running test:
+{:remote
+ #jepsen.control.retry.Remote{:remote #jepsen.control.scp.Remote{:cmd-remote #jepsen.control.sshj.SSHJRemote{:concurrency-limit 6,
+                                                                                                             :conn-spec nil,
+                                                                                                             :client nil,
+                                                                                                             :semaphore nil},
+                                                                 :conn-spec nil},
+                              :conn nil}
+ :concurrency 5
+ :cluster false
+ :db
+ #object[jepsen.frogdb.db$docker_db$reify__9886
+         "0x4d1bbad3"
+         "jepsen.frogdb.db$docker_db$reify__9886@4d1bbad3"]
+ :leave-db-running? false
+ :name "frogdb-expiry-kill-docker"
+ :logging-json? false
+ :independent false
+ :start-time
+ #object[org.joda.time.DateTime "0xc24e06a" "2026-02-22T23:08:33.784-05:00"]
+ :docker true
+ :net
+ #object[jepsen.net$reify__12635
+         "0x1926e42e"
+         "jepsen.net$reify__12635@1926e42e"]
+ :client
+ #jepsen.frogdb.expiry.ExpiryClient{:conn nil, :node nil, :docker-host? nil}
+ :barrier
+ #object[java.util.concurrent.CyclicBarrier
+         "0x6fa38b67"
+         "java.util.concurrent.CyclicBarrier@6fa38b67"]
+ :ssh {:dummy? true}
+ :rate 10
+ :checker
+ #object[jepsen.checker$compose$reify__10552
+         "0x3b6ea33b"
+         "jepsen.checker$compose$reify__10552@3b6ea33b"]
+ :argv
+ ("test"
+  "--docker"
+  "--workload"
+  "expiry"
+  "--nemesis"
+  "kill"
+  "--time-limit"
+  "60")
+ :nemesis
+ #unprintable "jepsen.frogdb.nemesis$process_killer$reify__11006@1062338c"
+ :nodes ["n1"]
+ :test-count 1
+ :replication false
+ :cluster-nodes ["n1"]
+ :generator
+ #object[jepsen.util.Forgettable
+         "0x67af3485"
+         ((jepsen.generator.Synchronize
+           {:gen (jepsen.generator.TimeLimit
+                  {:limit 60000000000,
+                   :cutoff nil,
+                   :gen (jepsen.generator.Any
+                         {:gens [(jepsen.generator.OnThreads
+                                  {:f #{:nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x66a81c48"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@66a81c48"],
+                                   :gen (jepsen.generator.Cycle
+                                         {:remaining -1,
+                                          :original-gen [{:type :sleep,
+                                                          :value 10}
+                                                         {:type :info, :f :kill}
+                                                         {:type :sleep,
+                                                          :value 5}
+                                                         {:type :info,
+                                                          :f :start}
+                                                         {:type :sleep,
+                                                          :value 5}],
+                                          :gen [{:type :sleep, :value 10}
+                                                {:type :info, :f :kill}
+                                                {:type :sleep, :value 5}
+                                                {:type :info, :f :start}
+                                                {:type :sleep, :value 5}]})})
+                                 (jepsen.generator.OnThreads
+                                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                           "0x60880394"
+                                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@60880394"],
+                                   :gen ((jepsen.generator.Synchronize
+                                          {:gen (jepsen.generator.Stagger
+                                                 {:dt 200000000,
+                                                  :next-time nil,
+                                                  :gen (jepsen.generator.Mix
+                                                        {:i 4,
+                                                         :gens [(jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.expiry$set_with_ttl_op
+                                                                               "0x482b6acc"
+                                                                               "jepsen.frogdb.expiry$set_with_ttl_op@482b6acc"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.expiry$set_with_ttl_op
+                                                                               "0x482b6acc"
+                                                                               "jepsen.frogdb.expiry$set_with_ttl_op@482b6acc"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.expiry$read_op
+                                                                               "0x3709ef16"
+                                                                               "jepsen.frogdb.expiry$read_op@3709ef16"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.expiry$read_op
+                                                                               "0x3709ef16"
+                                                                               "jepsen.frogdb.expiry$read_op@3709ef16"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.expiry$ttl_op
+                                                                               "0x1165efe3"
+                                                                               "jepsen.frogdb.expiry$ttl_op@1165efe3"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.expiry$expire_op
+                                                                               "0x3151caf8"
+                                                                               "jepsen.frogdb.expiry$expire_op@3151caf8"]})
+                                                                (jepsen.generator.Repeat
+                                                                 {:remaining -1,
+                                                                  :gen #object[jepsen.frogdb.expiry$persist_op
+                                                                               "0x22bfbb14"
+                                                                               "jepsen.frogdb.expiry$persist_op@22bfbb14"]})]})})})
+                                         (jepsen.generator.Synchronize
+                                          {:gen {:type :sleep, :value 5}})
+                                         (jepsen.generator.Synchronize
+                                          {:gen (jepsen.generator.OnThreads
+                                                 {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                                                  :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                                                          "0x5a36810a"
+                                                                          "jepsen.generator.context$make_thread_filter$lazy_filter__11515@5a36810a"],
+                                                  :gen (jepsen.generator.EachThread
+                                                        {:fresh-gen ({:f :read,
+                                                                      :value "expiry-key-0"}
+                                                                     {:f :read,
+                                                                      :value "expiry-key-1"}
+                                                                     {:f :read,
+                                                                      :value "expiry-key-2"}
+                                                                     {:f :read,
+                                                                      :value "expiry-key-3"}
+                                                                     {:f :read,
+                                                                      :value "expiry-key-4"}
+                                                                     {:f :read,
+                                                                      :value "expiry-key-5"}
+                                                                     {:f :read,
+                                                                      :value "expiry-key-6"}
+                                                                     {:f :read,
+                                                                      :value "expiry-key-7"}
+                                                                     ...),
+                                                         :context-filters #object[clojure.core$promise$reify__8591
+                                                                                  "0x64926758"
+                                                                                  {:status :pending,
+                                                                                   :val nil}],
+                                                         :gens {}})})}))})]})})})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Recovering from faults..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #{:nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x4130052"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@4130052"],
+                   :gen (jepsen.generator.Limit
+                         {:remaining 1, :gen {:type :info, :f :start}})})})
+          (jepsen.generator.Synchronize {:gen {:type :sleep, :value 5}})
+          (jepsen.generator.Synchronize
+           {:gen {:type :log, :value "Final reads..."}})
+          (jepsen.generator.Synchronize
+           {:gen (jepsen.generator.OnThreads
+                  {:f #jepsen.generator.context.AllBut{:element :nemesis},
+                   :context-filter #object[jepsen.generator.context$make_thread_filter$lazy_filter__11515
+                                           "0x6ac3ef0b"
+                                           "jepsen.generator.context$make_thread_filter$lazy_filter__11515@6ac3ef0b"],
+                   :gen (jepsen.generator.Stagger
+                         {:dt 200000000,
+                          :next-time nil,
+                          :gen (jepsen.generator.Limit
+                                {:remaining 10,
+                                 :gen (jepsen.generator.Repeat
+                                       {:remaining -1, :gen {:f :read}})})})})}))]
+ :interval 10
+ :os
+ #object[jepsen.frogdb.core$reify__14064
+         "0x430e10a5"
+         "jepsen.frogdb.core$reify__14064@430e10a5"]
+ :time-limit 60
+ :workload "expiry"
+ :local false}
+
+2026-02-22 23:08:35,138{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS setup for n1 (no-op)
+2026-02-22 23:08:35,138{GMT}	INFO	[jepsen test runner] jepsen.db: Tearing down DB
+2026-02-22 23:08:35,138{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB on n1
+2026-02-22 23:08:35,139{GMT}	INFO	[jepsen test runner] jepsen.db: Setting up DB
+2026-02-22 23:08:35,139{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Setting up FrogDB on n1
+2026-02-22 23:08:35,139{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Starting container for n1
+2026-02-22 23:08:36,321{GMT}	INFO	[jepsen test runner] jepsen.core: Relative time begins now
+2026-02-22 23:08:36,322{GMT}	INFO	[jepsen node n1] jepsen.frogdb.expiry: Opening expiry client to n1 (docker-host?: true )
+2026-02-22 23:08:36,322{GMT}	INFO	[jepsen node n1] jepsen.frogdb.expiry: Clearing expiry keys
+2026-02-22 23:08:36,339{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-7"
+2026-02-22 23:08:36,339{GMT}	INFO	[jepsen worker 0] jepsen.frogdb.expiry: Opening expiry client to n1 (docker-host?: true )
+2026-02-22 23:08:36,341{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-7", :ttl -2}
+2026-02-22 23:08:36,525{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-1", :ttl 6}
+2026-02-22 23:08:36,525{GMT}	INFO	[jepsen worker 2] jepsen.frogdb.expiry: Opening expiry client to n1 (docker-host?: true )
+2026-02-22 23:08:36,527{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-1", :ttl 6}
+2026-02-22 23:08:36,583{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-19"
+2026-02-22 23:08:36,583{GMT}	INFO	[jepsen worker 3] jepsen.frogdb.expiry: Opening expiry client to n1 (docker-host?: true )
+2026-02-22 23:08:36,586{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-19", :value nil}
+2026-02-22 23:08:36,676{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-4"
+2026-02-22 23:08:36,676{GMT}	INFO	[jepsen worker 4] jepsen.frogdb.expiry: Opening expiry client to n1 (docker-host?: true )
+2026-02-22 23:08:36,678{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-4", :ttl -2}
+2026-02-22 23:08:36,787{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-9", :ttl 7}
+2026-02-22 23:08:36,790{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-9", :ttl 7}
+2026-02-22 23:08:36,836{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-10"
+2026-02-22 23:08:36,838{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-10", :value nil}
+2026-02-22 23:08:36,970{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-16", :ttl 6}
+2026-02-22 23:08:36,971{GMT}	INFO	[jepsen worker 1] jepsen.frogdb.expiry: Opening expiry client to n1 (docker-host?: true )
+2026-02-22 23:08:36,974{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-16", :ttl 6}
+2026-02-22 23:08:37,005{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-4", :ttl 8}
+2026-02-22 23:08:37,007{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-4", :ttl 8}
+2026-02-22 23:08:37,057{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 1470, :ttl 8}
+2026-02-22 23:08:37,058{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-0", :value 1470, :ttl 8}
+2026-02-22 23:08:37,119{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 7714, :ttl 9}
+2026-02-22 23:08:37,122{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-12", :value 7714, :ttl 9}
+2026-02-22 23:08:37,269{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 5458, :ttl 5}
+2026-02-22 23:08:37,272{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-15", :value 5458, :ttl 5}
+2026-02-22 23:08:37,350{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 2642, :ttl 5}
+2026-02-22 23:08:37,353{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-16", :value 2642, :ttl 5}
+2026-02-22 23:08:37,379{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 534, :ttl 5}
+2026-02-22 23:08:37,381{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-2", :value 534, :ttl 5}
+2026-02-22 23:08:37,495{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-4"
+2026-02-22 23:08:37,496{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-4", :value nil}
+2026-02-22 23:08:37,529{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-19", :ttl 5}
+2026-02-22 23:08:37,530{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-19", :ttl 5}
+2026-02-22 23:08:37,610{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 1094, :ttl 4}
+2026-02-22 23:08:37,612{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-5", :value 1094, :ttl 4}
+2026-02-22 23:08:37,652{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-9"
+2026-02-22 23:08:37,654{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-9", :value nil}
+2026-02-22 23:08:37,745{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-2", :ttl 3}
+2026-02-22 23:08:37,747{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-2", :ttl 3}
+2026-02-22 23:08:37,775{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-3"
+2026-02-22 23:08:37,777{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-3", :value nil}
+2026-02-22 23:08:37,810{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-12"
+2026-02-22 23:08:37,818{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-12", :value "7714"}
+2026-02-22 23:08:37,932{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-11"
+2026-02-22 23:08:37,933{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-11", :value nil}
+2026-02-22 23:08:38,107{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-7"
+2026-02-22 23:08:38,109{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-7", :value nil}
+2026-02-22 23:08:38,309{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-7"
+2026-02-22 23:08:38,311{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-7"}
+2026-02-22 23:08:38,469{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-5"
+2026-02-22 23:08:38,470{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-5", :value "1094"}
+2026-02-22 23:08:38,553{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-15"
+2026-02-22 23:08:38,554{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-15", :value "5458"}
+2026-02-22 23:08:38,733{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-16"
+2026-02-22 23:08:38,735{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-16", :value "2642"}
+2026-02-22 23:08:38,935{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 7867, :ttl 4}
+2026-02-22 23:08:38,938{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-4", :value 7867, :ttl 4}
+2026-02-22 23:08:39,028{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-2"
+2026-02-22 23:08:39,030{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-2"}
+2026-02-22 23:08:39,195{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-1"
+2026-02-22 23:08:39,198{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-1", :ttl -2}
+2026-02-22 23:08:39,266{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-9"
+2026-02-22 23:08:39,269{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-9"}
+2026-02-22 23:08:39,439{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-18", :ttl 5}
+2026-02-22 23:08:39,441{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-18", :ttl 5}
+2026-02-22 23:08:39,463{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 7183, :ttl 5}
+2026-02-22 23:08:39,464{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-13", :value 7183, :ttl 5}
+2026-02-22 23:08:39,561{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 2677, :ttl 3}
+2026-02-22 23:08:39,563{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-12", :value 2677, :ttl 3}
+2026-02-22 23:08:39,715{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-15"
+2026-02-22 23:08:39,716{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-15"}
+2026-02-22 23:08:39,834{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-13", :ttl 9}
+2026-02-22 23:08:39,836{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-13", :ttl 9}
+2026-02-22 23:08:39,870{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-11", :ttl 5}
+2026-02-22 23:08:39,872{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-11", :ttl 5}
+2026-02-22 23:08:39,996{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 6434, :ttl 9}
+2026-02-22 23:08:39,999{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-17", :value 6434, :ttl 9}
+2026-02-22 23:08:40,044{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-0"
+2026-02-22 23:08:40,047{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-0", :ttl 5}
+2026-02-22 23:08:40,177{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 7026, :ttl 7}
+2026-02-22 23:08:40,179{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-14", :value 7026, :ttl 7}
+2026-02-22 23:08:40,224{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-4"
+2026-02-22 23:08:40,226{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-4", :ttl 2}
+2026-02-22 23:08:40,326{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-0"
+2026-02-22 23:08:40,328{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-0", :value "1470"}
+2026-02-22 23:08:40,363{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-5"
+2026-02-22 23:08:40,365{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-5", :value "1094"}
+2026-02-22 23:08:40,482{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:ttl	"expiry-key-14"
+2026-02-22 23:08:40,484{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:ttl	{:key "expiry-key-14", :ttl 6}
+2026-02-22 23:08:40,576{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-0"
+2026-02-22 23:08:40,578{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-0", :ttl 4}
+2026-02-22 23:08:40,749{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-19", :value 3272, :ttl 3}
+2026-02-22 23:08:40,750{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-19", :value 3272, :ttl 3}
+2026-02-22 23:08:40,801{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 179, :ttl 6}
+2026-02-22 23:08:40,802{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-15", :value 179, :ttl 6}
+2026-02-22 23:08:40,806{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 24, :ttl 5}
+2026-02-22 23:08:40,807{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-6", :value 24, :ttl 5}
+2026-02-22 23:08:40,958{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 3145, :ttl 9}
+2026-02-22 23:08:40,960{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-14", :value 3145, :ttl 9}
+2026-02-22 23:08:41,150{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-7"
+2026-02-22 23:08:41,152{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-7", :value nil}
+2026-02-22 23:08:41,254{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-5"
+2026-02-22 23:08:41,256{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-5", :ttl 0}
+2026-02-22 23:08:41,380{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-0", :ttl 3}
+2026-02-22 23:08:41,383{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-0", :ttl 3}
+2026-02-22 23:08:41,491{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 3867, :ttl 9}
+2026-02-22 23:08:41,494{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-0", :value 3867, :ttl 9}
+2026-02-22 23:08:41,522{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-0", :ttl 7}
+2026-02-22 23:08:41,525{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-0", :ttl 7}
+2026-02-22 23:08:41,647{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 7149, :ttl 5}
+2026-02-22 23:08:41,650{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-17", :value 7149, :ttl 5}
+2026-02-22 23:08:41,686{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 2952, :ttl 4}
+2026-02-22 23:08:41,689{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-14", :value 2952, :ttl 4}
+2026-02-22 23:08:41,721{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 145, :ttl 3}
+2026-02-22 23:08:41,724{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-0", :value 145, :ttl 3}
+2026-02-22 23:08:41,758{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:persist	"expiry-key-3"
+2026-02-22 23:08:41,760{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:persist	{:key "expiry-key-3"}
+2026-02-22 23:08:41,790{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-11", :ttl 7}
+2026-02-22 23:08:41,792{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-11", :ttl 7}
+2026-02-22 23:08:41,978{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-16"
+2026-02-22 23:08:41,981{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-16"}
+2026-02-22 23:08:42,021{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 5976, :ttl 7}
+2026-02-22 23:08:42,022{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-16", :value 5976, :ttl 7}
+2026-02-22 23:08:42,202{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-8"
+2026-02-22 23:08:42,205{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-8", :value nil}
+2026-02-22 23:08:42,294{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-10"
+2026-02-22 23:08:42,297{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-10", :value nil}
+2026-02-22 23:08:42,427{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-11"
+2026-02-22 23:08:42,429{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-11", :ttl -2}
+2026-02-22 23:08:42,608{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 2495, :ttl 6}
+2026-02-22 23:08:42,612{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-12", :value 2495, :ttl 6}
+2026-02-22 23:08:42,668{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-11"
+2026-02-22 23:08:42,671{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-11", :ttl -2}
+2026-02-22 23:08:42,685{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-9"
+2026-02-22 23:08:42,686{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-9"}
+2026-02-22 23:08:42,702{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 5747, :ttl 5}
+2026-02-22 23:08:42,717{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-9", :value 5747, :ttl 5}
+2026-02-22 23:08:42,802{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-4"
+2026-02-22 23:08:42,806{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-4", :value "7867"}
+2026-02-22 23:08:42,876{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-11"
+2026-02-22 23:08:42,878{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-11", :value nil}
+2026-02-22 23:08:43,029{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-0"
+2026-02-22 23:08:43,032{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-0"}
+2026-02-22 23:08:43,107{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-10"
+2026-02-22 23:08:43,110{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-10"}
+2026-02-22 23:08:43,179{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-5"
+2026-02-22 23:08:43,181{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-5", :value nil}
+2026-02-22 23:08:43,256{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 1464, :ttl 7}
+2026-02-22 23:08:43,258{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-2", :value 1464, :ttl 7}
+2026-02-22 23:08:43,381{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-19", :value 6631, :ttl 9}
+2026-02-22 23:08:43,383{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-19", :value 6631, :ttl 9}
+2026-02-22 23:08:43,455{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-2", :ttl 9}
+2026-02-22 23:08:43,458{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-2", :ttl 9}
+2026-02-22 23:08:43,582{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-12"
+2026-02-22 23:08:43,584{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-12", :value "2495"}
+2026-02-22 23:08:43,746{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 628, :ttl 5}
+2026-02-22 23:08:43,750{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-0", :value 628, :ttl 5}
+2026-02-22 23:08:43,944{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 8303, :ttl 4}
+2026-02-22 23:08:43,945{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-2", :value 8303, :ttl 4}
+2026-02-22 23:08:44,027{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 9261, :ttl 5}
+2026-02-22 23:08:44,028{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-7", :value 9261, :ttl 5}
+2026-02-22 23:08:44,082{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-4"
+2026-02-22 23:08:44,084{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-4", :ttl -2}
+2026-02-22 23:08:44,278{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 6716, :ttl 6}
+2026-02-22 23:08:44,281{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-9", :value 6716, :ttl 6}
+2026-02-22 23:08:44,349{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-11"
+2026-02-22 23:08:44,352{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-11", :ttl -2}
+2026-02-22 23:08:44,551{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-4", :ttl 7}
+2026-02-22 23:08:44,554{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-4", :ttl 7}
+2026-02-22 23:08:44,727{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-13"
+2026-02-22 23:08:44,729{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-13", :ttl 4}
+2026-02-22 23:08:44,778{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-8"
+2026-02-22 23:08:44,781{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-8"}
+2026-02-22 23:08:44,839{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-6"
+2026-02-22 23:08:44,841{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-6", :value "24"}
+2026-02-22 23:08:44,908{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 5759, :ttl 3}
+2026-02-22 23:08:44,912{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-4", :value 5759, :ttl 3}
+2026-02-22 23:08:45,023{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-16"
+2026-02-22 23:08:45,024{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-16", :value "5976"}
+2026-02-22 23:08:45,069{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-17"
+2026-02-22 23:08:45,070{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-17"}
+2026-02-22 23:08:45,191{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-4"
+2026-02-22 23:08:45,192{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-4"}
+2026-02-22 23:08:45,266{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-17"
+2026-02-22 23:08:45,269{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-17", :value "7149"}
+2026-02-22 23:08:45,427{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-19", :ttl 4}
+2026-02-22 23:08:45,430{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-19", :ttl 4}
+2026-02-22 23:08:45,562{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-2"
+2026-02-22 23:08:45,564{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-2", :value "8303"}
+2026-02-22 23:08:45,619{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 6382, :ttl 4}
+2026-02-22 23:08:45,621{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-18", :value 6382, :ttl 4}
+2026-02-22 23:08:45,753{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-5"
+2026-02-22 23:08:45,755{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-5", :ttl -2}
+2026-02-22 23:08:45,902{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 8459, :ttl 9}
+2026-02-22 23:08:45,905{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-12", :value 8459, :ttl 9}
+2026-02-22 23:08:46,015{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 9258, :ttl 5}
+2026-02-22 23:08:46,017{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-2", :value 9258, :ttl 5}
+2026-02-22 23:08:46,182{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-14"
+2026-02-22 23:08:46,184{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-14", :value nil}
+2026-02-22 23:08:46,342{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	nil
+2026-02-22 23:08:46,342{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Killing FrogDB on [n1]
+2026-02-22 23:08:46,342{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Killing FrogDB on n1
+2026-02-22 23:08:46,379{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-2", :ttl 9}
+2026-02-22 23:08:46,381{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-2", :ttl 9}
+2026-02-22 23:08:46,522{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	["n1"]
+2026-02-22 23:08:46,529{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-2"
+2026-02-22 23:08:46,530{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-2", :ttl 8}
+2026-02-22 23:08:46,685{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 8837, :ttl 5}
+2026-02-22 23:08:46,688{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-1", :value 8837, :ttl 5}
+2026-02-22 23:08:46,761{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-17"
+2026-02-22 23:08:46,763{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-17", :value "7149"}
+2026-02-22 23:08:46,767{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 5280, :ttl 6}
+2026-02-22 23:08:46,768{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-3", :value 5280, :ttl 6}
+2026-02-22 23:08:46,815{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 6617, :ttl 6}
+2026-02-22 23:08:46,818{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-18", :value 6617, :ttl 6}
+2026-02-22 23:08:47,011{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-6", :ttl 5}
+2026-02-22 23:08:47,012{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-6", :ttl 5}
+2026-02-22 23:08:47,122{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-14", :ttl 3}
+2026-02-22 23:08:47,124{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-14", :ttl 3}
+2026-02-22 23:08:47,180{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-5", :ttl 3}
+2026-02-22 23:08:47,180{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-5", :ttl 3}
+2026-02-22 23:08:47,306{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 6469, :ttl 4}
+2026-02-22 23:08:47,307{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-0", :value 6469, :ttl 4}
+2026-02-22 23:08:47,465{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-19", :value 8654, :ttl 6}
+2026-02-22 23:08:47,467{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-19", :value 8654, :ttl 6}
+2026-02-22 23:08:47,541{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 5269, :ttl 5}
+2026-02-22 23:08:47,543{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-18", :value 5269, :ttl 5}
+2026-02-22 23:08:47,670{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 7683, :ttl 9}
+2026-02-22 23:08:47,672{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-5", :value 7683, :ttl 9}
+2026-02-22 23:08:47,694{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 8604, :ttl 9}
+2026-02-22 23:08:47,696{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-6", :value 8604, :ttl 9}
+2026-02-22 23:08:47,831{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-1"
+2026-02-22 23:08:47,833{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-1"}
+2026-02-22 23:08:47,972{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-6", :ttl 8}
+2026-02-22 23:08:47,974{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-6", :ttl 8}
+2026-02-22 23:08:48,149{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-11"
+2026-02-22 23:08:48,151{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-11", :ttl -2}
+2026-02-22 23:08:48,255{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 6035, :ttl 8}
+2026-02-22 23:08:48,257{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-12", :value 6035, :ttl 8}
+2026-02-22 23:08:48,406{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-12"
+2026-02-22 23:08:48,408{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-12", :value "6035"}
+2026-02-22 23:08:48,607{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 5091, :ttl 7}
+2026-02-22 23:08:48,610{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-15", :value 5091, :ttl 7}
+2026-02-22 23:08:48,686{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-18"
+2026-02-22 23:08:48,688{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-18", :value "5269"}
+2026-02-22 23:08:48,750{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-19"
+2026-02-22 23:08:48,752{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-19", :value "8654"}
+2026-02-22 23:08:48,757{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-11", :ttl 9}
+2026-02-22 23:08:48,759{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-11", :ttl 9}
+2026-02-22 23:08:48,823{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-10"
+2026-02-22 23:08:48,824{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-10"}
+2026-02-22 23:08:48,965{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-5"
+2026-02-22 23:08:48,967{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-5", :value "7683"}
+2026-02-22 23:08:49,101{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-15"
+2026-02-22 23:08:49,103{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-15"}
+2026-02-22 23:08:49,144{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 8693, :ttl 5}
+2026-02-22 23:08:49,147{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-16", :value 8693, :ttl 5}
+2026-02-22 23:08:49,332{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 6866, :ttl 5}
+2026-02-22 23:08:49,333{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-11", :value 6866, :ttl 5}
+2026-02-22 23:08:49,500{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-1"
+2026-02-22 23:08:49,502{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-1", :ttl -1}
+2026-02-22 23:08:49,574{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-11"
+2026-02-22 23:08:49,576{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-11", :ttl 4}
+2026-02-22 23:08:49,686{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 6534, :ttl 4}
+2026-02-22 23:08:49,688{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-10", :value 6534, :ttl 4}
+2026-02-22 23:08:49,690{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-16", :ttl 6}
+2026-02-22 23:08:49,691{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-16", :ttl 6}
+2026-02-22 23:08:49,808{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-16"
+2026-02-22 23:08:49,818{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-16", :value "8693"}
+2026-02-22 23:08:49,983{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 2000, :ttl 5}
+2026-02-22 23:08:49,984{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-3", :value 2000, :ttl 5}
+2026-02-22 23:08:50,178{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 7736, :ttl 4}
+2026-02-22 23:08:50,180{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-7", :value 7736, :ttl 4}
+2026-02-22 23:08:50,312{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-6", :ttl 3}
+2026-02-22 23:08:50,314{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-6", :ttl 3}
+2026-02-22 23:08:50,396{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-1", :ttl 7}
+2026-02-22 23:08:50,398{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-1", :ttl 7}
+2026-02-22 23:08:50,435{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-9", :ttl 6}
+2026-02-22 23:08:50,436{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-9", :ttl 6}
+2026-02-22 23:08:50,453{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-2"
+2026-02-22 23:08:50,453{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-2", :value "9258"}
+2026-02-22 23:08:50,593{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 2590, :ttl 6}
+2026-02-22 23:08:50,595{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-10", :value 2590, :ttl 6}
+2026-02-22 23:08:50,677{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-15"
+2026-02-22 23:08:50,680{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-15", :value "5091"}
+2026-02-22 23:08:50,806{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 6339, :ttl 3}
+2026-02-22 23:08:50,808{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-0", :value 6339, :ttl 3}
+2026-02-22 23:08:50,842{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 3892, :ttl 9}
+2026-02-22 23:08:50,844{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-9", :value 3892, :ttl 9}
+2026-02-22 23:08:50,888{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 3296, :ttl 7}
+2026-02-22 23:08:50,890{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-14", :value 3296, :ttl 7}
+2026-02-22 23:08:50,980{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 5639, :ttl 9}
+2026-02-22 23:08:50,983{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-2", :value 5639, :ttl 9}
+2026-02-22 23:08:51,057{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-16", :ttl 4}
+2026-02-22 23:08:51,059{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-16", :ttl 4}
+2026-02-22 23:08:51,105{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 5091, :ttl 9}
+2026-02-22 23:08:51,108{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-7", :value 5091, :ttl 9}
+2026-02-22 23:08:51,220{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 5756, :ttl 6}
+2026-02-22 23:08:51,223{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-14", :value 5756, :ttl 6}
+2026-02-22 23:08:51,229{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-1"
+2026-02-22 23:08:51,230{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-1", :ttl 6}
+2026-02-22 23:08:51,395{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-1"
+2026-02-22 23:08:51,398{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-1"}
+2026-02-22 23:08:51,525{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	nil
+2026-02-22 23:08:51,525{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Starting FrogDB on [n1]
+2026-02-22 23:08:51,525{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Starting FrogDB on n1
+2026-02-22 23:08:51,560{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-16"
+2026-02-22 23:08:51,561{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-16", :value "8693"}
+2026-02-22 23:08:51,664{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-0", :ttl 8}
+2026-02-22 23:08:51,665{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-0", :ttl 8}
+2026-02-22 23:08:51,667{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-0"
+2026-02-22 23:08:51,668{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-0", :value "6339"}
+2026-02-22 23:08:51,749{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 8352, :ttl 6}
+2026-02-22 23:08:51,750{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-4", :value 8352, :ttl 6}
+2026-02-22 23:08:51,827{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 271, :ttl 9}
+2026-02-22 23:08:51,828{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-10", :value 271, :ttl 9}
+2026-02-22 23:08:51,956{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-18"
+2026-02-22 23:08:51,959{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-18", :value "5269"}
+2026-02-22 23:08:52,128{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 53, :ttl 5}
+2026-02-22 23:08:52,130{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-13", :value 53, :ttl 5}
+2026-02-22 23:08:52,208{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-0", :ttl 6}
+2026-02-22 23:08:52,210{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-0", :ttl 6}
+2026-02-22 23:08:52,381{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 5989, :ttl 6}
+2026-02-22 23:08:52,383{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-15", :value 5989, :ttl 6}
+2026-02-22 23:08:52,541{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-6", :ttl 4}
+2026-02-22 23:08:52,542{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-6", :ttl 4}
+2026-02-22 23:08:52,597{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-11", :ttl 7}
+2026-02-22 23:08:52,598{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-11", :ttl 7}
+2026-02-22 23:08:52,778{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 9307, :ttl 6}
+2026-02-22 23:08:52,779{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-10", :value 9307, :ttl 6}
+2026-02-22 23:08:52,784{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 9254, :ttl 4}
+2026-02-22 23:08:52,785{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-1", :value 9254, :ttl 4}
+2026-02-22 23:08:52,808{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 6950, :ttl 5}
+2026-02-22 23:08:52,810{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-6", :value 6950, :ttl 5}
+2026-02-22 23:08:52,977{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-19"
+2026-02-22 23:08:52,980{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-19", :ttl 0}
+2026-02-22 23:08:53,053{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 5535, :ttl 5}
+2026-02-22 23:08:53,056{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-4", :value 5535, :ttl 5}
+2026-02-22 23:08:53,121{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 2641, :ttl 3}
+2026-02-22 23:08:53,124{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-15", :value 2641, :ttl 3}
+2026-02-22 23:08:53,306{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-1"
+2026-02-22 23:08:53,308{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-1"}
+2026-02-22 23:08:53,476{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-8"
+2026-02-22 23:08:53,479{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-8", :value nil}
+2026-02-22 23:08:53,671{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-9"
+2026-02-22 23:08:53,673{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-9", :value "3892"}
+2026-02-22 23:08:53,726{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 4321, :ttl 6}
+2026-02-22 23:08:53,728{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-10", :value 4321, :ttl 6}
+2026-02-22 23:08:53,867{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 9057, :ttl 6}
+2026-02-22 23:08:53,869{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-3", :value 9057, :ttl 6}
+2026-02-22 23:08:53,969{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-8"
+2026-02-22 23:08:53,972{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-8", :value nil}
+2026-02-22 23:08:54,158{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 7548, :ttl 6}
+2026-02-22 23:08:54,161{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-12", :value 7548, :ttl 6}
+2026-02-22 23:08:54,220{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 6949, :ttl 5}
+2026-02-22 23:08:54,223{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-18", :value 6949, :ttl 5}
+2026-02-22 23:08:54,285{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 3947, :ttl 3}
+2026-02-22 23:08:54,288{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-3", :value 3947, :ttl 3}
+2026-02-22 23:08:54,333{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-10"
+2026-02-22 23:08:54,335{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-10", :value "4321"}
+2026-02-22 23:08:54,378{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-12"
+2026-02-22 23:08:54,381{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-12"}
+2026-02-22 23:08:54,560{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-15"
+2026-02-22 23:08:54,563{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-15", :value "2641"}
+2026-02-22 23:08:54,570{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	["n1"]
+2026-02-22 23:08:54,735{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-17"
+2026-02-22 23:08:54,737{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-17", :value "7149"}
+2026-02-22 23:08:54,791{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-19", :value 9693, :ttl 7}
+2026-02-22 23:08:54,793{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-19", :value 9693, :ttl 7}
+2026-02-22 23:08:54,940{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-14"
+2026-02-22 23:08:54,942{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-14", :ttl 2}
+2026-02-22 23:08:54,947{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 6385, :ttl 4}
+2026-02-22 23:08:54,950{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-15", :value 6385, :ttl 4}
+2026-02-22 23:08:55,018{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-18"
+2026-02-22 23:08:55,021{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-18"}
+2026-02-22 23:08:55,164{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 6121, :ttl 5}
+2026-02-22 23:08:55,167{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-10", :value 6121, :ttl 5}
+2026-02-22 23:08:55,228{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-13"
+2026-02-22 23:08:55,230{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-13", :ttl 1}
+2026-02-22 23:08:55,403{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-4"
+2026-02-22 23:08:55,406{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-4", :value "5535"}
+2026-02-22 23:08:55,520{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-4"
+2026-02-22 23:08:55,522{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-4"}
+2026-02-22 23:08:55,628{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-3"
+2026-02-22 23:08:55,630{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-3", :value "3947"}
+2026-02-22 23:08:55,648{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-9"
+2026-02-22 23:08:55,651{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-9", :value "3892"}
+2026-02-22 23:08:55,726{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-8"
+2026-02-22 23:08:55,728{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-8", :value nil}
+2026-02-22 23:08:55,927{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-15"
+2026-02-22 23:08:55,929{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-15", :value "6385"}
+2026-02-22 23:08:55,943{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:persist	"expiry-key-0"
+2026-02-22 23:08:55,945{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:persist	{:key "expiry-key-0"}
+2026-02-22 23:08:55,988{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 2835, :ttl 6}
+2026-02-22 23:08:55,989{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-8", :value 2835, :ttl 6}
+2026-02-22 23:08:56,067{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 4466, :ttl 6}
+2026-02-22 23:08:56,069{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-1", :value 4466, :ttl 6}
+2026-02-22 23:08:56,244{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 3048, :ttl 9}
+2026-02-22 23:08:56,246{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-3", :value 3048, :ttl 9}
+2026-02-22 23:08:56,343{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-10"
+2026-02-22 23:08:56,345{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-10", :value "6121"}
+2026-02-22 23:08:56,410{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-19"
+2026-02-22 23:08:56,413{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-19", :ttl 5}
+2026-02-22 23:08:56,429{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-1"
+2026-02-22 23:08:56,431{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-1", :value "4466"}
+2026-02-22 23:08:56,511{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-11"
+2026-02-22 23:08:56,514{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-11", :value "6866"}
+2026-02-22 23:08:56,633{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-1"
+2026-02-22 23:08:56,635{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-1", :ttl 5}
+2026-02-22 23:08:56,725{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 3925, :ttl 8}
+2026-02-22 23:08:56,728{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-12", :value 3925, :ttl 8}
+2026-02-22 23:08:56,747{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 7740, :ttl 6}
+2026-02-22 23:08:56,750{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-0", :value 7740, :ttl 6}
+2026-02-22 23:08:56,771{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-19", :ttl 4}
+2026-02-22 23:08:56,774{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-19", :ttl 4}
+2026-02-22 23:08:56,797{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 395, :ttl 8}
+2026-02-22 23:08:56,800{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-11", :value 395, :ttl 8}
+2026-02-22 23:08:56,890{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 4435, :ttl 4}
+2026-02-22 23:08:56,892{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-5", :value 4435, :ttl 4}
+2026-02-22 23:08:57,000{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 772, :ttl 7}
+2026-02-22 23:08:57,002{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-6", :value 772, :ttl 7}
+2026-02-22 23:08:57,059{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-10"
+2026-02-22 23:08:57,061{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-10", :value "6121"}
+2026-02-22 23:08:57,075{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-3", :ttl 3}
+2026-02-22 23:08:57,078{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-3", :ttl 3}
+2026-02-22 23:08:57,136{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-12"
+2026-02-22 23:08:57,139{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-12", :value "3925"}
+2026-02-22 23:08:57,186{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:persist	"expiry-key-0"
+2026-02-22 23:08:57,188{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:persist	{:key "expiry-key-0"}
+2026-02-22 23:08:57,291{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-2", :ttl 8}
+2026-02-22 23:08:57,293{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-2", :ttl 8}
+2026-02-22 23:08:57,403{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-10"
+2026-02-22 23:08:57,405{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-10", :value "6121"}
+2026-02-22 23:08:57,500{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 483, :ttl 7}
+2026-02-22 23:08:57,502{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-14", :value 483, :ttl 7}
+2026-02-22 23:08:57,620{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-8"
+2026-02-22 23:08:57,622{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-8", :value "2835"}
+2026-02-22 23:08:57,753{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-19"
+2026-02-22 23:08:57,755{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-19", :ttl 3}
+2026-02-22 23:08:57,935{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 9756, :ttl 4}
+2026-02-22 23:08:57,937{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-4", :value 9756, :ttl 4}
+2026-02-22 23:08:57,996{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 9437, :ttl 3}
+2026-02-22 23:08:57,997{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-4", :value 9437, :ttl 3}
+2026-02-22 23:08:58,114{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-19"
+2026-02-22 23:08:58,116{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-19", :value "9693"}
+2026-02-22 23:08:58,257{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 1165, :ttl 9}
+2026-02-22 23:08:58,260{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-8", :value 1165, :ttl 9}
+2026-02-22 23:08:58,423{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:ttl	"expiry-key-0"
+2026-02-22 23:08:58,425{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:ttl	{:key "expiry-key-0", :ttl -1}
+2026-02-22 23:08:58,476{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-11"
+2026-02-22 23:08:58,479{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-11", :value "395"}
+2026-02-22 23:08:58,573{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-15", :ttl 9}
+2026-02-22 23:08:58,575{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-15", :ttl 9}
+2026-02-22 23:08:58,612{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-14"
+2026-02-22 23:08:58,615{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-14", :value "483"}
+2026-02-22 23:08:58,655{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-0"
+2026-02-22 23:08:58,657{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-0", :value "7740"}
+2026-02-22 23:08:58,706{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-10"
+2026-02-22 23:08:58,708{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-10", :ttl 1}
+2026-02-22 23:08:58,760{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 6364, :ttl 6}
+2026-02-22 23:08:58,762{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-9", :value 6364, :ttl 6}
+2026-02-22 23:08:58,927{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-8"
+2026-02-22 23:08:58,928{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-8", :ttl 8}
+2026-02-22 23:08:59,035{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-17"
+2026-02-22 23:08:59,036{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-17", :value "7149"}
+2026-02-22 23:08:59,154{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-8"
+2026-02-22 23:08:59,155{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-8", :value "1165"}
+2026-02-22 23:08:59,187{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-11"
+2026-02-22 23:08:59,189{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-11", :ttl 5}
+2026-02-22 23:08:59,393{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-7"
+2026-02-22 23:08:59,395{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-7"}
+2026-02-22 23:08:59,419{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-0"
+2026-02-22 23:08:59,421{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-0"}
+2026-02-22 23:08:59,426{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-9"
+2026-02-22 23:08:59,428{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-9", :ttl 5}
+2026-02-22 23:08:59,487{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 7994, :ttl 3}
+2026-02-22 23:08:59,490{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-6", :value 7994, :ttl 3}
+2026-02-22 23:08:59,571{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-2"
+2026-02-22 23:08:59,572{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-2", :value "5639"}
+2026-02-22 23:08:59,759{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-2"
+2026-02-22 23:08:59,762{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-2"}
+2026-02-22 23:08:59,919{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-19", :ttl 4}
+2026-02-22 23:08:59,922{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-19", :ttl 4}
+2026-02-22 23:08:59,951{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 8807, :ttl 4}
+2026-02-22 23:08:59,953{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-6", :value 8807, :ttl 4}
+2026-02-22 23:09:00,057{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-10"
+2026-02-22 23:09:00,059{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-10", :ttl 0}
+2026-02-22 23:09:00,112{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-8"
+2026-02-22 23:09:00,113{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-8"}
+2026-02-22 23:09:00,118{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-17"
+2026-02-22 23:09:00,119{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-17"}
+2026-02-22 23:09:00,123{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-11", :ttl 6}
+2026-02-22 23:09:00,124{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-11", :ttl 6}
+2026-02-22 23:09:00,161{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:ttl	"expiry-key-4"
+2026-02-22 23:09:00,162{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:ttl	{:key "expiry-key-4", :ttl 0}
+2026-02-22 23:09:00,315{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-14", :ttl 4}
+2026-02-22 23:09:00,318{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-14", :ttl 4}
+2026-02-22 23:09:00,324{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-18", :ttl 5}
+2026-02-22 23:09:00,325{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-18", :ttl 5}
+2026-02-22 23:09:00,510{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-2"
+2026-02-22 23:09:00,513{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-2", :value "5639"}
+2026-02-22 23:09:00,628{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-12"
+2026-02-22 23:09:00,630{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-12", :value "3925"}
+2026-02-22 23:09:00,748{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-2"
+2026-02-22 23:09:00,750{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-2", :value "5639"}
+2026-02-22 23:09:00,786{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-7"
+2026-02-22 23:09:00,788{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-7", :value "5091"}
+2026-02-22 23:09:00,903{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-14"
+2026-02-22 23:09:00,905{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-14", :value "483"}
+2026-02-22 23:09:01,054{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-6"
+2026-02-22 23:09:01,055{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-6", :ttl 2}
+2026-02-22 23:09:01,160{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-16"
+2026-02-22 23:09:01,161{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-16", :value nil}
+2026-02-22 23:09:01,275{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-19"
+2026-02-22 23:09:01,276{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-19", :value "9693"}
+2026-02-22 23:09:01,424{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-16"
+2026-02-22 23:09:01,427{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-16", :ttl -2}
+2026-02-22 23:09:01,613{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-2"
+2026-02-22 23:09:01,616{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-2", :value "5639"}
+2026-02-22 23:09:01,656{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:persist	"expiry-key-10"
+2026-02-22 23:09:01,659{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:persist	{:key "expiry-key-10"}
+2026-02-22 23:09:01,790{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-13"
+2026-02-22 23:09:01,792{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-13", :value nil}
+2026-02-22 23:09:01,817{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-4"
+2026-02-22 23:09:01,820{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-4", :ttl -2}
+2026-02-22 23:09:01,903{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-3"
+2026-02-22 23:09:01,904{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-3", :value nil}
+2026-02-22 23:09:01,924{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-8"
+2026-02-22 23:09:01,927{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-8"}
+2026-02-22 23:09:02,092{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 1739, :ttl 9}
+2026-02-22 23:09:02,095{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-4", :value 1739, :ttl 9}
+2026-02-22 23:09:02,197{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 2830, :ttl 4}
+2026-02-22 23:09:02,198{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-6", :value 2830, :ttl 4}
+2026-02-22 23:09:02,281{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-1", :ttl 7}
+2026-02-22 23:09:02,282{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-1", :ttl 7}
+2026-02-22 23:09:02,370{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-9"
+2026-02-22 23:09:02,371{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-9"}
+2026-02-22 23:09:02,477{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-13"
+2026-02-22 23:09:02,478{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-13", :value nil}
+2026-02-22 23:09:02,613{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-9"
+2026-02-22 23:09:02,615{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-9"}
+2026-02-22 23:09:02,673{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-2"
+2026-02-22 23:09:02,676{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-2", :value "5639"}
+2026-02-22 23:09:02,736{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-5", :ttl 6}
+2026-02-22 23:09:02,739{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-5", :ttl 6}
+2026-02-22 23:09:02,852{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-19"
+2026-02-22 23:09:02,855{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-19", :ttl 1}
+2026-02-22 23:09:02,863{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 84, :ttl 3}
+2026-02-22 23:09:02,866{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-2", :value 84, :ttl 3}
+2026-02-22 23:09:03,029{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 2308, :ttl 9}
+2026-02-22 23:09:03,031{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-16", :value 2308, :ttl 9}
+2026-02-22 23:09:03,092{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-13", :ttl 6}
+2026-02-22 23:09:03,093{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-13", :ttl 6}
+2026-02-22 23:09:03,147{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-9", :ttl 3}
+2026-02-22 23:09:03,148{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-9", :ttl 3}
+2026-02-22 23:09:03,213{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 8290, :ttl 8}
+2026-02-22 23:09:03,215{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-8", :value 8290, :ttl 8}
+2026-02-22 23:09:03,356{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 8516, :ttl 8}
+2026-02-22 23:09:03,358{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-9", :value 8516, :ttl 8}
+2026-02-22 23:09:03,386{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 1168, :ttl 6}
+2026-02-22 23:09:03,387{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-16", :value 1168, :ttl 6}
+2026-02-22 23:09:03,520{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-11"
+2026-02-22 23:09:03,522{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-11", :value "395"}
+2026-02-22 23:09:03,620{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 9521, :ttl 9}
+2026-02-22 23:09:03,622{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-3", :value 9521, :ttl 9}
+2026-02-22 23:09:03,727{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-17"
+2026-02-22 23:09:03,729{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-17", :value "7149"}
+2026-02-22 23:09:03,921{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-16"
+2026-02-22 23:09:03,922{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-16", :value "1168"}
+2026-02-22 23:09:04,053{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-19", :ttl 5}
+2026-02-22 23:09:04,055{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-19", :ttl 5}
+2026-02-22 23:09:04,063{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-0"
+2026-02-22 23:09:04,064{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-0", :ttl -1}
+2026-02-22 23:09:04,176{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-7"
+2026-02-22 23:09:04,178{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-7"}
+2026-02-22 23:09:04,215{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-1", :ttl 9}
+2026-02-22 23:09:04,217{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-1", :ttl 9}
+2026-02-22 23:09:04,371{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:ttl	"expiry-key-19"
+2026-02-22 23:09:04,373{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:ttl	{:key "expiry-key-19", :ttl -2}
+2026-02-22 23:09:04,421{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-10"
+2026-02-22 23:09:04,422{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-10", :value nil}
+2026-02-22 23:09:04,592{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-3", :ttl 9}
+2026-02-22 23:09:04,594{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-3", :ttl 9}
+2026-02-22 23:09:04,661{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-18"
+2026-02-22 23:09:04,663{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-18"}
+2026-02-22 23:09:04,731{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-16"
+2026-02-22 23:09:04,732{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-16", :value "1168"}
+2026-02-22 23:09:04,849{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 2377, :ttl 7}
+2026-02-22 23:09:04,851{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-12", :value 2377, :ttl 7}
+2026-02-22 23:09:04,963{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:ttl	"expiry-key-16"
+2026-02-22 23:09:04,965{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:ttl	{:key "expiry-key-16", :ttl 4}
+2026-02-22 23:09:05,086{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 7676, :ttl 4}
+2026-02-22 23:09:05,088{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-17", :value 7676, :ttl 4}
+2026-02-22 23:09:05,286{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 6064, :ttl 8}
+2026-02-22 23:09:05,288{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-15", :value 6064, :ttl 8}
+2026-02-22 23:09:05,321{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 4586, :ttl 7}
+2026-02-22 23:09:05,323{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-16", :value 4586, :ttl 7}
+2026-02-22 23:09:05,501{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 1010, :ttl 3}
+2026-02-22 23:09:05,503{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-14", :value 1010, :ttl 3}
+2026-02-22 23:09:05,514{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-1"
+2026-02-22 23:09:05,514{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-1", :ttl -2}
+2026-02-22 23:09:05,628{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-14"
+2026-02-22 23:09:05,629{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-14"}
+2026-02-22 23:09:05,800{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-15"
+2026-02-22 23:09:05,802{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-15", :value "6064"}
+2026-02-22 23:09:05,911{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 5852, :ttl 8}
+2026-02-22 23:09:05,913{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-6", :value 5852, :ttl 8}
+2026-02-22 23:09:06,060{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 4834, :ttl 8}
+2026-02-22 23:09:06,062{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-1", :value 4834, :ttl 8}
+2026-02-22 23:09:06,194{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-15", :ttl 7}
+2026-02-22 23:09:06,197{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-15", :ttl 7}
+2026-02-22 23:09:06,245{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-10", :ttl 5}
+2026-02-22 23:09:06,247{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-10", :ttl 5}
+2026-02-22 23:09:06,445{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-3", :ttl 7}
+2026-02-22 23:09:06,448{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-3", :ttl 7}
+2026-02-22 23:09:06,621{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-1", :ttl 7}
+2026-02-22 23:09:06,622{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-1", :ttl 7}
+2026-02-22 23:09:06,625{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-6"
+2026-02-22 23:09:06,625{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-6", :value "5852"}
+2026-02-22 23:09:06,673{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 9597, :ttl 4}
+2026-02-22 23:09:06,674{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-11", :value 9597, :ttl 4}
+2026-02-22 23:09:06,675{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-8"
+2026-02-22 23:09:06,676{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-8", :value "8290"}
+2026-02-22 23:09:06,686{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 2094, :ttl 7}
+2026-02-22 23:09:06,687{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-4", :value 2094, :ttl 7}
+2026-02-22 23:09:06,882{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-4", :ttl 7}
+2026-02-22 23:09:06,885{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-4", :ttl 7}
+2026-02-22 23:09:07,023{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-0", :ttl 8}
+2026-02-22 23:09:07,025{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-0", :ttl 8}
+2026-02-22 23:09:07,223{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-19"
+2026-02-22 23:09:07,224{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-19", :ttl -2}
+2026-02-22 23:09:07,386{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 5686, :ttl 5}
+2026-02-22 23:09:07,388{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-5", :value 5686, :ttl 5}
+2026-02-22 23:09:07,459{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-3"
+2026-02-22 23:09:07,461{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-3", :ttl 5}
+2026-02-22 23:09:07,569{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-12"
+2026-02-22 23:09:07,570{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-12", :value "2377"}
+2026-02-22 23:09:07,581{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:ttl	"expiry-key-19"
+2026-02-22 23:09:07,582{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:ttl	{:key "expiry-key-19", :ttl -2}
+2026-02-22 23:09:07,704{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 4340, :ttl 9}
+2026-02-22 23:09:07,705{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-15", :value 4340, :ttl 9}
+2026-02-22 23:09:07,855{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:persist	"expiry-key-2"
+2026-02-22 23:09:07,857{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:persist	{:key "expiry-key-2"}
+2026-02-22 23:09:08,017{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-0"
+2026-02-22 23:09:08,019{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-0", :value "7740"}
+2026-02-22 23:09:08,031{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-7"
+2026-02-22 23:09:08,033{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-7", :ttl -1}
+2026-02-22 23:09:08,111{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-11"
+2026-02-22 23:09:08,114{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-11", :value "9597"}
+2026-02-22 23:09:08,240{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-7"
+2026-02-22 23:09:08,243{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-7", :value "5091"}
+2026-02-22 23:09:08,399{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-17"
+2026-02-22 23:09:08,402{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-17", :ttl 0}
+2026-02-22 23:09:08,492{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-1"
+2026-02-22 23:09:08,494{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-1", :value "4834"}
+2026-02-22 23:09:08,667{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 3013, :ttl 5}
+2026-02-22 23:09:08,670{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-15", :value 3013, :ttl 5}
+2026-02-22 23:09:08,749{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-16"
+2026-02-22 23:09:08,750{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-16", :value "4586"}
+2026-02-22 23:09:08,822{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-14", :ttl 4}
+2026-02-22 23:09:08,823{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-14", :ttl 4}
+2026-02-22 23:09:08,904{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 8245, :ttl 8}
+2026-02-22 23:09:08,906{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-9", :value 8245, :ttl 8}
+2026-02-22 23:09:09,103{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-18", :ttl 8}
+2026-02-22 23:09:09,108{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-18", :ttl 8}
+2026-02-22 23:09:09,156{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:persist	"expiry-key-13"
+2026-02-22 23:09:09,158{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:persist	{:key "expiry-key-13"}
+2026-02-22 23:09:09,251{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-6"
+2026-02-22 23:09:09,252{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-6", :value "5852"}
+2026-02-22 23:09:09,307{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 8146, :ttl 8}
+2026-02-22 23:09:09,309{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-5", :value 8146, :ttl 8}
+2026-02-22 23:09:09,478{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-2"
+2026-02-22 23:09:09,479{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-2", :value nil}
+2026-02-22 23:09:09,578{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	nil
+2026-02-22 23:09:09,578{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Killing FrogDB on [n1]
+2026-02-22 23:09:09,578{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Killing FrogDB on n1
+2026-02-22 23:09:09,641{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:persist	"expiry-key-18"
+2026-02-22 23:09:09,643{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:persist	{:key "expiry-key-18"}
+2026-02-22 23:09:09,748{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	["n1"]
+2026-02-22 23:09:09,814{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-15"
+2026-02-22 23:09:09,815{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-15", :ttl 3}
+2026-02-22 23:09:09,883{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 7762, :ttl 7}
+2026-02-22 23:09:09,884{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-11", :value 7762, :ttl 7}
+2026-02-22 23:09:09,953{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-11"
+2026-02-22 23:09:09,955{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:ttl	"expiry-key-9"
+2026-02-22 23:09:09,955{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-11", :value "7762"}
+2026-02-22 23:09:09,960{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:ttl	{:key "expiry-key-9", :ttl 6}
+2026-02-22 23:09:10,078{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-6"
+2026-02-22 23:09:10,081{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-6", :value "5852"}
+2026-02-22 23:09:10,274{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-16"
+2026-02-22 23:09:10,277{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-16", :ttl 2}
+2026-02-22 23:09:10,399{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-12"
+2026-02-22 23:09:10,402{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-12"}
+2026-02-22 23:09:10,572{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-11"
+2026-02-22 23:09:10,575{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-11", :value "7762"}
+2026-02-22 23:09:10,652{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 5016, :ttl 5}
+2026-02-22 23:09:10,654{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-12", :value 5016, :ttl 5}
+2026-02-22 23:09:10,695{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-8", :ttl 8}
+2026-02-22 23:09:10,697{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-8", :ttl 8}
+2026-02-22 23:09:10,738{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-12", :ttl 6}
+2026-02-22 23:09:10,740{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-12", :ttl 6}
+2026-02-22 23:09:10,938{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-3"
+2026-02-22 23:09:10,939{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-3", :ttl 2}
+2026-02-22 23:09:11,036{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 1695, :ttl 4}
+2026-02-22 23:09:11,038{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-18", :value 1695, :ttl 4}
+2026-02-22 23:09:11,160{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-1"
+2026-02-22 23:09:11,163{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-1", :value "4834"}
+2026-02-22 23:09:11,315{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 1455, :ttl 6}
+2026-02-22 23:09:11,318{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-9", :value 1455, :ttl 6}
+2026-02-22 23:09:11,410{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-2"
+2026-02-22 23:09:11,413{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-2"}
+2026-02-22 23:09:11,601{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-8"
+2026-02-22 23:09:11,603{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-8", :value "8290"}
+2026-02-22 23:09:11,686{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-16"
+2026-02-22 23:09:11,688{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-16", :ttl 0}
+2026-02-22 23:09:11,717{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-19"
+2026-02-22 23:09:11,719{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-19", :value nil}
+2026-02-22 23:09:11,921{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 507, :ttl 3}
+2026-02-22 23:09:11,923{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-11", :value 507, :ttl 3}
+2026-02-22 23:09:11,949{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-3", :ttl 4}
+2026-02-22 23:09:11,950{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-3", :ttl 4}
+2026-02-22 23:09:11,984{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:ttl	"expiry-key-7"
+2026-02-22 23:09:11,985{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:ttl	{:key "expiry-key-7", :ttl -1}
+2026-02-22 23:09:12,064{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-7"
+2026-02-22 23:09:12,065{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-7", :ttl -1}
+2026-02-22 23:09:12,138{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-16"
+2026-02-22 23:09:12,139{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-16", :value "4586"}
+2026-02-22 23:09:12,282{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 8653, :ttl 5}
+2026-02-22 23:09:12,284{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-0", :value 8653, :ttl 5}
+2026-02-22 23:09:12,291{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-6", :ttl 4}
+2026-02-22 23:09:12,293{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-6", :ttl 4}
+2026-02-22 23:09:12,459{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-17"
+2026-02-22 23:09:12,461{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-17", :ttl -2}
+2026-02-22 23:09:12,564{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-16"
+2026-02-22 23:09:12,565{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-16", :value nil}
+2026-02-22 23:09:12,566{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-19"
+2026-02-22 23:09:12,567{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-19", :ttl -2}
+2026-02-22 23:09:12,615{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 6918, :ttl 8}
+2026-02-22 23:09:12,618{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-1", :value 6918, :ttl 8}
+2026-02-22 23:09:12,728{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 8677, :ttl 8}
+2026-02-22 23:09:12,731{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-13", :value 8677, :ttl 8}
+2026-02-22 23:09:12,819{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-0"
+2026-02-22 23:09:12,820{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-0", :value "8653"}
+2026-02-22 23:09:13,001{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 9628, :ttl 3}
+2026-02-22 23:09:13,003{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-17", :value 9628, :ttl 3}
+2026-02-22 23:09:13,090{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-1", :ttl 3}
+2026-02-22 23:09:13,091{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-1", :ttl 3}
+2026-02-22 23:09:13,249{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-5"
+2026-02-22 23:09:13,251{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-5", :ttl 4}
+2026-02-22 23:09:13,273{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-11"
+2026-02-22 23:09:13,274{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-11", :value "507"}
+2026-02-22 23:09:13,392{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-19"
+2026-02-22 23:09:13,394{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-19"}
+2026-02-22 23:09:13,420{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-8"
+2026-02-22 23:09:13,423{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-8", :value "8290"}
+2026-02-22 23:09:13,529{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-17", :ttl 6}
+2026-02-22 23:09:13,531{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-17", :ttl 6}
+2026-02-22 23:09:13,611{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 1806, :ttl 4}
+2026-02-22 23:09:13,614{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-8", :value 1806, :ttl 4}
+2026-02-22 23:09:13,653{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:persist	"expiry-key-3"
+2026-02-22 23:09:13,655{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:persist	{:key "expiry-key-3"}
+2026-02-22 23:09:13,735{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 2921, :ttl 5}
+2026-02-22 23:09:13,738{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-8", :value 2921, :ttl 5}
+2026-02-22 23:09:13,800{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-10"
+2026-02-22 23:09:13,802{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-10", :value nil}
+2026-02-22 23:09:13,807{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-2"
+2026-02-22 23:09:13,817{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-2", :ttl -2}
+2026-02-22 23:09:13,945{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-1"
+2026-02-22 23:09:13,947{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-1", :ttl 2}
+2026-02-22 23:09:14,036{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-0"
+2026-02-22 23:09:14,039{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-0", :value "8653"}
+2026-02-22 23:09:14,173{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-8"
+2026-02-22 23:09:14,174{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-8", :ttl 4}
+2026-02-22 23:09:14,330{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-0"
+2026-02-22 23:09:14,331{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-0", :value "8653"}
+2026-02-22 23:09:14,445{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-13"
+2026-02-22 23:09:14,448{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-13", :value "8677"}
+2026-02-22 23:09:14,463{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-7"
+2026-02-22 23:09:14,465{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-7", :value "5091"}
+2026-02-22 23:09:14,472{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-7"
+2026-02-22 23:09:14,474{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-7"}
+2026-02-22 23:09:14,522{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 6287, :ttl 6}
+2026-02-22 23:09:14,524{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-2", :value 6287, :ttl 6}
+2026-02-22 23:09:14,651{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:persist	"expiry-key-17"
+2026-02-22 23:09:14,652{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:persist	{:key "expiry-key-17"}
+2026-02-22 23:09:14,754{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	nil
+2026-02-22 23:09:14,754{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Starting FrogDB on [n1]
+2026-02-22 23:09:14,754{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Starting FrogDB on n1
+2026-02-22 23:09:14,787{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-2"
+2026-02-22 23:09:14,788{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-2", :value "6287"}
+2026-02-22 23:09:14,850{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 467, :ttl 8}
+2026-02-22 23:09:14,853{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-17", :value 467, :ttl 8}
+2026-02-22 23:09:14,888{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-5", :ttl 3}
+2026-02-22 23:09:14,890{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-5", :ttl 3}
+2026-02-22 23:09:14,998{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 818, :ttl 5}
+2026-02-22 23:09:15,001{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-10", :value 818, :ttl 5}
+2026-02-22 23:09:15,014{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-14"
+2026-02-22 23:09:15,016{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-14", :ttl -2}
+2026-02-22 23:09:15,115{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 4178, :ttl 6}
+2026-02-22 23:09:15,117{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-18", :value 4178, :ttl 6}
+2026-02-22 23:09:15,126{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-6", :ttl 6}
+2026-02-22 23:09:15,127{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-6", :ttl 6}
+2026-02-22 23:09:15,212{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-2"
+2026-02-22 23:09:15,213{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-2", :ttl 5}
+2026-02-22 23:09:15,269{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-10"
+2026-02-22 23:09:15,270{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-10"}
+2026-02-22 23:09:15,438{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-10"
+2026-02-22 23:09:15,440{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-10", :value "818"}
+2026-02-22 23:09:15,503{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-17"
+2026-02-22 23:09:15,504{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-17", :value "467"}
+2026-02-22 23:09:15,676{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:persist	"expiry-key-17"
+2026-02-22 23:09:15,679{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:persist	{:key "expiry-key-17"}
+2026-02-22 23:09:15,790{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-14"
+2026-02-22 23:09:15,793{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-14"}
+2026-02-22 23:09:15,816{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 2925, :ttl 6}
+2026-02-22 23:09:15,819{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-8", :value 2925, :ttl 6}
+2026-02-22 23:09:15,973{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-13"
+2026-02-22 23:09:15,975{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-13", :value "8677"}
+2026-02-22 23:09:16,010{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-19"
+2026-02-22 23:09:16,012{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-19"}
+2026-02-22 23:09:16,119{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 4372, :ttl 8}
+2026-02-22 23:09:16,122{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-9", :value 4372, :ttl 8}
+2026-02-22 23:09:16,138{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-8", :ttl 7}
+2026-02-22 23:09:16,140{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-8", :ttl 7}
+2026-02-22 23:09:16,223{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 500, :ttl 7}
+2026-02-22 23:09:16,226{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-5", :value 500, :ttl 7}
+2026-02-22 23:09:16,330{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-17"
+2026-02-22 23:09:16,331{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-17", :value "467"}
+2026-02-22 23:09:16,364{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-17"
+2026-02-22 23:09:16,365{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-17", :value "467"}
+2026-02-22 23:09:16,429{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-1"
+2026-02-22 23:09:16,431{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-1", :value nil}
+2026-02-22 23:09:16,580{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 2219, :ttl 9}
+2026-02-22 23:09:16,582{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-13", :value 2219, :ttl 9}
+2026-02-22 23:09:16,635{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 5625, :ttl 5}
+2026-02-22 23:09:16,637{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-15", :value 5625, :ttl 5}
+2026-02-22 23:09:16,657{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-14"
+2026-02-22 23:09:16,658{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-14", :value nil}
+2026-02-22 23:09:16,859{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-2"
+2026-02-22 23:09:16,860{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-2", :value "6287"}
+2026-02-22 23:09:17,043{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 5936, :ttl 8}
+2026-02-22 23:09:17,046{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-14", :value 5936, :ttl 8}
+2026-02-22 23:09:17,121{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 2265, :ttl 5}
+2026-02-22 23:09:17,123{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-2", :value 2265, :ttl 5}
+2026-02-22 23:09:17,156{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:persist	"expiry-key-18"
+2026-02-22 23:09:17,157{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:persist	{:key "expiry-key-18"}
+2026-02-22 23:09:17,206{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 6070, :ttl 4}
+2026-02-22 23:09:17,208{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-2", :value 6070, :ttl 4}
+2026-02-22 23:09:17,300{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-3"
+2026-02-22 23:09:17,301{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-3", :ttl -1}
+2026-02-22 23:09:17,403{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 664, :ttl 4}
+2026-02-22 23:09:17,403{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-0", :value 664, :ttl 4}
+2026-02-22 23:09:17,512{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 5139, :ttl 9}
+2026-02-22 23:09:17,513{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-8", :value 5139, :ttl 9}
+2026-02-22 23:09:17,514{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-2", :ttl 9}
+2026-02-22 23:09:17,514{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-2", :ttl 9}
+2026-02-22 23:09:17,560{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-11"
+2026-02-22 23:09:17,561{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-11", :ttl -2}
+2026-02-22 23:09:17,594{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-9", :ttl 6}
+2026-02-22 23:09:17,596{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-9", :ttl 6}
+2026-02-22 23:09:17,736{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-18", :ttl 3}
+2026-02-22 23:09:17,738{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-18", :ttl 3}
+2026-02-22 23:09:17,802{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 9930, :ttl 7}
+2026-02-22 23:09:17,803{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	["n1"]
+2026-02-22 23:09:17,804{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-14", :value 9930, :ttl 7}
+2026-02-22 23:09:17,846{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 3024, :ttl 8}
+2026-02-22 23:09:17,848{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-4", :value 3024, :ttl 8}
+2026-02-22 23:09:17,898{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:persist	"expiry-key-18"
+2026-02-22 23:09:17,900{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:persist	{:key "expiry-key-18"}
+2026-02-22 23:09:18,072{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 9878, :ttl 3}
+2026-02-22 23:09:18,075{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-6", :value 9878, :ttl 3}
+2026-02-22 23:09:18,201{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-12"
+2026-02-22 23:09:18,203{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-12", :ttl -2}
+2026-02-22 23:09:18,262{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 8130, :ttl 4}
+2026-02-22 23:09:18,264{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-6", :value 8130, :ttl 4}
+2026-02-22 23:09:18,382{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-7"
+2026-02-22 23:09:18,384{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-7", :value "5091"}
+2026-02-22 23:09:18,517{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-0"
+2026-02-22 23:09:18,518{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-0"}
+2026-02-22 23:09:18,613{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-4"
+2026-02-22 23:09:18,614{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-4", :value "3024"}
+2026-02-22 23:09:18,650{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 1363, :ttl 7}
+2026-02-22 23:09:18,652{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-7", :value 1363, :ttl 7}
+2026-02-22 23:09:18,691{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 3052, :ttl 7}
+2026-02-22 23:09:18,693{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-15", :value 3052, :ttl 7}
+2026-02-22 23:09:18,839{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-5"
+2026-02-22 23:09:18,842{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-5", :value "500"}
+2026-02-22 23:09:19,007{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 2054, :ttl 3}
+2026-02-22 23:09:19,009{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-13", :value 2054, :ttl 3}
+2026-02-22 23:09:19,060{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-18", :ttl 3}
+2026-02-22 23:09:19,062{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-18", :ttl 3}
+2026-02-22 23:09:19,246{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-3"
+2026-02-22 23:09:19,247{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-3", :value "9521"}
+2026-02-22 23:09:19,383{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-0"
+2026-02-22 23:09:19,384{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-0", :value "664"}
+2026-02-22 23:09:19,474{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 4494, :ttl 9}
+2026-02-22 23:09:19,477{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-11", :value 4494, :ttl 9}
+2026-02-22 23:09:19,631{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 4885, :ttl 4}
+2026-02-22 23:09:19,632{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-7", :value 4885, :ttl 4}
+2026-02-22 23:09:19,695{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 3977, :ttl 6}
+2026-02-22 23:09:19,697{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-2", :value 3977, :ttl 6}
+2026-02-22 23:09:19,713{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-8"
+2026-02-22 23:09:19,714{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-8"}
+2026-02-22 23:09:19,839{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-9"
+2026-02-22 23:09:19,840{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-9", :ttl 3}
+2026-02-22 23:09:19,940{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 4237, :ttl 9}
+2026-02-22 23:09:19,941{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-10", :value 4237, :ttl 9}
+2026-02-22 23:09:19,991{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-10"
+2026-02-22 23:09:19,993{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-10", :value "4237"}
+2026-02-22 23:09:20,057{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 8701, :ttl 4}
+2026-02-22 23:09:20,058{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-3", :value 8701, :ttl 4}
+2026-02-22 23:09:20,135{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-3"
+2026-02-22 23:09:20,136{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-3", :value "8701"}
+2026-02-22 23:09:20,257{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 9364, :ttl 9}
+2026-02-22 23:09:20,260{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-15", :value 9364, :ttl 9}
+2026-02-22 23:09:20,374{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:persist	"expiry-key-6"
+2026-02-22 23:09:20,376{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:persist	{:key "expiry-key-6"}
+2026-02-22 23:09:20,407{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-7"
+2026-02-22 23:09:20,409{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-7", :value "4885"}
+2026-02-22 23:09:20,424{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-13"
+2026-02-22 23:09:20,426{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-13", :value "2054"}
+2026-02-22 23:09:20,456{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-13", :ttl 7}
+2026-02-22 23:09:20,458{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-13", :ttl 7}
+2026-02-22 23:09:20,478{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-10"
+2026-02-22 23:09:20,481{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-10", :value "4237"}
+2026-02-22 23:09:20,533{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 5210, :ttl 9}
+2026-02-22 23:09:20,536{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-16", :value 5210, :ttl 9}
+2026-02-22 23:09:20,600{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 9317, :ttl 3}
+2026-02-22 23:09:20,600{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-14", :value 9317, :ttl 3}
+2026-02-22 23:09:20,747{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-4", :ttl 8}
+2026-02-22 23:09:20,748{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-4", :ttl 8}
+2026-02-22 23:09:20,819{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-16"
+2026-02-22 23:09:20,820{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-16", :value "5210"}
+2026-02-22 23:09:20,845{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-11"
+2026-02-22 23:09:20,846{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-11", :value "4494"}
+2026-02-22 23:09:20,933{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-7", :ttl 7}
+2026-02-22 23:09:20,935{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-7", :ttl 7}
+2026-02-22 23:09:20,993{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 8553, :ttl 8}
+2026-02-22 23:09:20,995{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-4", :value 8553, :ttl 8}
+2026-02-22 23:09:21,029{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-1"
+2026-02-22 23:09:21,031{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-1", :value nil}
+2026-02-22 23:09:21,234{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 8306, :ttl 9}
+2026-02-22 23:09:21,236{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-3", :value 8306, :ttl 9}
+2026-02-22 23:09:21,432{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-12"
+2026-02-22 23:09:21,434{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-12", :ttl -2}
+2026-02-22 23:09:21,613{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-12"
+2026-02-22 23:09:21,615{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-12", :value nil}
+2026-02-22 23:09:21,804{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-12"
+2026-02-22 23:09:21,805{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-12", :value nil}
+2026-02-22 23:09:21,948{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-13"
+2026-02-22 23:09:21,951{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-13"}
+2026-02-22 23:09:22,083{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:persist	"expiry-key-3"
+2026-02-22 23:09:22,085{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:persist	{:key "expiry-key-3"}
+2026-02-22 23:09:22,277{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 6025, :ttl 8}
+2026-02-22 23:09:22,280{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-1", :value 6025, :ttl 8}
+2026-02-22 23:09:22,329{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 2481, :ttl 6}
+2026-02-22 23:09:22,331{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-16", :value 2481, :ttl 6}
+2026-02-22 23:09:22,417{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 1074, :ttl 4}
+2026-02-22 23:09:22,420{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-17", :value 1074, :ttl 4}
+2026-02-22 23:09:22,448{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-3"
+2026-02-22 23:09:22,449{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-3", :ttl -1}
+2026-02-22 23:09:22,634{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-14"
+2026-02-22 23:09:22,636{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-14", :value "9317"}
+2026-02-22 23:09:22,727{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 9189, :ttl 8}
+2026-02-22 23:09:22,729{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-4", :value 9189, :ttl 8}
+2026-02-22 23:09:22,864{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 1846, :ttl 4}
+2026-02-22 23:09:22,865{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-13", :value 1846, :ttl 4}
+2026-02-22 23:09:22,949{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-7"
+2026-02-22 23:09:22,951{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-7", :ttl 4}
+2026-02-22 23:09:23,142{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-7"
+2026-02-22 23:09:23,143{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-7"}
+2026-02-22 23:09:23,257{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-18"
+2026-02-22 23:09:23,258{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-18", :value nil}
+2026-02-22 23:09:23,386{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-2", :ttl 3}
+2026-02-22 23:09:23,388{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-2", :ttl 3}
+2026-02-22 23:09:23,400{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-6"
+2026-02-22 23:09:23,402{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-6", :value "8130"}
+2026-02-22 23:09:23,570{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-4"
+2026-02-22 23:09:23,572{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-4", :ttl 7}
+2026-02-22 23:09:23,671{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-19", :value 3379, :ttl 4}
+2026-02-22 23:09:23,674{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-19", :value 3379, :ttl 4}
+2026-02-22 23:09:23,841{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-19", :value 4551, :ttl 4}
+2026-02-22 23:09:23,843{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-19", :value 4551, :ttl 4}
+2026-02-22 23:09:24,023{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:ttl	"expiry-key-10"
+2026-02-22 23:09:24,024{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:ttl	{:key "expiry-key-10", :ttl 4}
+2026-02-22 23:09:24,221{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-18", :ttl 3}
+2026-02-22 23:09:24,223{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-18", :ttl 3}
+2026-02-22 23:09:24,266{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 4367, :ttl 7}
+2026-02-22 23:09:24,267{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-15", :value 4367, :ttl 7}
+2026-02-22 23:09:24,414{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-8"
+2026-02-22 23:09:24,416{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-8", :ttl -1}
+2026-02-22 23:09:24,461{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 594, :ttl 8}
+2026-02-22 23:09:24,464{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-15", :value 594, :ttl 8}
+2026-02-22 23:09:24,596{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-17"
+2026-02-22 23:09:24,599{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-17", :value "1074"}
+2026-02-22 23:09:24,604{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-17"
+2026-02-22 23:09:24,606{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-17", :value "1074"}
+2026-02-22 23:09:24,805{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:persist	"expiry-key-2"
+2026-02-22 23:09:24,808{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:persist	{:key "expiry-key-2"}
+2026-02-22 23:09:24,938{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-16"
+2026-02-22 23:09:24,940{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-16", :ttl 3}
+2026-02-22 23:09:24,982{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-4", :ttl 5}
+2026-02-22 23:09:24,982{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-4", :ttl 5}
+2026-02-22 23:09:25,098{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-15"
+2026-02-22 23:09:25,100{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-15", :value "594"}
+2026-02-22 23:09:25,125{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 2257, :ttl 4}
+2026-02-22 23:09:25,126{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-6", :value 2257, :ttl 4}
+2026-02-22 23:09:25,162{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 3633, :ttl 5}
+2026-02-22 23:09:25,164{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-8", :value 3633, :ttl 5}
+2026-02-22 23:09:25,189{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 9078, :ttl 8}
+2026-02-22 23:09:25,191{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-1", :value 9078, :ttl 8}
+2026-02-22 23:09:25,376{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:persist	"expiry-key-3"
+2026-02-22 23:09:25,378{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:persist	{:key "expiry-key-3"}
+2026-02-22 23:09:25,575{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-14"
+2026-02-22 23:09:25,577{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-14", :value nil}
+2026-02-22 23:09:25,677{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-0"
+2026-02-22 23:09:25,680{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-0", :value "664"}
+2026-02-22 23:09:25,842{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-17"
+2026-02-22 23:09:25,843{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-17", :value "1074"}
+2026-02-22 23:09:25,999{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-2"
+2026-02-22 23:09:26,000{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-2", :value "3977"}
+2026-02-22 23:09:26,045{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-18"
+2026-02-22 23:09:26,047{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-18", :value nil}
+2026-02-22 23:09:26,172{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 5635, :ttl 3}
+2026-02-22 23:09:26,174{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-11", :value 5635, :ttl 3}
+2026-02-22 23:09:26,325{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-17"
+2026-02-22 23:09:26,327{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-17", :value "1074"}
+2026-02-22 23:09:26,499{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-1"
+2026-02-22 23:09:26,501{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-1", :ttl 6}
+2026-02-22 23:09:26,577{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-15"
+2026-02-22 23:09:26,578{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-15", :ttl 5}
+2026-02-22 23:09:26,704{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:ttl	"expiry-key-11"
+2026-02-22 23:09:26,706{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:ttl	{:key "expiry-key-11", :ttl 2}
+2026-02-22 23:09:26,900{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-18"
+2026-02-22 23:09:26,903{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-18", :value nil}
+2026-02-22 23:09:27,074{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 8333, :ttl 6}
+2026-02-22 23:09:27,077{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-12", :value 8333, :ttl 6}
+2026-02-22 23:09:27,088{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-5"
+2026-02-22 23:09:27,089{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-5", :value nil}
+2026-02-22 23:09:27,169{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-19"
+2026-02-22 23:09:27,169{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-19", :ttl 0}
+2026-02-22 23:09:27,361{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-9", :ttl 5}
+2026-02-22 23:09:27,363{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-9", :ttl 5}
+2026-02-22 23:09:27,382{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-13"
+2026-02-22 23:09:27,384{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-13"}
+2026-02-22 23:09:27,564{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-4"
+2026-02-22 23:09:27,566{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-4", :value "9189"}
+2026-02-22 23:09:27,665{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:persist	"expiry-key-1"
+2026-02-22 23:09:27,667{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:persist	{:key "expiry-key-1"}
+2026-02-22 23:09:27,674{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-13", :ttl 5}
+2026-02-22 23:09:27,675{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-13", :ttl 5}
+2026-02-22 23:09:27,776{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-8"
+2026-02-22 23:09:27,778{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-8", :value "3633"}
+2026-02-22 23:09:27,864{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-16"
+2026-02-22 23:09:27,866{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-16", :ttl 0}
+2026-02-22 23:09:27,985{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-9", :ttl 6}
+2026-02-22 23:09:27,988{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-9", :ttl 6}
+2026-02-22 23:09:28,000{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-12"
+2026-02-22 23:09:28,002{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-12", :value "8333"}
+2026-02-22 23:09:28,017{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:persist	"expiry-key-11"
+2026-02-22 23:09:28,018{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-1"
+2026-02-22 23:09:28,019{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:persist	{:key "expiry-key-11"}
+2026-02-22 23:09:28,019{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-1", :ttl -1}
+2026-02-22 23:09:28,136{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-4"
+2026-02-22 23:09:28,138{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-4", :ttl 1}
+2026-02-22 23:09:28,290{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 4261, :ttl 5}
+2026-02-22 23:09:28,291{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-18", :value 4261, :ttl 5}
+2026-02-22 23:09:28,349{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-5"
+2026-02-22 23:09:28,350{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-5", :value nil}
+2026-02-22 23:09:28,537{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-5"
+2026-02-22 23:09:28,540{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-5", :value nil}
+2026-02-22 23:09:28,738{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-0"
+2026-02-22 23:09:28,740{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-0", :ttl -1}
+2026-02-22 23:09:28,835{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-12", :ttl 4}
+2026-02-22 23:09:28,837{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-12", :ttl 4}
+2026-02-22 23:09:29,007{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-13"
+2026-02-22 23:09:29,009{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-13", :ttl -2}
+2026-02-22 23:09:29,095{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:persist	"expiry-key-10"
+2026-02-22 23:09:29,097{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:persist	{:key "expiry-key-10"}
+2026-02-22 23:09:29,283{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-12", :ttl 8}
+2026-02-22 23:09:29,284{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-12", :ttl 8}
+2026-02-22 23:09:29,285{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-19"
+2026-02-22 23:09:29,285{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-19", :value nil}
+2026-02-22 23:09:29,287{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	"expiry-key-0"
+2026-02-22 23:09:29,287{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key "expiry-key-0", :value "664"}
+2026-02-22 23:09:29,300{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-18", :ttl 8}
+2026-02-22 23:09:29,300{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-18", :ttl 8}
+2026-02-22 23:09:29,450{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-19", :value 8764, :ttl 7}
+2026-02-22 23:09:29,451{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-19", :value 8764, :ttl 7}
+2026-02-22 23:09:29,616{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 6806, :ttl 9}
+2026-02-22 23:09:29,617{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-12", :value 6806, :ttl 9}
+2026-02-22 23:09:29,749{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-11"
+2026-02-22 23:09:29,751{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-11", :value "5635"}
+2026-02-22 23:09:29,819{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 785, :ttl 9}
+2026-02-22 23:09:29,820{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-1", :value 785, :ttl 9}
+2026-02-22 23:09:29,995{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 75, :ttl 6}
+2026-02-22 23:09:29,998{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-9", :value 75, :ttl 6}
+2026-02-22 23:09:30,110{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-10", :ttl 6}
+2026-02-22 23:09:30,112{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-10", :ttl 6}
+2026-02-22 23:09:30,188{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-19"
+2026-02-22 23:09:30,191{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-19", :value "8764"}
+2026-02-22 23:09:30,358{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-15"
+2026-02-22 23:09:30,359{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-15", :ttl 2}
+2026-02-22 23:09:30,380{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-7"
+2026-02-22 23:09:30,381{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-7"}
+2026-02-22 23:09:30,411{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-5", :ttl 4}
+2026-02-22 23:09:30,412{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-5", :ttl 4}
+2026-02-22 23:09:30,528{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:persist	"expiry-key-12"
+2026-02-22 23:09:30,529{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:persist	{:key "expiry-key-12"}
+2026-02-22 23:09:30,681{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-12"
+2026-02-22 23:09:30,683{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-12", :value "6806"}
+2026-02-22 23:09:30,713{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 9796, :ttl 7}
+2026-02-22 23:09:30,715{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-5", :value 9796, :ttl 7}
+2026-02-22 23:09:30,907{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-4"
+2026-02-22 23:09:30,909{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-4", :value nil}
+2026-02-22 23:09:31,060{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-6"
+2026-02-22 23:09:31,063{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-6", :value nil}
+2026-02-22 23:09:31,203{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 5998, :ttl 3}
+2026-02-22 23:09:31,205{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-10", :value 5998, :ttl 3}
+2026-02-22 23:09:31,240{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-7"
+2026-02-22 23:09:31,242{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-7", :ttl -1}
+2026-02-22 23:09:31,421{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 7417, :ttl 3}
+2026-02-22 23:09:31,422{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:set-with-ttl	{:key "expiry-key-13", :value 7417, :ttl 3}
+2026-02-22 23:09:31,620{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-17", :ttl 7}
+2026-02-22 23:09:31,622{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-17", :ttl 7}
+2026-02-22 23:09:31,639{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 2951, :ttl 6}
+2026-02-22 23:09:31,641{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-8", :value 2951, :ttl 6}
+2026-02-22 23:09:31,816{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 3014, :ttl 7}
+2026-02-22 23:09:31,824{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-8", :value 3014, :ttl 7}
+2026-02-22 23:09:31,890{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-16"
+2026-02-22 23:09:31,893{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-16", :value nil}
+2026-02-22 23:09:32,086{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 9345, :ttl 8}
+2026-02-22 23:09:32,087{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-3", :value 9345, :ttl 8}
+2026-02-22 23:09:32,227{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:expire	{:key "expiry-key-8", :ttl 7}
+2026-02-22 23:09:32,229{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:expire	{:key "expiry-key-8", :ttl 7}
+2026-02-22 23:09:32,413{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 3984, :ttl 3}
+2026-02-22 23:09:32,415{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-7", :value 3984, :ttl 3}
+2026-02-22 23:09:32,603{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 1437, :ttl 3}
+2026-02-22 23:09:32,604{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-12", :value 1437, :ttl 3}
+2026-02-22 23:09:32,756{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:persist	"expiry-key-9"
+2026-02-22 23:09:32,758{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:persist	{:key "expiry-key-9"}
+2026-02-22 23:09:32,814{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	nil
+2026-02-22 23:09:32,814{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Killing FrogDB on [n1]
+2026-02-22 23:09:32,814{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Killing FrogDB on n1
+2026-02-22 23:09:32,908{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-10", :ttl 7}
+2026-02-22 23:09:32,910{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-10", :ttl 7}
+2026-02-22 23:09:33,010{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:kill	["n1"]
+2026-02-22 23:09:33,041{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-9"
+2026-02-22 23:09:33,042{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-9", :value "75"}
+2026-02-22 23:09:33,065{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 360, :ttl 5}
+2026-02-22 23:09:33,066{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-3", :value 360, :ttl 5}
+2026-02-22 23:09:33,138{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-9"
+2026-02-22 23:09:33,139{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-9", :value "75"}
+2026-02-22 23:09:33,228{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 4398, :ttl 8}
+2026-02-22 23:09:33,231{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-15", :value 4398, :ttl 8}
+2026-02-22 23:09:33,338{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:ttl	"expiry-key-14"
+2026-02-22 23:09:33,339{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:ttl	{:key "expiry-key-14", :ttl -2}
+2026-02-22 23:09:33,377{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-12"
+2026-02-22 23:09:33,379{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-12", :value "1437"}
+2026-02-22 23:09:33,497{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	"expiry-key-14"
+2026-02-22 23:09:33,499{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key "expiry-key-14", :value nil}
+2026-02-22 23:09:33,552{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-14"
+2026-02-22 23:09:33,554{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-14", :ttl -2}
+2026-02-22 23:09:33,697{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 1113, :ttl 4}
+2026-02-22 23:09:33,699{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:set-with-ttl	{:key "expiry-key-8", :value 1113, :ttl 4}
+2026-02-22 23:09:33,846{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:expire	{:key "expiry-key-7", :ttl 9}
+2026-02-22 23:09:33,848{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:expire	{:key "expiry-key-7", :ttl 9}
+2026-02-22 23:09:33,998{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:expire	{:key "expiry-key-3", :ttl 4}
+2026-02-22 23:09:34,001{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:expire	{:key "expiry-key-3", :ttl 4}
+2026-02-22 23:09:34,074{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-15"
+2026-02-22 23:09:34,076{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-15", :ttl 7}
+2026-02-22 23:09:34,271{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-15", :ttl 6}
+2026-02-22 23:09:34,273{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-15", :ttl 6}
+2026-02-22 23:09:34,401{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-18"
+2026-02-22 23:09:34,403{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-18", :ttl 2}
+2026-02-22 23:09:34,589{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:ttl	"expiry-key-0"
+2026-02-22 23:09:34,591{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:ttl	{:key "expiry-key-0", :ttl -1}
+2026-02-22 23:09:34,613{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:ttl	"expiry-key-13"
+2026-02-22 23:09:34,615{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:ttl	{:key "expiry-key-13", :ttl -2}
+2026-02-22 23:09:34,766{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 6536, :ttl 7}
+2026-02-22 23:09:34,767{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-14", :value 6536, :ttl 7}
+2026-02-22 23:09:34,817{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:ttl	"expiry-key-7"
+2026-02-22 23:09:34,819{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:ttl	{:key "expiry-key-7", :ttl 8}
+2026-02-22 23:09:34,977{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 4504, :ttl 4}
+2026-02-22 23:09:34,980{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-13", :value 4504, :ttl 4}
+2026-02-22 23:09:35,024{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-0", :ttl 5}
+2026-02-22 23:09:35,026{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-0", :ttl 5}
+2026-02-22 23:09:35,086{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	"expiry-key-16"
+2026-02-22 23:09:35,088{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key "expiry-key-16", :value nil}
+2026-02-22 23:09:35,150{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 815, :ttl 5}
+2026-02-22 23:09:35,151{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:set-with-ttl	{:key "expiry-key-8", :value 815, :ttl 5}
+2026-02-22 23:09:35,313{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 1834, :ttl 6}
+2026-02-22 23:09:35,316{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:set-with-ttl	{:key "expiry-key-7", :value 1834, :ttl 6}
+2026-02-22 23:09:35,396{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	"expiry-key-4"
+2026-02-22 23:09:35,398{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key "expiry-key-4", :value nil}
+2026-02-22 23:09:35,579{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:ttl	"expiry-key-12"
+2026-02-22 23:09:35,581{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:ttl	{:key "expiry-key-12", :ttl 0}
+2026-02-22 23:09:35,696{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:expire	{:key "expiry-key-0", :ttl 8}
+2026-02-22 23:09:35,698{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:expire	{:key "expiry-key-0", :ttl 8}
+2026-02-22 23:09:35,759{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:expire	{:key "expiry-key-11", :ttl 4}
+2026-02-22 23:09:35,759{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:expire	{:key "expiry-key-11", :ttl 4}
+2026-02-22 23:09:35,917{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	"expiry-key-15"
+2026-02-22 23:09:35,919{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key "expiry-key-15", :value "4398"}
+2026-02-22 23:09:35,998{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:persist	"expiry-key-11"
+2026-02-22 23:09:36,000{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:persist	{:key "expiry-key-11"}
+2026-02-22 23:09:36,124{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:persist	"expiry-key-18"
+2026-02-22 23:09:36,126{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:persist	{:key "expiry-key-18"}
+2026-02-22 23:09:36,252{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 4377, :ttl 3}
+2026-02-22 23:09:36,254{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-5", :value 4377, :ttl 3}
+2026-02-22 23:09:36,318{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 485, :ttl 7}
+2026-02-22 23:09:36,320{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:set-with-ttl	{:key "expiry-key-11", :value 485, :ttl 7}
+2026-02-22 23:09:38,012{GMT}	INFO	[jepsen worker 1] jepsen.generator.interpreter: Recovering from faults...
+2026-02-22 23:09:38,012{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	nil
+2026-02-22 23:09:38,012{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.nemesis: Starting FrogDB on [n1]
+2026-02-22 23:09:38,012{GMT}	INFO	[jepsen worker nemesis] jepsen.frogdb.db: Starting FrogDB on n1
+2026-02-22 23:09:41,055{GMT}	INFO	[jepsen worker nemesis] jepsen.util: :nemesis	:info	:start	["n1"]
+2026-02-22 23:09:46,060{GMT}	INFO	[jepsen worker 4] jepsen.generator.interpreter: Final reads...
+2026-02-22 23:09:46,061{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-22 23:09:46,065{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key nil, :value nil}
+2026-02-22 23:09:46,218{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-22 23:09:46,220{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key nil, :value nil}
+2026-02-22 23:09:46,236{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-22 23:09:46,238{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key nil, :value nil}
+2026-02-22 23:09:46,263{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-22 23:09:46,265{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key nil, :value nil}
+2026-02-22 23:09:46,309{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:invoke	:read	nil
+2026-02-22 23:09:46,311{GMT}	INFO	[jepsen worker 3] jepsen.util: 3	:ok	:read	{:key nil, :value nil}
+2026-02-22 23:09:46,321{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:invoke	:read	nil
+2026-02-22 23:09:46,323{GMT}	INFO	[jepsen worker 4] jepsen.util: 4	:ok	:read	{:key nil, :value nil}
+2026-02-22 23:09:46,471{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-22 23:09:46,473{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key nil, :value nil}
+2026-02-22 23:09:46,502{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:invoke	:read	nil
+2026-02-22 23:09:46,503{GMT}	INFO	[jepsen worker 0] jepsen.util: 0	:ok	:read	{:key nil, :value nil}
+2026-02-22 23:09:46,677{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:invoke	:read	nil
+2026-02-22 23:09:46,678{GMT}	INFO	[jepsen worker 1] jepsen.util: 1	:ok	:read	{:key nil, :value nil}
+2026-02-22 23:09:46,824{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:invoke	:read	nil
+2026-02-22 23:09:46,829{GMT}	INFO	[jepsen worker 2] jepsen.util: 2	:ok	:read	{:key nil, :value nil}
+2026-02-22 23:09:46,844{GMT}	INFO	[jepsen test runner] jepsen.core: Run complete, writing
+2026-02-22 23:09:46,899{GMT}	INFO	[jepsen node n1] jepsen.frogdb.db: Tearing down FrogDB on n1
+2026-02-22 23:09:46,899{GMT}	INFO	[jepsen node n1] jepsen.frogdb.core: Docker OS teardown for n1 (no-op)
+2026-02-22 23:09:46,899{GMT}	INFO	[jepsen test runner] jepsen.core: Analyzing...
+2026-02-22 23:09:46,917{GMT}	WARN	[clojure-agent-send-off-pool-5] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$rate_graph_BANG_.invokeStatic(perf.clj:626)
+	at jepsen.checker.perf$rate_graph_BANG_.invoke(perf.clj:571)
+	at jepsen.checker$rate_graph$reify__10772.check(checker.clj:843)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-22 23:09:46,919{GMT}	WARN	[clojure-agent-send-off-pool-0] jepsen.checker: Error while checking history:
+java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable
+	at jepsen.checker.perf$plot_BANG_.invokeStatic(perf.clj:492)
+	at jepsen.checker.perf$plot_BANG_.invoke(perf.clj:429)
+	at jepsen.checker.perf$point_graph_BANG_.invokeStatic(perf.clj:523)
+	at jepsen.checker.perf$point_graph_BANG_.invoke(perf.clj:496)
+	at jepsen.checker$latency_graph$reify__10769.check(checker.clj:830)
+	at jepsen.checker$check_safe.invokeStatic(checker.clj:86)
+	at jepsen.checker$check_safe.invoke(checker.clj:79)
+	at jepsen.checker$compose$reify__10552$fn__10554.invoke(checker.clj:102)
+	at clojure.core$pmap$fn__8552$fn__8553.invoke(core.clj:7089)
+	at clojure.core$binding_conveyor_fn$fn__5823.invoke(core.clj:2047)
+	at clojure.lang.AFn.call(AFn.java:18)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+Caused by: java.io.IOException: Cannot run program "gnuplot": Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1112)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1046)
+	at java.base/java.lang.Runtime.exec(Runtime.java:605)
+	at clojure.java.shell$sh.invokeStatic(shell.clj:113)
+	at clojure.java.shell$sh.doInvoke(shell.clj:79)
+	at clojure.lang.RestFn.invoke(RestFn.java:512)
+	at gnuplot.core$run_BANG_.invokeStatic(core.clj:76)
+	at gnuplot.core$run_BANG_.invoke(core.clj:66)
+	at gnuplot.core$raw_plot_BANG_.invokeStatic(core.clj:106)
+	at gnuplot.core$raw_plot_BANG_.invoke(core.clj:91)
+	... 15 common frames omitted
+Caused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) 
+	at java.base/java.lang.ProcessImpl.forkAndExec(Native Method)
+	at java.base/java.lang.ProcessImpl.<init>(ProcessImpl.java:300)
+	at java.base/java.lang.ProcessImpl.start(ProcessImpl.java:231)
+	at java.base/java.lang.ProcessBuilder.start(ProcessBuilder.java:1078)
+	... 24 common frames omitted
+2026-02-22 23:09:46,920{GMT}	INFO	[jepsen test runner] jepsen.core: Analysis complete
+2026-02-22 23:09:46,929{GMT}	INFO	[jepsen results] jepsen.store: Wrote /Users/nathan/workspace/nathanjordan/workspace-1/jepsen/frogdb/store/frogdb-expiry-kill-docker/20260222T230833.784-0500/results.edn
+2026-02-22 23:09:46,951{GMT}	INFO	[jepsen test runner] jepsen.core: {:workload {:expiry {:delete-count 0,
+                     :valid? true,
+                     :ttl-check-count 90,
+                     :suspicious-ttls nil,
+                     :read-count 173,
+                     :persist-count 66,
+                     :note "TTL checking has limited precision due to concurrent operations and clock considerations",
+                     :expire-count 89,
+                     :set-count 186},
+            :valid? true},
+ :stats {:valid? true,
+         :count 604,
+         :ok-count 604,
+         :fail-count 0,
+         :info-count 0,
+         :by-f {:expire {:valid? true,
+                         :count 89,
+                         :ok-count 89,
+                         :fail-count 0,
+                         :info-count 0},
+                :persist {:valid? true,
+                          :count 66,
+                          :ok-count 66,
+                          :fail-count 0,
+                          :info-count 0},
+                :read {:valid? true,
+                       :count 173,
+                       :ok-count 173,
+                       :fail-count 0,
+                       :info-count 0},
+                :set-with-ttl {:valid? true,
+                               :count 186,
+                               :ok-count 186,
+                               :fail-count 0,
+                               :info-count 0},
+                :ttl {:valid? true,
+                      :count 90,
+                      :ok-count 90,
+                      :fail-count 0,
+                      :info-count 0}}},
+ :exceptions {:valid? true},
+ :perf {:latency-graph {:valid? :unknown,
+                        :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$point_graph_BANG_.invokeStatic (perf.clj:523)\n    jepsen.checker.perf$point_graph_BANG_.invoke (perf.clj:496)\n    jepsen.checker$latency_graph$reify__10769.check (checker.clj:830)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :rate-graph {:valid? :unknown,
+                     :error "java.lang.IllegalStateException: Error rendering plot, verify gnuplot is installed and reachable\n at jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Cannot run program \"gnuplot\": Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessBuilder.start (ProcessBuilder.java:1112)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\nCaused by: java.io.IOException: Exec failed, error: 2 (No such file or directory) \n at java.lang.ProcessImpl.forkAndExec (ProcessImpl.java:-2)\n    java.lang.ProcessImpl.<init> (ProcessImpl.java:300)\n    java.lang.ProcessImpl.start (ProcessImpl.java:231)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1078)\n    java.lang.ProcessBuilder.start (ProcessBuilder.java:1046)\n    java.lang.Runtime.exec (Runtime.java:605)\n    clojure.java.shell$sh.invokeStatic (shell.clj:113)\n    clojure.java.shell$sh.doInvoke (shell.clj:79)\n    clojure.lang.RestFn.invoke (RestFn.java:512)\n    gnuplot.core$run_BANG_.invokeStatic (core.clj:76)\n    gnuplot.core$run_BANG_.invoke (core.clj:66)\n    gnuplot.core$raw_plot_BANG_.invokeStatic (core.clj:106)\n    gnuplot.core$raw_plot_BANG_.invoke (core.clj:91)\n    jepsen.checker.perf$plot_BANG_.invokeStatic (perf.clj:492)\n    jepsen.checker.perf$plot_BANG_.invoke (perf.clj:429)\n    jepsen.checker.perf$rate_graph_BANG_.invokeStatic (perf.clj:626)\n    jepsen.checker.perf$rate_graph_BANG_.invoke (perf.clj:571)\n    jepsen.checker$rate_graph$reify__10772.check (checker.clj:843)\n    jepsen.checker$check_safe.invokeStatic (checker.clj:86)\n    jepsen.checker$check_safe.invoke (checker.clj:79)\n    jepsen.checker$compose$reify__10552$fn__10554.invoke (checker.clj:102)\n    clojure.core$pmap$fn__8552$fn__8553.invoke (core.clj:7089)\n    clojure.core$binding_conveyor_fn$fn__5823.invoke (core.clj:2047)\n    clojure.lang.AFn.call (AFn.java:18)\n    java.util.concurrent.FutureTask.run (FutureTask.java:328)\n    java.util.concurrent.ThreadPoolExecutor.runWorker (ThreadPoolExecutor.java:1090)\n    java.util.concurrent.ThreadPoolExecutor$Worker.run (ThreadPoolExecutor.java:614)\n    java.lang.Thread.run (Thread.java:1474)\n"},
+        :valid? :unknown},
+ :valid? :unknown}
+
+
+Errors occurred during analysis, but no anomalies found. ಠ~ಠ

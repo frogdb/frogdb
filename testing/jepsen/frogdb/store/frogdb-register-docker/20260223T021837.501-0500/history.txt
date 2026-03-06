@@ -1,0 +1,200 @@
+0	:invoke	:read	nil
+0	:ok	:read	nil
+1	:invoke	:cas	[46 11]
+1	:ok	:cas	[46 11]
+2	:invoke	:read	nil
+2	:ok	:read	nil
+3	:invoke	:cas	[98 46]
+3	:ok	:cas	[98 46]
+4	:invoke	:cas	[97 82]
+4	:ok	:cas	[97 82]
+0	:invoke	:write	34
+0	:ok	:write	34
+0	:invoke	:cas	[7 96]
+0	:ok	:cas	[7 96]
+1	:invoke	:write	74
+1	:ok	:write	74
+2	:invoke	:write	2
+2	:ok	:write	2
+3	:invoke	:write	63
+3	:ok	:write	63
+4	:invoke	:read	nil
+4	:ok	:read	63
+0	:invoke	:read	nil
+0	:ok	:read	63
+0	:invoke	:cas	[77 51]
+0	:ok	:cas	[77 51]
+1	:invoke	:write	22
+1	:ok	:write	22
+2	:invoke	:cas	[68 62]
+2	:ok	:cas	[68 62]
+3	:invoke	:cas	[66 74]
+3	:ok	:cas	[66 74]
+4	:invoke	:write	61
+4	:ok	:write	61
+0	:invoke	:write	8
+0	:ok	:write	8
+0	:invoke	:cas	[70 26]
+0	:ok	:cas	[70 26]
+1	:invoke	:write	37
+1	:ok	:write	37
+2	:invoke	:cas	[51 76]
+2	:ok	:cas	[51 76]
+3	:invoke	:cas	[86 81]
+3	:ok	:cas	[86 81]
+4	:invoke	:cas	[12 33]
+4	:ok	:cas	[12 33]
+0	:invoke	:write	87
+0	:ok	:write	87
+0	:invoke	:read	nil
+0	:ok	:read	87
+1	:invoke	:read	nil
+1	:ok	:read	87
+2	:invoke	:write	4
+2	:ok	:write	4
+3	:invoke	:read	nil
+3	:ok	:read	4
+4	:invoke	:write	55
+4	:ok	:write	55
+0	:invoke	:write	54
+0	:ok	:write	54
+0	:invoke	:write	67
+1	:invoke	:read	nil
+2	:invoke	:read	nil
+1	:ok	:read	54
+2	:ok	:read	54
+0	:ok	:write	67
+3	:invoke	:cas	[6 7]
+3	:ok	:cas	[6 7]
+4	:invoke	:cas	[73 32]
+4	:ok	:cas	[73 32]
+0	:invoke	:cas	[16 94]
+0	:ok	:cas	[16 94]
+0	:invoke	:write	39
+0	:ok	:write	39
+1	:invoke	:cas	[84 52]
+1	:ok	:cas	[84 52]
+2	:invoke	:cas	[18 47]
+2	:ok	:cas	[18 47]
+3	:invoke	:cas	[91 13]
+3	:ok	:cas	[91 13]
+4	:invoke	:cas	[3 46]
+4	:ok	:cas	[3 46]
+0	:invoke	:cas	[71 46]
+0	:ok	:cas	[71 46]
+0	:invoke	:cas	[74 86]
+0	:ok	:cas	[74 86]
+1	:invoke	:cas	[44 43]
+1	:ok	:cas	[44 43]
+2	:invoke	:read	nil
+2	:ok	:read	39
+3	:invoke	:write	64
+3	:ok	:write	64
+4	:invoke	:read	nil
+4	:ok	:read	64
+0	:invoke	:read	nil
+0	:ok	:read	64
+0	:invoke	:cas	[21 21]
+0	:ok	:cas	[21 21]
+1	:invoke	:cas	[72 61]
+1	:ok	:cas	[72 61]
+2	:invoke	:cas	[82 96]
+2	:ok	:cas	[82 96]
+3	:invoke	:write	70
+3	:ok	:write	70
+4	:invoke	:write	84
+4	:ok	:write	84
+0	:invoke	:cas	[11 15]
+0	:ok	:cas	[11 15]
+0	:invoke	:read	nil
+0	:ok	:read	84
+1	:invoke	:cas	[29 48]
+1	:ok	:cas	[29 48]
+2	:invoke	:cas	[27 60]
+2	:ok	:cas	[27 60]
+3	:invoke	:read	nil
+3	:ok	:read	84
+4	:invoke	:read	nil
+4	:ok	:read	84
+0	:invoke	:write	1
+0	:ok	:write	1
+0	:invoke	:read	nil
+0	:ok	:read	1
+1	:invoke	:cas	[98 53]
+1	:ok	:cas	[98 53]
+2	:invoke	:write	59
+2	:ok	:write	59
+3	:invoke	:cas	[57 73]
+3	:ok	:cas	[57 73]
+4	:invoke	:write	52
+4	:ok	:write	52
+0	:invoke	:write	82
+0	:ok	:write	82
+0	:invoke	:write	69
+0	:ok	:write	69
+1	:invoke	:write	53
+1	:ok	:write	53
+2	:invoke	:write	69
+2	:ok	:write	69
+3	:invoke	:read	nil
+3	:ok	:read	69
+4	:invoke	:read	nil
+4	:ok	:read	69
+0	:invoke	:write	22
+0	:ok	:write	22
+0	:invoke	:write	13
+0	:ok	:write	13
+1	:invoke	:cas	[31 27]
+1	:ok	:cas	[31 27]
+2	:invoke	:read	nil
+2	:ok	:read	13
+3	:invoke	:write	66
+3	:ok	:write	66
+4	:invoke	:write	86
+4	:ok	:write	86
+0	:invoke	:read	nil
+0	:ok	:read	86
+0	:invoke	:cas	[10 82]
+0	:ok	:cas	[10 82]
+1	:invoke	:read	nil
+1	:ok	:read	86
+2	:invoke	:cas	[96 11]
+2	:ok	:cas	[96 11]
+3	:invoke	:write	61
+3	:ok	:write	61
+4	:invoke	:write	85
+4	:ok	:write	85
+0	:invoke	:cas	[35 78]
+0	:ok	:cas	[35 78]
+0	:invoke	:read	nil
+0	:ok	:read	85
+1	:invoke	:write	91
+1	:ok	:write	91
+2	:invoke	:write	74
+2	:ok	:write	74
+3	:invoke	:write	11
+3	:ok	:write	11
+4	:invoke	:write	66
+4	:ok	:write	66
+0	:invoke	:read	nil
+0	:ok	:read	66
+3	:invoke	:read	nil
+3	:ok	:read	66
+4	:invoke	:read	nil
+4	:ok	:read	66
+0	:invoke	:read	nil
+0	:ok	:read	66
+0	:invoke	:read	nil
+0	:ok	:read	66
+1	:invoke	:read	nil
+1	:ok	:read	66
+2	:invoke	:read	nil
+2	:ok	:read	66
+3	:invoke	:read	nil
+3	:ok	:read	66
+4	:invoke	:read	nil
+4	:ok	:read	66
+0	:invoke	:read	nil
+0	:ok	:read	66
+0	:invoke	:read	nil
+0	:ok	:read	66

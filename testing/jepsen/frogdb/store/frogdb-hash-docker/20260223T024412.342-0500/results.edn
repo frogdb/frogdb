@@ -1,0 +1,175 @@
+{:workload {:hash {:valid? true,
+                   :field-count 5,
+                   :fields-with-ops 5,
+                   :invalid-fields nil,
+                   :field-results ({:field :f1,
+                                    :write-count 36,
+                                    :read-count 23,
+                                    :writes #{7
+                                              59
+                                              20
+                                              58
+                                              69
+                                              4
+                                              54
+                                              48
+                                              31
+                                              91
+                                              61
+                                              93
+                                              28
+                                              64
+                                              34
+                                              12
+                                              35
+                                              76
+                                              19
+                                              5
+                                              45
+                                              16
+                                              79
+                                              98
+                                              87
+                                              30
+                                              18
+                                              80
+                                              49},
+                                    :invalid-reads #{}}
+                                   {:field :f5,
+                                    :write-count 34,
+                                    :read-count 29,
+                                    :writes #{70
+                                              7
+                                              20
+                                              39
+                                              46
+                                              77
+                                              95
+                                              48
+                                              50
+                                              31
+                                              32
+                                              40
+                                              91
+                                              89
+                                              61
+                                              6
+                                              51
+                                              2
+                                              19
+                                              5
+                                              83
+                                              45
+                                              78
+                                              38
+                                              98
+                                              30
+                                              73
+                                              18
+                                              80
+                                              84},
+                                    :invalid-reads #{}}
+                                   {:field :f3,
+                                    :write-count 23,
+                                    :read-count 28,
+                                    :writes #{7
+                                              59
+                                              85
+                                              92
+                                              48
+                                              50
+                                              32
+                                              22
+                                              93
+                                              57
+                                              11
+                                              45
+                                              26
+                                              38
+                                              73
+                                              96
+                                              18
+                                              67
+                                              71
+                                              37},
+                                    :invalid-reads #{}}
+                                   {:field :f2,
+                                    :write-count 39,
+                                    :read-count 27,
+                                    :writes #{65
+                                              7
+                                              59
+                                              69
+                                              85
+                                              88
+                                              4
+                                              54
+                                              92
+                                              50
+                                              21
+                                              31
+                                              32
+                                              40
+                                              56
+                                              22
+                                              90
+                                              43
+                                              44
+                                              93
+                                              23
+                                              82
+                                              76
+                                              11
+                                              26
+                                              81
+                                              38
+                                              87
+                                              73
+                                              71
+                                              94},
+                                    :invalid-reads #{}}
+                                   {:field :f4,
+                                    :write-count 30,
+                                    :read-count 33,
+                                    :writes #{74
+                                              59
+                                              1
+                                              69
+                                              24
+                                              4
+                                              77
+                                              99
+                                              22
+                                              36
+                                              43
+                                              44
+                                              25
+                                              12
+                                              2
+                                              11
+                                              9
+                                              79
+                                              30
+                                              37},
+                                    :invalid-reads #{}})},
+            :valid? true},
+ :stats {:valid? true,
+         :count 312,
+         :ok-count 302,
+         :fail-count 0,
+         :info-count 10,
+         :by-f {:read {:valid? true,
+                       :count 150,
+                       :ok-count 140,
+                       :fail-count 0,
+                       :info-count 10},
+                :write {:valid? true,
+                        :count 162,
+                        :ok-count 162,
+                        :fail-count 0,
+                        :info-count 0}}},
+ :exceptions {:valid? true},
+ :perf {:latency-graph {:valid? true},
+        :rate-graph {:valid? true},
+        :valid? true},
+ :valid? true}

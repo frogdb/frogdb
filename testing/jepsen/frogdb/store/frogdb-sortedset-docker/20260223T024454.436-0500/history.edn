@@ -1,0 +1,618 @@
+{:index 0, :time 8847250, :type :invoke, :process 0, :f :score, :value "member-1"}
+{:index 1, :time 14485042, :type :ok, :process 0, :f :score, :value {:member "member-1", :score nil}}
+{:index 2, :time 94840917, :type :invoke, :process 1, :f :add, :value {:member "member-33", :score 329}}
+{:index 3, :time 106624917, :type :ok, :process 1, :f :add, :value {:member "member-33", :score 329}, :result 1}
+{:index 4, :time 168395458, :type :invoke, :process 2, :f :add, :value {:member "member-46", :score 696}}
+{:index 5, :time 171299083, :type :ok, :process 2, :f :add, :value {:member "member-46", :score 696}, :result 1}
+{:index 6, :time 330941750, :type :invoke, :process 3, :f :update-score, :value {:member "member-12", :score 738}}
+{:index 7, :time 336746667, :type :ok, :process 3, :f :update-score, :value {:member "member-12", :score 738}, :result 0}
+{:index 8, :time 371716875, :type :invoke, :process 4, :f :read, :value nil}
+{:index 9, :time 381081750, :type :ok, :process 4, :f :read, :value [{:member "member-33", :score 329.0} {:member "member-46", :score 696.0}]}
+{:index 10, :time 575618958, :type :invoke, :process 0, :f :rank, :value "member-17"}
+{:index 11, :time 578627958, :type :invoke, :process 1, :f :update-score, :value {:member "member-21", :score 23}}
+{:index 12, :time 579989000, :type :ok, :process 0, :f :rank, :value {:member "member-17", :rank nil}}
+{:index 13, :time 581759208, :type :ok, :process 1, :f :update-score, :value {:member "member-21", :score 23}, :result 0}
+{:index 14, :time 764944792, :type :invoke, :process 1, :f :remove, :value "member-37"}
+{:index 15, :time 765622750, :type :invoke, :process 2, :f :remove, :value "member-15"}
+{:index 16, :time 770631917, :type :ok, :process 1, :f :remove, :value "member-37", :result 0}
+{:index 17, :time 770670333, :type :ok, :process 2, :f :remove, :value "member-15", :result 0}
+{:index 18, :time 968998125, :type :invoke, :process 3, :f :add, :value {:member "member-35", :score 434}}
+{:index 19, :time 971562500, :type :ok, :process 3, :f :add, :value {:member "member-35", :score 434}, :result 1}
+{:index 20, :time 1113193667, :type :invoke, :process 4, :f :add, :value {:member "member-46", :score 707}}
+{:index 21, :time 1120410458, :type :ok, :process 4, :f :add, :value {:member "member-46", :score 707}, :result 0}
+{:index 22, :time 1159839167, :type :invoke, :process 0, :f :score, :value "member-46"}
+{:index 23, :time 1163794375, :type :ok, :process 0, :f :score, :value {:member "member-46", :score 707.0}}
+{:index 24, :time 1259392708, :type :invoke, :process 0, :f :score, :value "member-42"}
+{:index 25, :time 1262879625, :type :ok, :process 0, :f :score, :value {:member "member-42", :score nil}}
+{:index 26, :time 1393590708, :type :invoke, :process 1, :f :rank, :value "member-33"}
+{:index 27, :time 1397591000, :type :ok, :process 1, :f :rank, :value {:member "member-33", :rank 0}}
+{:index 28, :time 1560187292, :type :invoke, :process 2, :f :score, :value "member-49"}
+{:index 29, :time 1562703458, :type :ok, :process 2, :f :score, :value {:member "member-49", :score nil}}
+{:index 30, :time 1576139250, :type :invoke, :process 3, :f :update-score, :value {:member "member-5", :score 614}}
+{:index 31, :time 1578740000, :type :ok, :process 3, :f :update-score, :value {:member "member-5", :score 614}, :result 0}
+{:index 32, :time 1717881167, :type :invoke, :process 4, :f :add, :value {:member "member-44", :score 948}}
+{:index 33, :time 1721226250, :type :ok, :process 4, :f :add, :value {:member "member-44", :score 948}, :result 1}
+{:index 34, :time 1822311042, :type :invoke, :process 0, :f :add, :value {:member "member-1", :score 202}}
+{:index 35, :time 1826210167, :type :ok, :process 0, :f :add, :value {:member "member-1", :score 202}, :result 1}
+{:index 36, :time 1838413458, :type :invoke, :process 0, :f :remove, :value "member-29"}
+{:index 37, :time 1841319917, :type :ok, :process 0, :f :remove, :value "member-29", :result 0}
+{:index 38, :time 1927841333, :type :invoke, :process 1, :f :update-score, :value {:member "member-38", :score 291}}
+{:index 39, :time 1935358250, :type :ok, :process 1, :f :update-score, :value {:member "member-38", :score 291}, :result 0}
+{:index 40, :time 2029152917, :type :invoke, :process 2, :f :add, :value {:member "member-19", :score 726}}
+{:index 41, :time 2030484458, :type :ok, :process 2, :f :add, :value {:member "member-19", :score 726}, :result 1}
+{:index 42, :time 2219217125, :type :invoke, :process 3, :f :remove, :value "member-4"}
+{:index 43, :time 2221343833, :type :ok, :process 3, :f :remove, :value "member-4", :result 0}
+{:index 44, :time 2258070625, :type :invoke, :process 4, :f :add, :value {:member "member-42", :score 882}}
+{:index 45, :time 2260800750, :type :ok, :process 4, :f :add, :value {:member "member-42", :score 882}, :result 1}
+{:index 46, :time 2437817375, :type :invoke, :process 0, :f :read, :value nil}
+{:index 47, :time 2441998667, :type :ok, :process 0, :f :read, :value [{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 434.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]}
+{:index 48, :time 2609107917, :type :invoke, :process 0, :f :score, :value "member-43"}
+{:index 49, :time 2611587542, :type :ok, :process 0, :f :score, :value {:member "member-43", :score nil}}
+{:index 50, :time 2656857125, :type :invoke, :process 1, :f :remove, :value "member-21"}
+{:index 51, :time 2659854917, :type :ok, :process 1, :f :remove, :value "member-21", :result 0}
+{:index 52, :time 2740997542, :type :invoke, :process 2, :f :score, :value "member-17"}
+{:index 53, :time 2744330167, :type :ok, :process 2, :f :score, :value {:member "member-17", :score nil}}
+{:index 54, :time 2793185625, :type :invoke, :process 3, :f :read, :value nil}
+{:index 55, :time 2796640000, :type :ok, :process 3, :f :read, :value [{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 434.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]}
+{:index 56, :time 2987722625, :type :invoke, :process 4, :f :read, :value nil}
+{:index 57, :time 2990740375, :type :ok, :process 4, :f :read, :value [{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 434.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]}
+{:index 58, :time 3052480667, :type :invoke, :process 0, :f :add, :value {:member "member-35", :score 523}}
+{:index 59, :time 3057512333, :type :ok, :process 0, :f :add, :value {:member "member-35", :score 523}, :result 0}
+{:index 60, :time 3201038375, :type :invoke, :process 0, :f :read, :value nil}
+{:index 61, :time 3207416292, :type :ok, :process 0, :f :read, :value [{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]}
+{:index 62, :time 3398074833, :type :invoke, :process 1, :f :remove, :value "member-45"}
+{:index 63, :time 3399995292, :type :ok, :process 1, :f :remove, :value "member-45", :result 0}
+{:index 64, :time 3410006667, :type :invoke, :process 2, :f :rank, :value "member-41"}
+{:index 65, :time 3411394125, :type :ok, :process 2, :f :rank, :value {:member "member-41", :rank nil}}
+{:index 66, :time 3420536375, :type :invoke, :process 3, :f :update-score, :value {:member "member-34", :score 879}}
+{:index 67, :time 3421903250, :type :ok, :process 3, :f :update-score, :value {:member "member-34", :score 879}, :result 0}
+{:index 68, :time 3498877500, :type :invoke, :process 4, :f :add, :value {:member "member-15", :score 842}}
+{:index 69, :time 3501195958, :type :ok, :process 4, :f :add, :value {:member "member-15", :score 842}, :result 1}
+{:index 70, :time 3623693458, :type :invoke, :process 0, :f :read, :value nil}
+{:index 71, :time 3626645250, :type :ok, :process 0, :f :read, :value [{:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-42", :score 882.0} {:member "member-44", :score 948.0}]}
+{:index 72, :time 3809577250, :type :invoke, :process 0, :f :rank, :value "member-41"}
+{:index 73, :time 3812015833, :type :ok, :process 0, :f :rank, :value {:member "member-41", :rank nil}}
+{:index 74, :time 3968434417, :type :invoke, :process 1, :f :add, :value {:member "member-27", :score 887}}
+{:index 75, :time 3970979583, :type :ok, :process 1, :f :add, :value {:member "member-27", :score 887}, :result 1}
+{:index 76, :time 4088998792, :type :invoke, :process 2, :f :rank, :value "member-25"}
+{:index 77, :time 4091610750, :type :ok, :process 2, :f :rank, :value {:member "member-25", :rank nil}}
+{:index 78, :time 4233648042, :type :invoke, :process 3, :f :rank, :value "member-44"}
+{:index 79, :time 4235660042, :type :ok, :process 3, :f :rank, :value {:member "member-44", :rank 8}}
+{:index 80, :time 4322992917, :type :invoke, :process 4, :f :rank, :value "member-7"}
+{:index 81, :time 4325063208, :type :ok, :process 4, :f :rank, :value {:member "member-7", :rank nil}}
+{:index 82, :time 4415640500, :type :invoke, :process 0, :f :score, :value "member-21"}
+{:index 83, :time 4418610292, :type :ok, :process 0, :f :score, :value {:member "member-21", :score nil}}
+{:index 84, :time 4513940125, :type :invoke, :process 0, :f :add, :value {:member "member-37", :score 229}}
+{:index 85, :time 4516590667, :type :ok, :process 0, :f :add, :value {:member "member-37", :score 229}, :result 1}
+{:index 86, :time 4596478458, :type :invoke, :process 1, :f :add, :value {:member "member-40", :score 846}}
+{:index 87, :time 4599006667, :type :ok, :process 1, :f :add, :value {:member "member-40", :score 846}, :result 1}
+{:index 88, :time 4768385833, :type :invoke, :process 2, :f :add, :value {:member "member-20", :score 960}}
+{:index 89, :time 4771068500, :type :ok, :process 2, :f :add, :value {:member "member-20", :score 960}, :result 1}
+{:index 90, :time 4824363000, :type :invoke, :process 3, :f :rank, :value "member-33"}
+{:index 91, :time 4826240208, :type :ok, :process 3, :f :rank, :value {:member "member-33", :rank 2}}
+{:index 92, :time 4997226375, :type :invoke, :process 4, :f :score, :value "member-36"}
+{:index 93, :time 4999008083, :type :ok, :process 4, :f :score, :value {:member "member-36", :score nil}}
+{:index 94, :time 5054223708, :type :invoke, :process 0, :f :score, :value "member-42"}
+{:index 95, :time 5056370083, :type :ok, :process 0, :f :score, :value {:member "member-42", :score 882.0}}
+{:index 96, :time 5112668583, :type :invoke, :process 0, :f :update-score, :value {:member "member-20", :score 32}}
+{:index 97, :time 5116087167, :type :ok, :process 0, :f :update-score, :value {:member "member-20", :score 32}, :result 0}
+{:index 98, :time 5204133125, :type :invoke, :process 1, :f :read, :value nil}
+{:index 99, :time 5206453250, :type :ok, :process 1, :f :read, :value [{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]}
+{:index 100, :time 5313954750, :type :invoke, :process 2, :f :read, :value nil}
+{:index 101, :time 5315860625, :type :ok, :process 2, :f :read, :value [{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]}
+{:index 102, :time 5496263333, :type :invoke, :process 3, :f :score, :value "member-10"}
+{:index 103, :time 5498187875, :type :ok, :process 3, :f :score, :value {:member "member-10", :score nil}}
+{:index 104, :time 5627868250, :type :invoke, :process 4, :f :rank, :value "member-41"}
+{:index 105, :time 5630251958, :type :ok, :process 4, :f :rank, :value {:member "member-41", :rank nil}}
+{:index 106, :time 5822038542, :type :invoke, :process 0, :f :read, :value nil}
+{:index 107, :time 5823506917, :type :ok, :process 0, :f :read, :value [{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]}
+{:index 108, :time 5986147167, :type :invoke, :process 0, :f :update-score, :value {:member "member-47", :score 788}}
+{:index 109, :time 5988616167, :type :ok, :process 0, :f :update-score, :value {:member "member-47", :score 788}, :result 0}
+{:index 110, :time 6039174208, :type :invoke, :process 1, :f :read, :value nil}
+{:index 111, :time 6042203500, :type :ok, :process 1, :f :read, :value [{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-37", :score 229.0} {:member "member-33", :score 329.0} {:member "member-35", :score 523.0} {:member "member-46", :score 707.0} {:member "member-19", :score 726.0} {:member "member-15", :score 842.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 948.0}]}
+{:index 112, :time 6104505583, :type :invoke, :process 2, :f :remove, :value "member-35"}
+{:index 113, :time 6107152417, :type :ok, :process 2, :f :remove, :value "member-35", :result 1}
+{:index 114, :time 6159808417, :type :invoke, :process 3, :f :remove, :value "member-19"}
+{:index 115, :time 6163091458, :type :ok, :process 3, :f :remove, :value "member-19", :result 1}
+{:index 116, :time 6215765583, :type :invoke, :process 4, :f :rank, :value "member-49"}
+{:index 117, :time 6218509375, :type :ok, :process 4, :f :rank, :value {:member "member-49", :rank nil}}
+{:index 118, :time 6237193167, :type :invoke, :process 0, :f :add, :value {:member "member-11", :score 362}}
+{:index 119, :time 6240515125, :type :ok, :process 0, :f :add, :value {:member "member-11", :score 362}, :result 1}
+{:index 120, :time 6250181667, :type :invoke, :process 0, :f :remove, :value "member-37"}
+{:index 121, :time 6253529542, :type :ok, :process 0, :f :remove, :value "member-37", :result 1}
+{:index 122, :time 6416976542, :type :invoke, :process 1, :f :update-score, :value {:member "member-5", :score 553}}
+{:index 123, :time 6420537083, :type :ok, :process 1, :f :update-score, :value {:member "member-5", :score 553}, :result 0}
+{:index 124, :time 6430229792, :type :invoke, :process 2, :f :add, :value {:member "member-19", :score 846}}
+{:index 125, :time 6431569833, :type :ok, :process 2, :f :add, :value {:member "member-19", :score 846}, :result 1}
+{:index 126, :time 6485427208, :type :invoke, :process 3, :f :score, :value "member-32"}
+{:index 127, :time 6487126792, :type :ok, :process 3, :f :score, :value {:member "member-32", :score nil}}
+{:index 128, :time 6577403208, :type :invoke, :process 4, :f :score, :value "member-5"}
+{:index 129, :time 6580023500, :type :ok, :process 4, :f :score, :value {:member "member-5", :score nil}}
+{:index 130, :time 6646191417, :type :invoke, :process 0, :f :add, :value {:member "member-5", :score 900}}
+{:index 131, :time 6649335917, :type :ok, :process 0, :f :add, :value {:member "member-5", :score 900}, :result 1}
+{:index 132, :time 6763801000, :type :invoke, :process 0, :f :read, :value nil}
+{:index 133, :time 6767183750, :type :ok, :process 0, :f :read, :value [{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]}
+{:index 134, :time 6832947833, :type :invoke, :process 1, :f :read, :value nil}
+{:index 135, :time 6835249708, :type :ok, :process 1, :f :read, :value [{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]}
+{:index 136, :time 6889111917, :type :invoke, :process 2, :f :remove, :value "member-7"}
+{:index 137, :time 6891056750, :type :ok, :process 2, :f :remove, :value "member-7", :result 0}
+{:index 138, :time 6905781458, :type :invoke, :process 3, :f :rank, :value "member-3"}
+{:index 139, :time 6907158917, :type :ok, :process 3, :f :rank, :value {:member "member-3", :rank nil}}
+{:index 140, :time 7035661333, :type :invoke, :process 4, :f :rank, :value "member-43"}
+{:index 141, :time 7038036375, :type :ok, :process 4, :f :rank, :value {:member "member-43", :rank nil}}
+{:index 142, :time 7144275250, :type :invoke, :process 0, :f :add, :value {:member "member-25", :score 449}}
+{:index 143, :time 7146215292, :type :ok, :process 0, :f :add, :value {:member "member-25", :score 449}, :result 1}
+{:index 144, :time 7190229417, :type :invoke, :process 0, :f :read, :value nil}
+{:index 145, :time 7192245875, :type :ok, :process 0, :f :read, :value [{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]}
+{:index 146, :time 7217871542, :type :invoke, :process 1, :f :rank, :value "member-39"}
+{:index 147, :time 7220432667, :type :ok, :process 1, :f :rank, :value {:member "member-39", :rank nil}}
+{:index 148, :time 7239488542, :type :invoke, :process 2, :f :remove, :value "member-39"}
+{:index 149, :time 7242092542, :type :ok, :process 2, :f :remove, :value "member-39", :result 0}
+{:index 150, :time 7245064875, :type :invoke, :process 3, :f :read, :value nil}
+{:index 151, :time 7246757917, :type :ok, :process 3, :f :read, :value [{:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-5", :score 900.0} {:member "member-44", :score 948.0}]}
+{:index 152, :time 7278401208, :type :invoke, :process 4, :f :update-score, :value {:member "member-43", :score 684}}
+{:index 153, :time 7281028583, :type :ok, :process 4, :f :update-score, :value {:member "member-43", :score 684}, :result 0}
+{:index 154, :time 7448703333, :type :invoke, :process 0, :f :update-score, :value {:member "member-16", :score 220}}
+{:index 155, :time 7452697542, :type :ok, :process 0, :f :update-score, :value {:member "member-16", :score 220}, :result 0}
+{:index 156, :time 7498978417, :type :invoke, :process 0, :f :add, :value {:member "member-47", :score 570}}
+{:index 157, :time 7502088958, :type :ok, :process 0, :f :add, :value {:member "member-47", :score 570}, :result 1}
+{:index 158, :time 7616853708, :type :invoke, :process 1, :f :add, :value {:member "member-6", :score 347}}
+{:index 159, :time 7618860708, :type :ok, :process 1, :f :add, :value {:member "member-6", :score 347}, :result 1}
+{:index 160, :time 7802447042, :type :invoke, :process 2, :f :remove, :value "member-5"}
+{:index 161, :time 7806217167, :type :ok, :process 2, :f :remove, :value "member-5", :result 1}
+{:index 162, :time 7973300542, :type :invoke, :process 3, :f :remove, :value "member-0"}
+{:index 163, :time 7976338000, :type :ok, :process 3, :f :remove, :value "member-0", :result 0}
+{:index 164, :time 8160891167, :type :invoke, :process 4, :f :rank, :value "member-3"}
+{:index 165, :time 8163728125, :type :ok, :process 4, :f :rank, :value {:member "member-3", :rank nil}}
+{:index 166, :time 8213950125, :type :invoke, :process 0, :f :score, :value "member-28"}
+{:index 167, :time 8216164500, :type :ok, :process 0, :f :score, :value {:member "member-28", :score nil}}
+{:index 168, :time 8338964917, :type :invoke, :process 0, :f :score, :value "member-30"}
+{:index 169, :time 8341703792, :type :ok, :process 0, :f :score, :value {:member "member-30", :score nil}}
+{:index 170, :time 8533805458, :type :invoke, :process 1, :f :score, :value "member-6"}
+{:index 171, :time 8536214458, :type :ok, :process 1, :f :score, :value {:member "member-6", :score 347.0}}
+{:index 172, :time 8700516250, :type :invoke, :process 2, :f :remove, :value "member-43"}
+{:index 173, :time 8702877542, :type :ok, :process 2, :f :remove, :value "member-43", :result 0}
+{:index 174, :time 8755606333, :type :invoke, :process 3, :f :add, :value {:member "member-44", :score 930}}
+{:index 175, :time 8758046583, :type :ok, :process 3, :f :add, :value {:member "member-44", :score 930}, :result 0}
+{:index 176, :time 8919016792, :type :invoke, :process 4, :f :score, :value "member-11"}
+{:index 177, :time 8922165125, :type :ok, :process 4, :f :score, :value {:member "member-11", :score 362.0}}
+{:index 178, :time 8959954167, :type :invoke, :process 0, :f :remove, :value "member-45"}
+{:index 179, :time 8962743042, :type :ok, :process 0, :f :remove, :value "member-45", :result 0}
+{:index 180, :time 9018571083, :type :invoke, :process 0, :f :score, :value "member-1"}
+{:index 181, :time 9020191875, :type :ok, :process 0, :f :score, :value {:member "member-1", :score 202.0}}
+{:index 182, :time 9143453417, :type :invoke, :process 1, :f :score, :value "member-25"}
+{:index 183, :time 9145900958, :type :ok, :process 1, :f :score, :value {:member "member-25", :score 449.0}}
+{:index 184, :time 9158274125, :type :invoke, :process 2, :f :add, :value {:member "member-7", :score 7}}
+{:index 185, :time 9160137750, :type :ok, :process 2, :f :add, :value {:member "member-7", :score 7}, :result 1}
+{:index 186, :time 9269060708, :type :invoke, :process 3, :f :score, :value "member-8"}
+{:index 187, :time 9271922375, :type :ok, :process 3, :f :score, :value {:member "member-8", :score nil}}
+{:index 188, :time 9446604333, :type :invoke, :process 4, :f :update-score, :value {:member "member-12", :score 570}}
+{:index 189, :time 9448517292, :type :ok, :process 4, :f :update-score, :value {:member "member-12", :score 570}, :result 0}
+{:index 190, :time 9564746792, :type :invoke, :process 0, :f :read, :value nil}
+{:index 191, :time 9566947292, :type :ok, :process 0, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]}
+{:index 192, :time 9568074167, :type :invoke, :process 0, :f :rank, :value "member-0"}
+{:index 193, :time 9569520667, :type :ok, :process 0, :f :rank, :value {:member "member-0", :rank nil}}
+{:index 194, :time 9646332500, :type :invoke, :process 1, :f :add, :value {:member "member-28", :score 554}}
+{:index 195, :time 9647655583, :type :ok, :process 1, :f :add, :value {:member "member-28", :score 554}, :result 1}
+{:index 196, :time 9742680875, :type :invoke, :process 2, :f :rank, :value "member-25"}
+{:index 197, :time 9743764917, :type :ok, :process 2, :f :rank, :value {:member "member-25", :rank 6}}
+{:index 198, :time 9834528042, :type :invoke, :process 3, :f :update-score, :value {:member "member-39", :score 263}}
+{:index 199, :time 9837020042, :type :ok, :process 3, :f :update-score, :value {:member "member-39", :score 263}, :result 0}
+{:index 200, :time 9840914917, :type :invoke, :process 4, :f :update-score, :value {:member "member-23", :score 300}}
+{:index 201, :time 9842571750, :type :ok, :process 4, :f :update-score, :value {:member "member-23", :score 300}, :result 0}
+{:index 202, :time 9992534625, :type :invoke, :process 0, :f :rank, :value "member-34"}
+{:index 203, :time 9994718583, :type :ok, :process 0, :f :rank, :value {:member "member-34", :rank nil}}
+{:index 204, :time 10165287542, :type :invoke, :process 0, :f :add, :value {:member "member-48", :score 642}}
+{:index 205, :time 10167452417, :type :ok, :process 0, :f :add, :value {:member "member-48", :score 642}, :result 1}
+{:index 206, :time 10275826917, :type :invoke, :process 1, :f :add, :value {:member "member-22", :score 198}}
+{:index 207, :time 10278520167, :type :ok, :process 1, :f :add, :value {:member "member-22", :score 198}, :result 1}
+{:index 208, :time 10288493542, :type :invoke, :process 2, :f :remove, :value "member-38"}
+{:index 209, :time 10290409208, :type :ok, :process 2, :f :remove, :value "member-38", :result 0}
+{:index 210, :time 10374120958, :type :invoke, :process 3, :f :add, :value {:member "member-18", :score 610}}
+{:index 211, :time 10376157500, :type :ok, :process 3, :f :add, :value {:member "member-18", :score 610}, :result 1}
+{:index 212, :time 10406087208, :type :invoke, :process 4, :f :read, :value nil}
+{:index 213, :time 10408053458, :type :ok, :process 4, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]}
+{:index 214, :time 10423762542, :type :invoke, :process 0, :f :read, :value nil}
+{:index 215, :time 10425771875, :type :ok, :process 0, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]}
+{:index 216, :time 10507045125, :type :invoke, :process 0, :f :update-score, :value {:member "member-37", :score 707}}
+{:index 217, :time 10509929875, :type :ok, :process 0, :f :update-score, :value {:member "member-37", :score 707}, :result 0}
+{:index 218, :time 10686553417, :type :invoke, :process 1, :f :read, :value nil}
+{:index 219, :time 10688647542, :type :ok, :process 1, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]}
+{:index 220, :time 10713934625, :type :invoke, :process 2, :f :remove, :value "member-17"}
+{:index 221, :time 10715779208, :type :ok, :process 2, :f :remove, :value "member-17", :result 0}
+{:index 222, :time 10716680458, :type :invoke, :process 3, :f :read, :value nil}
+{:index 223, :time 10717706083, :type :ok, :process 3, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-48", :score 642.0} {:member "member-46", :score 707.0} {:member "member-15", :score 842.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0}]}
+{:index 224, :time 10724909667, :type :invoke, :process 4, :f :rank, :value "member-38"}
+{:index 225, :time 10726308083, :type :ok, :process 4, :f :rank, :value {:member "member-38", :rank nil}}
+{:index 226, :time 10779886083, :type :invoke, :process 0, :f :update-score, :value {:member "member-14", :score 689}}
+{:index 227, :time 10781185875, :type :ok, :process 0, :f :update-score, :value {:member "member-14", :score 689}, :result 0}
+{:index 228, :time 10915535875, :type :invoke, :process 0, :f :add, :value {:member "member-48", :score 732}}
+{:index 229, :time 10918613708, :type :ok, :process 0, :f :add, :value {:member "member-48", :score 732}, :result 0}
+{:index 230, :time 10988898750, :type :invoke, :process 1, :f :score, :value "member-49"}
+{:index 231, :time 10990664292, :type :ok, :process 1, :f :score, :value {:member "member-49", :score nil}}
+{:index 232, :time 10993441125, :type :invoke, :process 2, :f :score, :value "member-17"}
+{:index 233, :time 10994768875, :type :ok, :process 2, :f :score, :value {:member "member-17", :score nil}}
+{:index 234, :time 11162117042, :type :invoke, :process 3, :f :add, :value {:member "member-26", :score 252}}
+{:index 235, :time 11164077875, :type :ok, :process 3, :f :add, :value {:member "member-26", :score 252}, :result 1}
+{:index 236, :time 11167999375, :type :invoke, :process 4, :f :score, :value "member-33"}
+{:index 237, :time 11169054083, :type :ok, :process 4, :f :score, :value {:member "member-33", :score 329.0}}
+{:index 238, :time 11302680458, :type :invoke, :process 0, :f :remove, :value "member-15"}
+{:index 239, :time 11304982125, :type :ok, :process 0, :f :remove, :value "member-15", :result 1}
+{:index 240, :time 11357168625, :type :invoke, :process 0, :f :add, :value {:member "member-0", :score 982}}
+{:index 241, :time 11359548958, :type :ok, :process 0, :f :add, :value {:member "member-0", :score 982}, :result 1}
+{:index 242, :time 11458643250, :type :invoke, :process 1, :f :update-score, :value {:member "member-3", :score 894}}
+{:index 243, :time 11461899875, :type :ok, :process 1, :f :update-score, :value {:member "member-3", :score 894}, :result 0}
+{:index 244, :time 11503814167, :type :invoke, :process 2, :f :score, :value "member-31"}
+{:index 245, :time 11505758833, :type :ok, :process 2, :f :score, :value {:member "member-31", :score nil}}
+{:index 246, :time 11571196667, :type :invoke, :process 3, :f :score, :value "member-31"}
+{:index 247, :time 11573042458, :type :ok, :process 3, :f :score, :value {:member "member-31", :score nil}}
+{:index 248, :time 11627643792, :type :invoke, :process 4, :f :remove, :value "member-30"}
+{:index 249, :time 11630364750, :type :ok, :process 4, :f :remove, :value "member-30", :result 0}
+{:index 250, :time 11819783375, :type :invoke, :process 0, :f :update-score, :value {:member "member-9", :score 194}}
+{:index 251, :time 11822360583, :type :ok, :process 0, :f :update-score, :value {:member "member-9", :score 194}, :result 0}
+{:index 252, :time 11916912750, :type :invoke, :process 0, :f :add, :value {:member "member-26", :score 544}}
+{:index 253, :time 11918680417, :type :ok, :process 0, :f :add, :value {:member "member-26", :score 544}, :result 0}
+{:index 254, :time 11979361917, :type :invoke, :process 1, :f :read, :value nil}
+{:index 255, :time 11982178042, :type :ok, :process 1, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-46", :score 707.0} {:member "member-48", :score 732.0} {:member "member-19", :score 846.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]}
+{:index 256, :time 12094880542, :type :invoke, :process 2, :f :rank, :value "member-14"}
+{:index 257, :time 12097825000, :type :ok, :process 2, :f :rank, :value {:member "member-14", :rank nil}}
+{:index 258, :time 12152511625, :type :invoke, :process 3, :f :rank, :value "member-10"}
+{:index 259, :time 12158455292, :type :ok, :process 3, :f :rank, :value {:member "member-10", :rank nil}}
+{:index 260, :time 12350233333, :type :invoke, :process 4, :f :remove, :value "member-19"}
+{:index 261, :time 12353183208, :type :ok, :process 4, :f :remove, :value "member-19", :result 1}
+{:index 262, :time 12440286375, :type :invoke, :process 0, :f :read, :value nil}
+{:index 263, :time 12442690167, :type :ok, :process 0, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-46", :score 707.0} {:member "member-48", :score 732.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]}
+{:index 264, :time 12641385875, :type :invoke, :process 0, :f :remove, :value "member-48"}
+{:index 265, :time 12643896083, :type :ok, :process 0, :f :remove, :value "member-48", :result 1}
+{:index 266, :time 12762063208, :type :invoke, :process 1, :f :rank, :value "member-1"}
+{:index 267, :time 12764633042, :type :ok, :process 1, :f :rank, :value {:member "member-1", :rank 3}}
+{:index 268, :time 12947620875, :type :invoke, :process 2, :f :read, :value nil}
+{:index 269, :time 12949414917, :type :ok, :process 2, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-25", :score 449.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-18", :score 610.0} {:member "member-46", :score 707.0} {:member "member-40", :score 846.0} {:member "member-42", :score 882.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]}
+{:index 270, :time 13095987250, :type :invoke, :process 3, :f :remove, :value "member-18"}
+{:index 271, :time 13097938208, :type :ok, :process 3, :f :remove, :value "member-18", :result 1}
+{:index 272, :time 13132998292, :type :invoke, :process 4, :f :update-score, :value {:member "member-25", :score 515}}
+{:index 273, :time 13135743500, :type :ok, :process 4, :f :update-score, :value {:member "member-25", :score 515}, :result 0}
+{:index 274, :time 13323889875, :type :invoke, :process 0, :f :update-score, :value {:member "member-12", :score 37}}
+{:index 275, :time 13326855542, :type :ok, :process 0, :f :update-score, :value {:member "member-12", :score 37}, :result 0}
+{:index 276, :time 13370062208, :type :invoke, :process 0, :f :score, :value "member-5"}
+{:index 277, :time 13372100208, :type :ok, :process 0, :f :score, :value {:member "member-5", :score nil}}
+{:index 278, :time 13522243958, :type :invoke, :process 1, :f :update-score, :value {:member "member-45", :score 839}}
+{:index 279, :time 13524560083, :type :ok, :process 1, :f :update-score, :value {:member "member-45", :score 839}, :result 0}
+{:index 280, :time 13675499250, :type :invoke, :process 2, :f :add, :value {:member "member-34", :score 808}}
+{:index 281, :time 13677642042, :type :ok, :process 2, :f :add, :value {:member "member-34", :score 808}, :result 1}
+{:index 282, :time 13738942417, :type :invoke, :process 3, :f :update-score, :value {:member "member-3", :score 982}}
+{:index 283, :time 13742228125, :type :ok, :process 3, :f :update-score, :value {:member "member-3", :score 982}, :result 0}
+{:index 284, :time 13894533167, :type :invoke, :process 4, :f :rank, :value "member-28"}
+{:index 285, :time 13896775708, :type :ok, :process 4, :f :rank, :value {:member "member-28", :rank 9}}
+{:index 286, :time 13975466542, :type :invoke, :process 0, :f :score, :value "member-5"}
+{:index 287, :time 13977001250, :type :ok, :process 0, :f :score, :value {:member "member-5", :score nil}}
+{:index 288, :time 14009845750, :type :invoke, :process 0, :f :add, :value {:member "member-3", :score 103}}
+{:index 289, :time 14011320042, :type :ok, :process 0, :f :add, :value {:member "member-3", :score 103}, :result 1}
+{:index 290, :time 14212570833, :type :invoke, :process 1, :f :remove, :value "member-48"}
+{:index 291, :time 14215758667, :type :ok, :process 1, :f :remove, :value "member-48", :result 0}
+{:index 292, :time 14328826042, :type :invoke, :process 2, :f :remove, :value "member-18"}
+{:index 293, :time 14332154500, :type :ok, :process 2, :f :remove, :value "member-18", :result 0}
+{:index 294, :time 14401762833, :type :invoke, :process 3, :f :rank, :value "member-4"}
+{:index 295, :time 14404520458, :type :ok, :process 3, :f :rank, :value {:member "member-4", :rank nil}}
+{:index 296, :time 14599853667, :type :invoke, :process 4, :f :add, :value {:member "member-18", :score 812}}
+{:index 297, :time 14602296167, :type :ok, :process 4, :f :add, :value {:member "member-18", :score 812}, :result 1}
+{:index 298, :time 14677615333, :type :invoke, :process 0, :f :update-score, :value {:member "member-42", :score 697}}
+{:index 299, :time 14681404750, :type :ok, :process 0, :f :update-score, :value {:member "member-42", :score 697}, :result 0}
+{:index 300, :time 14704640125, :type :invoke, :process 0, :f :remove, :value "member-34"}
+{:index 301, :time 14707077917, :type :ok, :process 0, :f :remove, :value "member-34", :result 1}
+{:index 302, :time 14897289667, :type :invoke, :process 1, :f :add, :value {:member "member-16", :score 420}}
+{:index 303, :time 14899022417, :type :ok, :process 1, :f :add, :value {:member "member-16", :score 420}, :result 1}
+{:index 304, :time 15072233750, :type :invoke, :process 2, :f :remove, :value "member-12"}
+{:index 305, :time 15073390833, :type :ok, :process 2, :f :remove, :value "member-12", :result 0}
+{:index 306, :time 15260880625, :type :invoke, :process 3, :f :read, :value nil}
+{:index 307, :time 15263322792, :type :ok, :process 3, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-1", :score 202.0} {:member "member-33", :score 329.0} {:member "member-6", :score 347.0} {:member "member-11", :score 362.0} {:member "member-16", :score 420.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-28", :score 554.0} {:member "member-47", :score 570.0} {:member "member-42", :score 697.0} {:member "member-46", :score 707.0} {:member "member-18", :score 812.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]}
+{:index 308, :time 15461195792, :type :invoke, :process 4, :f :remove, :value "member-18"}
+{:index 309, :time 15463845542, :type :ok, :process 4, :f :remove, :value "member-18", :result 1}
+{:index 310, :time 15613147292, :type :invoke, :process 0, :f :remove, :value "member-39"}
+{:index 311, :time 15616268583, :type :ok, :process 0, :f :remove, :value "member-39", :result 0}
+{:index 312, :time 15789843167, :type :invoke, :process 0, :f :rank, :value "member-5"}
+{:index 313, :time 15791351750, :type :ok, :process 0, :f :rank, :value {:member "member-5", :rank nil}}
+{:index 314, :time 15925440458, :type :invoke, :process 1, :f :rank, :value "member-21"}
+{:index 315, :time 15928100708, :type :ok, :process 1, :f :rank, :value {:member "member-21", :rank nil}}
+{:index 316, :time 16030771708, :type :invoke, :process 2, :f :score, :value "member-9"}
+{:index 317, :time 16032808458, :type :ok, :process 2, :f :score, :value {:member "member-9", :score nil}}
+{:index 318, :time 16088931542, :type :invoke, :process 3, :f :add, :value {:member "member-17", :score 712}}
+{:index 319, :time 16090299125, :type :invoke, :process 4, :f :update-score, :value {:member "member-1", :score 991}}
+{:index 320, :time 16090733333, :type :ok, :process 3, :f :add, :value {:member "member-17", :score 712}, :result 1}
+{:index 321, :time 16091356583, :type :ok, :process 4, :f :update-score, :value {:member "member-1", :score 991}, :result 0}
+{:index 322, :time 16149023125, :type :invoke, :process 0, :f :score, :value "member-40"}
+{:index 323, :time 16150640125, :type :ok, :process 0, :f :score, :value {:member "member-40", :score 846.0}}
+{:index 324, :time 16338927833, :type :invoke, :process 0, :f :add, :value {:member "member-42", :score 300}}
+{:index 325, :time 16341833583, :type :ok, :process 0, :f :add, :value {:member "member-42", :score 300}, :result 0}
+{:index 326, :time 16383857000, :type :invoke, :process 1, :f :score, :value "member-8"}
+{:index 327, :time 16386708417, :type :ok, :process 1, :f :score, :value {:member "member-8", :score nil}}
+{:index 328, :time 16462441458, :type :invoke, :process 2, :f :add, :value {:member "member-11", :score 9}}
+{:index 329, :time 16465467875, :type :ok, :process 2, :f :add, :value {:member "member-11", :score 9}, :result 0}
+{:index 330, :time 16499087000, :type :invoke, :process 3, :f :remove, :value "member-29"}
+{:index 331, :time 16501872333, :type :ok, :process 3, :f :remove, :value "member-29", :result 0}
+{:index 332, :time 16571600125, :type :invoke, :process 4, :f :add, :value {:member "member-5", :score 328}}
+{:index 333, :time 16574543625, :type :ok, :process 4, :f :add, :value {:member "member-5", :score 328}, :result 1}
+{:index 334, :time 16655565375, :type :invoke, :process 0, :f :add, :value {:member "member-19", :score 715}}
+{:index 335, :time 16658827875, :type :ok, :process 0, :f :add, :value {:member "member-19", :score 715}, :result 1}
+{:index 336, :time 16674637083, :type :invoke, :process 0, :f :rank, :value "member-32"}
+{:index 337, :time 16676704292, :type :ok, :process 0, :f :rank, :value {:member "member-32", :rank nil}}
+{:index 338, :time 16680097833, :type :invoke, :process 1, :f :update-score, :value {:member "member-6", :score 799}}
+{:index 339, :time 16681429625, :type :ok, :process 1, :f :update-score, :value {:member "member-6", :score 799}, :result 0}
+{:index 340, :time 16792643917, :type :invoke, :process 2, :f :add, :value {:member "member-28", :score 514}}
+{:index 341, :time 16794962542, :type :ok, :process 2, :f :add, :value {:member "member-28", :score 514}, :result 0}
+{:index 342, :time 16904656542, :type :invoke, :process 3, :f :read, :value nil}
+{:index 343, :time 16907854125, :type :ok, :process 3, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0} {:member "member-1", :score 991.0}]}
+{:index 344, :time 16908660333, :type :invoke, :process 4, :f :read, :value nil}
+{:index 345, :time 16909897958, :type :ok, :process 4, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0} {:member "member-1", :score 991.0}]}
+{:index 346, :time 17038920375, :type :invoke, :process 0, :f :add, :value {:member "member-43", :score 337}}
+{:index 347, :time 17042309250, :type :ok, :process 0, :f :add, :value {:member "member-43", :score 337}, :result 1}
+{:index 348, :time 17183095875, :type :invoke, :process 0, :f :remove, :value "member-36"}
+{:index 349, :time 17185402583, :type :ok, :process 0, :f :remove, :value "member-36", :result 0}
+{:index 350, :time 17363934500, :type :invoke, :process 1, :f :add, :value {:member "member-30", :score 298}}
+{:index 351, :time 17366249583, :type :ok, :process 1, :f :add, :value {:member "member-30", :score 298}, :result 1}
+{:index 352, :time 17380228792, :type :invoke, :process 2, :f :rank, :value "member-0"}
+{:index 353, :time 17382824458, :type :ok, :process 2, :f :rank, :value {:member "member-0", :rank 22}}
+{:index 354, :time 17387391375, :type :invoke, :process 3, :f :read, :value nil}
+{:index 355, :time 17389058708, :type :ok, :process 3, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-30", :score 298.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0} {:member "member-1", :score 991.0}]}
+{:index 356, :time 17408789125, :type :invoke, :process 4, :f :add, :value {:member "member-1", :score 685}}
+{:index 357, :time 17411809042, :type :ok, :process 4, :f :add, :value {:member "member-1", :score 685}, :result 0}
+{:index 358, :time 17548625958, :type :invoke, :process 0, :f :read, :value nil}
+{:index 359, :time 17551669792, :type :ok, :process 0, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-30", :score 298.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-1", :score 685.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]}
+{:index 360, :time 17641002750, :type :invoke, :process 0, :f :score, :value "member-1"}
+{:index 361, :time 17643826167, :type :ok, :process 0, :f :score, :value {:member "member-1", :score 685.0}}
+{:index 362, :time 17644342167, :type :invoke, :process 1, :f :read, :value nil}
+{:index 363, :time 17645910250, :type :ok, :process 1, :f :read, :value [{:member "member-7", :score 7.0} {:member "member-11", :score 9.0} {:member "member-20", :score 32.0} {:member "member-3", :score 103.0} {:member "member-22", :score 198.0} {:member "member-30", :score 298.0} {:member "member-42", :score 300.0} {:member "member-5", :score 328.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-16", :score 420.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-47", :score 570.0} {:member "member-1", :score 685.0} {:member "member-46", :score 707.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-6", :score 799.0} {:member "member-40", :score 846.0} {:member "member-27", :score 887.0} {:member "member-44", :score 930.0} {:member "member-0", :score 982.0}]}
+{:index 364, :time 17765974875, :type :invoke, :process 2, :f :add, :value {:member "member-11", :score 417}}
+{:index 365, :time 17768636125, :type :ok, :process 2, :f :add, :value {:member "member-11", :score 417}, :result 0}
+{:index 366, :time 17893357792, :type :invoke, :process 3, :f :update-score, :value {:member "member-13", :score 273}}
+{:index 367, :time 17895664958, :type :ok, :process 3, :f :update-score, :value {:member "member-13", :score 273}, :result 0}
+{:index 368, :time 17897294167, :type :invoke, :process 4, :f :add, :value {:member "member-38", :score 580}}
+{:index 369, :time 17898128583, :type :ok, :process 4, :f :add, :value {:member "member-38", :score 580}, :result 1}
+{:index 370, :time 17967467417, :type :invoke, :process 0, :f :rank, :value "member-0"}
+{:index 371, :time 17970580792, :type :ok, :process 0, :f :rank, :value {:member "member-0", :rank 24}}
+{:index 372, :time 18122280250, :type :invoke, :process 0, :f :rank, :value "member-32"}
+{:index 373, :time 18125134833, :type :ok, :process 0, :f :rank, :value {:member "member-32", :rank nil}}
+{:index 374, :time 18217240667, :type :invoke, :process 1, :f :add, :value {:member "member-5", :score 272}}
+{:index 375, :time 18220444708, :type :ok, :process 1, :f :add, :value {:member "member-5", :score 272}, :result 0}
+{:index 376, :time 18306397000, :type :invoke, :process 2, :f :remove, :value "member-27"}
+{:index 377, :time 18308477708, :type :ok, :process 2, :f :remove, :value "member-27", :result 1}
+{:index 378, :time 18450408708, :type :invoke, :process 3, :f :remove, :value "member-12"}
+{:index 379, :time 18453131500, :type :ok, :process 3, :f :remove, :value "member-12", :result 0}
+{:index 380, :time 18631275208, :type :invoke, :process 4, :f :update-score, :value {:member "member-37", :score 40}}
+{:index 381, :time 18634616500, :type :ok, :process 4, :f :update-score, :value {:member "member-37", :score 40}, :result 0}
+{:index 382, :time 18829316375, :type :invoke, :process 0, :f :update-score, :value {:member "member-27", :score 667}}
+{:index 383, :time 18833291000, :type :ok, :process 0, :f :update-score, :value {:member "member-27", :score 667}, :result 0}
+{:index 384, :time 18988892292, :type :invoke, :process 0, :f :score, :value "member-47"}
+{:index 385, :time 18990618500, :type :ok, :process 0, :f :score, :value {:member "member-47", :score 570.0}}
+{:index 386, :time 19176387000, :type :invoke, :process 1, :f :add, :value {:member "member-42", :score 783}}
+{:index 387, :time 19178834542, :type :ok, :process 1, :f :add, :value {:member "member-42", :score 783}, :result 0}
+{:index 388, :time 19319254667, :type :invoke, :process 2, :f :add, :value {:member "member-46", :score 77}}
+{:index 389, :time 19322587542, :type :ok, :process 2, :f :add, :value {:member "member-46", :score 77}, :result 0}
+{:index 390, :time 19393366708, :type :invoke, :process 3, :f :remove, :value "member-3"}
+{:index 391, :time 19394731958, :type :ok, :process 3, :f :remove, :value "member-3", :result 1}
+{:index 392, :time 19589958958, :type :invoke, :process 4, :f :add, :value {:member "member-23", :score 319}}
+{:index 393, :time 19592866125, :type :ok, :process 4, :f :add, :value {:member "member-23", :score 319}, :result 1}
+{:index 394, :time 19725462042, :type :invoke, :process 0, :f :remove, :value "member-6"}
+{:index 395, :time 19728795792, :type :ok, :process 0, :f :remove, :value "member-6", :result 1}
+{:index 396, :time 19837156458, :type :invoke, :process 0, :f :add, :value {:member "member-0", :score 601}}
+{:index 397, :time 19840425500, :type :ok, :process 0, :f :add, :value {:member "member-0", :score 601}, :result 0}
+{:index 398, :time 19953397083, :type :invoke, :process 1, :f :rank, :value "member-0"}
+{:index 399, :time 19955873250, :type :ok, :process 1, :f :rank, :value {:member "member-0", :rank 16}}
+{:index 400, :time 20007296667, :type :invoke, :process 2, :f :rank, :value "member-44"}
+{:index 401, :time 20010009917, :type :ok, :process 2, :f :rank, :value {:member "member-44", :rank 22}}
+{:index 402, :time 20055619333, :type :invoke, :process 3, :f :update-score, :value {:member "member-20", :score 445}}
+{:index 403, :time 20058064167, :type :ok, :process 3, :f :update-score, :value {:member "member-20", :score 445}, :result 0}
+{:index 404, :time 20181217042, :type :invoke, :process 4, :f :remove, :value "member-42"}
+{:index 405, :time 20184205042, :type :ok, :process 4, :f :remove, :value "member-42", :result 1}
+{:index 406, :time 20197215458, :type :invoke, :process 0, :f :add, :value {:member "member-7", :score 729}}
+{:index 407, :time 20199280833, :type :ok, :process 0, :f :add, :value {:member "member-7", :score 729}, :result 0}
+{:index 408, :time 20387300000, :type :invoke, :process 0, :f :add, :value {:member "member-47", :score 428}}
+{:index 409, :time 20389726042, :type :invoke, :process 1, :f :remove, :value "member-2"}
+{:index 410, :time 20390263208, :type :ok, :process 0, :f :add, :value {:member "member-47", :score 428}, :result 0}
+{:index 411, :time 20390991000, :type :ok, :process 1, :f :remove, :value "member-2", :result 0}
+{:index 412, :time 20564887458, :type :invoke, :process 2, :f :read, :value nil}
+{:index 413, :time 20566672083, :type :ok, :process 2, :f :read, :value [{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-23", :score 319.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-47", :score 428.0} {:member "member-20", :score 445.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-38", :score 580.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-7", :score 729.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]}
+{:index 414, :time 20628882333, :type :invoke, :process 3, :f :score, :value "member-2"}
+{:index 415, :time 20630885042, :type :ok, :process 3, :f :score, :value {:member "member-2", :score nil}}
+{:index 416, :time 20773956292, :type :invoke, :process 4, :f :read, :value nil}
+{:index 417, :time 20777050958, :type :ok, :process 4, :f :read, :value [{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-23", :score 319.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-47", :score 428.0} {:member "member-20", :score 445.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-38", :score 580.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-7", :score 729.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]}
+{:index 418, :time 20913207542, :type :invoke, :process 0, :f :remove, :value "member-36"}
+{:index 419, :time 20916184000, :type :ok, :process 0, :f :remove, :value "member-36", :result 0}
+{:index 420, :time 21027471292, :type :invoke, :process 0, :f :remove, :value "member-47"}
+{:index 421, :time 21029994708, :type :ok, :process 0, :f :remove, :value "member-47", :result 1}
+{:index 422, :time 21070036250, :type :invoke, :process 1, :f :remove, :value "member-7"}
+{:index 423, :time 21072655708, :type :ok, :process 1, :f :remove, :value "member-7", :result 1}
+{:index 424, :time 21196572750, :type :invoke, :process 2, :f :add, :value {:member "member-18", :score 471}}
+{:index 425, :time 21199161583, :type :ok, :process 2, :f :add, :value {:member "member-18", :score 471}, :result 1}
+{:index 426, :time 21250947375, :type :invoke, :process 3, :f :update-score, :value {:member "member-38", :score 391}}
+{:index 427, :time 21253971250, :type :ok, :process 3, :f :update-score, :value {:member "member-38", :score 391}, :result 0}
+{:index 428, :time 21355584917, :type :invoke, :process 4, :f :update-score, :value {:member "member-23", :score 739}}
+{:index 429, :time 21358666542, :type :ok, :process 4, :f :update-score, :value {:member "member-23", :score 739}, :result 0}
+{:index 430, :time 21416805208, :type :invoke, :process 0, :f :read, :value nil}
+{:index 431, :time 21419827833, :type :ok, :process 0, :f :read, :value [{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]}
+{:index 432, :time 21559313000, :type :invoke, :process 0, :f :rank, :value "member-21"}
+{:index 433, :time 21562785042, :type :ok, :process 0, :f :rank, :value {:member "member-21", :rank nil}}
+{:index 434, :time 21731610125, :type :invoke, :process 1, :f :rank, :value "member-48"}
+{:index 435, :time 21733355500, :type :ok, :process 1, :f :rank, :value {:member "member-48", :rank nil}}
+{:index 436, :time 21759517792, :type :invoke, :process 2, :f :score, :value "member-46"}
+{:index 437, :time 21761123000, :type :ok, :process 2, :f :score, :value {:member "member-46", :score 77.0}}
+{:index 438, :time 21863370958, :type :invoke, :process 3, :f :score, :value "member-24"}
+{:index 439, :time 21865616917, :type :ok, :process 3, :f :score, :value {:member "member-24", :score nil}}
+{:index 440, :time 21955548250, :type :invoke, :process 4, :f :update-score, :value {:member "member-42", :score 467}}
+{:index 441, :time 21958308792, :type :ok, :process 4, :f :update-score, :value {:member "member-42", :score 467}, :result 0}
+{:index 442, :time 22074840792, :type :invoke, :process 0, :f :score, :value "member-49"}
+{:index 443, :time 22077902167, :type :ok, :process 0, :f :score, :value {:member "member-49", :score nil}}
+{:index 444, :time 22246093667, :type :invoke, :process 0, :f :remove, :value "member-42"}
+{:index 445, :time 22248771583, :type :ok, :process 0, :f :remove, :value "member-42", :result 0}
+{:index 446, :time 22286538417, :type :invoke, :process 1, :f :update-score, :value {:member "member-27", :score 597}}
+{:index 447, :time 22288942750, :type :ok, :process 1, :f :update-score, :value {:member "member-27", :score 597}, :result 0}
+{:index 448, :time 22480572375, :type :invoke, :process 2, :f :rank, :value "member-25"}
+{:index 449, :time 22483939083, :type :ok, :process 2, :f :rank, :value {:member "member-25", :rank 12}}
+{:index 450, :time 22588101708, :type :invoke, :process 3, :f :rank, :value "member-26"}
+{:index 451, :time 22590954458, :type :ok, :process 3, :f :rank, :value {:member "member-26", :rank 13}}
+{:index 452, :time 22633994417, :type :invoke, :process 4, :f :read, :value nil}
+{:index 453, :time 22635951333, :type :ok, :process 4, :f :read, :value [{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]}
+{:index 454, :time 22788990667, :type :invoke, :process 0, :f :read, :value nil}
+{:index 455, :time 22791552250, :type :ok, :process 0, :f :read, :value [{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-11", :score 417.0} {:member "member-16", :score 420.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-25", :score 515.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]}
+{:index 456, :time 22848416000, :type :invoke, :process 0, :f :add, :value {:member "member-2", :score 407}}
+{:index 457, :time 22851300000, :type :ok, :process 0, :f :add, :value {:member "member-2", :score 407}, :result 1}
+{:index 458, :time 23006221917, :type :invoke, :process 1, :f :remove, :value "member-12"}
+{:index 459, :time 23009739792, :type :ok, :process 1, :f :remove, :value "member-12", :result 0}
+{:index 460, :time 23055558292, :type :invoke, :process 2, :f :update-score, :value {:member "member-25", :score 979}}
+{:index 461, :time 23058322208, :type :ok, :process 2, :f :update-score, :value {:member "member-25", :score 979}, :result 0}
+{:index 462, :time 23058845792, :type :invoke, :process 3, :f :score, :value "member-36"}
+{:index 463, :time 23059700875, :type :ok, :process 3, :f :score, :value {:member "member-36", :score nil}}
+{:index 464, :time 23086781333, :type :invoke, :process 4, :f :update-score, :value {:member "member-16", :score 266}}
+{:index 465, :time 23089274917, :type :ok, :process 4, :f :update-score, :value {:member "member-16", :score 266}, :result 0}
+{:index 466, :time 23263453083, :type :invoke, :process 0, :f :remove, :value "member-21"}
+{:index 467, :time 23265601250, :type :ok, :process 0, :f :remove, :value "member-21", :result 0}
+{:index 468, :time 23269457583, :type :invoke, :process 0, :f :score, :value "member-2"}
+{:index 469, :time 23271469333, :type :ok, :process 0, :f :score, :value {:member "member-2", :score 407.0}}
+{:index 470, :time 23438915875, :type :invoke, :process 1, :f :update-score, :value {:member "member-41", :score 411}}
+{:index 471, :time 23441952125, :type :ok, :process 1, :f :update-score, :value {:member "member-41", :score 411}, :result 0}
+{:index 472, :time 23594145917, :type :invoke, :process 2, :f :read, :value nil}
+{:index 473, :time 23597331750, :type :ok, :process 2, :f :read, :value [{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-16", :score 266.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-38", :score 391.0} {:member "member-2", :score 407.0} {:member "member-11", :score 417.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]}
+{:index 474, :time 23747225750, :type :invoke, :process 3, :f :remove, :value "member-38"}
+{:index 475, :time 23748877458, :type :ok, :process 3, :f :remove, :value "member-38", :result 1}
+{:index 476, :time 23913909458, :type :invoke, :process 4, :f :read, :value nil}
+{:index 477, :time 23917093667, :type :ok, :process 4, :f :read, :value [{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-16", :score 266.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-2", :score 407.0} {:member "member-11", :score 417.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-26", :score 544.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]}
+{:index 478, :time 24014236458, :type :invoke, :process 0, :f :remove, :value "member-26"}
+{:index 479, :time 24017137333, :type :ok, :process 0, :f :remove, :value "member-26", :result 1}
+{:index 480, :time 24177203208, :type :invoke, :process 0, :f :rank, :value "member-31"}
+{:index 481, :time 24180138708, :type :ok, :process 0, :f :rank, :value {:member "member-31", :rank nil}}
+{:index 482, :time 24320131333, :type :invoke, :process 1, :f :read, :value nil}
+{:index 483, :time 24322677083, :type :ok, :process 1, :f :read, :value [{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-16", :score 266.0} {:member "member-5", :score 272.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-2", :score 407.0} {:member "member-11", :score 417.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]}
+{:index 484, :time 24497249125, :type :invoke, :process 2, :f :update-score, :value {:member "member-6", :score 406}}
+{:index 485, :time 24500320750, :type :ok, :process 2, :f :update-score, :value {:member "member-6", :score 406}, :result 0}
+{:index 486, :time 24624239625, :type :invoke, :process 3, :f :add, :value {:member "member-5", :score 424}}
+{:index 487, :time 24627390667, :type :ok, :process 3, :f :add, :value {:member "member-5", :score 424}, :result 0}
+{:index 488, :time 24635141750, :type :invoke, :process 4, :f :add, :value {:member "member-13", :score 383}}
+{:index 489, :time 24637388625, :type :ok, :process 4, :f :add, :value {:member "member-13", :score 383}, :result 1}
+{:index 490, :time 24786016167, :type :invoke, :process 0, :f :add, :value {:member "member-47", :score 615}}
+{:index 491, :time 24788104125, :type :ok, :process 0, :f :add, :value {:member "member-47", :score 615}, :result 1}
+{:index 492, :time 24847262667, :type :invoke, :process 0, :f :update-score, :value {:member "member-11", :score 210}}
+{:index 493, :time 24849034792, :type :ok, :process 0, :f :update-score, :value {:member "member-11", :score 210}, :result 0}
+{:index 494, :time 25052165125, :type :invoke, :process 1, :f :update-score, :value {:member "member-12", :score 501}}
+{:index 495, :time 25054614833, :type :ok, :process 1, :f :update-score, :value {:member "member-12", :score 501}, :result 0}
+{:index 496, :time 25238903875, :type :invoke, :process 2, :f :read, :value nil}
+{:index 497, :time 25241798292, :type :ok, :process 2, :f :read, :value [{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-13", :score 383.0} {:member "member-2", :score 407.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]}
+{:index 498, :time 25308280333, :type :invoke, :process 3, :f :score, :value "member-14"}
+{:index 499, :time 25310236083, :type :ok, :process 3, :f :score, :value {:member "member-14", :score nil}}
+{:index 500, :time 25360334542, :type :invoke, :process 4, :f :rank, :value "member-20"}
+{:index 501, :time 25363282083, :type :ok, :process 4, :f :rank, :value {:member "member-20", :rank 10}}
+{:index 502, :time 25468330792, :type :invoke, :process 0, :f :read, :value nil}
+{:index 503, :time 25469798375, :type :ok, :process 0, :f :read, :value [{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-13", :score 383.0} {:member "member-2", :score 407.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-19", :score 715.0} {:member "member-23", :score 739.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0} {:member "member-25", :score 979.0}]}
+{:index 504, :time 25562731833, :type :invoke, :process 0, :f :add, :value {:member "member-41", :score 639}}
+{:index 505, :time 25564388833, :type :ok, :process 0, :f :add, :value {:member "member-41", :score 639}, :result 1}
+{:index 506, :time 25642127792, :type :invoke, :process 1, :f :add, :value {:member "member-41", :score 368}}
+{:index 507, :time 25644225542, :type :ok, :process 1, :f :add, :value {:member "member-41", :score 368}, :result 0}
+{:index 508, :time 25671685542, :type :invoke, :process 2, :f :rank, :value "member-22"}
+{:index 509, :time 25674166083, :type :ok, :process 2, :f :rank, :value {:member "member-22", :rank 1}}
+{:index 510, :time 25830991042, :type :invoke, :process 3, :f :score, :value "member-4"}
+{:index 511, :time 25832470375, :type :ok, :process 3, :f :score, :value {:member "member-4", :score nil}}
+{:index 512, :time 25884862542, :type :invoke, :process 4, :f :add, :value {:member "member-13", :score 779}}
+{:index 513, :time 25886618875, :type :ok, :process 4, :f :add, :value {:member "member-13", :score 779}, :result 0}
+{:index 514, :time 25951588958, :type :invoke, :process 0, :f :rank, :value "member-16"}
+{:index 515, :time 25952358667, :type :ok, :process 0, :f :rank, :value {:member "member-16", :rank 3}}
+{:index 516, :time 26043420250, :type :invoke, :process 0, :f :rank, :value "member-15"}
+{:index 517, :time 26044714625, :type :ok, :process 0, :f :rank, :value {:member "member-15", :rank nil}}
+{:index 518, :time 26223539292, :type :invoke, :process 1, :f :remove, :value "member-25"}
+{:index 519, :time 26225066000, :type :ok, :process 1, :f :remove, :value "member-25", :result 1}
+{:index 520, :time 26284240875, :type :invoke, :process 2, :f :remove, :value "member-36"}
+{:index 521, :time 26290495625, :type :ok, :process 2, :f :remove, :value "member-36", :result 0}
+{:index 522, :time 26337060417, :type :invoke, :process 3, :f :add, :value {:member "member-12", :score 779}}
+{:index 523, :time 26338854583, :type :ok, :process 3, :f :add, :value {:member "member-12", :score 779}, :result 1}
+{:index 524, :time 26340262333, :type :invoke, :process 4, :f :remove, :value "member-19"}
+{:index 525, :time 26341406083, :type :ok, :process 4, :f :remove, :value "member-19", :result 1}
+{:index 526, :time 26520448917, :type :invoke, :process 0, :f :add, :value {:member "member-27", :score 424}}
+{:index 527, :time 26521817250, :type :ok, :process 0, :f :add, :value {:member "member-27", :score 424}, :result 1}
+{:index 528, :time 26530431958, :type :invoke, :process 0, :f :read, :value nil}
+{:index 529, :time 26531816792, :type :ok, :process 0, :f :read, :value [{:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]}
+{:index 530, :time 26556127167, :type :invoke, :process 1, :f :add, :value {:member "member-4", :score 48}}
+{:index 531, :time 26558813083, :type :ok, :process 1, :f :add, :value {:member "member-4", :score 48}, :result 1}
+{:index 532, :time 26648889958, :type :invoke, :process 2, :f :read, :value nil}
+{:index 533, :time 26650661708, :type :ok, :process 2, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]}
+{:index 534, :time 26749391417, :type :invoke, :process 3, :f :remove, :value "member-3"}
+{:index 535, :time 26751337917, :type :ok, :process 3, :f :remove, :value "member-3", :result 0}
+{:index 536, :time 26893231583, :type :invoke, :process 4, :f :read, :value nil}
+{:index 537, :time 26895102750, :type :ok, :process 4, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]}
+{:index 538, :time 26950201167, :type :invoke, :process 0, :f :update-score, :value {:member "member-37", :score 889}}
+{:index 539, :time 26951401833, :type :ok, :process 0, :f :update-score, :value {:member "member-37", :score 889}, :result 0}
+{:index 540, :time 27045185417, :type :invoke, :process 0, :f :rank, :value "member-46"}
+{:index 541, :time 27046113208, :type :ok, :process 0, :f :rank, :value {:member "member-46", :rank 1}}
+{:index 542, :time 27104446500, :type :invoke, :process 1, :f :update-score, :value {:member "member-19", :score 606}}
+{:index 543, :time 27106445250, :type :ok, :process 1, :f :update-score, :value {:member "member-19", :score 606}, :result 0}
+{:index 544, :time 27192782542, :type :invoke, :process 2, :f :add, :value {:member "member-6", :score 499}}
+{:index 545, :time 27194444667, :type :ok, :process 2, :f :add, :value {:member "member-6", :score 499}, :result 1}
+{:index 546, :time 27347172125, :type :invoke, :process 3, :f :remove, :value "member-45"}
+{:index 547, :time 27348382042, :type :ok, :process 3, :f :remove, :value "member-45", :result 0}
+{:index 548, :time 27430954333, :type :invoke, :process 4, :f :read, :value nil}
+{:index 549, :time 27432601833, :type :ok, :process 4, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-6", :score 499.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-23", :score 739.0} {:member "member-12", :score 779.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]}
+{:index 550, :time 27538128167, :type :invoke, :process 0, :f :update-score, :value {:member "member-12", :score 724}}
+{:index 551, :time 27540281083, :type :ok, :process 0, :f :update-score, :value {:member "member-12", :score 724}, :result 0}
+{:index 552, :time 27550108042, :type :invoke, :process 0, :f :update-score, :value {:member "member-31", :score 196}}
+{:index 553, :time 27552145667, :type :ok, :process 0, :f :update-score, :value {:member "member-31", :score 196}, :result 0}
+{:index 554, :time 27588864042, :type :invoke, :process 1, :f :add, :value {:member "member-26", :score 222}}
+{:index 555, :time 27590937792, :type :ok, :process 1, :f :add, :value {:member "member-26", :score 222}, :result 1}
+{:index 556, :time 27750682375, :type :invoke, :process 2, :f :score, :value "member-17"}
+{:index 557, :time 27752439792, :type :ok, :process 2, :f :score, :value {:member "member-17", :score 712.0}}
+{:index 558, :time 27791687292, :type :invoke, :process 3, :f :remove, :value "member-31"}
+{:index 559, :time 27793015042, :type :ok, :process 3, :f :remove, :value "member-31", :result 0}
+{:index 560, :time 27834167875, :type :invoke, :process 4, :f :rank, :value "member-3"}
+{:index 561, :time 27835850750, :type :ok, :process 4, :f :rank, :value {:member "member-3", :rank nil}}
+{:index 562, :time 27989993625, :type :invoke, :process 0, :f :score, :value "member-44"}
+{:index 563, :time 27991188417, :type :ok, :process 0, :f :score, :value {:member "member-44", :score 930.0}}
+{:index 564, :time 28105440667, :type :invoke, :process 0, :f :read, :value nil}
+{:index 565, :time 28107275667, :type :ok, :process 0, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-6", :score 499.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]}
+{:index 566, :time 28257308250, :type :invoke, :process 1, :f :remove, :value "member-31"}
+{:index 567, :time 28259306583, :type :ok, :process 1, :f :remove, :value "member-31", :result 0}
+{:index 568, :time 28389078500, :type :invoke, :process 2, :f :read, :value nil}
+{:index 569, :time 28391210625, :type :ok, :process 2, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-2", :score 407.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-6", :score 499.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-40", :score 846.0} {:member "member-44", :score 930.0}]}
+{:index 570, :time 28454330083, :type :invoke, :process 3, :f :update-score, :value {:member "member-6", :score 892}}
+{:index 571, :time 28455692833, :type :ok, :process 3, :f :update-score, :value {:member "member-6", :score 892}, :result 0}
+{:index 572, :time 28618361792, :type :invoke, :process 4, :f :update-score, :value {:member "member-7", :score 978}}
+{:index 573, :time 28620398333, :type :ok, :process 4, :f :update-score, :value {:member "member-7", :score 978}, :result 0}
+{:index 574, :time 28761627583, :type :invoke, :process 0, :f :add, :value {:member "member-44", :score 479}}
+{:index 575, :time 28763731250, :type :ok, :process 0, :f :add, :value {:member "member-44", :score 479}, :result 0}
+{:index 576, :time 28955526292, :type :invoke, :process 0, :f :remove, :value "member-40"}
+{:index 577, :time 28957439917, :type :ok, :process 0, :f :remove, :value "member-40", :result 1}
+{:index 578, :time 29155529958, :type :invoke, :process 1, :f :update-score, :value {:member "member-3", :score 1}}
+{:index 579, :time 29156919042, :type :ok, :process 1, :f :update-score, :value {:member "member-3", :score 1}, :result 0}
+{:index 580, :time 29220586958, :type :invoke, :process 2, :f :remove, :value "member-2"}
+{:index 581, :time 29221905792, :type :ok, :process 2, :f :remove, :value "member-2", :result 1}
+{:index 582, :time 29347196750, :type :invoke, :process 3, :f :score, :value "member-21"}
+{:index 583, :time 29348464417, :type :ok, :process 3, :f :score, :value {:member "member-21", :score nil}}
+{:index 584, :time 29385778917, :type :invoke, :process 4, :f :read, :value nil}
+{:index 585, :time 29386924750, :type :ok, :process 4, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 586, :time 29556555625, :type :invoke, :process 0, :f :read, :value nil}
+{:index 587, :time 29558090875, :type :ok, :process 0, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 588, :time 29567300417, :type :invoke, :process 0, :f :read, :value nil}
+{:index 589, :time 29568271958, :type :ok, :process 0, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 590, :time 29682406750, :type :invoke, :process 1, :f :read, :value nil}
+{:index 591, :time 29683613667, :type :ok, :process 1, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 592, :time 29838869583, :type :invoke, :process 2, :f :score, :value "member-7"}
+{:index 593, :time 29841110750, :type :ok, :process 2, :f :score, :value {:member "member-7", :score nil}}
+{:index 594, :time 29848742250, :type :invoke, :process 3, :f :rank, :value "member-32"}
+{:index 595, :time 29850122917, :type :ok, :process 3, :f :rank, :value {:member "member-32", :rank nil}}
+{:index 596, :time 29851435250, :type :invoke, :process 4, :f :remove, :value "member-48"}
+{:index 597, :time 29852912125, :type :ok, :process 4, :f :remove, :value "member-48", :result 0}
+{:index 598, :time 34859249875, :type :invoke, :process 2, :f :read, :value nil}
+{:index 599, :time 34862266125, :type :ok, :process 2, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 600, :time 34936785917, :type :invoke, :process 3, :f :read, :value nil}
+{:index 601, :time 34938289000, :type :ok, :process 3, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 602, :time 35104593750, :type :invoke, :process 4, :f :read, :value nil}
+{:index 603, :time 35105661208, :type :ok, :process 4, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 604, :time 35283018000, :type :invoke, :process 0, :f :read, :value nil}
+{:index 605, :time 35284327375, :type :ok, :process 0, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 606, :time 35389627125, :type :invoke, :process 0, :f :read, :value nil}
+{:index 607, :time 35391181917, :type :ok, :process 0, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 608, :time 35396705792, :type :invoke, :process 1, :f :read, :value nil}
+{:index 609, :time 35398381083, :type :ok, :process 1, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 610, :time 35573030333, :type :invoke, :process 2, :f :read, :value nil}
+{:index 611, :time 35574005542, :type :ok, :process 2, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 612, :time 35743967583, :type :invoke, :process 3, :f :read, :value nil}
+{:index 613, :time 35745195375, :type :ok, :process 3, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 614, :time 35844940458, :type :invoke, :process 4, :f :read, :value nil}
+{:index 615, :time 35845775708, :type :ok, :process 4, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}
+{:index 616, :time 36049165958, :type :invoke, :process 0, :f :read, :value nil}
+{:index 617, :time 36050665333, :type :ok, :process 0, :f :read, :value [{:member "member-4", :score 48.0} {:member "member-46", :score 77.0} {:member "member-22", :score 198.0} {:member "member-11", :score 210.0} {:member "member-26", :score 222.0} {:member "member-16", :score 266.0} {:member "member-30", :score 298.0} {:member "member-33", :score 329.0} {:member "member-43", :score 337.0} {:member "member-41", :score 368.0} {:member "member-27", :score 424.0} {:member "member-5", :score 424.0} {:member "member-20", :score 445.0} {:member "member-18", :score 471.0} {:member "member-44", :score 479.0} {:member "member-28", :score 514.0} {:member "member-0", :score 601.0} {:member "member-47", :score 615.0} {:member "member-1", :score 685.0} {:member "member-17", :score 712.0} {:member "member-12", :score 724.0} {:member "member-23", :score 739.0} {:member "member-13", :score 779.0} {:member "member-6", :score 892.0}]}

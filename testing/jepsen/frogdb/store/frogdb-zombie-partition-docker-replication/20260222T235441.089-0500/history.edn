@@ -1,0 +1,770 @@
+{:index 0, :time 518230708, :type :invoke, :process 1, :f :read-quorum, :value nil}
+{:index 1, :time 523635292, :type :fail, :process 1, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 0} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 2, :time 623634583, :type :invoke, :process 2, :f :write-async, :value 3}
+{:index 3, :time 626284833, :type :ok, :process 2, :f :write-async, :value 3, :durable false}
+{:index 4, :time 707942417, :type :invoke, :process 3, :f :write-durable, :value 6}
+{:index 5, :time 776241167, :type :invoke, :process 4, :f :read-quorum, :value nil}
+{:index 6, :time 780897375, :type :fail, :process 4, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 7, :time 949355833, :type :invoke, :process 0, :f :read-quorum, :value nil}
+{:index 8, :time 952183917, :type :fail, :process 0, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 9, :time 1065845792, :type :invoke, :process 0, :f :write-async, :value 9}
+{:index 10, :time 1068467292, :type :ok, :process 0, :f :write-async, :value 9, :durable false}
+{:index 11, :time 1241222583, :type :invoke, :process 1, :f :write-async, :value 12}
+{:index 12, :time 1244650083, :type :ok, :process 1, :f :write-async, :value 12, :durable false}
+{:index 13, :time 1409845750, :type :invoke, :process 2, :f :read-quorum, :value nil}
+{:index 14, :time 1414776333, :type :fail, :process 2, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 12} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 15, :time 1598378708, :type :invoke, :process 4, :f :write-async, :value 15}
+{:index 16, :time 1600745500, :type :ok, :process 4, :f :write-async, :value 15, :durable false}
+{:index 17, :time 1774355625, :type :invoke, :process 4, :f :write-async, :value 18}
+{:index 18, :time 1776348167, :type :ok, :process 4, :f :write-async, :value 18, :durable false}
+{:index 19, :time 1900471417, :type :invoke, :process 0, :f :read-quorum, :value nil}
+{:index 20, :time 1904062833, :type :fail, :process 0, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 18} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 21, :time 2081147708, :type :invoke, :process 0, :f :write-async, :value 21}
+{:index 22, :time 2082346042, :type :ok, :process 0, :f :write-async, :value 21, :durable false}
+{:index 23, :time 2182641708, :type :invoke, :process 1, :f :write-async, :value 24}
+{:index 24, :time 2184676917, :type :ok, :process 1, :f :write-async, :value 24, :durable false}
+{:index 25, :time 2384322833, :type :invoke, :process 2, :f :read-quorum, :value nil}
+{:index 26, :time 2388486917, :type :fail, :process 2, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 24} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 27, :time 2519399542, :type :invoke, :process 4, :f :write-async, :value 27}
+{:index 28, :time 2521544625, :type :ok, :process 4, :f :write-async, :value 27, :durable false}
+{:index 29, :time 2529899375, :type :invoke, :process 4, :f :write-durable, :value 30}
+{:index 30, :time 2563688625, :type :invoke, :process 0, :f :read-quorum, :value nil}
+{:index 31, :time 2568351042, :type :fail, :process 0, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 30} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 32, :time 2580542000, :type :invoke, :process 0, :f :write-durable, :value 33}
+{:index 33, :time 2668730917, :type :invoke, :process 1, :f :write-async, :value 35}
+{:index 34, :time 2672729625, :type :ok, :process 1, :f :write-async, :value 35, :durable false}
+{:index 35, :time 2717056417, :type :info, :process 3, :f :write-durable, :value 6, :error :sync-timeout, :acked 0}
+{:index 36, :time 2779522875, :type :invoke, :process 2, :f :read-quorum, :value nil}
+{:index 37, :time 2784342875, :type :fail, :process 2, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 35} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 38, :time 2884719958, :type :invoke, :process 8, :f :read-quorum, :value nil}
+{:index 39, :time 2889141000, :type :fail, :process 8, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 35} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 40, :time 2889546708, :type :invoke, :process 1, :f :write-durable, :value 38}
+{:index 41, :time 2993686583, :type :invoke, :process 2, :f :read-quorum, :value nil}
+{:index 42, :time 2999329125, :type :fail, :process 2, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 38} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 43, :time 3084271875, :type :invoke, :process 2, :f :write-durable, :value 41}
+{:index 44, :time 3259447542, :type :invoke, :process 8, :f :write-async, :value 43}
+{:index 45, :time 3264778667, :type :ok, :process 8, :f :write-async, :value 43, :durable false}
+{:index 46, :time 3284384208, :type :invoke, :process 8, :f :write-async, :value 49}
+{:index 47, :time 3287601583, :type :ok, :process 8, :f :write-async, :value 49, :durable false}
+{:index 48, :time 3341918083, :type :invoke, :process 8, :f :write-async, :value 53}
+{:index 49, :time 3343405042, :type :ok, :process 8, :f :write-async, :value 53, :durable false}
+{:index 50, :time 3523374708, :type :invoke, :process 8, :f :read-quorum, :value nil}
+{:index 51, :time 3527392542, :type :fail, :process 8, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 53} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 52, :time 3677322583, :type :invoke, :process 8, :f :write-async, :value 58}
+{:index 53, :time 3679706958, :type :ok, :process 8, :f :write-async, :value 58, :durable false}
+{:index 54, :time 3732898875, :type :invoke, :process 8, :f :read-quorum, :value nil}
+{:index 55, :time 3737787292, :type :fail, :process 8, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 58} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 56, :time 3927300208, :type :invoke, :process 8, :f :write-async, :value 64}
+{:index 57, :time 3930212500, :type :ok, :process 8, :f :write-async, :value 64, :durable false}
+{:index 58, :time 4095204042, :type :invoke, :process 8, :f :write-async, :value 68}
+{:index 59, :time 4097680042, :type :ok, :process 8, :f :write-async, :value 68, :durable false}
+{:index 60, :time 4183466625, :type :invoke, :process 8, :f :write-durable, :value 72}
+{:index 61, :time 4536246917, :type :info, :process 4, :f :write-durable, :value 30, :error :sync-timeout, :acked 0}
+{:index 62, :time 4536303500, :type :invoke, :process 9, :f :read-quorum, :value nil}
+{:index 63, :time 4540251667, :type :fail, :process 9, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 72} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 64, :time 4585521208, :type :info, :process 0, :f :write-durable, :value 33, :error :sync-timeout, :acked 0}
+{:index 65, :time 4628327500, :type :invoke, :process 5, :f :read-quorum, :value nil}
+{:index 66, :time 4631979792, :type :fail, :process 5, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 72} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 67, :time 4806586625, :type :invoke, :process 5, :f :read-quorum, :value nil}
+{:index 68, :time 4810670208, :type :fail, :process 5, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 72} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 69, :time 4839110542, :type :invoke, :process 9, :f :write-async, :value 75}
+{:index 70, :time 4840866875, :type :ok, :process 9, :f :write-async, :value 75, :durable false}
+{:index 71, :time 4897318500, :type :info, :process 1, :f :write-durable, :value 38, :error :sync-timeout, :acked 0}
+{:index 72, :time 4963475917, :type :invoke, :process 9, :f :read-quorum, :value nil}
+{:index 73, :time 4968136625, :type :fail, :process 9, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 75} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 74, :time 4992095042, :type :invoke, :process 9, :f :read-quorum, :value nil}
+{:index 75, :time 4995483083, :type :fail, :process 9, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 75} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 76, :time 5089033250, :type :info, :process 2, :f :write-durable, :value 41, :error :sync-timeout, :acked 0}
+{:index 77, :time 5119357625, :type :invoke, :process 9, :f :write-durable, :value 79}
+{:index 78, :time 5123649250, :type :invoke, :process 5, :f :write-durable, :value 81}
+{:index 79, :time 5316052667, :type :invoke, :process 6, :f :write-durable, :value 83}
+{:index 80, :time 5456420417, :type :invoke, :process 7, :f :write-durable, :value 85}
+{:index 81, :time 6187818042, :type :info, :process 8, :f :write-durable, :value 72, :error :sync-timeout, :acked 0}
+{:index 82, :time 6187995542, :type :invoke, :process 13, :f :read-quorum, :value nil}
+{:index 83, :time 6193693292, :type :fail, :process 13, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 85} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 84, :time 6390645750, :type :invoke, :process 13, :f :write-async, :value 92}
+{:index 85, :time 6391773708, :type :ok, :process 13, :f :write-async, :value 92, :durable false}
+{:index 86, :time 6483573417, :type :invoke, :process 13, :f :write-async, :value 95}
+{:index 87, :time 6485586375, :type :ok, :process 13, :f :write-async, :value 95, :durable false}
+{:index 88, :time 6554020792, :type :invoke, :process 13, :f :write-async, :value 99}
+{:index 89, :time 6556365958, :type :ok, :process 13, :f :write-async, :value 99, :durable false}
+{:index 90, :time 6674746458, :type :invoke, :process 13, :f :write-async, :value 103}
+{:index 91, :time 6676706333, :type :ok, :process 13, :f :write-async, :value 103, :durable false}
+{:index 92, :time 6854536208, :type :invoke, :process 13, :f :read-quorum, :value nil}
+{:index 93, :time 6859774750, :type :fail, :process 13, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 103} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 94, :time 6862832667, :type :invoke, :process 13, :f :read-quorum, :value nil}
+{:index 95, :time 6865320667, :type :fail, :process 13, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 103} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 96, :time 7005111667, :type :invoke, :process 13, :f :write-async, :value 107}
+{:index 97, :time 7008260792, :type :ok, :process 13, :f :write-async, :value 107, :durable false}
+{:index 98, :time 7097289375, :type :invoke, :process 13, :f :read-quorum, :value nil}
+{:index 99, :time 7102367375, :type :fail, :process 13, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 107} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 100, :time 7126409417, :type :info, :process 9, :f :write-durable, :value 79, :error :sync-timeout, :acked 0}
+{:index 101, :time 7126470083, :type :info, :process 5, :f :write-durable, :value 81, :error :sync-timeout, :acked 0}
+{:index 102, :time 7186330708, :type :invoke, :process 10, :f :read-quorum, :value nil}
+{:index 103, :time 7190358417, :type :fail, :process 10, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 107} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 104, :time 7315291917, :type :invoke, :process 10, :f :write-durable, :value 110}
+{:index 105, :time 7320472167, :type :info, :process 6, :f :write-durable, :value 83, :error :sync-timeout, :acked 0}
+{:index 106, :time 7360516333, :type :invoke, :process 11, :f :write-durable, :value 113}
+{:index 107, :time 7462802042, :type :info, :process 7, :f :write-durable, :value 85, :error :sync-timeout, :acked 0}
+{:index 108, :time 7503880208, :type :invoke, :process 12, :f :read-quorum, :value nil}
+{:index 109, :time 7506516375, :type :fail, :process 12, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 113} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 110, :time 7507865583, :type :invoke, :process 13, :f :read-quorum, :value nil}
+{:index 111, :time 7509375208, :type :fail, :process 13, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 113} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 112, :time 7569134167, :type :invoke, :process 14, :f :read-quorum, :value nil}
+{:index 113, :time 7573400250, :type :fail, :process 14, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 113} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 114, :time 7619997208, :type :invoke, :process 12, :f :write-durable, :value 116}
+{:index 115, :time 7812778667, :type :invoke, :process 13, :f :read-quorum, :value nil}
+{:index 116, :time 7817772500, :type :fail, :process 13, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 116} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 117, :time 7837959333, :type :invoke, :process 13, :f :write-async, :value 119}
+{:index 118, :time 7839405042, :type :ok, :process 13, :f :write-async, :value 119, :durable false}
+{:index 119, :time 7851510750, :type :invoke, :process 13, :f :read-quorum, :value nil}
+{:index 120, :time 7854854083, :type :fail, :process 13, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 119} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 121, :time 8036677292, :type :invoke, :process 13, :f :read-quorum, :value nil}
+{:index 122, :time 8041081417, :type :fail, :process 13, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 119} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 123, :time 8199883500, :type :invoke, :process 14, :f :read-quorum, :value nil}
+{:index 124, :time 8205609917, :type :fail, :process 14, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 119} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 125, :time 8377836000, :type :invoke, :process 13, :f :read-quorum, :value nil}
+{:index 126, :time 8381826833, :type :fail, :process 13, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 119} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 127, :time 8550345083, :type :invoke, :process 13, :f :write-durable, :value 122}
+{:index 128, :time 8658541292, :type :invoke, :process 14, :f :write-async, :value 124}
+{:index 129, :time 8661597583, :type :ok, :process 14, :f :write-async, :value 124, :durable false}
+{:index 130, :time 8854608125, :type :invoke, :process 14, :f :write-durable, :value 129}
+{:index 131, :time 9323468833, :type :info, :process 10, :f :write-durable, :value 110, :error :sync-timeout, :acked 0}
+{:index 132, :time 9323558458, :type :invoke, :process 15, :f :write-async, :value 492}
+{:index 133, :time 9325537417, :type :ok, :process 15, :f :write-async, :value 492, :durable false}
+{:index 134, :time 9363650875, :type :info, :process 11, :f :write-durable, :value 113, :error :sync-timeout, :acked 0}
+{:index 135, :time 9365823458, :type :invoke, :process 15, :f :write-async, :value 497}
+{:index 136, :time 9366707833, :type :ok, :process 15, :f :write-async, :value 497, :durable false}
+{:index 137, :time 9367730542, :type :invoke, :process 15, :f :write-async, :value 500}
+{:index 138, :time 9368933833, :type :ok, :process 15, :f :write-async, :value 500, :durable false}
+{:index 139, :time 9568327333, :type :invoke, :process 15, :f :read-quorum, :value nil}
+{:index 140, :time 9570468000, :type :fail, :process 15, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 500} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 141, :time 9624861000, :type :info, :process 12, :f :write-durable, :value 116, :error :sync-timeout, :acked 0}
+{:index 142, :time 9674173333, :type :invoke, :process 16, :f :read-quorum, :value nil}
+{:index 143, :time 9678018000, :type :fail, :process 16, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 500} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 144, :time 9812811792, :type :invoke, :process 17, :f :read-quorum, :value nil}
+{:index 145, :time 9818576000, :type :fail, :process 17, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 500} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 146, :time 9866193500, :type :invoke, :process 15, :f :read-quorum, :value nil}
+{:index 147, :time 9870490500, :type :fail, :process 15, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 500} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 148, :time 10054663208, :type :invoke, :process 15, :f :write-async, :value 503}
+{:index 149, :time 10056507667, :type :ok, :process 15, :f :write-async, :value 503, :durable false}
+{:index 150, :time 10183281500, :type :invoke, :process 15, :f :read-quorum, :value nil}
+{:index 151, :time 10187474958, :type :fail, :process 15, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 503} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 152, :time 10351661125, :type :invoke, :process 15, :f :write-durable, :value 506}
+{:index 153, :time 10522979750, :type :info, :process :nemesis, :f :partition, :value :primary-isolated}
+{:index 154, :time 10524751917, :type :invoke, :process 17, :f :write-async, :value 510}
+{:index 155, :time 10525960333, :type :ok, :process 17, :f :write-async, :value 510, :durable false}
+{:index 156, :time 10557479542, :type :info, :process 13, :f :write-durable, :value 122, :error :sync-timeout, :acked 0}
+{:index 157, :time 10563541333, :type :invoke, :process 18, :f :write-async, :value 514}
+{:index 158, :time 10565151875, :type :ok, :process 18, :f :write-async, :value 514, :durable false}
+{:index 159, :time 10599239375, :type :invoke, :process 16, :f :read-quorum, :value nil}
+{:index 160, :time 10601842458, :type :fail, :process 16, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 514} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 161, :time 10622318792, :type :invoke, :process 16, :f :write-async, :value 517}
+{:index 162, :time 10623742125, :type :ok, :process 16, :f :write-async, :value 517, :durable false}
+{:index 163, :time 10646019417, :type :invoke, :process 16, :f :write-async, :value 520}
+{:index 164, :time 10646768125, :type :ok, :process 16, :f :write-async, :value 520, :durable false}
+{:index 165, :time 10811715750, :type :invoke, :process 16, :f :read-quorum, :value nil}
+{:index 166, :time 10813521667, :type :fail, :process 16, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 520} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 167, :time 10863294917, :type :info, :process 14, :f :write-durable, :value 129, :error :sync-timeout, :acked 0}
+{:index 168, :time 10895892333, :type :invoke, :process 17, :f :read-quorum, :value nil}
+{:index 169, :time 10897157500, :type :fail, :process 17, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 520} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 170, :time 10995184208, :type :invoke, :process 18, :f :write-durable, :value 523}
+{:index 171, :time 11101265458, :type :info, :process :nemesis, :f :partition, :value :primary-isolated}
+{:index 172, :time 11177057750, :type :invoke, :process 16, :f :read-quorum, :value nil}
+{:index 173, :time 11178841083, :type :fail, :process 16, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 523} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 174, :time 11225168083, :type :invoke, :process 16, :f :write-async, :value 526}
+{:index 175, :time 11226250208, :type :ok, :process 16, :f :write-async, :value 526, :durable false}
+{:index 176, :time 11256336792, :type :invoke, :process 16, :f :write-durable, :value 529}
+{:index 177, :time 11422925500, :type :invoke, :process 17, :f :write-async, :value 531}
+{:index 178, :time 11424524542, :type :ok, :process 17, :f :write-async, :value 531, :durable false}
+{:index 179, :time 11495752208, :type :invoke, :process 19, :f :write-durable, :value 534}
+{:index 180, :time 11571632167, :type :invoke, :process 17, :f :read-quorum, :value nil}
+{:index 181, :time 11575936500, :type :fail, :process 17, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 534} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 182, :time 11615554417, :type :invoke, :process 17, :f :write-async, :value 540}
+{:index 183, :time 11617196000, :type :ok, :process 17, :f :write-async, :value 540, :durable false}
+{:index 184, :time 11757396042, :type :invoke, :process 17, :f :write-durable, :value 544}
+{:index 185, :time 12361330625, :type :info, :process 15, :f :write-durable, :value 506, :error :sync-timeout, :acked 0}
+{:index 186, :time 12361380958, :type :invoke, :process 20, :f :write-durable, :value 1018}
+{:index 187, :time 13002689792, :type :info, :process 18, :f :write-durable, :value 523, :error :sync-timeout, :acked 0}
+{:index 188, :time 13002749875, :type :invoke, :process 23, :f :write-durable, :value 1520}
+{:index 189, :time 13262597708, :type :info, :process 16, :f :write-durable, :value 529, :error :sync-timeout, :acked 0}
+{:index 190, :time 13262649417, :type :invoke, :process 21, :f :write-durable, :value 1725}
+{:index 191, :time 13505159000, :type :info, :process 19, :f :write-durable, :value 534, :error :sync-timeout, :acked 0}
+{:index 192, :time 13505212750, :type :invoke, :process 24, :f :write-durable, :value 1911}
+{:index 193, :time 13761079417, :type :info, :process 17, :f :write-durable, :value 544, :error :sync-timeout, :acked 0}
+{:index 194, :time 13761186000, :type :invoke, :process 22, :f :read-quorum, :value nil}
+{:index 195, :time 13763688667, :type :fail, :process 22, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 1911} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 196, :time 13910838958, :type :invoke, :process 22, :f :write-async, :value 1915}
+{:index 197, :time 13913090792, :type :ok, :process 22, :f :write-async, :value 1915, :durable false}
+{:index 198, :time 14064984333, :type :invoke, :process 22, :f :read-quorum, :value nil}
+{:index 199, :time 14070009083, :type :fail, :process 22, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 1915} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 200, :time 14154535458, :type :invoke, :process 22, :f :read-quorum, :value nil}
+{:index 201, :time 14159445583, :type :fail, :process 22, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 1915} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 202, :time 14189383500, :type :invoke, :process 22, :f :read-quorum, :value nil}
+{:index 203, :time 14194281750, :type :fail, :process 22, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 1915} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 204, :time 14365281125, :type :info, :process 20, :f :write-durable, :value 1018, :error :sync-timeout, :acked 0}
+{:index 205, :time 14390255542, :type :invoke, :process 25, :f :write-durable, :value 1922}
+{:index 206, :time 14576213750, :type :invoke, :process 22, :f :write-durable, :value 1924}
+{:index 207, :time 15011819583, :type :info, :process 23, :f :write-durable, :value 1520, :error :sync-timeout, :acked 0}
+{:index 208, :time 15011879500, :type :invoke, :process 28, :f :read-quorum, :value nil}
+{:index 209, :time 15013861250, :type :fail, :process 28, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 1924} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 210, :time 15109862042, :type :invoke, :process 28, :f :read-quorum, :value nil}
+{:index 211, :time 15113983750, :type :fail, :process 28, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 1924} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 212, :time 15222816500, :type :invoke, :process 28, :f :read-quorum, :value nil}
+{:index 213, :time 15228202375, :type :fail, :process 28, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 1924} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 214, :time 15244334875, :type :invoke, :process 28, :f :write-durable, :value 1931}
+{:index 215, :time 15267570333, :type :info, :process 21, :f :write-durable, :value 1725, :error :sync-timeout, :acked 0}
+{:index 216, :time 15299694792, :type :invoke, :process 26, :f :read-quorum, :value nil}
+{:index 217, :time 15306044042, :type :fail, :process 26, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 1931} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 218, :time 15426352042, :type :invoke, :process 26, :f :write-async, :value 1938}
+{:index 219, :time 15428914333, :type :ok, :process 26, :f :write-async, :value 1938, :durable false}
+{:index 220, :time 15468621667, :type :invoke, :process 26, :f :write-durable, :value 1942}
+{:index 221, :time 15511081208, :type :info, :process 24, :f :write-durable, :value 1911, :error :sync-timeout, :acked 0}
+{:index 222, :time 15561125042, :type :invoke, :process 29, :f :read-quorum, :value nil}
+{:index 223, :time 15565774167, :type :fail, :process 29, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 1942} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 224, :time 15726022958, :type :invoke, :process 29, :f :write-async, :value 1948}
+{:index 225, :time 15728283167, :type :ok, :process 29, :f :write-async, :value 1948, :durable false}
+{:index 226, :time 15817944667, :type :invoke, :process 29, :f :read-quorum, :value nil}
+{:index 227, :time 15820957458, :type :fail, :process 29, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 1948} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 228, :time 15992561000, :type :invoke, :process 29, :f :write-durable, :value 1953}
+{:index 229, :time 16396243125, :type :info, :process 25, :f :write-durable, :value 1922, :error :sync-timeout, :acked 0}
+{:index 230, :time 16396343417, :type :invoke, :process 30, :f :write-durable, :value 2270}
+{:index 231, :time 16585559792, :type :info, :process 22, :f :write-durable, :value 1924, :error :sync-timeout, :acked 0}
+{:index 232, :time 16585654083, :type :invoke, :process 27, :f :read-quorum, :value nil}
+{:index 233, :time 16589426083, :type :fail, :process 27, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 2270} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 234, :time 16589444083, :type :invoke, :process 27, :f :write-async, :value 2274}
+{:index 235, :time 16590929625, :type :ok, :process 27, :f :write-async, :value 2274, :durable false}
+{:index 236, :time 16592978292, :type :invoke, :process 27, :f :write-durable, :value 2278}
+{:index 237, :time 17249205750, :type :info, :process 28, :f :write-durable, :value 1931, :error :sync-timeout, :acked 0}
+{:index 238, :time 17249266667, :type :invoke, :process 33, :f :write-async, :value 2789}
+{:index 239, :time 17250713833, :type :ok, :process 33, :f :write-async, :value 2789, :durable false}
+{:index 240, :time 17346859083, :type :invoke, :process 33, :f :write-durable, :value 2793}
+{:index 241, :time 17475537875, :type :info, :process 26, :f :write-durable, :value 1942, :error :sync-timeout, :acked 0}
+{:index 242, :time 17475584542, :type :invoke, :process 31, :f :read-quorum, :value nil}
+{:index 243, :time 17478538708, :type :fail, :process 31, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 2793} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 244, :time 17585731833, :type :invoke, :process 31, :f :write-durable, :value 2798}
+{:index 245, :time 18002816000, :type :info, :process 29, :f :write-durable, :value 1953, :error :sync-timeout, :acked 0}
+{:index 246, :time 18002908333, :type :invoke, :process 34, :f :write-async, :value 3127}
+{:index 247, :time 18005339083, :type :ok, :process 34, :f :write-async, :value 3127, :durable false}
+{:index 248, :time 18060018458, :type :invoke, :process 34, :f :write-async, :value 3131}
+{:index 249, :time 18062721000, :type :ok, :process 34, :f :write-async, :value 3131, :durable false}
+{:index 250, :time 18108619708, :type :invoke, :process 34, :f :read-quorum, :value nil}
+{:index 251, :time 18112403667, :type :fail, :process 34, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 3131} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 252, :time 18267366000, :type :invoke, :process 34, :f :write-durable, :value 3136}
+{:index 253, :time 18405860042, :type :info, :process 30, :f :write-durable, :value 2270, :error :sync-timeout, :acked 0}
+{:index 254, :time 18405991083, :type :invoke, :process 35, :f :read-quorum, :value nil}
+{:index 255, :time 18409093875, :type :fail, :process 35, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 3136} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 256, :time 18416726375, :type :invoke, :process 35, :f :read-quorum, :value nil}
+{:index 257, :time 18420429083, :type :fail, :process 35, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 3136} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 258, :time 18446887000, :type :invoke, :process 35, :f :write-async, :value 3141}
+{:index 259, :time 18448548125, :type :ok, :process 35, :f :write-async, :value 3141, :durable false}
+{:index 260, :time 18601933625, :type :info, :process 27, :f :write-durable, :value 2278, :error :sync-timeout, :acked 0}
+{:index 261, :time 18602002125, :type :invoke, :process 32, :f :write-async, :value 3145}
+{:index 262, :time 18605152167, :type :ok, :process 32, :f :write-async, :value 3145, :durable false}
+{:index 263, :time 18791904500, :type :invoke, :process 35, :f :write-durable, :value 3148}
+{:index 264, :time 18986758625, :type :invoke, :process 32, :f :write-async, :value 3150}
+{:index 265, :time 18989761625, :type :ok, :process 32, :f :write-async, :value 3150, :durable false}
+{:index 266, :time 19170872875, :type :invoke, :process 32, :f :write-async, :value 3155}
+{:index 267, :time 19173766042, :type :ok, :process 32, :f :write-async, :value 3155, :durable false}
+{:index 268, :time 19352507750, :type :info, :process 33, :f :write-durable, :value 2793, :error :sync-timeout, :acked 0}
+{:index 269, :time 19354085792, :type :invoke, :process 32, :f :write-durable, :value 3161}
+{:index 270, :time 19469911500, :type :invoke, :process 38, :f :read-quorum, :value nil}
+{:index 271, :time 19474156292, :type :fail, :process 38, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 3161} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 272, :time 19594804417, :type :info, :process 31, :f :write-durable, :value 2798, :error :sync-timeout, :acked 0}
+{:index 273, :time 19652201500, :type :invoke, :process 38, :f :write-durable, :value 3168}
+{:index 274, :time 19666188417, :type :invoke, :process 36, :f :write-durable, :value 3170}
+{:index 275, :time 20273065750, :type :info, :process 34, :f :write-durable, :value 3136, :error :sync-timeout, :acked 0}
+{:index 276, :time 20273194875, :type :invoke, :process 39, :f :write-async, :value 3640}
+{:index 277, :time 20275641875, :type :ok, :process 39, :f :write-async, :value 3640, :durable false}
+{:index 278, :time 20301229167, :type :invoke, :process 39, :f :write-durable, :value 3644}
+{:index 279, :time 20798895875, :type :info, :process 35, :f :write-durable, :value 3148, :error :sync-timeout, :acked 0}
+{:index 280, :time 20799011208, :type :invoke, :process 40, :f :read-quorum, :value nil}
+{:index 281, :time 20802461042, :type :fail, :process 40, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 3644} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 282, :time 20999720708, :type :invoke, :process 40, :f :write-async, :value 3649}
+{:index 283, :time 21002821583, :type :ok, :process 40, :f :write-async, :value 3649, :durable false}
+{:index 284, :time 21106706833, :type :info, :process :nemesis, :f :heal, :value nil}
+{:index 285, :time 21119952792, :type :invoke, :process 40, :f :write-async, :value 3656}
+{:index 286, :time 21122556708, :type :ok, :process 40, :f :write-async, :value 3656, :durable false}
+{:index 287, :time 21226124000, :type :invoke, :process 40, :f :write-async, :value 3660}
+{:index 288, :time 21227251625, :type :ok, :process 40, :f :write-async, :value 3660, :durable false}
+{:index 289, :time 21350765042, :type :invoke, :process 40, :f :write-durable, :value 3663}
+{:index 290, :time 21358492458, :type :info, :process 32, :f :write-durable, :value 3161, :error :sync-timeout, :acked 0}
+{:index 291, :time 21438541833, :type :info, :process :nemesis, :f :heal, :value :healed}
+{:index 292, :time 21511774375, :type :invoke, :process 37, :f :read-quorum, :value nil}
+{:index 293, :time 21513969583, :type :fail, :process 37, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 3663} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 294, :time 21663060333, :type :info, :process 38, :f :write-durable, :value 3168, :error :sync-timeout, :acked 0}
+{:index 295, :time 21672163208, :type :info, :process 36, :f :write-durable, :value 3170, :error :sync-timeout, :acked 0}
+{:index 296, :time 21676072583, :type :invoke, :process 37, :f :write-async, :value 3669}
+{:index 297, :time 21678126792, :type :ok, :process 37, :f :write-async, :value 3669, :durable false}
+{:index 298, :time 21757351833, :type :invoke, :process 43, :f :write-durable, :value 3672}
+{:index 299, :time 21761393083, :type :invoke, :process 41, :f :write-durable, :value 3674}
+{:index 300, :time 21884630875, :type :invoke, :process 37, :f :read-quorum, :value nil}
+{:index 301, :time 21888101667, :type :fail, :process 37, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 3674} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 302, :time 21992698208, :type :invoke, :process 37, :f :write-durable, :value 3679}
+{:index 303, :time 22314383875, :type :info, :process 39, :f :write-durable, :value 3644, :error :sync-timeout, :acked 0}
+{:index 304, :time 22314432625, :type :invoke, :process 44, :f :write-durable, :value 3935}
+{:index 305, :time 23358483375, :type :info, :process 40, :f :write-durable, :value 3663, :error :sync-timeout, :acked 0}
+{:index 306, :time 23358541292, :type :invoke, :process 45, :f :write-async, :value 4745}
+{:index 307, :time 23360077083, :type :ok, :process 45, :f :write-async, :value 4745, :durable false}
+{:index 308, :time 23477757333, :type :invoke, :process 45, :f :write-async, :value 4749}
+{:index 309, :time 23480011792, :type :ok, :process 45, :f :write-async, :value 4749, :durable false}
+{:index 310, :time 23568470500, :type :invoke, :process 45, :f :write-async, :value 4753}
+{:index 311, :time 23569383958, :type :ok, :process 45, :f :write-async, :value 4753, :durable false}
+{:index 312, :time 23716875333, :type :invoke, :process 45, :f :write-async, :value 4756}
+{:index 313, :time 23718314833, :type :ok, :process 45, :f :write-async, :value 4756, :durable false}
+{:index 314, :time 23726624958, :type :invoke, :process 45, :f :write-durable, :value 4760}
+{:index 315, :time 23761339375, :type :info, :process 43, :f :write-durable, :value 3672, :error :sync-timeout, :acked 0}
+{:index 316, :time 23766081417, :type :info, :process 41, :f :write-durable, :value 3674, :error :sync-timeout, :acked 0}
+{:index 317, :time 23836642250, :type :invoke, :process 46, :f :read-quorum, :value nil}
+{:index 318, :time 23840746250, :type :fail, :process 46, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 4760} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 319, :time 23858278458, :type :invoke, :process 48, :f :read-quorum, :value nil}
+{:index 320, :time 23861852583, :type :fail, :process 48, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 4760} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 321, :time 23924852458, :type :invoke, :process 48, :f :read-quorum, :value nil}
+{:index 322, :time 23930259417, :type :fail, :process 48, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 4760} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 323, :time 23999108000, :type :info, :process 37, :f :write-durable, :value 3679, :error :sync-timeout, :acked 0}
+{:index 324, :time 24105364083, :type :invoke, :process 46, :f :write-async, :value 4764}
+{:index 325, :time 24107673917, :type :ok, :process 46, :f :write-async, :value 4764, :durable false}
+{:index 326, :time 24236268042, :type :invoke, :process 46, :f :write-async, :value 4767}
+{:index 327, :time 24238939708, :type :ok, :process 46, :f :write-async, :value 4767, :durable false}
+{:index 328, :time 24264418958, :type :invoke, :process 46, :f :read-quorum, :value nil}
+{:index 329, :time 24268551625, :type :fail, :process 46, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 4767} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 330, :time 24320935625, :type :info, :process 44, :f :write-durable, :value 3935, :error :sync-timeout, :acked 0}
+{:index 331, :time 24406553417, :type :invoke, :process 46, :f :write-durable, :value 4771}
+{:index 332, :time 24445592458, :type :invoke, :process 42, :f :read-quorum, :value nil}
+{:index 333, :time 24449877917, :type :fail, :process 42, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 4771} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 334, :time 24640596333, :type :invoke, :process 48, :f :read-quorum, :value nil}
+{:index 335, :time 24643795250, :type :fail, :process 48, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 4771} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 336, :time 24680052667, :type :invoke, :process 49, :f :write-durable, :value 4774}
+{:index 337, :time 24808258500, :type :invoke, :process 42, :f :read-quorum, :value nil}
+{:index 338, :time 24811971833, :type :fail, :process 42, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 4774} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 339, :time 25003596125, :type :invoke, :process 42, :f :write-durable, :value 4777}
+{:index 340, :time 25106058917, :type :invoke, :process 48, :f :write-async, :value 4779}
+{:index 341, :time 25108474875, :type :ok, :process 48, :f :write-async, :value 4779, :durable false}
+{:index 342, :time 25271022042, :type :invoke, :process 48, :f :write-durable, :value 4783}
+{:index 343, :time 25729796958, :type :info, :process 45, :f :write-durable, :value 4760, :error :sync-timeout, :acked 0}
+{:index 344, :time 25729889542, :type :invoke, :process 50, :f :write-durable, :value 5143}
+{:index 345, :time 26411516542, :type :info, :process 46, :f :write-durable, :value 4771, :error :sync-timeout, :acked 0}
+{:index 346, :time 26411554542, :type :invoke, :process 51, :f :write-async, :value 5675}
+{:index 347, :time 26413100917, :type :ok, :process 51, :f :write-async, :value 5675, :durable false}
+{:index 348, :time 26480550375, :type :invoke, :process 51, :f :write-async, :value 5681}
+{:index 349, :time 26482440750, :type :ok, :process 51, :f :write-async, :value 5681, :durable false}
+{:index 350, :time 26586700750, :type :invoke, :process 51, :f :read-quorum, :value nil}
+{:index 351, :time 26589835833, :type :fail, :process 51, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 5681} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 352, :time 26684950333, :type :invoke, :process 51, :f :write-durable, :value 5686}
+{:index 353, :time 26686901750, :type :info, :process 49, :f :write-durable, :value 4774, :error :sync-timeout, :acked 0}
+{:index 354, :time 26686974625, :type :invoke, :process 54, :f :write-durable, :value 5689}
+{:index 355, :time 27011711042, :type :info, :process 42, :f :write-durable, :value 4777, :error :sync-timeout, :acked 0}
+{:index 356, :time 27011761708, :type :invoke, :process 47, :f :read-quorum, :value nil}
+{:index 357, :time 27014738583, :type :fail, :process 47, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 5689} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 358, :time 27161262542, :type :invoke, :process 47, :f :write-durable, :value 5694}
+{:index 359, :time 27278698833, :type :info, :process 48, :f :write-durable, :value 4783, :error :sync-timeout, :acked 0}
+{:index 360, :time 27278750250, :type :invoke, :process 53, :f :read-quorum, :value nil}
+{:index 361, :time 27282495958, :type :fail, :process 53, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 5694} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 362, :time 27475479167, :type :invoke, :process 53, :f :write-async, :value 5699}
+{:index 363, :time 27477787583, :type :ok, :process 53, :f :write-async, :value 5699, :durable false}
+{:index 364, :time 27491811250, :type :invoke, :process 53, :f :read-quorum, :value nil}
+{:index 365, :time 27495334375, :type :fail, :process 53, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 5699} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 366, :time 27520566875, :type :invoke, :process 53, :f :write-durable, :value 5704}
+{:index 367, :time 27735109542, :type :info, :process 50, :f :write-durable, :value 5143, :error :sync-timeout, :acked 0}
+{:index 368, :time 27735161417, :type :invoke, :process 55, :f :write-async, :value 5873}
+{:index 369, :time 27737091417, :type :ok, :process 55, :f :write-async, :value 5873, :durable false}
+{:index 370, :time 27828719458, :type :invoke, :process 55, :f :read-quorum, :value nil}
+{:index 371, :time 27834668250, :type :fail, :process 55, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 5873} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 372, :time 27834701458, :type :invoke, :process 55, :f :write-durable, :value 5879}
+{:index 373, :time 28691432667, :type :info, :process 54, :f :write-durable, :value 5689, :error :sync-timeout, :acked 0}
+{:index 374, :time 28691510667, :type :info, :process 51, :f :write-durable, :value 5686, :error :sync-timeout, :acked 0}
+{:index 375, :time 28691527625, :type :invoke, :process 56, :f :write-durable, :value 6548}
+{:index 376, :time 28697099542, :type :invoke, :process 59, :f :write-durable, :value 6550}
+{:index 377, :time 29166837125, :type :info, :process 47, :f :write-durable, :value 5694, :error :sync-timeout, :acked 0}
+{:index 378, :time 29166981208, :type :invoke, :process 52, :f :write-async, :value 6917}
+{:index 379, :time 29169570417, :type :ok, :process 52, :f :write-async, :value 6917, :durable false}
+{:index 380, :time 29338603833, :type :invoke, :process 52, :f :read-quorum, :value nil}
+{:index 381, :time 29340934000, :type :fail, :process 52, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6917} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 382, :time 29463702208, :type :invoke, :process 52, :f :read-quorum, :value nil}
+{:index 383, :time 29467755500, :type :fail, :process 52, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6917} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 384, :time 29529379375, :type :info, :process 53, :f :write-durable, :value 5704, :error :sync-timeout, :acked 0}
+{:index 385, :time 29597149208, :type :invoke, :process 52, :f :write-durable, :value 6924}
+{:index 386, :time 29697264792, :type :invoke, :process 58, :f :read-quorum, :value nil}
+{:index 387, :time 29701260792, :type :fail, :process 58, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6924} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 388, :time 29823255958, :type :invoke, :process 58, :f :read-quorum, :value nil}
+{:index 389, :time 29827957500, :type :fail, :process 58, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6924} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 390, :time 29840635333, :type :info, :process 55, :f :write-durable, :value 5879, :error :sync-timeout, :acked 0}
+{:index 391, :time 29980888958, :type :invoke, :process 58, :f :read-quorum, :value nil}
+{:index 392, :time 29986342667, :type :fail, :process 58, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6924} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 393, :time 30022803458, :type :invoke, :process 60, :f :write-durable, :value 6927}
+{:index 394, :time 30197765417, :type :invoke, :process 58, :f :write-durable, :value 6929}
+{:index 395, :time 30694992125, :type :info, :process 56, :f :write-durable, :value 6548, :error :sync-timeout, :acked 0}
+{:index 396, :time 30695068250, :type :invoke, :process 61, :f :read-quorum, :value nil}
+{:index 397, :time 30696722208, :type :fail, :process 61, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6929} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 398, :time 30700902500, :type :info, :process 59, :f :write-durable, :value 6550, :error :sync-timeout, :acked 0}
+{:index 399, :time 30781676333, :type :invoke, :process 61, :f :write-durable, :value 6934}
+{:index 400, :time 30943686792, :type :invoke, :process 64, :f :read-quorum, :value nil}
+{:index 401, :time 30947318958, :type :fail, :process 64, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6934} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 402, :time 31113352958, :type :invoke, :process 64, :f :read-quorum, :value nil}
+{:index 403, :time 31115292250, :type :fail, :process 64, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6934} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 404, :time 31176635167, :type :invoke, :process 64, :f :write-async, :value 6938}
+{:index 405, :time 31177727958, :type :ok, :process 64, :f :write-async, :value 6938, :durable false}
+{:index 406, :time 31317765583, :type :invoke, :process 64, :f :write-async, :value 6941}
+{:index 407, :time 31320015417, :type :ok, :process 64, :f :write-async, :value 6941, :durable false}
+{:index 408, :time 31414470208, :type :invoke, :process 64, :f :read-quorum, :value nil}
+{:index 409, :time 31417034458, :type :fail, :process 64, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6941} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 410, :time 31531976208, :type :invoke, :process 64, :f :read-quorum, :value nil}
+{:index 411, :time 31535649500, :type :fail, :process 64, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 6941} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 412, :time 31603087875, :type :info, :process 52, :f :write-durable, :value 6924, :error :sync-timeout, :acked 0}
+{:index 413, :time 31725500042, :type :invoke, :process 57, :f :write-durable, :value 6947}
+{:index 414, :time 31789253750, :type :invoke, :process 64, :f :write-durable, :value 6949}
+{:index 415, :time 32028391458, :type :info, :process 60, :f :write-durable, :value 6927, :error :sync-timeout, :acked 0}
+{:index 416, :time 32028464458, :type :invoke, :process 65, :f :write-durable, :value 7138}
+{:index 417, :time 32203163083, :type :info, :process 58, :f :write-durable, :value 6929, :error :sync-timeout, :acked 0}
+{:index 418, :time 32203216458, :type :invoke, :process 63, :f :read-quorum, :value nil}
+{:index 419, :time 32204734833, :type :fail, :process 63, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 7138} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 420, :time 32397943958, :type :invoke, :process 63, :f :write-async, :value 7142}
+{:index 421, :time 32400192667, :type :ok, :process 63, :f :write-async, :value 7142, :durable false}
+{:index 422, :time 32535372000, :type :invoke, :process 63, :f :read-quorum, :value nil}
+{:index 423, :time 32538458125, :type :fail, :process 63, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 7142} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 424, :time 32615795333, :type :invoke, :process 63, :f :read-quorum, :value nil}
+{:index 425, :time 32618984125, :type :fail, :process 63, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 7142} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 426, :time 32619016917, :type :invoke, :process 63, :f :write-durable, :value 7146}
+{:index 427, :time 32786363333, :type :info, :process 61, :f :write-durable, :value 6934, :error :sync-timeout, :acked 0}
+{:index 428, :time 32786419875, :type :invoke, :process 66, :f :write-durable, :value 7278}
+{:index 429, :time 33730673583, :type :info, :process 57, :f :write-durable, :value 6947, :error :sync-timeout, :acked 0}
+{:index 430, :time 33730722625, :type :invoke, :process 62, :f :read-quorum, :value nil}
+{:index 431, :time 33733113625, :type :fail, :process 62, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 7278} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 432, :time 33795174042, :type :info, :process 64, :f :write-durable, :value 6949, :error :sync-timeout, :acked 0}
+{:index 433, :time 33877189167, :type :invoke, :process 62, :f :read-quorum, :value nil}
+{:index 434, :time 33880508167, :type :fail, :process 62, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 7278} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 435, :time 33941375917, :type :invoke, :process 62, :f :read-quorum, :value nil}
+{:index 436, :time 33944410583, :type :fail, :process 62, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 7278} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 437, :time 34033988208, :type :info, :process 65, :f :write-durable, :value 7138, :error :sync-timeout, :acked 0}
+{:index 438, :time 34133755792, :type :invoke, :process 62, :f :write-durable, :value 7282}
+{:index 439, :time 34293787083, :type :invoke, :process 69, :f :write-async, :value 7284}
+{:index 440, :time 34295217792, :type :ok, :process 69, :f :write-async, :value 7284, :durable false}
+{:index 441, :time 34303389167, :type :invoke, :process 69, :f :write-async, :value 7287}
+{:index 442, :time 34304007667, :type :ok, :process 69, :f :write-async, :value 7287, :durable false}
+{:index 443, :time 34354662208, :type :invoke, :process 70, :f :read-quorum, :value nil}
+{:index 444, :time 34356129417, :type :fail, :process 70, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 7287} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 445, :time 34446696000, :type :invoke, :process 70, :f :write-async, :value 7290}
+{:index 446, :time 34448139875, :type :ok, :process 70, :f :write-async, :value 7290, :durable false}
+{:index 447, :time 34526131875, :type :invoke, :process 69, :f :read-quorum, :value nil}
+{:index 448, :time 34529773625, :type :fail, :process 69, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 7290} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 449, :time 34584185042, :type :invoke, :process 69, :f :write-async, :value 7293}
+{:index 450, :time 34585596958, :type :ok, :process 69, :f :write-async, :value 7293, :durable false}
+{:index 451, :time 34624100583, :type :info, :process 63, :f :write-durable, :value 7146, :error :sync-timeout, :acked 0}
+{:index 452, :time 34696300958, :type :invoke, :process 68, :f :write-durable, :value 7297}
+{:index 453, :time 34785679917, :type :invoke, :process 69, :f :write-async, :value 7299}
+{:index 454, :time 34787487125, :type :ok, :process 69, :f :write-async, :value 7299, :durable false}
+{:index 455, :time 34790394875, :type :info, :process 66, :f :write-durable, :value 7278, :error :sync-timeout, :acked 0}
+{:index 456, :time 34912860292, :type :invoke, :process 70, :f :write-durable, :value 7303}
+{:index 457, :time 35057931542, :type :invoke, :process 71, :f :read-quorum, :value nil}
+{:index 458, :time 35061047125, :type :fail, :process 71, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 7303} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 459, :time 35064245542, :type :invoke, :process 71, :f :write-async, :value 7306}
+{:index 460, :time 35065093917, :type :ok, :process 71, :f :write-async, :value 7306, :durable false}
+{:index 461, :time 35241236917, :type :invoke, :process 69, :f :write-async, :value 7309}
+{:index 462, :time 35242526208, :type :ok, :process 69, :f :write-async, :value 7309, :durable false}
+{:index 463, :time 35275477792, :type :invoke, :process 69, :f :write-durable, :value 7312}
+{:index 464, :time 35319542667, :type :invoke, :process 71, :f :write-durable, :value 7314}
+{:index 465, :time 36138933583, :type :info, :process 62, :f :write-durable, :value 7282, :error :sync-timeout, :acked 0}
+{:index 466, :time 36139059250, :type :invoke, :process 67, :f :read-quorum, :value nil}
+{:index 467, :time 36142325875, :type :fail, :process 67, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 7314} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 468, :time 36256846583, :type :invoke, :process 67, :f :read-quorum, :value nil}
+{:index 469, :time 36260483083, :type :fail, :process 67, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 7314} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 470, :time 36344736000, :type :invoke, :process 67, :f :write-durable, :value 7319}
+{:index 471, :time 36444556000, :type :info, :process :nemesis, :f :partition, :value :primary-isolated}
+{:index 472, :time 36701379375, :type :info, :process 68, :f :write-durable, :value 7297, :error :sync-timeout, :acked 0}
+{:index 473, :time 36701417292, :type :invoke, :process 73, :f :write-durable, :value 7609}
+{:index 474, :time 36916762958, :type :info, :process 70, :f :write-durable, :value 7303, :error :sync-timeout, :acked 0}
+{:index 475, :time 36916804875, :type :invoke, :process 75, :f :write-durable, :value 7785}
+{:index 476, :time 37057694542, :type :info, :process :nemesis, :f :partition, :value :primary-isolated}
+{:index 477, :time 37281038708, :type :info, :process 69, :f :write-durable, :value 7312, :error :sync-timeout, :acked 0}
+{:index 478, :time 37281084667, :type :invoke, :process 74, :f :write-durable, :value 8076}
+{:index 479, :time 37328429667, :type :info, :process 71, :f :write-durable, :value 7314, :error :sync-timeout, :acked 0}
+{:index 480, :time 37328507167, :type :invoke, :process 76, :f :read-quorum, :value nil}
+{:index 481, :time 37330763542, :type :fail, :process 76, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8076} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 482, :time 37363444250, :type :invoke, :process 76, :f :write-durable, :value 8080}
+{:index 483, :time 38349891208, :type :info, :process 67, :f :write-durable, :value 7319, :error :sync-timeout, :acked 0}
+{:index 484, :time 38349939625, :type :invoke, :process 72, :f :read-quorum, :value nil}
+{:index 485, :time 38353292500, :type :fail, :process 72, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8080} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 486, :time 38422658792, :type :invoke, :process 72, :f :read-quorum, :value nil}
+{:index 487, :time 38426277417, :type :fail, :process 72, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8080} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 488, :time 38548388917, :type :invoke, :process 72, :f :write-async, :value 8085}
+{:index 489, :time 38550603375, :type :ok, :process 72, :f :write-async, :value 8085, :durable false}
+{:index 490, :time 38700687250, :type :invoke, :process 72, :f :read-quorum, :value nil}
+{:index 491, :time 38702577417, :type :fail, :process 72, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8085} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 492, :time 38703876583, :type :info, :process 73, :f :write-durable, :value 7609, :error :sync-timeout, :acked 0}
+{:index 493, :time 38847579750, :type :invoke, :process 72, :f :read-quorum, :value nil}
+{:index 494, :time 38853717458, :type :invoke, :process 78, :f :write-durable, :value 8087}
+{:index 495, :time 38855710792, :type :fail, :process 72, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8085} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 496, :time 38921475917, :type :info, :process 75, :f :write-durable, :value 7785, :error :sync-timeout, :acked 0}
+{:index 497, :time 39039923708, :type :invoke, :process 80, :f :read-quorum, :value nil}
+{:index 498, :time 39043787542, :type :fail, :process 80, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8087} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 499, :time 39094563042, :type :invoke, :process 80, :f :write-durable, :value 8090}
+{:index 500, :time 39231761917, :type :invoke, :process 72, :f :write-async, :value 8092}
+{:index 501, :time 39233960500, :type :ok, :process 72, :f :write-async, :value 8092, :durable false}
+{:index 502, :time 39287105250, :type :info, :process 74, :f :write-durable, :value 8076, :error :sync-timeout, :acked 0}
+{:index 503, :time 39287559833, :type :invoke, :process 72, :f :write-async, :value 8097}
+{:index 504, :time 39289107625, :type :ok, :process 72, :f :write-async, :value 8097, :durable false}
+{:index 505, :time 39368823750, :type :info, :process 76, :f :write-durable, :value 8080, :error :sync-timeout, :acked 0}
+{:index 506, :time 39439763750, :type :invoke, :process 81, :f :write-async, :value 8101}
+{:index 507, :time 39442097333, :type :ok, :process 81, :f :write-async, :value 8101, :durable false}
+{:index 508, :time 39560611500, :type :invoke, :process 72, :f :write-durable, :value 8104}
+{:index 509, :time 39661510708, :type :invoke, :process 79, :f :write-async, :value 8106}
+{:index 510, :time 39662890000, :type :ok, :process 79, :f :write-async, :value 8106, :durable false}
+{:index 511, :time 39779157500, :type :invoke, :process 79, :f :write-async, :value 8109}
+{:index 512, :time 39780418750, :type :ok, :process 79, :f :write-async, :value 8109, :durable false}
+{:index 513, :time 39955384375, :type :invoke, :process 81, :f :write-durable, :value 8112}
+{:index 514, :time 40117953375, :type :invoke, :process 79, :f :write-async, :value 8114}
+{:index 515, :time 40120826750, :type :ok, :process 79, :f :write-async, :value 8114, :durable false}
+{:index 516, :time 40239220542, :type :invoke, :process 79, :f :write-durable, :value 8119}
+{:index 517, :time 40857838958, :type :info, :process 78, :f :write-durable, :value 8087, :error :sync-timeout, :acked 0}
+{:index 518, :time 40857886083, :type :invoke, :process 83, :f :read-quorum, :value nil}
+{:index 519, :time 40859433292, :type :fail, :process 83, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8119} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 520, :time 40966829542, :type :invoke, :process 83, :f :read-quorum, :value nil}
+{:index 521, :time 40968994625, :type :fail, :process 83, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8119} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 522, :time 41104116042, :type :info, :process 80, :f :write-durable, :value 8090, :error :sync-timeout, :acked 0}
+{:index 523, :time 41106491458, :type :invoke, :process 85, :f :write-durable, :value 8124}
+{:index 524, :time 41111125750, :type :invoke, :process 83, :f :read-quorum, :value nil}
+{:index 525, :time 41114481542, :type :fail, :process 83, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8124} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 526, :time 41309103750, :type :invoke, :process 83, :f :write-durable, :value 8129}
+{:index 527, :time 41566083125, :type :info, :process 72, :f :write-durable, :value 8104, :error :sync-timeout, :acked 0}
+{:index 528, :time 41566122667, :type :invoke, :process 77, :f :write-durable, :value 8332}
+{:index 529, :time 41959814500, :type :info, :process 81, :f :write-durable, :value 8112, :error :sync-timeout, :acked 0}
+{:index 530, :time 41959875583, :type :invoke, :process 86, :f :read-quorum, :value nil}
+{:index 531, :time 41961551417, :type :fail, :process 86, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8332} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 532, :time 42026217500, :type :invoke, :process 86, :f :write-durable, :value 8336}
+{:index 533, :time 42247028125, :type :info, :process 79, :f :write-durable, :value 8119, :error :sync-timeout, :acked 0}
+{:index 534, :time 42247079708, :type :invoke, :process 84, :f :write-durable, :value 8511}
+{:index 535, :time 43111886292, :type :info, :process 85, :f :write-durable, :value 8124, :error :sync-timeout, :acked 0}
+{:index 536, :time 43111941750, :type :invoke, :process 90, :f :read-quorum, :value nil}
+{:index 537, :time 43115063375, :type :fail, :process 90, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8511} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 538, :time 43251932667, :type :invoke, :process 90, :f :write-async, :value 8516}
+{:index 539, :time 43254416542, :type :ok, :process 90, :f :write-async, :value 8516, :durable false}
+{:index 540, :time 43316688083, :type :info, :process 83, :f :write-durable, :value 8129, :error :sync-timeout, :acked 0}
+{:index 541, :time 43450442333, :type :invoke, :process 88, :f :write-durable, :value 8521}
+{:index 542, :time 43494348542, :type :invoke, :process 90, :f :write-durable, :value 8523}
+{:index 543, :time 43572331167, :type :info, :process 77, :f :write-durable, :value 8332, :error :sync-timeout, :acked 0}
+{:index 544, :time 43634844375, :type :invoke, :process 82, :f :write-async, :value 8587}
+{:index 545, :time 43636141250, :type :ok, :process 82, :f :write-async, :value 8587, :durable false}
+{:index 546, :time 43709437125, :type :invoke, :process 82, :f :write-durable, :value 8590}
+{:index 547, :time 44031879375, :type :info, :process 86, :f :write-durable, :value 8336, :error :sync-timeout, :acked 0}
+{:index 548, :time 44031916000, :type :invoke, :process 91, :f :write-async, :value 8842}
+{:index 549, :time 44032546667, :type :ok, :process 91, :f :write-async, :value 8842, :durable false}
+{:index 550, :time 44172618917, :type :invoke, :process 91, :f :write-async, :value 8845}
+{:index 551, :time 44174448958, :type :ok, :process 91, :f :write-async, :value 8845, :durable false}
+{:index 552, :time 44254137417, :type :info, :process 84, :f :write-durable, :value 8511, :error :sync-timeout, :acked 0}
+{:index 553, :time 44377383917, :type :invoke, :process 91, :f :read-quorum, :value nil}
+{:index 554, :time 44380857875, :type :fail, :process 91, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8845} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 555, :time 44534544625, :type :invoke, :process 89, :f :read-quorum, :value nil}
+{:index 556, :time 44537432500, :type :fail, :process 89, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8845} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 557, :time 44574479958, :type :invoke, :process 89, :f :read-quorum, :value nil}
+{:index 558, :time 44578190208, :type :fail, :process 89, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 8845} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 559, :time 44620969958, :type :invoke, :process 89, :f :write-durable, :value 8848}
+{:index 560, :time 44709848417, :type :invoke, :process 91, :f :write-async, :value 8850}
+{:index 561, :time 44711643458, :type :ok, :process 91, :f :write-async, :value 8850, :durable false}
+{:index 562, :time 44798658125, :type :invoke, :process 91, :f :write-durable, :value 8854}
+{:index 563, :time 45457336167, :type :info, :process 88, :f :write-durable, :value 8521, :error :sync-timeout, :acked 0}
+{:index 564, :time 45457679750, :type :invoke, :process 93, :f :write-durable, :value 9354}
+{:index 565, :time 45500050542, :type :info, :process 90, :f :write-durable, :value 8523, :error :sync-timeout, :acked 0}
+{:index 566, :time 45630269000, :type :invoke, :process 95, :f :read-quorum, :value nil}
+{:index 567, :time 45644202375, :type :fail, :process 95, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9354} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 568, :time 45715319458, :type :info, :process 82, :f :write-durable, :value 8590, :error :sync-timeout, :acked 0}
+{:index 569, :time 45742861167, :type :invoke, :process 95, :f :read-quorum, :value nil}
+{:index 570, :time 45751899042, :type :fail, :process 95, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9354} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 571, :time 45774203417, :type :invoke, :process 95, :f :write-async, :value 9357}
+{:index 572, :time 45776128417, :type :ok, :process 95, :f :write-async, :value 9357, :durable false}
+{:index 573, :time 45950123500, :type :invoke, :process 95, :f :write-async, :value 9360}
+{:index 574, :time 45953020667, :type :ok, :process 95, :f :write-async, :value 9360, :durable false}
+{:index 575, :time 45992051042, :type :invoke, :process 95, :f :read-quorum, :value nil}
+{:index 576, :time 45995625542, :type :fail, :process 95, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9360} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 577, :time 46114995792, :type :invoke, :process 87, :f :read-quorum, :value nil}
+{:index 578, :time 46126971167, :type :fail, :process 87, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9360} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 579, :time 46297327625, :type :invoke, :process 87, :f :write-async, :value 9363}
+{:index 580, :time 46343135583, :type :ok, :process 87, :f :write-async, :value 9363, :durable false}
+{:index 581, :time 46497390292, :type :invoke, :process 95, :f :write-durable, :value 9366}
+{:index 582, :time 46583490625, :type :invoke, :process 87, :f :write-async, :value 9368}
+{:index 583, :time 46584615125, :type :ok, :process 87, :f :write-async, :value 9368, :durable false}
+{:index 584, :time 46627119708, :type :info, :process 89, :f :write-durable, :value 8848, :error :sync-timeout, :acked 0}
+{:index 585, :time 46664093542, :type :invoke, :process 87, :f :write-durable, :value 9372}
+{:index 586, :time 46806036208, :type :info, :process 91, :f :write-durable, :value 8854, :error :sync-timeout, :acked 0}
+{:index 587, :time 46809464708, :type :invoke, :process 96, :f :read-quorum, :value nil}
+{:index 588, :time 46812130333, :type :fail, :process 96, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9372} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 589, :time 46877814292, :type :invoke, :process 96, :f :write-async, :value 9375}
+{:index 590, :time 46879221042, :type :ok, :process 96, :f :write-async, :value 9375, :durable false}
+{:index 591, :time 47060861208, :type :invoke, :process 94, :f :write-async, :value 9378}
+{:index 592, :time 47062568083, :type :ok, :process 94, :f :write-async, :value 9378, :durable false}
+{:index 593, :time 47062872792, :type :info, :process :nemesis, :f :heal, :value nil}
+{:index 594, :time 47114493833, :type :invoke, :process 94, :f :write-async, :value 9383}
+{:index 595, :time 47115587000, :type :ok, :process 94, :f :write-async, :value 9383, :durable false}
+{:index 596, :time 47241368667, :type :invoke, :process 96, :f :write-durable, :value 9386}
+{:index 597, :time 47294541833, :type :invoke, :process 94, :f :write-durable, :value 9388}
+{:index 598, :time 47327547708, :type :info, :process :nemesis, :f :heal, :value :healed}
+{:index 599, :time 47462948333, :type :info, :process 93, :f :write-durable, :value 9354, :error :sync-timeout, :acked 0}
+{:index 600, :time 47462988333, :type :invoke, :process 98, :f :read-quorum, :value nil}
+{:index 601, :time 47464311583, :type :fail, :process 98, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9388} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 602, :time 47464322000, :type :invoke, :process 98, :f :write-durable, :value 9391}
+{:index 603, :time 48501614833, :type :info, :process 95, :f :write-durable, :value 9366, :error :sync-timeout, :acked 0}
+{:index 604, :time 48501663625, :type :invoke, :process 100, :f :read-quorum, :value nil}
+{:index 605, :time 48502834750, :type :fail, :process 100, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9391} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 606, :time 48621070167, :type :invoke, :process 100, :f :write-durable, :value 9394}
+{:index 607, :time 48668189667, :type :info, :process 87, :f :write-durable, :value 9372, :error :sync-timeout, :acked 0}
+{:index 608, :time 48710471250, :type :invoke, :process 92, :f :read-quorum, :value nil}
+{:index 609, :time 48714135750, :type :fail, :process 92, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9394} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 610, :time 48737031750, :type :invoke, :process 92, :f :write-durable, :value 9399}
+{:index 611, :time 49245961833, :type :info, :process 96, :f :write-durable, :value 9386, :error :sync-timeout, :acked 0}
+{:index 612, :time 49246007625, :type :invoke, :process 101, :f :read-quorum, :value nil}
+{:index 613, :time 49249726042, :type :fail, :process 101, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9399} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 614, :time 49278343708, :type :invoke, :process 101, :f :write-async, :value 9404}
+{:index 615, :time 49279687042, :type :ok, :process 101, :f :write-async, :value 9404, :durable false}
+{:index 616, :time 49298571625, :type :info, :process 94, :f :write-durable, :value 9388, :error :sync-timeout, :acked 0}
+{:index 617, :time 49442522292, :type :invoke, :process 99, :f :read-quorum, :value nil}
+{:index 618, :time 49444775167, :type :fail, :process 99, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9404} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 619, :time 49467318583, :type :info, :process 98, :f :write-durable, :value 9391, :error :sync-timeout, :acked 0}
+{:index 620, :time 49527045083, :type :invoke, :process 101, :f :read-quorum, :value nil}
+{:index 621, :time 49528537500, :type :fail, :process 101, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9404} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 622, :time 49687765042, :type :invoke, :process 101, :f :write-durable, :value 9407}
+{:index 623, :time 49717830083, :type :invoke, :process 103, :f :write-async, :value 9409}
+{:index 624, :time 49719153375, :type :ok, :process 103, :f :write-async, :value 9409, :durable false}
+{:index 625, :time 49866936708, :type :invoke, :process 103, :f :write-durable, :value 9412}
+{:index 626, :time 50062205875, :type :invoke, :process 99, :f :write-durable, :value 9414}
+{:index 627, :time 50625058667, :type :info, :process 100, :f :write-durable, :value 9394, :error :sync-timeout, :acked 0}
+{:index 628, :time 50625097542, :type :invoke, :process 105, :f :read-quorum, :value nil}
+{:index 629, :time 50626381458, :type :fail, :process 105, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9414} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 630, :time 50744028875, :type :info, :process 92, :f :write-durable, :value 9399, :error :sync-timeout, :acked 0}
+{:index 631, :time 50810310042, :type :invoke, :process 105, :f :write-async, :value 9419}
+{:index 632, :time 50812071333, :type :ok, :process 105, :f :write-async, :value 9419, :durable false}
+{:index 633, :time 50885065083, :type :invoke, :process 105, :f :write-async, :value 9422}
+{:index 634, :time 50887461833, :type :ok, :process 105, :f :write-async, :value 9422, :durable false}
+{:index 635, :time 51062206917, :type :invoke, :process 97, :f :write-async, :value 9425}
+{:index 636, :time 51064338958, :type :ok, :process 97, :f :write-async, :value 9425, :durable false}
+{:index 637, :time 51145137042, :type :invoke, :process 97, :f :write-durable, :value 9428}
+{:index 638, :time 51268759875, :type :invoke, :process 105, :f :write-async, :value 9430}
+{:index 639, :time 51270587167, :type :ok, :process 105, :f :write-async, :value 9430, :durable false}
+{:index 640, :time 51444493333, :type :invoke, :process 105, :f :read-quorum, :value nil}
+{:index 641, :time 51447402917, :type :fail, :process 105, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9430} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 642, :time 51536339167, :type :invoke, :process 105, :f :write-async, :value 9435}
+{:index 643, :time 51538220542, :type :ok, :process 105, :f :write-async, :value 9435, :durable false}
+{:index 644, :time 51629845125, :type :invoke, :process 105, :f :read-quorum, :value nil}
+{:index 645, :time 51633136000, :type :fail, :process 105, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9435} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 646, :time 51692476583, :type :info, :process 101, :f :write-durable, :value 9407, :error :sync-timeout, :acked 0}
+{:index 647, :time 51769812625, :type :invoke, :process 106, :f :write-durable, :value 9441}
+{:index 648, :time 51873063458, :type :info, :process 103, :f :write-durable, :value 9412, :error :sync-timeout, :acked 0}
+{:index 649, :time 51897142208, :type :invoke, :process 108, :f :read-quorum, :value nil}
+{:index 650, :time 51899546583, :type :fail, :process 108, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9441} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 651, :time 51949578125, :type :invoke, :process 108, :f :write-async, :value 9444}
+{:index 652, :time 51951622417, :type :ok, :process 108, :f :write-async, :value 9444, :durable false}
+{:index 653, :time 52066220500, :type :info, :process 99, :f :write-durable, :value 9414, :error :sync-timeout, :acked 0}
+{:index 654, :time 52151965167, :type :invoke, :process 104, :f :write-async, :value 9448}
+{:index 655, :time 52154660083, :type :ok, :process 104, :f :write-async, :value 9448, :durable false}
+{:index 656, :time 52202017125, :type :invoke, :process 105, :f :read-quorum, :value nil}
+{:index 657, :time 52205628667, :type :fail, :process 105, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9448} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 658, :time 52249029667, :type :invoke, :process 105, :f :write-durable, :value 9451}
+{:index 659, :time 52329063958, :type :invoke, :process 108, :f :read-quorum, :value nil}
+{:index 660, :time 52333290958, :type :fail, :process 108, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9451} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 661, :time 52364794417, :type :invoke, :process 108, :f :write-durable, :value 9456}
+{:index 662, :time 52420120250, :type :invoke, :process 104, :f :write-async, :value 9458}
+{:index 663, :time 52421675167, :type :ok, :process 104, :f :write-async, :value 9458, :durable false}
+{:index 664, :time 52499473083, :type :invoke, :process 104, :f :read-quorum, :value nil}
+{:index 665, :time 52503444500, :type :fail, :process 104, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9458} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 666, :time 52570035583, :type :invoke, :process 104, :f :read-quorum, :value nil}
+{:index 667, :time 52573254667, :type :fail, :process 104, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9458} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 668, :time 52769218167, :type :invoke, :process 104, :f :write-durable, :value 9463}
+{:index 669, :time 53155088292, :type :info, :process 97, :f :write-durable, :value 9428, :error :sync-timeout, :acked 0}
+{:index 670, :time 53155134417, :type :invoke, :process 102, :f :read-quorum, :value nil}
+{:index 671, :time 53158981292, :type :fail, :process 102, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9463} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 672, :time 53270801083, :type :invoke, :process 102, :f :read-quorum, :value nil}
+{:index 673, :time 53274168417, :type :fail, :process 102, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9463} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 674, :time 53466754917, :type :invoke, :process 102, :f :read-quorum, :value nil}
+{:index 675, :time 53470312792, :type :fail, :process 102, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9463} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 676, :time 53470334792, :type :invoke, :process 102, :f :write-async, :value 9467}
+{:index 677, :time 53471150250, :type :ok, :process 102, :f :write-async, :value 9467, :durable false}
+{:index 678, :time 53497810708, :type :invoke, :process 102, :f :write-durable, :value 9470}
+{:index 679, :time 53773819500, :type :info, :process 106, :f :write-durable, :value 9441, :error :sync-timeout, :acked 0}
+{:index 680, :time 53773899292, :type :invoke, :process 111, :f :write-async, :value 9685}
+{:index 681, :time 53775367375, :type :ok, :process 111, :f :write-async, :value 9685, :durable false}
+{:index 682, :time 53808519708, :type :invoke, :process 111, :f :write-durable, :value 9689}
+{:index 683, :time 54256404000, :type :info, :process 105, :f :write-durable, :value 9451, :error :sync-timeout, :acked 0}
+{:index 684, :time 54256452958, :type :invoke, :process 110, :f :read-quorum, :value nil}
+{:index 685, :time 54259347625, :type :fail, :process 110, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9689} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 686, :time 54368665750, :type :info, :process 108, :f :write-durable, :value 9456, :error :sync-timeout, :acked 0}
+{:index 687, :time 54430984292, :type :invoke, :process 110, :f :write-async, :value 9695}
+{:index 688, :time 54432563375, :type :ok, :process 110, :f :write-async, :value 9695, :durable false}
+{:index 689, :time 54552654792, :type :invoke, :process 110, :f :write-durable, :value 9698}
+{:index 690, :time 54714054292, :type :invoke, :process 113, :f :write-async, :value 9700}
+{:index 691, :time 54716036833, :type :ok, :process 113, :f :write-async, :value 9700, :durable false}
+{:index 692, :time 54760940083, :type :invoke, :process 113, :f :write-async, :value 9704}
+{:index 693, :time 54762120750, :type :ok, :process 113, :f :write-async, :value 9704, :durable false}
+{:index 694, :time 54775647125, :type :info, :process 104, :f :write-durable, :value 9463, :error :sync-timeout, :acked 0}
+{:index 695, :time 54946842750, :type :invoke, :process 113, :f :write-durable, :value 9708}
+{:index 696, :time 55116849292, :type :invoke, :process 109, :f :write-durable, :value 9710}
+{:index 697, :time 55507276250, :type :info, :process 102, :f :write-durable, :value 9470, :error :sync-timeout, :acked 0}
+{:index 698, :time 55507321917, :type :invoke, :process 107, :f :read-quorum, :value nil}
+{:index 699, :time 55510062250, :type :fail, :process 107, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 9710} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 700, :time 55513386667, :type :invoke, :process 107, :f :write-async, :value 9715}
+{:index 701, :time 55514309500, :type :ok, :process 107, :f :write-async, :value 9715, :durable false}
+{:index 702, :time 55571164625, :type :invoke, :process 107, :f :write-async, :value 9718}
+{:index 703, :time 55572965250, :type :ok, :process 107, :f :write-async, :value 9718, :durable false}
+{:index 704, :time 55689942958, :type :invoke, :process 107, :f :write-durable, :value 9722}
+{:index 705, :time 55817871458, :type :info, :process 111, :f :write-durable, :value 9689, :error :sync-timeout, :acked 0}
+{:index 706, :time 55875812875, :type :invoke, :process 116, :f :write-async, :value 9824}
+{:index 707, :time 55878757875, :type :ok, :process 116, :f :write-async, :value 9824, :durable false}
+{:index 708, :time 56023538542, :type :invoke, :process 116, :f :write-durable, :value 9828}
+{:index 709, :time 56556382000, :type :info, :process 110, :f :write-durable, :value 9698, :error :sync-timeout, :acked 0}
+{:index 710, :time 56556422125, :type :invoke, :process 115, :f :write-durable, :value 10246}
+{:index 711, :time 56952541167, :type :info, :process 113, :f :write-durable, :value 9708, :error :sync-timeout, :acked 0}
+{:index 712, :time 56952618917, :type :invoke, :process 118, :f :write-async, :value 10558}
+{:index 713, :time 56954601458, :type :ok, :process 118, :f :write-async, :value 10558, :durable false}
+{:index 714, :time 57102536875, :type :invoke, :process 118, :f :write-durable, :value 10562}
+{:index 715, :time 57124734500, :type :info, :process 109, :f :write-durable, :value 9710, :error :sync-timeout, :acked 0}
+{:index 716, :time 57141926667, :type :invoke, :process 114, :f :read-quorum, :value nil}
+{:index 717, :time 57147533375, :type :fail, :process 114, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 10562} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 718, :time 57342830667, :type :invoke, :process 114, :f :write-durable, :value 10568}
+{:index 719, :time 57696160958, :type :info, :process 107, :f :write-durable, :value 9722, :error :sync-timeout, :acked 0}
+{:index 720, :time 57696223125, :type :invoke, :process 112, :f :write-durable, :value 10847}
+{:index 721, :time 58028119208, :type :info, :process 116, :f :write-durable, :value 9828, :error :sync-timeout, :acked 0}
+{:index 722, :time 58028161792, :type :invoke, :process 121, :f :write-async, :value 11105}
+{:index 723, :time 58029682125, :type :ok, :process 121, :f :write-async, :value 11105, :durable false}
+{:index 724, :time 58216616542, :type :invoke, :process 121, :f :write-durable, :value 11109}
+{:index 725, :time 58564081208, :type :info, :process 115, :f :write-durable, :value 10246, :error :sync-timeout, :acked 0}
+{:index 726, :time 58564150500, :type :invoke, :process 120, :f :write-durable, :value 11382}
+{:index 727, :time 59111681875, :type :info, :process 118, :f :write-durable, :value 10562, :error :sync-timeout, :acked 0}
+{:index 728, :time 59111799417, :type :invoke, :process 123, :f :write-async, :value 11812}
+{:index 729, :time 59113667083, :type :ok, :process 123, :f :write-async, :value 11812, :durable false}
+{:index 730, :time 59138276958, :type :invoke, :process 123, :f :read-quorum, :value nil}
+{:index 731, :time 59143575875, :type :fail, :process 123, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 11812} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 732, :time 59262334542, :type :invoke, :process 123, :f :read-quorum, :value nil}
+{:index 733, :time 59264548458, :type :fail, :process 123, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 11812} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 734, :time 59347429792, :type :info, :process 114, :f :write-durable, :value 10568, :error :sync-timeout, :acked 0}
+{:index 735, :time 59374249208, :type :invoke, :process 119, :f :write-durable, :value 11817}
+{:index 736, :time 59559577583, :type :invoke, :process 123, :f :read-quorum, :value nil}
+{:index 737, :time 59563728125, :type :fail, :process 123, :f :read-quorum, :value nil, :error :no-quorum, :results [{:node "n1", :value 11817} {:node "n2", :value nil} {:node "n3", :value nil}]}
+{:index 738, :time 59699865708, :type :info, :process 112, :f :write-durable, :value 10847, :error :sync-timeout, :acked 0}
+{:index 739, :time 59717680458, :type :invoke, :process 117, :f :write-durable, :value 11824}
+{:index 740, :time 59752949917, :type :invoke, :process 123, :f :write-durable, :value 11826}
+{:index 741, :time 60221006125, :type :info, :process 121, :f :write-durable, :value 11109, :error :sync-timeout, :acked 0}
+{:index 742, :time 60221076792, :type :invoke, :process 126, :f :write-durable, :value 12191}
+{:index 743, :time 60570051000, :type :info, :process 120, :f :write-durable, :value 11382, :error :sync-timeout, :acked 0}
+{:index 744, :time 61381187583, :type :info, :process 119, :f :write-durable, :value 11817, :error :sync-timeout, :acked 0}
+{:index 745, :time 61723500792, :type :info, :process 117, :f :write-durable, :value 11824, :error :sync-timeout, :acked 0}
+{:index 746, :time 61760441458, :type :info, :process 123, :f :write-durable, :value 11826, :error :sync-timeout, :acked 0}
+{:index 747, :time 62230007792, :type :info, :process 126, :f :write-durable, :value 12191, :error :sync-timeout, :acked 0}
+{:index 748, :time 62337445250, :type :info, :process :nemesis, :f :heal, :value nil}
+{:index 749, :time 62579844917, :type :info, :process :nemesis, :f :heal, :value :healed}
+{:index 750, :time 67582623917, :type :invoke, :process 131, :f :read, :value nil}
+{:index 751, :time 67593089958, :type :info, :process 131, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54]}], :trace [[jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 752, :time 67635114167, :type :invoke, :process 122, :f :read, :value nil}
+{:index 753, :time 67635725917, :type :info, :process 122, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54]}], :trace [[jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 754, :time 67790726375, :type :invoke, :process 128, :f :read, :value nil}
+{:index 755, :time 67791307208, :type :info, :process 128, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54]}], :trace [[jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 756, :time 67799426542, :type :invoke, :process 124, :f :read, :value nil}
+{:index 757, :time 67800153583, :type :info, :process 124, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54]}], :trace [[jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 758, :time 67894012333, :type :invoke, :process 125, :f :read, :value nil}
+{:index 759, :time 67894732958, :type :info, :process 125, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54]}], :trace [[jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 760, :time 67947322958, :type :invoke, :process 130, :f :read, :value nil}
+{:index 761, :time 67947927708, :type :info, :process 130, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54]}], :trace [[jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 762, :time 68129558208, :type :invoke, :process 136, :f :read, :value nil}
+{:index 763, :time 68130333417, :type :info, :process 136, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54]}], :trace [[jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 764, :time 68151918750, :type :invoke, :process 127, :f :read, :value nil}
+{:index 765, :time 68152558417, :type :info, :process 127, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54]}], :trace [[jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 766, :time 68311197625, :type :invoke, :process 133, :f :read, :value nil}
+{:index 767, :time 68311729375, :type :info, :process 133, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54]}], :trace [[jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}
+{:index 768, :time 68401947208, :type :invoke, :process 129, :f :read, :value nil}
+{:index 769, :time 68402506792, :type :info, :process 129, :f :read, :value nil, :exception {:via [{:type java.lang.IllegalArgumentException, :message "No matching clause: :read", :at [jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54]}], :trace [[jepsen.frogdb.zombie.ZombieClient invoke_BANG_ "zombie.clj" 54] [jepsen.client.Validate invoke_BANG_ "client.clj" 83] [jepsen.generator.interpreter.ClientWorker invoke_BANG_ "interpreter.clj" 65] [jepsen.generator.interpreter$spawn_worker$fn__13146$fn__13147 invoke "interpreter.clj" 140] [jepsen.generator.interpreter$spawn_worker$fn__13146 invoke "interpreter.clj" 123] [clojure.core$binding_conveyor_fn$fn__5823 invoke "core.clj" 2047] [clojure.lang.AFn call "AFn.java" 18] [java.util.concurrent.FutureTask run "FutureTask.java" 328] [java.util.concurrent.ThreadPoolExecutor runWorker "ThreadPoolExecutor.java" 1090] [java.util.concurrent.ThreadPoolExecutor$Worker run "ThreadPoolExecutor.java" 614] [java.lang.Thread run "Thread.java" 1474]], :cause "No matching clause: :read"}, :error "indeterminate: No matching clause: :read"}

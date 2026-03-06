@@ -1,0 +1,1234 @@
+1	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 5549, :ttl 9}
+1	:ok	:set-with-ttl	{:key "expiry-key-8", :value 5549, :ttl 9}
+2	:invoke	:persist	"expiry-key-8"
+2	:ok	:persist	{:key "expiry-key-8"}
+3	:invoke	:expire	{:key "expiry-key-15", :ttl 7}
+3	:ok	:expire	{:key "expiry-key-15", :ttl 7}
+4	:invoke	:ttl	"expiry-key-9"
+4	:ok	:ttl	{:key "expiry-key-9", :ttl -2}
+0	:invoke	:ttl	"expiry-key-8"
+0	:ok	:ttl	{:key "expiry-key-8", :ttl -1}
+0	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 410, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-0", :value 410, :ttl 4}
+1	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 6723, :ttl 4}
+1	:ok	:set-with-ttl	{:key "expiry-key-6", :value 6723, :ttl 4}
+2	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 7398, :ttl 5}
+2	:ok	:set-with-ttl	{:key "expiry-key-6", :value 7398, :ttl 5}
+3	:invoke	:read	"expiry-key-13"
+3	:ok	:read	{:key "expiry-key-13", :value nil}
+4	:invoke	:read	"expiry-key-8"
+4	:ok	:read	{:key "expiry-key-8", :value "5549"}
+0	:invoke	:read	"expiry-key-8"
+0	:ok	:read	{:key "expiry-key-8", :value "5549"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 1932, :ttl 9}
+0	:ok	:set-with-ttl	{:key "expiry-key-7", :value 1932, :ttl 9}
+1	:invoke	:persist	"expiry-key-13"
+1	:ok	:persist	{:key "expiry-key-13"}
+2	:invoke	:persist	"expiry-key-8"
+2	:ok	:persist	{:key "expiry-key-8"}
+3	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 1273, :ttl 9}
+3	:ok	:set-with-ttl	{:key "expiry-key-3", :value 1273, :ttl 9}
+4	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 9883, :ttl 9}
+4	:ok	:set-with-ttl	{:key "expiry-key-18", :value 9883, :ttl 9}
+0	:invoke	:persist	"expiry-key-8"
+0	:ok	:persist	{:key "expiry-key-8"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 7673, :ttl 9}
+0	:ok	:set-with-ttl	{:key "expiry-key-5", :value 7673, :ttl 9}
+1	:invoke	:ttl	"expiry-key-11"
+1	:ok	:ttl	{:key "expiry-key-11", :ttl -2}
+2	:invoke	:expire	{:key "expiry-key-15", :ttl 8}
+2	:ok	:expire	{:key "expiry-key-15", :ttl 8}
+3	:invoke	:read	"expiry-key-6"
+3	:ok	:read	{:key "expiry-key-6", :value "7398"}
+4	:invoke	:persist	"expiry-key-4"
+4	:ok	:persist	{:key "expiry-key-4"}
+0	:invoke	:read	"expiry-key-5"
+1	:invoke	:read	"expiry-key-1"
+0	:ok	:read	{:key "expiry-key-5", :value "7673"}
+1	:ok	:read	{:key "expiry-key-1", :value nil}
+1	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 30, :ttl 3}
+1	:ok	:set-with-ttl	{:key "expiry-key-17", :value 30, :ttl 3}
+2	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 5002, :ttl 8}
+2	:ok	:set-with-ttl	{:key "expiry-key-16", :value 5002, :ttl 8}
+3	:invoke	:read	"expiry-key-8"
+3	:ok	:read	{:key "expiry-key-8", :value "5549"}
+4	:invoke	:read	"expiry-key-1"
+4	:ok	:read	{:key "expiry-key-1", :value nil}
+0	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 9208, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-10", :value 9208, :ttl 7}
+0	:invoke	:expire	{:key "expiry-key-4", :ttl 9}
+0	:ok	:expire	{:key "expiry-key-4", :ttl 9}
+1	:invoke	:read	"expiry-key-17"
+1	:ok	:read	{:key "expiry-key-17", :value "30"}
+2	:invoke	:expire	{:key "expiry-key-17", :ttl 4}
+2	:ok	:expire	{:key "expiry-key-17", :ttl 4}
+3	:invoke	:read	"expiry-key-6"
+3	:ok	:read	{:key "expiry-key-6", :value "7398"}
+4	:invoke	:read	"expiry-key-0"
+4	:ok	:read	{:key "expiry-key-0", :value "410"}
+0	:invoke	:expire	{:key "expiry-key-2", :ttl 4}
+0	:ok	:expire	{:key "expiry-key-2", :ttl 4}
+0	:invoke	:expire	{:key "expiry-key-17", :ttl 5}
+0	:ok	:expire	{:key "expiry-key-17", :ttl 5}
+1	:invoke	:ttl	"expiry-key-16"
+1	:ok	:ttl	{:key "expiry-key-16", :ttl 6}
+2	:invoke	:expire	{:key "expiry-key-6", :ttl 6}
+2	:ok	:expire	{:key "expiry-key-6", :ttl 6}
+3	:invoke	:read	"expiry-key-6"
+3	:ok	:read	{:key "expiry-key-6", :value "7398"}
+4	:invoke	:read	"expiry-key-2"
+4	:ok	:read	{:key "expiry-key-2", :value nil}
+0	:invoke	:expire	{:key "expiry-key-16", :ttl 5}
+0	:ok	:expire	{:key "expiry-key-16", :ttl 5}
+0	:invoke	:read	"expiry-key-5"
+0	:ok	:read	{:key "expiry-key-5", :value "7673"}
+1	:invoke	:ttl	"expiry-key-5"
+1	:ok	:ttl	{:key "expiry-key-5", :ttl 6}
+2	:invoke	:read	"expiry-key-16"
+2	:ok	:read	{:key "expiry-key-16", :value "5002"}
+3	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 8484, :ttl 3}
+3	:ok	:set-with-ttl	{:key "expiry-key-14", :value 8484, :ttl 3}
+4	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 1322, :ttl 5}
+4	:ok	:set-with-ttl	{:key "expiry-key-2", :value 1322, :ttl 5}
+0	:invoke	:read	"expiry-key-2"
+0	:ok	:read	{:key "expiry-key-2", :value "1322"}
+0	:invoke	:read	"expiry-key-5"
+0	:ok	:read	{:key "expiry-key-5", :value "7673"}
+1	:invoke	:ttl	"expiry-key-5"
+1	:ok	:ttl	{:key "expiry-key-5", :ttl 5}
+2	:invoke	:read	"expiry-key-6"
+2	:ok	:read	{:key "expiry-key-6", :value "7398"}
+3	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 8581, :ttl 5}
+3	:ok	:set-with-ttl	{:key "expiry-key-11", :value 8581, :ttl 5}
+4	:invoke	:ttl	"expiry-key-18"
+4	:ok	:ttl	{:key "expiry-key-18", :ttl 5}
+0	:invoke	:read	"expiry-key-17"
+0	:ok	:read	{:key "expiry-key-17", :value "30"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 9402, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-5", :value 9402, :ttl 4}
+1	:invoke	:read	"expiry-key-1"
+1	:ok	:read	{:key "expiry-key-1", :value nil}
+2	:invoke	:persist	"expiry-key-16"
+2	:ok	:persist	{:key "expiry-key-16"}
+3	:invoke	:ttl	"expiry-key-11"
+3	:ok	:ttl	{:key "expiry-key-11", :ttl 4}
+4	:invoke	:read	"expiry-key-14"
+4	:ok	:read	{:key "expiry-key-14", :value "8484"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 9331, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-18", :value 9331, :ttl 7}
+0	:invoke	:read	"expiry-key-11"
+0	:ok	:read	{:key "expiry-key-11", :value "8581"}
+1	:invoke	:persist	"expiry-key-3"
+1	:ok	:persist	{:key "expiry-key-3"}
+2	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 5444, :ttl 5}
+2	:ok	:set-with-ttl	{:key "expiry-key-9", :value 5444, :ttl 5}
+3	:invoke	:read	"expiry-key-18"
+3	:ok	:read	{:key "expiry-key-18", :value "9331"}
+4	:invoke	:ttl	"expiry-key-16"
+4	:ok	:ttl	{:key "expiry-key-16", :ttl -1}
+0	:invoke	:read	"expiry-key-6"
+0	:ok	:read	{:key "expiry-key-6", :value "7398"}
+0	:invoke	:ttl	"expiry-key-11"
+0	:ok	:ttl	{:key "expiry-key-11", :ttl 3}
+1	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 6103, :ttl 3}
+1	:ok	:set-with-ttl	{:key "expiry-key-10", :value 6103, :ttl 3}
+2	:invoke	:ttl	"expiry-key-0"
+2	:ok	:ttl	{:key "expiry-key-0", :ttl -2}
+3	:invoke	:ttl	"expiry-key-18"
+3	:ok	:ttl	{:key "expiry-key-18", :ttl 5}
+4	:invoke	:read	"expiry-key-6"
+4	:ok	:read	{:key "expiry-key-6", :value "7398"}
+0	:invoke	:expire	{:key "expiry-key-18", :ttl 4}
+0	:ok	:expire	{:key "expiry-key-18", :ttl 4}
+0	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 2426, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-10", :value 2426, :ttl 7}
+1	:invoke	:expire	{:key "expiry-key-6", :ttl 8}
+1	:ok	:expire	{:key "expiry-key-6", :ttl 8}
+2	:invoke	:ttl	"expiry-key-14"
+2	:ok	:ttl	{:key "expiry-key-14", :ttl -2}
+3	:invoke	:expire	{:key "expiry-key-5", :ttl 8}
+3	:ok	:expire	{:key "expiry-key-5", :ttl 8}
+4	:invoke	:read	"expiry-key-6"
+4	:ok	:read	{:key "expiry-key-6", :value "7398"}
+0	:invoke	:read	"expiry-key-13"
+0	:ok	:read	{:key "expiry-key-13", :value nil}
+0	:invoke	:read	"expiry-key-5"
+0	:ok	:read	{:key "expiry-key-5", :value "9402"}
+1	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 411, :ttl 6}
+1	:ok	:set-with-ttl	{:key "expiry-key-4", :value 411, :ttl 6}
+2	:invoke	:expire	{:key "expiry-key-4", :ttl 9}
+2	:ok	:expire	{:key "expiry-key-4", :ttl 9}
+3	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 1932, :ttl 7}
+3	:ok	:set-with-ttl	{:key "expiry-key-3", :value 1932, :ttl 7}
+4	:invoke	:ttl	"expiry-key-5"
+4	:ok	:ttl	{:key "expiry-key-5", :ttl 7}
+0	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 9507, :ttl 9}
+0	:ok	:set-with-ttl	{:key "expiry-key-13", :value 9507, :ttl 9}
+0	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 9480, :ttl 3}
+0	:ok	:set-with-ttl	{:key "expiry-key-13", :value 9480, :ttl 3}
+1	:invoke	:ttl	"expiry-key-3"
+1	:ok	:ttl	{:key "expiry-key-3", :ttl 6}
+2	:invoke	:expire	{:key "expiry-key-10", :ttl 4}
+2	:ok	:expire	{:key "expiry-key-10", :ttl 4}
+3	:invoke	:read	"expiry-key-19"
+3	:ok	:read	{:key "expiry-key-19", :value nil}
+4	:invoke	:read	"expiry-key-9"
+4	:ok	:read	{:key "expiry-key-9", :value "5444"}
+0	:invoke	:persist	"expiry-key-7"
+0	:ok	:persist	{:key "expiry-key-7"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 8294, :ttl 8}
+0	:ok	:set-with-ttl	{:key "expiry-key-7", :value 8294, :ttl 8}
+:nemesis	:info	:kill	nil
+2	:invoke	:expire	{:key "expiry-key-1", :ttl 3}
+2	:ok	:expire	{:key "expiry-key-1", :ttl 3}
+3	:invoke	:ttl	"expiry-key-17"
+3	:ok	:ttl	{:key "expiry-key-17", :ttl -2}
+:nemesis	:info	:kill	["n1"]
+0	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 4873, :ttl 3}
+0	:ok	:set-with-ttl	{:key "expiry-key-7", :value 4873, :ttl 3}
+0	:invoke	:expire	{:key "expiry-key-2", :ttl 9}
+0	:ok	:expire	{:key "expiry-key-2", :ttl 9}
+1	:invoke	:read	"expiry-key-11"
+1	:ok	:read	{:key "expiry-key-11", :value nil}
+2	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 8723, :ttl 4}
+2	:ok	:set-with-ttl	{:key "expiry-key-10", :value 8723, :ttl 4}
+3	:invoke	:read	"expiry-key-16"
+3	:ok	:read	{:key "expiry-key-16", :value "5002"}
+4	:invoke	:read	"expiry-key-12"
+4	:ok	:read	{:key "expiry-key-12", :value nil}
+0	:invoke	:persist	"expiry-key-2"
+0	:ok	:persist	{:key "expiry-key-2"}
+0	:invoke	:read	"expiry-key-12"
+0	:ok	:read	{:key "expiry-key-12", :value nil}
+1	:invoke	:expire	{:key "expiry-key-8", :ttl 4}
+1	:ok	:expire	{:key "expiry-key-8", :ttl 4}
+2	:invoke	:expire	{:key "expiry-key-3", :ttl 5}
+2	:ok	:expire	{:key "expiry-key-3", :ttl 5}
+3	:invoke	:read	"expiry-key-12"
+3	:ok	:read	{:key "expiry-key-12", :value nil}
+4	:invoke	:set-with-ttl	{:key "expiry-key-19", :value 5627, :ttl 5}
+4	:ok	:set-with-ttl	{:key "expiry-key-19", :value 5627, :ttl 5}
+0	:invoke	:ttl	"expiry-key-8"
+0	:ok	:ttl	{:key "expiry-key-8", :ttl 3}
+0	:invoke	:expire	{:key "expiry-key-12", :ttl 4}
+0	:ok	:expire	{:key "expiry-key-12", :ttl 4}
+1	:invoke	:read	"expiry-key-16"
+1	:ok	:read	{:key "expiry-key-16", :value "5002"}
+2	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 9808, :ttl 8}
+2	:ok	:set-with-ttl	{:key "expiry-key-3", :value 9808, :ttl 8}
+3	:invoke	:ttl	"expiry-key-18"
+3	:ok	:ttl	{:key "expiry-key-18", :ttl -2}
+4	:invoke	:ttl	"expiry-key-3"
+4	:ok	:ttl	{:key "expiry-key-3", :ttl 7}
+0	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 2855, :ttl 3}
+0	:ok	:set-with-ttl	{:key "expiry-key-9", :value 2855, :ttl 3}
+0	:invoke	:persist	"expiry-key-9"
+0	:ok	:persist	{:key "expiry-key-9"}
+1	:invoke	:persist	"expiry-key-4"
+1	:ok	:persist	{:key "expiry-key-4"}
+2	:invoke	:persist	"expiry-key-12"
+2	:ok	:persist	{:key "expiry-key-12"}
+3	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 8816, :ttl 9}
+3	:ok	:set-with-ttl	{:key "expiry-key-5", :value 8816, :ttl 9}
+4	:invoke	:expire	{:key "expiry-key-0", :ttl 6}
+4	:ok	:expire	{:key "expiry-key-0", :ttl 6}
+0	:invoke	:ttl	"expiry-key-5"
+0	:ok	:ttl	{:key "expiry-key-5", :ttl 8}
+0	:invoke	:ttl	"expiry-key-6"
+0	:ok	:ttl	{:key "expiry-key-6", :ttl 3}
+1	:invoke	:persist	"expiry-key-3"
+1	:ok	:persist	{:key "expiry-key-3"}
+2	:invoke	:read	"expiry-key-11"
+2	:ok	:read	{:key "expiry-key-11", :value nil}
+3	:invoke	:ttl	"expiry-key-19"
+3	:ok	:ttl	{:key "expiry-key-19", :ttl 3}
+4	:invoke	:ttl	"expiry-key-9"
+4	:ok	:ttl	{:key "expiry-key-9", :ttl -1}
+0	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 2615, :ttl 9}
+0	:ok	:set-with-ttl	{:key "expiry-key-13", :value 2615, :ttl 9}
+0	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 9205, :ttl 9}
+0	:ok	:set-with-ttl	{:key "expiry-key-5", :value 9205, :ttl 9}
+1	:invoke	:read	"expiry-key-14"
+1	:ok	:read	{:key "expiry-key-14", :value nil}
+2	:invoke	:read	"expiry-key-8"
+2	:ok	:read	{:key "expiry-key-8", :value "5549"}
+3	:invoke	:persist	"expiry-key-2"
+3	:ok	:persist	{:key "expiry-key-2"}
+4	:invoke	:ttl	"expiry-key-12"
+4	:ok	:ttl	{:key "expiry-key-12", :ttl -2}
+0	:invoke	:persist	"expiry-key-0"
+0	:ok	:persist	{:key "expiry-key-0"}
+0	:invoke	:expire	{:key "expiry-key-4", :ttl 5}
+0	:ok	:expire	{:key "expiry-key-4", :ttl 5}
+1	:invoke	:read	"expiry-key-6"
+1	:ok	:read	{:key "expiry-key-6", :value "7398"}
+2	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 4599, :ttl 4}
+2	:ok	:set-with-ttl	{:key "expiry-key-5", :value 4599, :ttl 4}
+3	:invoke	:expire	{:key "expiry-key-14", :ttl 7}
+3	:ok	:expire	{:key "expiry-key-14", :ttl 7}
+4	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 3974, :ttl 7}
+4	:ok	:set-with-ttl	{:key "expiry-key-13", :value 3974, :ttl 7}
+0	:invoke	:ttl	"expiry-key-1"
+0	:ok	:ttl	{:key "expiry-key-1", :ttl -2}
+0	:invoke	:expire	{:key "expiry-key-16", :ttl 5}
+0	:ok	:expire	{:key "expiry-key-16", :ttl 5}
+1	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 5165, :ttl 9}
+1	:ok	:set-with-ttl	{:key "expiry-key-16", :value 5165, :ttl 9}
+2	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 5841, :ttl 8}
+2	:ok	:set-with-ttl	{:key "expiry-key-18", :value 5841, :ttl 8}
+3	:invoke	:read	"expiry-key-9"
+3	:ok	:read	{:key "expiry-key-9", :value "2855"}
+4	:invoke	:persist	"expiry-key-16"
+:nemesis	:info	:start	nil
+4	:ok	:persist	{:key "expiry-key-16"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 7370, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-10", :value 7370, :ttl 7}
+1	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 9192, :ttl 4}
+1	:ok	:set-with-ttl	{:key "expiry-key-12", :value 9192, :ttl 4}
+2	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 3934, :ttl 7}
+2	:ok	:set-with-ttl	{:key "expiry-key-14", :value 3934, :ttl 7}
+3	:invoke	:read	"expiry-key-12"
+3	:ok	:read	{:key "expiry-key-12", :value "9192"}
+4	:invoke	:read	"expiry-key-7"
+4	:ok	:read	{:key "expiry-key-7", :value nil}
+0	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 4081, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-8", :value 4081, :ttl 7}
+0	:invoke	:expire	{:key "expiry-key-18", :ttl 9}
+0	:ok	:expire	{:key "expiry-key-18", :ttl 9}
+1	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 418, :ttl 5}
+1	:ok	:set-with-ttl	{:key "expiry-key-4", :value 418, :ttl 5}
+2	:invoke	:ttl	"expiry-key-13"
+2	:ok	:ttl	{:key "expiry-key-13", :ttl 5}
+3	:invoke	:persist	"expiry-key-9"
+3	:ok	:persist	{:key "expiry-key-9"}
+4	:invoke	:persist	"expiry-key-18"
+4	:ok	:persist	{:key "expiry-key-18"}
+0	:invoke	:read	"expiry-key-13"
+0	:ok	:read	{:key "expiry-key-13", :value "3974"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 678, :ttl 9}
+0	:ok	:set-with-ttl	{:key "expiry-key-9", :value 678, :ttl 9}
+1	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 1569, :ttl 6}
+1	:ok	:set-with-ttl	{:key "expiry-key-0", :value 1569, :ttl 6}
+2	:invoke	:read	"expiry-key-4"
+2	:ok	:read	{:key "expiry-key-4", :value "418"}
+3	:invoke	:expire	{:key "expiry-key-19", :ttl 8}
+3	:ok	:expire	{:key "expiry-key-19", :ttl 8}
+4	:invoke	:read	"expiry-key-14"
+4	:ok	:read	{:key "expiry-key-14", :value "3934"}
+0	:invoke	:read	"expiry-key-15"
+0	:ok	:read	{:key "expiry-key-15", :value nil}
+0	:invoke	:persist	"expiry-key-8"
+0	:ok	:persist	{:key "expiry-key-8"}
+1	:invoke	:read	"expiry-key-4"
+1	:ok	:read	{:key "expiry-key-4", :value "418"}
+2	:invoke	:read	"expiry-key-9"
+2	:ok	:read	{:key "expiry-key-9", :value "678"}
+3	:invoke	:read	"expiry-key-9"
+3	:ok	:read	{:key "expiry-key-9", :value "678"}
+4	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 2924, :ttl 7}
+4	:ok	:set-with-ttl	{:key "expiry-key-7", :value 2924, :ttl 7}
+0	:invoke	:read	"expiry-key-16"
+0	:ok	:read	{:key "expiry-key-16", :value "5165"}
+0	:invoke	:read	"expiry-key-13"
+0	:ok	:read	{:key "expiry-key-13", :value "3974"}
+1	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 607, :ttl 6}
+1	:ok	:set-with-ttl	{:key "expiry-key-4", :value 607, :ttl 6}
+2	:invoke	:persist	"expiry-key-10"
+2	:ok	:persist	{:key "expiry-key-10"}
+3	:invoke	:persist	"expiry-key-10"
+3	:ok	:persist	{:key "expiry-key-10"}
+4	:invoke	:persist	"expiry-key-0"
+4	:ok	:persist	{:key "expiry-key-0"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 3782, :ttl 6}
+0	:ok	:set-with-ttl	{:key "expiry-key-16", :value 3782, :ttl 6}
+:nemesis	:info	:start	["n1"]
+1	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 9973, :ttl 4}
+1	:ok	:set-with-ttl	{:key "expiry-key-0", :value 9973, :ttl 4}
+2	:invoke	:persist	"expiry-key-11"
+2	:ok	:persist	{:key "expiry-key-11"}
+3	:invoke	:read	"expiry-key-17"
+3	:ok	:read	{:key "expiry-key-17", :value nil}
+4	:invoke	:read	"expiry-key-8"
+4	:ok	:read	{:key "expiry-key-8", :value "4081"}
+0	:invoke	:expire	{:key "expiry-key-10", :ttl 5}
+0	:ok	:expire	{:key "expiry-key-10", :ttl 5}
+0	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 4791, :ttl 3}
+0	:ok	:set-with-ttl	{:key "expiry-key-10", :value 4791, :ttl 3}
+1	:invoke	:read	"expiry-key-8"
+1	:ok	:read	{:key "expiry-key-8", :value "4081"}
+2	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 4620, :ttl 9}
+2	:ok	:set-with-ttl	{:key "expiry-key-15", :value 4620, :ttl 9}
+3	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 3267, :ttl 9}
+3	:ok	:set-with-ttl	{:key "expiry-key-0", :value 3267, :ttl 9}
+4	:invoke	:expire	{:key "expiry-key-18", :ttl 6}
+4	:ok	:expire	{:key "expiry-key-18", :ttl 6}
+0	:invoke	:expire	{:key "expiry-key-18", :ttl 8}
+0	:ok	:expire	{:key "expiry-key-18", :ttl 8}
+0	:invoke	:read	"expiry-key-19"
+0	:ok	:read	{:key "expiry-key-19", :value nil}
+1	:invoke	:persist	"expiry-key-5"
+1	:ok	:persist	{:key "expiry-key-5"}
+2	:invoke	:expire	{:key "expiry-key-4", :ttl 9}
+2	:ok	:expire	{:key "expiry-key-4", :ttl 9}
+3	:invoke	:ttl	"expiry-key-15"
+3	:ok	:ttl	{:key "expiry-key-15", :ttl 8}
+4	:invoke	:read	"expiry-key-5"
+4	:ok	:read	{:key "expiry-key-5", :value nil}
+0	:invoke	:set-with-ttl	{:key "expiry-key-19", :value 4513, :ttl 8}
+0	:ok	:set-with-ttl	{:key "expiry-key-19", :value 4513, :ttl 8}
+0	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 8281, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-1", :value 8281, :ttl 4}
+1	:invoke	:read	"expiry-key-16"
+1	:ok	:read	{:key "expiry-key-16", :value "3782"}
+2	:invoke	:ttl	"expiry-key-16"
+2	:ok	:ttl	{:key "expiry-key-16", :ttl 4}
+3	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 9700, :ttl 3}
+3	:ok	:set-with-ttl	{:key "expiry-key-4", :value 9700, :ttl 3}
+4	:invoke	:expire	{:key "expiry-key-15", :ttl 7}
+4	:ok	:expire	{:key "expiry-key-15", :ttl 7}
+0	:invoke	:read	"expiry-key-13"
+0	:ok	:read	{:key "expiry-key-13", :value "3974"}
+0	:invoke	:expire	{:key "expiry-key-12", :ttl 8}
+0	:ok	:expire	{:key "expiry-key-12", :ttl 8}
+1	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 3048, :ttl 3}
+1	:ok	:set-with-ttl	{:key "expiry-key-12", :value 3048, :ttl 3}
+2	:invoke	:read	"expiry-key-7"
+2	:ok	:read	{:key "expiry-key-7", :value "2924"}
+3	:invoke	:persist	"expiry-key-19"
+3	:ok	:persist	{:key "expiry-key-19"}
+4	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 7262, :ttl 3}
+4	:ok	:set-with-ttl	{:key "expiry-key-3", :value 7262, :ttl 3}
+0	:invoke	:read	"expiry-key-10"
+0	:ok	:read	{:key "expiry-key-10", :value "4791"}
+0	:invoke	:read	"expiry-key-8"
+0	:ok	:read	{:key "expiry-key-8", :value "4081"}
+1	:invoke	:expire	{:key "expiry-key-12", :ttl 9}
+1	:ok	:expire	{:key "expiry-key-12", :ttl 9}
+2	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 1360, :ttl 3}
+2	:ok	:set-with-ttl	{:key "expiry-key-7", :value 1360, :ttl 3}
+3	:invoke	:persist	"expiry-key-18"
+3	:ok	:persist	{:key "expiry-key-18"}
+4	:invoke	:persist	"expiry-key-19"
+4	:ok	:persist	{:key "expiry-key-19"}
+0	:invoke	:read	"expiry-key-17"
+0	:ok	:read	{:key "expiry-key-17", :value nil}
+0	:invoke	:expire	{:key "expiry-key-1", :ttl 3}
+0	:ok	:expire	{:key "expiry-key-1", :ttl 3}
+1	:invoke	:read	"expiry-key-12"
+1	:ok	:read	{:key "expiry-key-12", :value "3048"}
+2	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 8836, :ttl 9}
+2	:ok	:set-with-ttl	{:key "expiry-key-11", :value 8836, :ttl 9}
+3	:invoke	:ttl	"expiry-key-1"
+3	:ok	:ttl	{:key "expiry-key-1", :ttl 2}
+4	:invoke	:persist	"expiry-key-11"
+4	:ok	:persist	{:key "expiry-key-11"}
+0	:invoke	:read	"expiry-key-0"
+0	:ok	:read	{:key "expiry-key-0", :value "3267"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 2362, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-7", :value 2362, :ttl 7}
+1	:invoke	:read	"expiry-key-5"
+1	:ok	:read	{:key "expiry-key-5", :value nil}
+2	:invoke	:read	"expiry-key-10"
+2	:ok	:read	{:key "expiry-key-10", :value nil}
+3	:invoke	:expire	{:key "expiry-key-5", :ttl 9}
+3	:ok	:expire	{:key "expiry-key-5", :ttl 9}
+4	:invoke	:ttl	"expiry-key-14"
+4	:ok	:ttl	{:key "expiry-key-14", :ttl -2}
+0	:invoke	:read	"expiry-key-7"
+0	:ok	:read	{:key "expiry-key-7", :value "2362"}
+0	:invoke	:read	"expiry-key-12"
+0	:ok	:read	{:key "expiry-key-12", :value "3048"}
+1	:invoke	:expire	{:key "expiry-key-7", :ttl 5}
+1	:ok	:expire	{:key "expiry-key-7", :ttl 5}
+2	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 6537, :ttl 4}
+2	:ok	:set-with-ttl	{:key "expiry-key-14", :value 6537, :ttl 4}
+3	:invoke	:read	"expiry-key-8"
+3	:ok	:read	{:key "expiry-key-8", :value "4081"}
+4	:invoke	:expire	{:key "expiry-key-16", :ttl 8}
+4	:ok	:expire	{:key "expiry-key-16", :ttl 8}
+0	:invoke	:ttl	"expiry-key-3"
+0	:ok	:ttl	{:key "expiry-key-3", :ttl 0}
+0	:invoke	:read	"expiry-key-5"
+0	:ok	:read	{:key "expiry-key-5", :value nil}
+2	:invoke	:expire	{:key "expiry-key-6", :ttl 9}
+2	:ok	:expire	{:key "expiry-key-6", :ttl 9}
+3	:invoke	:expire	{:key "expiry-key-2", :ttl 7}
+3	:ok	:expire	{:key "expiry-key-2", :ttl 7}
+4	:invoke	:persist	"expiry-key-13"
+4	:ok	:persist	{:key "expiry-key-13"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 7001, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-12", :value 7001, :ttl 7}
+0	:invoke	:read	"expiry-key-10"
+0	:ok	:read	{:key "expiry-key-10", :value nil}
+1	:invoke	:persist	"expiry-key-18"
+1	:ok	:persist	{:key "expiry-key-18"}
+2	:invoke	:read	"expiry-key-17"
+2	:ok	:read	{:key "expiry-key-17", :value nil}
+3	:invoke	:persist	"expiry-key-11"
+3	:ok	:persist	{:key "expiry-key-11"}
+4	:invoke	:read	"expiry-key-4"
+4	:ok	:read	{:key "expiry-key-4", :value nil}
+0	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 8641, :ttl 9}
+0	:ok	:set-with-ttl	{:key "expiry-key-17", :value 8641, :ttl 9}
+0	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 1938, :ttl 9}
+0	:ok	:set-with-ttl	{:key "expiry-key-13", :value 1938, :ttl 9}
+1	:invoke	:read	"expiry-key-4"
+1	:ok	:read	{:key "expiry-key-4", :value nil}
+2	:invoke	:persist	"expiry-key-13"
+2	:ok	:persist	{:key "expiry-key-13"}
+3	:invoke	:read	"expiry-key-1"
+3	:ok	:read	{:key "expiry-key-1", :value "8281"}
+4	:invoke	:ttl	"expiry-key-0"
+4	:ok	:ttl	{:key "expiry-key-0", :ttl 3}
+0	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 924, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-4", :value 924, :ttl 4}
+0	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 7555, :ttl 9}
+0	:ok	:set-with-ttl	{:key "expiry-key-2", :value 7555, :ttl 9}
+1	:invoke	:expire	{:key "expiry-key-16", :ttl 6}
+1	:ok	:expire	{:key "expiry-key-16", :ttl 6}
+2	:invoke	:read	"expiry-key-17"
+2	:ok	:read	{:key "expiry-key-17", :value "8641"}
+3	:invoke	:expire	{:key "expiry-key-7", :ttl 8}
+3	:ok	:expire	{:key "expiry-key-7", :ttl 8}
+4	:invoke	:persist	"expiry-key-8"
+4	:ok	:persist	{:key "expiry-key-8"}
+0	:invoke	:expire	{:key "expiry-key-9", :ttl 9}
+0	:ok	:expire	{:key "expiry-key-9", :ttl 9}
+0	:invoke	:read	"expiry-key-7"
+0	:ok	:read	{:key "expiry-key-7", :value "2362"}
+1	:invoke	:expire	{:key "expiry-key-3", :ttl 3}
+1	:ok	:expire	{:key "expiry-key-3", :ttl 3}
+2	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 4597, :ttl 3}
+2	:ok	:set-with-ttl	{:key "expiry-key-2", :value 4597, :ttl 3}
+3	:invoke	:read	"expiry-key-9"
+3	:ok	:read	{:key "expiry-key-9", :value "678"}
+4	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 7427, :ttl 5}
+4	:ok	:set-with-ttl	{:key "expiry-key-10", :value 7427, :ttl 5}
+0	:invoke	:persist	"expiry-key-8"
+0	:ok	:persist	{:key "expiry-key-8"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 7373, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-13", :value 7373, :ttl 7}
+1	:invoke	:expire	{:key "expiry-key-7", :ttl 6}
+1	:ok	:expire	{:key "expiry-key-7", :ttl 6}
+2	:invoke	:expire	{:key "expiry-key-7", :ttl 6}
+2	:ok	:expire	{:key "expiry-key-7", :ttl 6}
+3	:invoke	:expire	{:key "expiry-key-6", :ttl 5}
+3	:ok	:expire	{:key "expiry-key-6", :ttl 5}
+4	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 5531, :ttl 3}
+4	:ok	:set-with-ttl	{:key "expiry-key-18", :value 5531, :ttl 3}
+0	:invoke	:read	"expiry-key-12"
+0	:ok	:read	{:key "expiry-key-12", :value "7001"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 2714, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-8", :value 2714, :ttl 4}
+1	:invoke	:ttl	"expiry-key-8"
+1	:ok	:ttl	{:key "expiry-key-8", :ttl 3}
+2	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 1484, :ttl 4}
+2	:ok	:set-with-ttl	{:key "expiry-key-1", :value 1484, :ttl 4}
+3	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 1167, :ttl 6}
+3	:ok	:set-with-ttl	{:key "expiry-key-5", :value 1167, :ttl 6}
+4	:invoke	:persist	"expiry-key-16"
+4	:ok	:persist	{:key "expiry-key-16"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 974, :ttl 6}
+0	:ok	:set-with-ttl	{:key "expiry-key-18", :value 974, :ttl 6}
+0	:invoke	:read	"expiry-key-14"
+0	:ok	:read	{:key "expiry-key-14", :value "6537"}
+1	:invoke	:read	"expiry-key-5"
+1	:ok	:read	{:key "expiry-key-5", :value "1167"}
+2	:invoke	:read	"expiry-key-6"
+2	:ok	:read	{:key "expiry-key-6", :value nil}
+3	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 1158, :ttl 5}
+3	:ok	:set-with-ttl	{:key "expiry-key-13", :value 1158, :ttl 5}
+4	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 8577, :ttl 5}
+4	:ok	:set-with-ttl	{:key "expiry-key-18", :value 8577, :ttl 5}
+0	:invoke	:ttl	"expiry-key-3"
+0	:ok	:ttl	{:key "expiry-key-3", :ttl -2}
+0	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 6002, :ttl 6}
+0	:ok	:set-with-ttl	{:key "expiry-key-3", :value 6002, :ttl 6}
+1	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 1924, :ttl 6}
+1	:ok	:set-with-ttl	{:key "expiry-key-10", :value 1924, :ttl 6}
+2	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 157, :ttl 9}
+2	:ok	:set-with-ttl	{:key "expiry-key-11", :value 157, :ttl 9}
+3	:invoke	:read	"expiry-key-0"
+3	:ok	:read	{:key "expiry-key-0", :value "3267"}
+4	:invoke	:read	"expiry-key-19"
+4	:ok	:read	{:key "expiry-key-19", :value "4513"}
+0	:invoke	:persist	"expiry-key-18"
+0	:ok	:persist	{:key "expiry-key-18"}
+0	:invoke	:ttl	"expiry-key-17"
+0	:ok	:ttl	{:key "expiry-key-17", :ttl 5}
+1	:invoke	:persist	"expiry-key-19"
+1	:ok	:persist	{:key "expiry-key-19"}
+2	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 5870, :ttl 4}
+2	:ok	:set-with-ttl	{:key "expiry-key-8", :value 5870, :ttl 4}
+3	:invoke	:read	"expiry-key-10"
+3	:ok	:read	{:key "expiry-key-10", :value "1924"}
+4	:invoke	:persist	"expiry-key-4"
+4	:ok	:persist	{:key "expiry-key-4"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 5644, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-4", :value 5644, :ttl 7}
+0	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 2667, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-5", :value 2667, :ttl 4}
+1	:invoke	:ttl	"expiry-key-14"
+1	:ok	:ttl	{:key "expiry-key-14", :ttl -2}
+2	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 2121, :ttl 6}
+2	:ok	:set-with-ttl	{:key "expiry-key-2", :value 2121, :ttl 6}
+3	:invoke	:ttl	"expiry-key-4"
+3	:ok	:ttl	{:key "expiry-key-4", :ttl 6}
+4	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 5687, :ttl 9}
+4	:ok	:set-with-ttl	{:key "expiry-key-2", :value 5687, :ttl 9}
+0	:invoke	:expire	{:key "expiry-key-11", :ttl 3}
+0	:ok	:expire	{:key "expiry-key-11", :ttl 3}
+0	:invoke	:read	"expiry-key-14"
+0	:ok	:read	{:key "expiry-key-14", :value nil}
+1	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 4657, :ttl 7}
+1	:ok	:set-with-ttl	{:key "expiry-key-9", :value 4657, :ttl 7}
+2	:invoke	:read	"expiry-key-1"
+2	:ok	:read	{:key "expiry-key-1", :value "1484"}
+3	:invoke	:read	"expiry-key-8"
+3	:ok	:read	{:key "expiry-key-8", :value "5870"}
+4	:invoke	:read	"expiry-key-1"
+4	:ok	:read	{:key "expiry-key-1", :value "1484"}
+0	:invoke	:read	"expiry-key-18"
+0	:ok	:read	{:key "expiry-key-18", :value "8577"}
+0	:invoke	:read	"expiry-key-14"
+0	:ok	:read	{:key "expiry-key-14", :value nil}
+1	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 1383, :ttl 9}
+1	:ok	:set-with-ttl	{:key "expiry-key-12", :value 1383, :ttl 9}
+2	:invoke	:read	"expiry-key-14"
+2	:ok	:read	{:key "expiry-key-14", :value nil}
+3	:invoke	:read	"expiry-key-8"
+3	:ok	:read	{:key "expiry-key-8", :value "5870"}
+4	:invoke	:persist	"expiry-key-8"
+4	:ok	:persist	{:key "expiry-key-8"}
+0	:invoke	:read	"expiry-key-8"
+0	:ok	:read	{:key "expiry-key-8", :value "5870"}
+0	:invoke	:read	"expiry-key-6"
+0	:ok	:read	{:key "expiry-key-6", :value nil}
+1	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 8809, :ttl 4}
+1	:ok	:set-with-ttl	{:key "expiry-key-1", :value 8809, :ttl 4}
+2	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 2245, :ttl 6}
+2	:ok	:set-with-ttl	{:key "expiry-key-14", :value 2245, :ttl 6}
+3	:invoke	:ttl	"expiry-key-8"
+3	:ok	:ttl	{:key "expiry-key-8", :ttl -1}
+4	:invoke	:persist	"expiry-key-18"
+4	:ok	:persist	{:key "expiry-key-18"}
+0	:invoke	:persist	"expiry-key-4"
+0	:ok	:persist	{:key "expiry-key-4"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 7031, :ttl 5}
+0	:ok	:set-with-ttl	{:key "expiry-key-15", :value 7031, :ttl 5}
+1	:invoke	:read	"expiry-key-12"
+1	:ok	:read	{:key "expiry-key-12", :value "1383"}
+2	:invoke	:read	"expiry-key-15"
+2	:ok	:read	{:key "expiry-key-15", :value "7031"}
+3	:invoke	:read	"expiry-key-9"
+3	:ok	:read	{:key "expiry-key-9", :value "4657"}
+4	:invoke	:read	"expiry-key-7"
+4	:ok	:read	{:key "expiry-key-7", :value "2362"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 7414, :ttl 6}
+0	:ok	:set-with-ttl	{:key "expiry-key-10", :value 7414, :ttl 6}
+0	:invoke	:persist	"expiry-key-19"
+0	:ok	:persist	{:key "expiry-key-19"}
+1	:invoke	:persist	"expiry-key-4"
+1	:ok	:persist	{:key "expiry-key-4"}
+2	:invoke	:persist	"expiry-key-15"
+2	:ok	:persist	{:key "expiry-key-15"}
+3	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 1786, :ttl 3}
+3	:ok	:set-with-ttl	{:key "expiry-key-15", :value 1786, :ttl 3}
+4	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 1058, :ttl 6}
+4	:ok	:set-with-ttl	{:key "expiry-key-6", :value 1058, :ttl 6}
+0	:invoke	:persist	"expiry-key-10"
+0	:ok	:persist	{:key "expiry-key-10"}
+0	:invoke	:ttl	"expiry-key-15"
+0	:ok	:ttl	{:key "expiry-key-15", :ttl 2}
+1	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 116, :ttl 5}
+1	:ok	:set-with-ttl	{:key "expiry-key-9", :value 116, :ttl 5}
+2	:invoke	:persist	"expiry-key-8"
+2	:ok	:persist	{:key "expiry-key-8"}
+3	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 8262, :ttl 7}
+3	:ok	:set-with-ttl	{:key "expiry-key-4", :value 8262, :ttl 7}
+4	:invoke	:read	"expiry-key-12"
+4	:ok	:read	{:key "expiry-key-12", :value "1383"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 4871, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-7", :value 4871, :ttl 4}
+0	:invoke	:read	"expiry-key-7"
+0	:ok	:read	{:key "expiry-key-7", :value "4871"}
+1	:invoke	:read	"expiry-key-5"
+1	:ok	:read	{:key "expiry-key-5", :value nil}
+2	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 2882, :ttl 8}
+2	:ok	:set-with-ttl	{:key "expiry-key-11", :value 2882, :ttl 8}
+3	:invoke	:ttl	"expiry-key-1"
+3	:ok	:ttl	{:key "expiry-key-1", :ttl 1}
+4	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 3047, :ttl 6}
+4	:ok	:set-with-ttl	{:key "expiry-key-15", :value 3047, :ttl 6}
+0	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 5591, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-17", :value 5591, :ttl 4}
+0	:invoke	:expire	{:key "expiry-key-14", :ttl 8}
+0	:ok	:expire	{:key "expiry-key-14", :ttl 8}
+1	:invoke	:persist	"expiry-key-7"
+1	:ok	:persist	{:key "expiry-key-7"}
+2	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 4059, :ttl 8}
+2	:ok	:set-with-ttl	{:key "expiry-key-5", :value 4059, :ttl 8}
+3	:invoke	:persist	"expiry-key-12"
+3	:ok	:persist	{:key "expiry-key-12"}
+4	:invoke	:expire	{:key "expiry-key-7", :ttl 7}
+:nemesis	:info	:kill	nil
+4	:ok	:expire	{:key "expiry-key-7", :ttl 7}
+0	:invoke	:ttl	"expiry-key-9"
+:nemesis	:info	:kill	["n1"]
+0	:ok	:ttl	{:key "expiry-key-9", :ttl 3}
+2	:invoke	:expire	{:key "expiry-key-6", :ttl 3}
+2	:ok	:expire	{:key "expiry-key-6", :ttl 3}
+3	:invoke	:persist	"expiry-key-14"
+3	:ok	:persist	{:key "expiry-key-14"}
+4	:invoke	:read	"expiry-key-5"
+4	:ok	:read	{:key "expiry-key-5", :value "4059"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 7353, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-15", :value 7353, :ttl 4}
+0	:invoke	:persist	"expiry-key-11"
+0	:ok	:persist	{:key "expiry-key-11"}
+1	:invoke	:persist	"expiry-key-7"
+1	:ok	:persist	{:key "expiry-key-7"}
+2	:invoke	:ttl	"expiry-key-10"
+2	:ok	:ttl	{:key "expiry-key-10", :ttl -1}
+3	:invoke	:read	"expiry-key-6"
+3	:ok	:read	{:key "expiry-key-6", :value "1058"}
+4	:invoke	:read	"expiry-key-8"
+4	:ok	:read	{:key "expiry-key-8", :value "5870"}
+0	:invoke	:ttl	"expiry-key-12"
+0	:ok	:ttl	{:key "expiry-key-12", :ttl -1}
+0	:invoke	:read	"expiry-key-8"
+0	:ok	:read	{:key "expiry-key-8", :value "5870"}
+1	:invoke	:ttl	"expiry-key-18"
+1	:ok	:ttl	{:key "expiry-key-18", :ttl -1}
+2	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 7001, :ttl 8}
+2	:ok	:set-with-ttl	{:key "expiry-key-3", :value 7001, :ttl 8}
+3	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 6792, :ttl 6}
+3	:ok	:set-with-ttl	{:key "expiry-key-6", :value 6792, :ttl 6}
+4	:invoke	:read	"expiry-key-0"
+4	:ok	:read	{:key "expiry-key-0", :value nil}
+0	:invoke	:read	"expiry-key-18"
+0	:ok	:read	{:key "expiry-key-18", :value "8577"}
+0	:invoke	:read	"expiry-key-16"
+0	:ok	:read	{:key "expiry-key-16", :value "3782"}
+1	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 3703, :ttl 3}
+1	:ok	:set-with-ttl	{:key "expiry-key-8", :value 3703, :ttl 3}
+2	:invoke	:persist	"expiry-key-6"
+2	:ok	:persist	{:key "expiry-key-6"}
+3	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 8258, :ttl 8}
+3	:ok	:set-with-ttl	{:key "expiry-key-6", :value 8258, :ttl 8}
+4	:invoke	:read	"expiry-key-14"
+4	:ok	:read	{:key "expiry-key-14", :value "2245"}
+0	:invoke	:expire	{:key "expiry-key-7", :ttl 6}
+0	:ok	:expire	{:key "expiry-key-7", :ttl 6}
+0	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 8447, :ttl 9}
+0	:ok	:set-with-ttl	{:key "expiry-key-14", :value 8447, :ttl 9}
+1	:invoke	:ttl	"expiry-key-15"
+1	:ok	:ttl	{:key "expiry-key-15", :ttl 1}
+2	:invoke	:ttl	"expiry-key-12"
+2	:ok	:ttl	{:key "expiry-key-12", :ttl -1}
+3	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 4227, :ttl 4}
+3	:ok	:set-with-ttl	{:key "expiry-key-18", :value 4227, :ttl 4}
+4	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 9646, :ttl 8}
+4	:ok	:set-with-ttl	{:key "expiry-key-2", :value 9646, :ttl 8}
+0	:invoke	:persist	"expiry-key-9"
+0	:ok	:persist	{:key "expiry-key-9"}
+0	:invoke	:expire	{:key "expiry-key-2", :ttl 6}
+0	:ok	:expire	{:key "expiry-key-2", :ttl 6}
+1	:invoke	:expire	{:key "expiry-key-13", :ttl 4}
+1	:ok	:expire	{:key "expiry-key-13", :ttl 4}
+2	:invoke	:expire	{:key "expiry-key-11", :ttl 9}
+2	:ok	:expire	{:key "expiry-key-11", :ttl 9}
+3	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 1252, :ttl 6}
+3	:ok	:set-with-ttl	{:key "expiry-key-13", :value 1252, :ttl 6}
+4	:invoke	:read	"expiry-key-6"
+4	:ok	:read	{:key "expiry-key-6", :value "8258"}
+0	:invoke	:read	"expiry-key-1"
+0	:ok	:read	{:key "expiry-key-1", :value nil}
+0	:invoke	:read	"expiry-key-11"
+0	:ok	:read	{:key "expiry-key-11", :value "2882"}
+1	:invoke	:read	"expiry-key-6"
+1	:ok	:read	{:key "expiry-key-6", :value "8258"}
+2	:invoke	:read	"expiry-key-3"
+2	:ok	:read	{:key "expiry-key-3", :value "7001"}
+3	:invoke	:expire	{:key "expiry-key-3", :ttl 9}
+3	:ok	:expire	{:key "expiry-key-3", :ttl 9}
+4	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 5553, :ttl 3}
+4	:ok	:set-with-ttl	{:key "expiry-key-5", :value 5553, :ttl 3}
+0	:invoke	:ttl	"expiry-key-14"
+0	:ok	:ttl	{:key "expiry-key-14", :ttl 7}
+0	:invoke	:expire	{:key "expiry-key-3", :ttl 7}
+0	:ok	:expire	{:key "expiry-key-3", :ttl 7}
+1	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 1005, :ttl 8}
+1	:ok	:set-with-ttl	{:key "expiry-key-3", :value 1005, :ttl 8}
+2	:invoke	:read	"expiry-key-3"
+2	:ok	:read	{:key "expiry-key-3", :value "1005"}
+3	:invoke	:read	"expiry-key-16"
+3	:ok	:read	{:key "expiry-key-16", :value "3782"}
+4	:invoke	:ttl	"expiry-key-4"
+4	:ok	:ttl	{:key "expiry-key-4", :ttl 0}
+:nemesis	:info	:start	nil
+0	:invoke	:expire	{:key "expiry-key-6", :ttl 9}
+0	:ok	:expire	{:key "expiry-key-6", :ttl 9}
+1	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 351, :ttl 4}
+1	:ok	:set-with-ttl	{:key "expiry-key-1", :value 351, :ttl 4}
+2	:invoke	:read	"expiry-key-6"
+2	:ok	:read	{:key "expiry-key-6", :value "8258"}
+3	:invoke	:expire	{:key "expiry-key-6", :ttl 5}
+3	:ok	:expire	{:key "expiry-key-6", :ttl 5}
+4	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 8215, :ttl 7}
+0	:invoke	:persist	"expiry-key-1"
+4	:ok	:set-with-ttl	{:key "expiry-key-17", :value 8215, :ttl 7}
+0	:ok	:persist	{:key "expiry-key-1"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 2030, :ttl 5}
+0	:ok	:set-with-ttl	{:key "expiry-key-10", :value 2030, :ttl 5}
+1	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 9911, :ttl 4}
+1	:ok	:set-with-ttl	{:key "expiry-key-4", :value 9911, :ttl 4}
+2	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 2054, :ttl 9}
+2	:ok	:set-with-ttl	{:key "expiry-key-11", :value 2054, :ttl 9}
+3	:invoke	:read	"expiry-key-11"
+3	:ok	:read	{:key "expiry-key-11", :value "2054"}
+4	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 993, :ttl 9}
+4	:ok	:set-with-ttl	{:key "expiry-key-10", :value 993, :ttl 9}
+0	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 7261, :ttl 5}
+0	:ok	:set-with-ttl	{:key "expiry-key-18", :value 7261, :ttl 5}
+0	:invoke	:ttl	"expiry-key-4"
+0	:ok	:ttl	{:key "expiry-key-4", :ttl 3}
+1	:invoke	:ttl	"expiry-key-17"
+1	:ok	:ttl	{:key "expiry-key-17", :ttl 6}
+2	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 6688, :ttl 5}
+2	:ok	:set-with-ttl	{:key "expiry-key-11", :value 6688, :ttl 5}
+3	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 6363, :ttl 3}
+3	:ok	:set-with-ttl	{:key "expiry-key-16", :value 6363, :ttl 3}
+4	:invoke	:expire	{:key "expiry-key-0", :ttl 4}
+4	:ok	:expire	{:key "expiry-key-0", :ttl 4}
+0	:invoke	:persist	"expiry-key-1"
+0	:ok	:persist	{:key "expiry-key-1"}
+0	:invoke	:expire	{:key "expiry-key-5", :ttl 6}
+0	:ok	:expire	{:key "expiry-key-5", :ttl 6}
+1	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 3236, :ttl 9}
+1	:ok	:set-with-ttl	{:key "expiry-key-10", :value 3236, :ttl 9}
+2	:invoke	:persist	"expiry-key-0"
+2	:ok	:persist	{:key "expiry-key-0"}
+3	:invoke	:expire	{:key "expiry-key-15", :ttl 4}
+3	:ok	:expire	{:key "expiry-key-15", :ttl 4}
+4	:invoke	:persist	"expiry-key-5"
+4	:ok	:persist	{:key "expiry-key-5"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 4126, :ttl 3}
+0	:ok	:set-with-ttl	{:key "expiry-key-3", :value 4126, :ttl 3}
+0	:invoke	:persist	"expiry-key-6"
+0	:ok	:persist	{:key "expiry-key-6"}
+1	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 1421, :ttl 3}
+1	:ok	:set-with-ttl	{:key "expiry-key-1", :value 1421, :ttl 3}
+2	:invoke	:read	"expiry-key-9"
+2	:ok	:read	{:key "expiry-key-9", :value nil}
+3	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 2369, :ttl 9}
+3	:ok	:set-with-ttl	{:key "expiry-key-13", :value 2369, :ttl 9}
+4	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 3694, :ttl 8}
+4	:ok	:set-with-ttl	{:key "expiry-key-16", :value 3694, :ttl 8}
+0	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 9445, :ttl 8}
+0	:ok	:set-with-ttl	{:key "expiry-key-16", :value 9445, :ttl 8}
+0	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 7247, :ttl 3}
+0	:ok	:set-with-ttl	{:key "expiry-key-15", :value 7247, :ttl 3}
+1	:invoke	:read	"expiry-key-13"
+1	:ok	:read	{:key "expiry-key-13", :value "2369"}
+:nemesis	:info	:start	["n1"]
+3	:invoke	:persist	"expiry-key-16"
+3	:ok	:persist	{:key "expiry-key-16"}
+4	:invoke	:expire	{:key "expiry-key-14", :ttl 9}
+4	:ok	:expire	{:key "expiry-key-14", :ttl 9}
+0	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 7050, :ttl 5}
+0	:ok	:set-with-ttl	{:key "expiry-key-14", :value 7050, :ttl 5}
+0	:invoke	:read	"expiry-key-2"
+0	:ok	:read	{:key "expiry-key-2", :value "9646"}
+1	:invoke	:read	"expiry-key-18"
+1	:ok	:read	{:key "expiry-key-18", :value "7261"}
+2	:invoke	:expire	{:key "expiry-key-5", :ttl 3}
+2	:ok	:expire	{:key "expiry-key-5", :ttl 3}
+3	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 2073, :ttl 5}
+3	:ok	:set-with-ttl	{:key "expiry-key-11", :value 2073, :ttl 5}
+4	:invoke	:read	"expiry-key-6"
+4	:ok	:read	{:key "expiry-key-6", :value "8258"}
+0	:invoke	:ttl	"expiry-key-6"
+0	:ok	:ttl	{:key "expiry-key-6", :ttl -1}
+0	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 8492, :ttl 6}
+0	:ok	:set-with-ttl	{:key "expiry-key-7", :value 8492, :ttl 6}
+1	:invoke	:read	"expiry-key-11"
+1	:ok	:read	{:key "expiry-key-11", :value "2073"}
+2	:invoke	:persist	"expiry-key-13"
+2	:ok	:persist	{:key "expiry-key-13"}
+3	:invoke	:read	"expiry-key-8"
+3	:ok	:read	{:key "expiry-key-8", :value nil}
+4	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 5119, :ttl 3}
+4	:ok	:set-with-ttl	{:key "expiry-key-12", :value 5119, :ttl 3}
+0	:invoke	:persist	"expiry-key-7"
+0	:ok	:persist	{:key "expiry-key-7"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 33, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-4", :value 33, :ttl 7}
+1	:invoke	:set-with-ttl	{:key "expiry-key-13", :value 6902, :ttl 9}
+1	:ok	:set-with-ttl	{:key "expiry-key-13", :value 6902, :ttl 9}
+2	:invoke	:expire	{:key "expiry-key-12", :ttl 9}
+2	:ok	:expire	{:key "expiry-key-12", :ttl 9}
+3	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 3946, :ttl 8}
+3	:ok	:set-with-ttl	{:key "expiry-key-15", :value 3946, :ttl 8}
+4	:invoke	:read	"expiry-key-3"
+4	:ok	:read	{:key "expiry-key-3", :value "4126"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 3202, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-16", :value 3202, :ttl 7}
+0	:invoke	:ttl	"expiry-key-19"
+0	:ok	:ttl	{:key "expiry-key-19", :ttl -1}
+1	:invoke	:expire	{:key "expiry-key-1", :ttl 6}
+1	:ok	:expire	{:key "expiry-key-1", :ttl 6}
+2	:invoke	:read	"expiry-key-10"
+2	:ok	:read	{:key "expiry-key-10", :value "3236"}
+3	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 9453, :ttl 7}
+4	:invoke	:persist	"expiry-key-4"
+3	:ok	:set-with-ttl	{:key "expiry-key-12", :value 9453, :ttl 7}
+4	:ok	:persist	{:key "expiry-key-4"}
+0	:invoke	:ttl	"expiry-key-6"
+0	:ok	:ttl	{:key "expiry-key-6", :ttl -1}
+0	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 6773, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-2", :value 6773, :ttl 7}
+1	:invoke	:persist	"expiry-key-19"
+1	:ok	:persist	{:key "expiry-key-19"}
+2	:invoke	:read	"expiry-key-2"
+2	:ok	:read	{:key "expiry-key-2", :value "6773"}
+3	:invoke	:expire	{:key "expiry-key-12", :ttl 8}
+3	:ok	:expire	{:key "expiry-key-12", :ttl 8}
+4	:invoke	:ttl	"expiry-key-11"
+4	:ok	:ttl	{:key "expiry-key-11", :ttl 2}
+0	:invoke	:read	"expiry-key-5"
+0	:ok	:read	{:key "expiry-key-5", :value "5553"}
+0	:invoke	:read	"expiry-key-19"
+0	:ok	:read	{:key "expiry-key-19", :value "4513"}
+1	:invoke	:ttl	"expiry-key-11"
+1	:ok	:ttl	{:key "expiry-key-11", :ttl 2}
+2	:invoke	:expire	{:key "expiry-key-2", :ttl 7}
+3	:invoke	:read	"expiry-key-14"
+2	:ok	:expire	{:key "expiry-key-2", :ttl 7}
+3	:ok	:read	{:key "expiry-key-14", :value "7050"}
+4	:invoke	:ttl	"expiry-key-15"
+4	:ok	:ttl	{:key "expiry-key-15", :ttl 6}
+0	:invoke	:read	"expiry-key-0"
+0	:ok	:read	{:key "expiry-key-0", :value nil}
+0	:invoke	:ttl	"expiry-key-19"
+0	:ok	:ttl	{:key "expiry-key-19", :ttl -1}
+1	:invoke	:persist	"expiry-key-8"
+1	:ok	:persist	{:key "expiry-key-8"}
+2	:invoke	:persist	"expiry-key-8"
+2	:ok	:persist	{:key "expiry-key-8"}
+3	:invoke	:ttl	"expiry-key-3"
+3	:ok	:ttl	{:key "expiry-key-3", :ttl -2}
+4	:invoke	:persist	"expiry-key-18"
+4	:ok	:persist	{:key "expiry-key-18"}
+0	:invoke	:read	"expiry-key-17"
+0	:ok	:read	{:key "expiry-key-17", :value "8215"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 324, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-3", :value 324, :ttl 7}
+1	:invoke	:read	"expiry-key-13"
+1	:ok	:read	{:key "expiry-key-13", :value "6902"}
+2	:invoke	:ttl	"expiry-key-10"
+2	:ok	:ttl	{:key "expiry-key-10", :ttl 3}
+3	:invoke	:expire	{:key "expiry-key-19", :ttl 5}
+3	:ok	:expire	{:key "expiry-key-19", :ttl 5}
+4	:invoke	:read	"expiry-key-19"
+4	:ok	:read	{:key "expiry-key-19", :value "4513"}
+0	:invoke	:read	"expiry-key-11"
+0	:ok	:read	{:key "expiry-key-11", :value "2073"}
+1	:invoke	:read	"expiry-key-8"
+1	:ok	:read	{:key "expiry-key-8", :value nil}
+2	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 8585, :ttl 3}
+2	:ok	:set-with-ttl	{:key "expiry-key-7", :value 8585, :ttl 3}
+3	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 3753, :ttl 3}
+3	:ok	:set-with-ttl	{:key "expiry-key-11", :value 3753, :ttl 3}
+4	:invoke	:ttl	"expiry-key-2"
+4	:ok	:ttl	{:key "expiry-key-2", :ttl 4}
+0	:invoke	:ttl	"expiry-key-5"
+0	:ok	:ttl	{:key "expiry-key-5", :ttl -2}
+0	:invoke	:expire	{:key "expiry-key-13", :ttl 8}
+0	:ok	:expire	{:key "expiry-key-13", :ttl 8}
+1	:invoke	:read	"expiry-key-5"
+1	:ok	:read	{:key "expiry-key-5", :value nil}
+2	:invoke	:set-with-ttl	{:key "expiry-key-6", :value 3342, :ttl 4}
+2	:ok	:set-with-ttl	{:key "expiry-key-6", :value 3342, :ttl 4}
+3	:invoke	:persist	"expiry-key-1"
+3	:ok	:persist	{:key "expiry-key-1"}
+4	:invoke	:read	"expiry-key-8"
+4	:ok	:read	{:key "expiry-key-8", :value nil}
+0	:invoke	:read	"expiry-key-17"
+0	:ok	:read	{:key "expiry-key-17", :value nil}
+0	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 7550, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-15", :value 7550, :ttl 4}
+1	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 3511, :ttl 9}
+1	:ok	:set-with-ttl	{:key "expiry-key-8", :value 3511, :ttl 9}
+2	:invoke	:read	"expiry-key-16"
+2	:ok	:read	{:key "expiry-key-16", :value "3202"}
+3	:invoke	:set-with-ttl	{:key "expiry-key-1", :value 1926, :ttl 6}
+3	:ok	:set-with-ttl	{:key "expiry-key-1", :value 1926, :ttl 6}
+4	:invoke	:read	"expiry-key-4"
+4	:ok	:read	{:key "expiry-key-4", :value "33"}
+0	:invoke	:ttl	"expiry-key-14"
+0	:ok	:ttl	{:key "expiry-key-14", :ttl -2}
+0	:invoke	:set-with-ttl	{:key "expiry-key-8", :value 4944, :ttl 3}
+0	:ok	:set-with-ttl	{:key "expiry-key-8", :value 4944, :ttl 3}
+1	:invoke	:set-with-ttl	{:key "expiry-key-3", :value 9944, :ttl 4}
+1	:ok	:set-with-ttl	{:key "expiry-key-3", :value 9944, :ttl 4}
+2	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 3646, :ttl 7}
+2	:ok	:set-with-ttl	{:key "expiry-key-12", :value 3646, :ttl 7}
+3	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 8492, :ttl 4}
+3	:ok	:set-with-ttl	{:key "expiry-key-0", :value 8492, :ttl 4}
+4	:invoke	:read	"expiry-key-10"
+4	:ok	:read	{:key "expiry-key-10", :value "3236"}
+0	:invoke	:read	"expiry-key-13"
+0	:ok	:read	{:key "expiry-key-13", :value "6902"}
+0	:invoke	:persist	"expiry-key-18"
+0	:ok	:persist	{:key "expiry-key-18"}
+1	:invoke	:read	"expiry-key-16"
+1	:ok	:read	{:key "expiry-key-16", :value "3202"}
+2	:invoke	:read	"expiry-key-16"
+2	:ok	:read	{:key "expiry-key-16", :value "3202"}
+3	:invoke	:read	"expiry-key-5"
+3	:ok	:read	{:key "expiry-key-5", :value nil}
+4	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 228, :ttl 7}
+4	:ok	:set-with-ttl	{:key "expiry-key-18", :value 228, :ttl 7}
+0	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 1451, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-16", :value 1451, :ttl 4}
+0	:invoke	:read	"expiry-key-7"
+0	:ok	:read	{:key "expiry-key-7", :value "8585"}
+1	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 6274, :ttl 6}
+1	:ok	:set-with-ttl	{:key "expiry-key-16", :value 6274, :ttl 6}
+2	:invoke	:ttl	"expiry-key-13"
+2	:ok	:ttl	{:key "expiry-key-13", :ttl 5}
+3	:invoke	:read	"expiry-key-17"
+3	:ok	:read	{:key "expiry-key-17", :value nil}
+4	:invoke	:expire	{:key "expiry-key-2", :ttl 8}
+4	:ok	:expire	{:key "expiry-key-2", :ttl 8}
+0	:invoke	:ttl	"expiry-key-15"
+0	:ok	:ttl	{:key "expiry-key-15", :ttl 1}
+0	:invoke	:expire	{:key "expiry-key-17", :ttl 6}
+0	:ok	:expire	{:key "expiry-key-17", :ttl 6}
+1	:invoke	:expire	{:key "expiry-key-16", :ttl 3}
+1	:ok	:expire	{:key "expiry-key-16", :ttl 3}
+2	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 9105, :ttl 9}
+2	:ok	:set-with-ttl	{:key "expiry-key-17", :value 9105, :ttl 9}
+3	:invoke	:ttl	"expiry-key-3"
+3	:ok	:ttl	{:key "expiry-key-3", :ttl 1}
+4	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 6814, :ttl 7}
+4	:ok	:set-with-ttl	{:key "expiry-key-10", :value 6814, :ttl 7}
+0	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 6201, :ttl 4}
+0	:ok	:set-with-ttl	{:key "expiry-key-5", :value 6201, :ttl 4}
+0	:invoke	:expire	{:key "expiry-key-7", :ttl 4}
+0	:ok	:expire	{:key "expiry-key-7", :ttl 4}
+1	:invoke	:ttl	"expiry-key-13"
+1	:ok	:ttl	{:key "expiry-key-13", :ttl 4}
+2	:invoke	:set-with-ttl	{:key "expiry-key-14", :value 7388, :ttl 5}
+2	:ok	:set-with-ttl	{:key "expiry-key-14", :value 7388, :ttl 5}
+3	:invoke	:read	"expiry-key-10"
+3	:ok	:read	{:key "expiry-key-10", :value "6814"}
+4	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 4408, :ttl 7}
+4	:ok	:set-with-ttl	{:key "expiry-key-15", :value 4408, :ttl 7}
+0	:invoke	:read	"expiry-key-3"
+0	:ok	:read	{:key "expiry-key-3", :value "9944"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 2457, :ttl 6}
+0	:ok	:set-with-ttl	{:key "expiry-key-0", :value 2457, :ttl 6}
+1	:invoke	:set-with-ttl	{:key "expiry-key-15", :value 7323, :ttl 6}
+1	:ok	:set-with-ttl	{:key "expiry-key-15", :value 7323, :ttl 6}
+2	:invoke	:read	"expiry-key-5"
+2	:ok	:read	{:key "expiry-key-5", :value "6201"}
+3	:invoke	:ttl	"expiry-key-5"
+3	:ok	:ttl	{:key "expiry-key-5", :ttl 3}
+4	:invoke	:read	"expiry-key-1"
+4	:ok	:read	{:key "expiry-key-1", :value "1926"}
+0	:invoke	:read	"expiry-key-18"
+0	:ok	:read	{:key "expiry-key-18", :value "228"}
+0	:invoke	:read	"expiry-key-13"
+0	:ok	:read	{:key "expiry-key-13", :value "6902"}
+1	:invoke	:set-with-ttl	{:key "expiry-key-9", :value 2717, :ttl 5}
+1	:ok	:set-with-ttl	{:key "expiry-key-9", :value 2717, :ttl 5}
+2	:invoke	:read	"expiry-key-19"
+2	:ok	:read	{:key "expiry-key-19", :value nil}
+3	:invoke	:ttl	"expiry-key-13"
+3	:ok	:ttl	{:key "expiry-key-13", :ttl 2}
+4	:invoke	:ttl	"expiry-key-8"
+4	:ok	:ttl	{:key "expiry-key-8", :ttl -2}
+0	:invoke	:read	"expiry-key-17"
+0	:ok	:read	{:key "expiry-key-17", :value "9105"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 1049, :ttl 8}
+0	:ok	:set-with-ttl	{:key "expiry-key-11", :value 1049, :ttl 8}
+1	:invoke	:persist	"expiry-key-5"
+1	:ok	:persist	{:key "expiry-key-5"}
+2	:invoke	:set-with-ttl	{:key "expiry-key-19", :value 5532, :ttl 7}
+2	:ok	:set-with-ttl	{:key "expiry-key-19", :value 5532, :ttl 7}
+3	:invoke	:read	"expiry-key-11"
+3	:ok	:read	{:key "expiry-key-11", :value "1049"}
+4	:invoke	:read	"expiry-key-15"
+4	:ok	:read	{:key "expiry-key-15", :value "7323"}
+0	:invoke	:read	"expiry-key-12"
+0	:ok	:read	{:key "expiry-key-12", :value "3646"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 8748, :ttl 5}
+0	:ok	:set-with-ttl	{:key "expiry-key-17", :value 8748, :ttl 5}
+1	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 1829, :ttl 4}
+1	:ok	:set-with-ttl	{:key "expiry-key-4", :value 1829, :ttl 4}
+2	:invoke	:ttl	"expiry-key-4"
+2	:ok	:ttl	{:key "expiry-key-4", :ttl 3}
+3	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 9365, :ttl 6}
+3	:ok	:set-with-ttl	{:key "expiry-key-18", :value 9365, :ttl 6}
+4	:invoke	:set-with-ttl	{:key "expiry-key-5", :value 4148, :ttl 9}
+4	:ok	:set-with-ttl	{:key "expiry-key-5", :value 4148, :ttl 9}
+0	:invoke	:persist	"expiry-key-19"
+0	:ok	:persist	{:key "expiry-key-19"}
+0	:invoke	:ttl	"expiry-key-2"
+0	:ok	:ttl	{:key "expiry-key-2", :ttl 4}
+1	:invoke	:ttl	"expiry-key-4"
+1	:ok	:ttl	{:key "expiry-key-4", :ttl 3}
+2	:invoke	:read	"expiry-key-9"
+2	:ok	:read	{:key "expiry-key-9", :value "2717"}
+3	:invoke	:read	"expiry-key-12"
+3	:ok	:read	{:key "expiry-key-12", :value "3646"}
+4	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 437, :ttl 6}
+4	:ok	:set-with-ttl	{:key "expiry-key-12", :value 437, :ttl 6}
+0	:invoke	:read	"expiry-key-7"
+0	:ok	:read	{:key "expiry-key-7", :value nil}
+0	:invoke	:read	"expiry-key-11"
+0	:ok	:read	{:key "expiry-key-11", :value "1049"}
+1	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 6459, :ttl 3}
+1	:ok	:set-with-ttl	{:key "expiry-key-7", :value 6459, :ttl 3}
+2	:invoke	:set-with-ttl	{:key "expiry-key-2", :value 6704, :ttl 9}
+2	:ok	:set-with-ttl	{:key "expiry-key-2", :value 6704, :ttl 9}
+3	:invoke	:ttl	"expiry-key-2"
+3	:ok	:ttl	{:key "expiry-key-2", :ttl 8}
+4	:invoke	:read	"expiry-key-2"
+4	:ok	:read	{:key "expiry-key-2", :value "6704"}
+0	:invoke	:set-with-ttl	{:key "expiry-key-0", :value 2270, :ttl 8}
+0	:ok	:set-with-ttl	{:key "expiry-key-0", :value 2270, :ttl 8}
+0	:invoke	:read	"expiry-key-16"
+0	:ok	:read	{:key "expiry-key-16", :value nil}
+1	:invoke	:read	"expiry-key-7"
+1	:ok	:read	{:key "expiry-key-7", :value "6459"}
+2	:invoke	:expire	{:key "expiry-key-5", :ttl 5}
+2	:ok	:expire	{:key "expiry-key-5", :ttl 5}
+3	:invoke	:persist	"expiry-key-7"
+3	:ok	:persist	{:key "expiry-key-7"}
+4	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 3969, :ttl 8}
+4	:ok	:set-with-ttl	{:key "expiry-key-16", :value 3969, :ttl 8}
+0	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 4666, :ttl 3}
+0	:ok	:set-with-ttl	{:key "expiry-key-18", :value 4666, :ttl 3}
+0	:invoke	:persist	"expiry-key-10"
+0	:ok	:persist	{:key "expiry-key-10"}
+1	:invoke	:read	"expiry-key-17"
+1	:ok	:read	{:key "expiry-key-17", :value "8748"}
+2	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 8319, :ttl 9}
+2	:ok	:set-with-ttl	{:key "expiry-key-17", :value 8319, :ttl 9}
+3	:invoke	:read	"expiry-key-7"
+3	:ok	:read	{:key "expiry-key-7", :value "6459"}
+4	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 765, :ttl 5}
+4	:ok	:set-with-ttl	{:key "expiry-key-18", :value 765, :ttl 5}
+0	:invoke	:expire	{:key "expiry-key-4", :ttl 3}
+0	:ok	:expire	{:key "expiry-key-4", :ttl 3}
+0	:invoke	:read	"expiry-key-4"
+0	:ok	:read	{:key "expiry-key-4", :value "1829"}
+:nemesis	:info	:kill	nil
+2	:invoke	:set-with-ttl	{:key "expiry-key-10", :value 3937, :ttl 3}
+2	:ok	:set-with-ttl	{:key "expiry-key-10", :value 3937, :ttl 3}
+3	:invoke	:ttl	"expiry-key-5"
+3	:ok	:ttl	{:key "expiry-key-5", :ttl 3}
+:nemesis	:info	:kill	["n1"]
+0	:invoke	:read	"expiry-key-19"
+0	:ok	:read	{:key "expiry-key-19", :value "5532"}
+0	:invoke	:read	"expiry-key-0"
+0	:ok	:read	{:key "expiry-key-0", :value "2270"}
+1	:invoke	:set-with-ttl	{:key "expiry-key-17", :value 6685, :ttl 9}
+1	:ok	:set-with-ttl	{:key "expiry-key-17", :value 6685, :ttl 9}
+2	:invoke	:expire	{:key "expiry-key-2", :ttl 7}
+2	:ok	:expire	{:key "expiry-key-2", :ttl 7}
+3	:invoke	:read	"expiry-key-3"
+3	:ok	:read	{:key "expiry-key-3", :value nil}
+4	:invoke	:read	"expiry-key-8"
+4	:ok	:read	{:key "expiry-key-8", :value nil}
+0	:invoke	:set-with-ttl	{:key "expiry-key-12", :value 8146, :ttl 6}
+0	:ok	:set-with-ttl	{:key "expiry-key-12", :value 8146, :ttl 6}
+0	:invoke	:persist	"expiry-key-7"
+0	:ok	:persist	{:key "expiry-key-7"}
+1	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 1731, :ttl 4}
+1	:ok	:set-with-ttl	{:key "expiry-key-16", :value 1731, :ttl 4}
+2	:invoke	:set-with-ttl	{:key "expiry-key-7", :value 7342, :ttl 9}
+2	:ok	:set-with-ttl	{:key "expiry-key-7", :value 7342, :ttl 9}
+3	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 457, :ttl 9}
+3	:ok	:set-with-ttl	{:key "expiry-key-11", :value 457, :ttl 9}
+4	:invoke	:ttl	"expiry-key-12"
+4	:ok	:ttl	{:key "expiry-key-12", :ttl 5}
+0	:invoke	:ttl	"expiry-key-15"
+0	:ok	:ttl	{:key "expiry-key-15", :ttl 0}
+0	:invoke	:set-with-ttl	{:key "expiry-key-11", :value 2540, :ttl 7}
+0	:ok	:set-with-ttl	{:key "expiry-key-11", :value 2540, :ttl 7}
+1	:invoke	:read	"expiry-key-5"
+1	:ok	:read	{:key "expiry-key-5", :value "4148"}
+2	:invoke	:set-with-ttl	{:key "expiry-key-18", :value 1485, :ttl 4}
+2	:ok	:set-with-ttl	{:key "expiry-key-18", :value 1485, :ttl 4}
+3	:invoke	:persist	"expiry-key-18"
+4	:invoke	:persist	"expiry-key-6"
+3	:ok	:persist	{:key "expiry-key-18"}
+4	:ok	:persist	{:key "expiry-key-6"}
+0	:invoke	:expire	{:key "expiry-key-13", :ttl 6}
+0	:ok	:expire	{:key "expiry-key-13", :ttl 6}
+0	:invoke	:persist	"expiry-key-14"
+0	:ok	:persist	{:key "expiry-key-14"}
+1	:invoke	:expire	{:key "expiry-key-4", :ttl 9}
+1	:ok	:expire	{:key "expiry-key-4", :ttl 9}
+2	:invoke	:read	"expiry-key-10"
+2	:ok	:read	{:key "expiry-key-10", :value "3937"}
+3	:invoke	:ttl	"expiry-key-12"
+3	:ok	:ttl	{:key "expiry-key-12", :ttl 4}
+4	:invoke	:read	"expiry-key-19"
+4	:ok	:read	{:key "expiry-key-19", :value "5532"}
+0	:invoke	:ttl	"expiry-key-17"
+0	:ok	:ttl	{:key "expiry-key-17", :ttl 7}
+0	:invoke	:read	"expiry-key-12"
+0	:ok	:read	{:key "expiry-key-12", :value "8146"}
+1	:invoke	:read	"expiry-key-2"
+1	:ok	:read	{:key "expiry-key-2", :value "6704"}
+2	:invoke	:set-with-ttl	{:key "expiry-key-16", :value 6437, :ttl 5}
+2	:ok	:set-with-ttl	{:key "expiry-key-16", :value 6437, :ttl 5}
+3	:invoke	:expire	{:key "expiry-key-14", :ttl 6}
+3	:ok	:expire	{:key "expiry-key-14", :ttl 6}
+4	:invoke	:expire	{:key "expiry-key-19", :ttl 6}
+4	:ok	:expire	{:key "expiry-key-19", :ttl 6}
+0	:invoke	:expire	{:key "expiry-key-13", :ttl 3}
+0	:ok	:expire	{:key "expiry-key-13", :ttl 3}
+0	:invoke	:read	"expiry-key-14"
+0	:ok	:read	{:key "expiry-key-14", :value nil}
+1	:invoke	:read	"expiry-key-4"
+1	:ok	:read	{:key "expiry-key-4", :value "1829"}
+2	:invoke	:expire	{:key "expiry-key-1", :ttl 8}
+2	:ok	:expire	{:key "expiry-key-1", :ttl 8}
+3	:invoke	:set-with-ttl	{:key "expiry-key-4", :value 4346, :ttl 8}
+3	:ok	:set-with-ttl	{:key "expiry-key-4", :value 4346, :ttl 8}
+4	:invoke	:read	"expiry-key-5"
+4	:ok	:read	{:key "expiry-key-5", :value "4148"}
+0	:invoke	:persist	"expiry-key-6"
+0	:ok	:persist	{:key "expiry-key-6"}
+0	:invoke	:expire	{:key "expiry-key-9", :ttl 9}
+0	:ok	:expire	{:key "expiry-key-9", :ttl 9}
+1	:invoke	:persist	"expiry-key-2"
+1	:ok	:persist	{:key "expiry-key-2"}
+:nemesis	:info	:start	nil
+:nemesis	:info	:start	["n1"]
+0	:invoke	:read	nil
+0	:ok	:read	{:key nil, :value nil}
+1	:invoke	:read	nil
+1	:ok	:read	{:key nil, :value nil}
+2	:invoke	:read	nil
+2	:ok	:read	{:key nil, :value nil}
+3	:invoke	:read	nil
+3	:ok	:read	{:key nil, :value nil}
+4	:invoke	:read	nil
+4	:ok	:read	{:key nil, :value nil}
+0	:invoke	:read	nil
+0	:ok	:read	{:key nil, :value nil}
+0	:invoke	:read	nil
+0	:ok	:read	{:key nil, :value nil}
+1	:invoke	:read	nil
+1	:ok	:read	{:key nil, :value nil}
+2	:invoke	:read	nil
+2	:ok	:read	{:key nil, :value nil}
+3	:invoke	:read	nil
+3	:ok	:read	{:key nil, :value nil}
