@@ -244,6 +244,15 @@ impl ConnectionHandler {
                 }
             }
             b"VLL" => Some(vec![self.handle_debug_vll(args).await]),
+            b"PUBSUB" => {
+                if args.len() > 1 && args[1].eq_ignore_ascii_case(b"LIMITS") {
+                    Some(vec![self.handle_debug_pubsub_limits().await])
+                } else {
+                    Some(vec![Response::error(
+                        "ERR Unknown DEBUG PUBSUB subcommand. Use LIMITS.",
+                    )])
+                }
+            }
             b"BUNDLE" => {
                 if args.len() > 1 && args[1].eq_ignore_ascii_case(b"GENERATE") {
                     Some(vec![self.handle_debug_bundle_generate(args).await])

@@ -54,9 +54,10 @@ pub use helpers::{
 };
 pub use message::{ScatterOp, ShardMessage};
 pub use types::{
-    BigKeyInfo, BigKeysScanResponse, PartialResult, PendingOp, ShardClusterDeps, ShardConfig,
-    ShardCoreDeps, ShardMemoryStats, ShardPersistenceDeps, TransactionQueue, TransactionResult,
-    VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo, WalLagStatsResponse,
+    BigKeyInfo, BigKeysScanResponse, PartialResult, PendingOp, PubSubLimitsInfo, ShardClusterDeps,
+    ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardPersistenceDeps, TransactionQueue,
+    TransactionResult, VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo,
+    WalLagStatsResponse,
 };
 pub use wait_queue::{ShardWaitQueue, WaitEntry};
 pub use worker::ShardWorker;
