@@ -1011,14 +1011,17 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.server.bind, "127.0.0.1");
-        assert_eq!(config.server.port, 6379);
-        assert_eq!(config.server.num_shards, 1);
-        assert_eq!(config.logging.level, "info");
-        assert_eq!(config.logging.format, "pretty");
+        assert_eq!(config.server.bind, server::DEFAULT_BIND);
+        assert_eq!(config.server.port, server::DEFAULT_PORT);
+        assert_eq!(config.server.num_shards, server::DEFAULT_NUM_SHARDS);
+        assert_eq!(config.logging.level, logging::DEFAULT_LOG_LEVEL);
+        assert_eq!(config.logging.format, logging::DEFAULT_LOG_FORMAT);
         assert!(config.persistence.enabled);
         assert_eq!(config.persistence.durability_mode, "periodic");
-        assert_eq!(config.persistence.sync_interval_ms, 1000);
+        assert_eq!(
+            config.persistence.sync_interval_ms,
+            persistence::DEFAULT_SYNC_INTERVAL_MS
+        );
     }
 
     #[test]

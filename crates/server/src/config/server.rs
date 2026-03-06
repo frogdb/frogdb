@@ -44,16 +44,21 @@ pub struct ServerConfig {
     pub sorted_set_index: SortedSetIndexConfig,
 }
 
+pub const DEFAULT_BIND: &str = "127.0.0.1";
+pub const DEFAULT_PORT: u16 = 6379;
+pub const DEFAULT_NUM_SHARDS: usize = 1;
+pub const DEFAULT_SCATTER_GATHER_TIMEOUT_MS: u64 = 5000;
+
 fn default_bind() -> String {
-    "127.0.0.1".to_string()
+    DEFAULT_BIND.to_string()
 }
 
 fn default_port() -> u16 {
-    6379
+    DEFAULT_PORT
 }
 
 fn default_num_shards() -> usize {
-    1 // Start with 1 shard as per the plan
+    DEFAULT_NUM_SHARDS
 }
 
 fn default_allow_cross_slot_standalone() -> bool {
@@ -61,7 +66,7 @@ fn default_allow_cross_slot_standalone() -> bool {
 }
 
 fn default_scatter_gather_timeout_ms() -> u64 {
-    5000
+    DEFAULT_SCATTER_GATHER_TIMEOUT_MS
 }
 
 fn default_sorted_set_index() -> SortedSetIndexConfig {

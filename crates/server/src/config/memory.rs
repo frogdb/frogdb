@@ -55,28 +55,35 @@ fn default_maxmemory_policy() -> String {
     "noeviction".to_string()
 }
 
+pub const DEFAULT_MAXMEMORY_SAMPLES: usize = 5;
+pub const DEFAULT_LFU_LOG_FACTOR: u8 = 10;
+pub const DEFAULT_LFU_DECAY_TIME: u64 = 1;
+pub const DEFAULT_DOCTOR_BIG_KEY_THRESHOLD: u64 = 1_048_576;
+pub const DEFAULT_DOCTOR_MAX_BIG_KEYS: usize = 100;
+pub const DEFAULT_DOCTOR_IMBALANCE_THRESHOLD: f64 = 25.0;
+
 fn default_maxmemory_samples() -> usize {
-    5
+    DEFAULT_MAXMEMORY_SAMPLES
 }
 
 fn default_lfu_log_factor() -> u8 {
-    10
+    DEFAULT_LFU_LOG_FACTOR
 }
 
 fn default_lfu_decay_time() -> u64 {
-    1
+    DEFAULT_LFU_DECAY_TIME
 }
 
 fn default_doctor_big_key_threshold() -> u64 {
-    1_048_576 // 1MB
+    DEFAULT_DOCTOR_BIG_KEY_THRESHOLD
 }
 
 fn default_doctor_max_big_keys() -> usize {
-    100
+    DEFAULT_DOCTOR_MAX_BIG_KEYS
 }
 
 fn default_doctor_imbalance_threshold() -> f64 {
-    25.0 // 25% coefficient of variation
+    DEFAULT_DOCTOR_IMBALANCE_THRESHOLD
 }
 
 impl Default for MemoryConfig {
@@ -149,9 +156,9 @@ mod tests {
         let config = MemoryConfig::default();
         assert_eq!(config.maxmemory, 0);
         assert_eq!(config.maxmemory_policy, "noeviction");
-        assert_eq!(config.maxmemory_samples, 5);
-        assert_eq!(config.lfu_log_factor, 10);
-        assert_eq!(config.lfu_decay_time, 1);
+        assert_eq!(config.maxmemory_samples, DEFAULT_MAXMEMORY_SAMPLES);
+        assert_eq!(config.lfu_log_factor, DEFAULT_LFU_LOG_FACTOR);
+        assert_eq!(config.lfu_decay_time, DEFAULT_LFU_DECAY_TIME);
     }
 
     #[test]

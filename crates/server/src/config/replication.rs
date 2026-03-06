@@ -88,24 +88,34 @@ fn default_replication_role() -> String {
     "standalone".to_string()
 }
 
+pub const DEFAULT_PRIMARY_PORT: u16 = 6379;
+pub const DEFAULT_MIN_REPLICAS_TIMEOUT_MS: u64 = 5000;
+pub const DEFAULT_ACK_INTERVAL_MS: u64 = 1000;
+pub const DEFAULT_FULLSYNC_TIMEOUT_SECS: u64 = 300;
+pub const DEFAULT_FULLSYNC_MAX_MEMORY_MB: usize = 512;
+pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5000;
+pub const DEFAULT_HANDSHAKE_TIMEOUT_MS: u64 = 10000;
+pub const DEFAULT_RECONNECT_BACKOFF_INITIAL_MS: u64 = 100;
+pub const DEFAULT_RECONNECT_BACKOFF_MAX_MS: u64 = 30000;
+
 fn default_primary_port() -> u16 {
-    6379
+    DEFAULT_PRIMARY_PORT
 }
 
 fn default_min_replicas_timeout_ms() -> u64 {
-    5000
+    DEFAULT_MIN_REPLICAS_TIMEOUT_MS
 }
 
 fn default_ack_interval_ms() -> u64 {
-    1000
+    DEFAULT_ACK_INTERVAL_MS
 }
 
 fn default_fullsync_timeout_secs() -> u64 {
-    300
+    DEFAULT_FULLSYNC_TIMEOUT_SECS
 }
 
 fn default_fullsync_max_memory_mb() -> usize {
-    512
+    DEFAULT_FULLSYNC_MAX_MEMORY_MB
 }
 
 fn default_replication_state_file() -> String {
@@ -113,19 +123,19 @@ fn default_replication_state_file() -> String {
 }
 
 fn default_connect_timeout_ms() -> u64 {
-    5000
+    DEFAULT_CONNECT_TIMEOUT_MS
 }
 
 fn default_handshake_timeout_ms() -> u64 {
-    10000
+    DEFAULT_HANDSHAKE_TIMEOUT_MS
 }
 
 fn default_reconnect_backoff_initial_ms() -> u64 {
-    100
+    DEFAULT_RECONNECT_BACKOFF_INITIAL_MS
 }
 
 fn default_reconnect_backoff_max_ms() -> u64 {
-    30000
+    DEFAULT_RECONNECT_BACKOFF_MAX_MS
 }
 
 fn default_fullresync_cooldown_secs() -> u64 {
@@ -226,17 +236,29 @@ mod tests {
         let config = ReplicationConfigSection::default();
         assert_eq!(config.role, "standalone");
         assert!(config.primary_host.is_empty());
-        assert_eq!(config.primary_port, 6379);
+        assert_eq!(config.primary_port, DEFAULT_PRIMARY_PORT);
         assert_eq!(config.min_replicas_to_write, 0);
-        assert_eq!(config.min_replicas_timeout_ms, 5000);
-        assert_eq!(config.ack_interval_ms, 1000);
-        assert_eq!(config.fullsync_timeout_secs, 300);
-        assert_eq!(config.fullsync_max_memory_mb, 512);
+        assert_eq!(
+            config.min_replicas_timeout_ms,
+            DEFAULT_MIN_REPLICAS_TIMEOUT_MS
+        );
+        assert_eq!(config.ack_interval_ms, DEFAULT_ACK_INTERVAL_MS);
+        assert_eq!(config.fullsync_timeout_secs, DEFAULT_FULLSYNC_TIMEOUT_SECS);
+        assert_eq!(
+            config.fullsync_max_memory_mb,
+            DEFAULT_FULLSYNC_MAX_MEMORY_MB
+        );
         assert_eq!(config.state_file, "replication_state.json");
-        assert_eq!(config.connect_timeout_ms, 5000);
-        assert_eq!(config.handshake_timeout_ms, 10000);
-        assert_eq!(config.reconnect_backoff_initial_ms, 100);
-        assert_eq!(config.reconnect_backoff_max_ms, 30000);
+        assert_eq!(config.connect_timeout_ms, DEFAULT_CONNECT_TIMEOUT_MS);
+        assert_eq!(config.handshake_timeout_ms, DEFAULT_HANDSHAKE_TIMEOUT_MS);
+        assert_eq!(
+            config.reconnect_backoff_initial_ms,
+            DEFAULT_RECONNECT_BACKOFF_INITIAL_MS
+        );
+        assert_eq!(
+            config.reconnect_backoff_max_ms,
+            DEFAULT_RECONNECT_BACKOFF_MAX_MS
+        );
         assert_eq!(config.replication_lag_threshold_bytes, 0);
         assert_eq!(config.replication_lag_threshold_secs, 0);
         assert_eq!(config.fullresync_cooldown_secs, 60);
