@@ -14,7 +14,7 @@ impl ShardWorker {
     ) -> Vec<usize> {
         // This returns the total subscription count after each subscription
         // The count is just a placeholder here since we don't track across shards
-        channels
+        let counts: Vec<usize> = channels
             .into_iter()
             .enumerate()
             .map(|(i, channel)| {
@@ -22,7 +22,12 @@ impl ShardWorker {
                     .subscribe(channel, conn_id, sender.clone());
                 i + 1 // Placeholder count
             })
-            .collect()
+            .collect();
+        self.subscriptions.check_thresholds_after_subscribe(
+            self.identity.shard_id,
+            &self.observability.metrics_recorder,
+        );
+        counts
     }
 
     /// Handle UNSUBSCRIBE - unsubscribe from broadcast channels.
@@ -31,14 +36,16 @@ impl ShardWorker {
         channels: Vec<Bytes>,
         conn_id: ConnId,
     ) -> Vec<usize> {
-        channels
+        let counts: Vec<usize> = channels
             .into_iter()
             .enumerate()
             .map(|(i, channel)| {
                 self.subscriptions.unsubscribe(&channel, conn_id);
                 i // Placeholder remaining count
             })
-            .collect()
+            .collect();
+        self.subscriptions.reset_thresholds_if_needed();
+        counts
     }
 
     /// Handle PSUBSCRIBE - subscribe to patterns.
@@ -48,7 +55,7 @@ impl ShardWorker {
         conn_id: ConnId,
         sender: PubSubSender,
     ) -> Vec<usize> {
-        patterns
+        let counts: Vec<usize> = patterns
             .into_iter()
             .enumerate()
             .map(|(i, pattern)| {
@@ -56,7 +63,12 @@ impl ShardWorker {
                     .psubscribe(pattern, conn_id, sender.clone());
                 i + 1 // Placeholder count
             })
-            .collect()
+            .collect();
+        self.subscriptions.check_thresholds_after_subscribe(
+            self.identity.shard_id,
+            &self.observability.metrics_recorder,
+        );
+        counts
     }
 
     /// Handle PUNSUBSCRIBE - unsubscribe from patterns.
@@ -65,14 +77,16 @@ impl ShardWorker {
         patterns: Vec<Bytes>,
         conn_id: ConnId,
     ) -> Vec<usize> {
-        patterns
+        let counts: Vec<usize> = patterns
             .into_iter()
             .enumerate()
             .map(|(i, pattern)| {
                 self.subscriptions.punsubscribe(&pattern, conn_id);
                 i // Placeholder remaining count
             })
-            .collect()
+            .collect();
+        self.subscriptions.reset_thresholds_if_needed();
+        counts
     }
 
     /// Handle SSUBSCRIBE - subscribe to sharded channels.
@@ -82,7 +96,7 @@ impl ShardWorker {
         conn_id: ConnId,
         sender: PubSubSender,
     ) -> Vec<usize> {
-        channels
+        let counts: Vec<usize> = channels
             .into_iter()
             .enumerate()
             .map(|(i, channel)| {
@@ -90,7 +104,12 @@ impl ShardWorker {
                     .ssubscribe(channel, conn_id, sender.clone());
                 i + 1 // Placeholder count
             })
-            .collect()
+            .collect();
+        self.subscriptions.check_thresholds_after_subscribe(
+            self.identity.shard_id,
+            &self.observability.metrics_recorder,
+        );
+        counts
     }
 
     /// Handle SUNSUBSCRIBE - unsubscribe from sharded channels.
@@ -99,14 +118,16 @@ impl ShardWorker {
         channels: Vec<Bytes>,
         conn_id: ConnId,
     ) -> Vec<usize> {
-        channels
+        let counts: Vec<usize> = channels
             .into_iter()
             .enumerate()
             .map(|(i, channel)| {
                 self.subscriptions.sunsubscribe(&channel, conn_id);
                 i // Placeholder remaining count
             })
-            .collect()
+            .collect();
+        self.subscriptions.reset_thresholds_if_needed();
+        counts
     }
 
     /// Handle introspection requests.

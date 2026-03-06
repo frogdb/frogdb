@@ -53,6 +53,12 @@ pub struct PubSubState {
     pub patterns: HashSet<Bytes>,
     /// Sharded channel subscriptions.
     pub sharded_subscriptions: HashSet<Bytes>,
+    /// Whether the 80% channel subscription warning has been emitted.
+    pub warned_sub_80: bool,
+    /// Whether the 80% pattern subscription warning has been emitted.
+    pub warned_pattern_80: bool,
+    /// Whether the 80% sharded subscription warning has been emitted.
+    pub warned_sharded_80: bool,
 }
 
 impl PubSubState {
