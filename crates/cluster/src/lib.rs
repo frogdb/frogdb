@@ -51,7 +51,7 @@ pub use network::{
     ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse,
     handle_rpc_request, parse_rpc_message, send_rpc_response,
 };
-pub use state::{ClusterState, ClusterStateMachine};
+pub use state::{ClusterState, ClusterStateMachine, DemotionEvent};
 pub use storage::ClusterStorage;
 pub use types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterResponse, ClusterSnapshot,

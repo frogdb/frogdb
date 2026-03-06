@@ -9,6 +9,8 @@ use openraft::{EntryPayload, LogId, Snapshot, SnapshotMeta, StorageError, Stored
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
+use tokio::sync::mpsc;
+
 use crate::types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterError, ClusterResponse, ClusterSnapshot, ConfigEpoch,
     MigrationState, NodeId, NodeInfo, NodeRole, SlotMigration, SlotRange, TypeConfig,
@@ -343,9 +345,24 @@ impl ClusterState {
     }
 }
 
+/// Event emitted when this node is demoted from primary to replica.
+#[derive(Debug, Clone)]
+pub struct DemotionEvent {
+    /// The node ID that was demoted.
+    pub demoted_node_id: NodeId,
+    /// The node ID of the new primary (if known).
+    pub new_primary_id: Option<NodeId>,
+    /// The configuration epoch at the time of demotion.
+    pub epoch: u64,
+}
+
 /// Raft state machine for cluster coordination.
 pub struct ClusterStateMachine {
     state: ClusterState,
+    /// This node's ID, used to detect self-demotion events.
+    self_node_id: Option<NodeId>,
+    /// Channel to notify when this node is demoted from primary to replica.
+    demotion_tx: Option<mpsc::UnboundedSender<DemotionEvent>>,
 }
 
 impl ClusterStateMachine {
@@ -353,12 +370,32 @@ impl ClusterStateMachine {
     pub fn new() -> Self {
         Self {
             state: ClusterState::new(),
+            self_node_id: None,
+            demotion_tx: None,
         }
     }
 
     /// Create a state machine with existing state.
     pub fn with_state(state: ClusterState) -> Self {
-        Self { state }
+        Self {
+            state,
+            self_node_id: None,
+            demotion_tx: None,
+        }
+    }
+
+    /// Configure self-demotion detection.
+    ///
+    /// When a `SetRole { role: Replica }` command is applied for `self_node_id`,
+    /// a `DemotionEvent` is sent through the returned receiver.
+    pub fn enable_demotion_detection(
+        &mut self,
+        self_node_id: NodeId,
+    ) -> mpsc::UnboundedReceiver<DemotionEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.self_node_id = Some(self_node_id);
+        self.demotion_tx = Some(tx);
+        rx
     }
 
     /// Get a reference to the cluster state.
@@ -403,6 +440,24 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
                     results.push(ClusterResponse::Ok);
                 }
                 EntryPayload::Normal(cmd) => {
+                    // Check for self-demotion before applying
+                    if let Some(self_id) = self.self_node_id
+                        && let ClusterCommand::SetRole {
+                            node_id,
+                            role: NodeRole::Replica,
+                            primary_id,
+                        } = &cmd
+                        && *node_id == self_id
+                        && let Some(ref tx) = self.demotion_tx
+                    {
+                        let epoch = self.state.config_epoch();
+                        let _ = tx.send(DemotionEvent {
+                            demoted_node_id: self_id,
+                            new_primary_id: *primary_id,
+                            epoch,
+                        });
+                    }
+
                     let result = self.state.apply_command(cmd).unwrap_or_else(|e| {
                         tracing::warn!(error = %e, "Failed to apply cluster command");
                         ClusterResponse::Error(e.to_string())
@@ -426,6 +481,8 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
         ClusterStateMachine {
             state: self.state.clone(),
+            self_node_id: None,
+            demotion_tx: None,
         }
     }
 
@@ -689,5 +746,75 @@ mod tests {
 
         assert!(!state.is_slot_migrating(42));
         assert_eq!(state.get_slot_owner(42), Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_demotion_detection_fires_for_self() {
+        let cluster = ClusterState::new();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_demotion_detection(2);
+
+        // Add two nodes
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        sm.state()
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        sm.state()
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+
+        // SetRole demoting node 2 to replica
+        let entry = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 1,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::SetRole {
+                node_id: 2,
+                role: NodeRole::Replica,
+                primary_id: Some(1),
+            }),
+        };
+
+        sm.apply(vec![entry]).await.unwrap();
+
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.demoted_node_id, 2);
+        assert_eq!(event.new_primary_id, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_demotion_detection_ignores_other_nodes() {
+        let cluster = ClusterState::new();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_demotion_detection(1); // Watching node 1
+
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        sm.state()
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        sm.state()
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+
+        // SetRole demoting node 2 (not self)
+        let entry = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 1,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::SetRole {
+                node_id: 2,
+                role: NodeRole::Replica,
+                primary_id: Some(1),
+            }),
+        };
+
+        sm.apply(vec![entry]).await.unwrap();
+
+        // No event for node 1 watching
+        assert!(rx.try_recv().is_err());
     }
 }

@@ -82,6 +82,19 @@ pub struct ReplicationConfigSection {
     /// Cooldown seconds after proactive lag disconnect before allowing another.
     #[serde(default = "default_fullresync_cooldown_secs")]
     pub fullresync_cooldown_secs: u64,
+
+    /// Enable split-brain discarded-writes logging.
+    /// When a primary is demoted, divergent writes are logged before resync.
+    #[serde(default = "default_split_brain_log_enabled")]
+    pub split_brain_log_enabled: bool,
+
+    /// Maximum number of recent commands to buffer for split-brain detection.
+    #[serde(default = "default_split_brain_buffer_size")]
+    pub split_brain_buffer_size: usize,
+
+    /// Maximum memory in MB for the split-brain command buffer.
+    #[serde(default = "default_split_brain_buffer_max_mb")]
+    pub split_brain_buffer_max_mb: usize,
 }
 
 fn default_replication_role() -> String {
@@ -97,6 +110,9 @@ pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5000;
 pub const DEFAULT_HANDSHAKE_TIMEOUT_MS: u64 = 10000;
 pub const DEFAULT_RECONNECT_BACKOFF_INITIAL_MS: u64 = 100;
 pub const DEFAULT_RECONNECT_BACKOFF_MAX_MS: u64 = 30000;
+pub const DEFAULT_SPLIT_BRAIN_LOG_ENABLED: bool = true;
+pub const DEFAULT_SPLIT_BRAIN_BUFFER_SIZE: usize = 10_000;
+pub const DEFAULT_SPLIT_BRAIN_BUFFER_MAX_MB: usize = 64;
 
 fn default_primary_port() -> u16 {
     DEFAULT_PRIMARY_PORT
@@ -142,6 +158,18 @@ fn default_fullresync_cooldown_secs() -> u64 {
     60
 }
 
+fn default_split_brain_log_enabled() -> bool {
+    DEFAULT_SPLIT_BRAIN_LOG_ENABLED
+}
+
+fn default_split_brain_buffer_size() -> usize {
+    DEFAULT_SPLIT_BRAIN_BUFFER_SIZE
+}
+
+fn default_split_brain_buffer_max_mb() -> usize {
+    DEFAULT_SPLIT_BRAIN_BUFFER_MAX_MB
+}
+
 impl Default for ReplicationConfigSection {
     fn default() -> Self {
         Self {
@@ -161,6 +189,9 @@ impl Default for ReplicationConfigSection {
             replication_lag_threshold_bytes: 0,
             replication_lag_threshold_secs: 0,
             fullresync_cooldown_secs: default_fullresync_cooldown_secs(),
+            split_brain_log_enabled: default_split_brain_log_enabled(),
+            split_brain_buffer_size: default_split_brain_buffer_size(),
+            split_brain_buffer_max_mb: default_split_brain_buffer_max_mb(),
         }
     }
 }
@@ -262,6 +293,15 @@ mod tests {
         assert_eq!(config.replication_lag_threshold_bytes, 0);
         assert_eq!(config.replication_lag_threshold_secs, 0);
         assert_eq!(config.fullresync_cooldown_secs, 60);
+        assert!(config.split_brain_log_enabled);
+        assert_eq!(
+            config.split_brain_buffer_size,
+            DEFAULT_SPLIT_BRAIN_BUFFER_SIZE
+        );
+        assert_eq!(
+            config.split_brain_buffer_max_mb,
+            DEFAULT_SPLIT_BRAIN_BUFFER_MAX_MB
+        );
     }
 
     #[test]

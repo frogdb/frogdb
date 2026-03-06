@@ -10,11 +10,12 @@ use bytes::{Bytes, BytesMut};
 use frogdb_persistence::RocksStore;
 use frogdb_types::ReplicationTracker;
 use sha2::Digest;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -44,6 +45,87 @@ const RDB_OPCODE_RESIZEDB: u8 = 0xFB;
 
 /// RDB end-of-file opcode.
 const RDB_OPCODE_EOF: u8 = 0xFF;
+
+/// Configuration for the split-brain replication ring buffer.
+#[derive(Debug, Clone)]
+pub struct SplitBrainBufferConfig {
+    /// Whether split-brain logging is enabled.
+    pub enabled: bool,
+    /// Maximum number of recent commands to retain.
+    pub max_entries: usize,
+    /// Maximum memory in bytes for buffered commands.
+    pub max_bytes: usize,
+}
+
+impl Default for SplitBrainBufferConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_entries: 10_000,
+            max_bytes: 64 * 1024 * 1024, // 64 MB
+        }
+    }
+}
+
+/// A single buffered command in the replication ring buffer.
+struct BufferedCommand {
+    offset: u64,
+    resp_bytes: Bytes,
+}
+
+/// Bounded ring buffer that captures recent RESP-encoded commands with their
+/// replication offsets. Used to recover divergent writes during split-brain detection.
+pub struct ReplicationRingBuffer {
+    entries: parking_lot::Mutex<VecDeque<BufferedCommand>>,
+    max_entries: usize,
+    current_bytes: AtomicUsize,
+    max_bytes: usize,
+}
+
+impl ReplicationRingBuffer {
+    /// Create a new ring buffer with the given capacity limits.
+    pub fn new(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            entries: parking_lot::Mutex::new(VecDeque::with_capacity(
+                max_entries.min(1024), // Don't pre-allocate more than 1K entries
+            )),
+            max_entries,
+            current_bytes: AtomicUsize::new(0),
+            max_bytes,
+        }
+    }
+
+    /// Push a new command into the buffer, evicting oldest entries if capacity is exceeded.
+    pub fn push(&self, offset: u64, resp_bytes: Bytes) {
+        let entry_size = resp_bytes.len();
+        let mut entries = self.entries.lock();
+
+        // Evict oldest entries if we'd exceed limits
+        while entries.len() >= self.max_entries
+            || (self.current_bytes.load(Ordering::Relaxed) + entry_size > self.max_bytes
+                && !entries.is_empty())
+        {
+            if let Some(evicted) = entries.pop_front() {
+                self.current_bytes
+                    .fetch_sub(evicted.resp_bytes.len(), Ordering::Relaxed);
+            }
+        }
+
+        self.current_bytes.fetch_add(entry_size, Ordering::Relaxed);
+        entries.push_back(BufferedCommand { offset, resp_bytes });
+    }
+
+    /// Extract commands with offset > `last_replicated_offset`.
+    /// Returns entries in order. Non-destructive (clones data).
+    pub fn extract_divergent_writes(&self, last_replicated_offset: u64) -> Vec<(u64, Bytes)> {
+        let entries = self.entries.lock();
+        entries
+            .iter()
+            .filter(|cmd| cmd.offset > last_replicated_offset)
+            .map(|cmd| (cmd.offset, cmd.resp_bytes.clone()))
+            .collect()
+    }
+}
 
 /// Configuration for proactive lag-threshold disconnection.
 #[derive(Debug, Clone)]
@@ -84,6 +166,9 @@ pub struct PrimaryReplicationHandler {
 
     /// Proactive lag-threshold disconnect configuration.
     lag_config: LagThresholdConfig,
+
+    /// Ring buffer for split-brain divergent-write detection.
+    ring_buffer: Option<ReplicationRingBuffer>,
 }
 
 /// Handle to a replica connection.
@@ -119,8 +204,18 @@ impl PrimaryReplicationHandler {
         rocks_store: Option<Arc<RocksStore>>,
         data_dir: PathBuf,
         lag_config: LagThresholdConfig,
+        split_brain_config: SplitBrainBufferConfig,
     ) -> Self {
         let (wal_broadcast, _) = broadcast::channel(10000);
+
+        let ring_buffer = if split_brain_config.enabled {
+            Some(ReplicationRingBuffer::new(
+                split_brain_config.max_entries,
+                split_brain_config.max_bytes,
+            ))
+        } else {
+            None
+        };
 
         Self {
             state: Arc::new(RwLock::new(state)),
@@ -130,6 +225,7 @@ impl PrimaryReplicationHandler {
             rocks_store,
             data_dir,
             lag_config,
+            ring_buffer,
         }
     }
 
@@ -625,6 +721,11 @@ impl ReplicationBroadcaster for PrimaryReplicationHandler {
         // Increment offset atomically via the tracker
         let new_offset = self.tracker.increment_offset(bytes_len);
 
+        // Push to ring buffer for split-brain detection
+        if let Some(ref rb) = self.ring_buffer {
+            rb.push(new_offset, resp_bytes.clone());
+        }
+
         // Create and broadcast the frame
         let frame = ReplicationFrame::new(new_offset, resp_bytes);
         self.broadcast_frame(frame);
@@ -645,6 +746,13 @@ impl ReplicationBroadcaster for PrimaryReplicationHandler {
 
     fn current_offset(&self) -> u64 {
         self.tracker.current_offset()
+    }
+
+    fn extract_divergent_writes(&self, last_replicated_offset: u64) -> Vec<(u64, Bytes)> {
+        match self.ring_buffer {
+            Some(ref rb) => rb.extract_divergent_writes(last_replicated_offset),
+            None => Vec::new(),
+        }
     }
 }
 
@@ -744,5 +852,82 @@ mod tests {
         // Invalid data
         let data = b"INVALID";
         assert_eq!(parse_replconf_ack(data), None);
+    }
+
+    // ========================================================================
+    // Ring buffer tests
+    // ========================================================================
+
+    #[test]
+    fn test_ring_buffer_push_and_extract() {
+        let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
+
+        rb.push(10, Bytes::from("cmd1"));
+        rb.push(20, Bytes::from("cmd2"));
+        rb.push(30, Bytes::from("cmd3"));
+
+        // Extract everything after offset 0
+        let writes = rb.extract_divergent_writes(0);
+        assert_eq!(writes.len(), 3);
+        assert_eq!(writes[0], (10, Bytes::from("cmd1")));
+        assert_eq!(writes[1], (20, Bytes::from("cmd2")));
+        assert_eq!(writes[2], (30, Bytes::from("cmd3")));
+
+        // Extract only after offset 20
+        let writes = rb.extract_divergent_writes(20);
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0], (30, Bytes::from("cmd3")));
+
+        // Extract after all offsets
+        let writes = rb.extract_divergent_writes(30);
+        assert!(writes.is_empty());
+    }
+
+    #[test]
+    fn test_ring_buffer_entry_limit_eviction() {
+        let rb = ReplicationRingBuffer::new(3, 1024 * 1024);
+
+        rb.push(10, Bytes::from("cmd1"));
+        rb.push(20, Bytes::from("cmd2"));
+        rb.push(30, Bytes::from("cmd3"));
+        rb.push(40, Bytes::from("cmd4")); // Should evict cmd1
+
+        let writes = rb.extract_divergent_writes(0);
+        assert_eq!(writes.len(), 3);
+        assert_eq!(writes[0].0, 20); // cmd1 evicted
+        assert_eq!(writes[2].0, 40);
+    }
+
+    #[test]
+    fn test_ring_buffer_byte_limit_eviction() {
+        // Allow only 10 bytes total
+        let rb = ReplicationRingBuffer::new(100, 10);
+
+        rb.push(10, Bytes::from("abcde")); // 5 bytes
+        rb.push(20, Bytes::from("fghij")); // 5 bytes, total 10
+        rb.push(30, Bytes::from("klmno")); // 5 bytes, must evict first to fit
+
+        let writes = rb.extract_divergent_writes(0);
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0].0, 20);
+        assert_eq!(writes[1].0, 30);
+    }
+
+    #[test]
+    fn test_ring_buffer_empty() {
+        let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
+        let writes = rb.extract_divergent_writes(0);
+        assert!(writes.is_empty());
+    }
+
+    #[test]
+    fn test_ring_buffer_extract_is_nondestructive() {
+        let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
+        rb.push(10, Bytes::from("cmd1"));
+
+        let w1 = rb.extract_divergent_writes(0);
+        let w2 = rb.extract_divergent_writes(0);
+        assert_eq!(w1.len(), 1);
+        assert_eq!(w2.len(), 1);
     }
 }

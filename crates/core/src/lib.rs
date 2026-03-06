@@ -46,8 +46,8 @@ pub use client_registry::{
 pub use cluster::{
     CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterNetwork,
     ClusterNetworkFactory, ClusterRaft, ClusterResponse, ClusterRpcRequest, ClusterRpcResponse,
-    ClusterSnapshot, ClusterState, ClusterStateMachine, ClusterStorage, ConfigEpoch, NodeId,
-    NodeInfo, NodeRole, SharedClusterRaft, SlotRange, TypeConfig, handle_rpc_request,
+    ClusterSnapshot, ClusterState, ClusterStateMachine, ClusterStorage, ConfigEpoch, DemotionEvent,
+    NodeId, NodeInfo, NodeRole, SharedClusterRaft, SlotRange, TypeConfig, handle_rpc_request,
     parse_rpc_message, send_rpc_response,
 };
 pub use command::{

@@ -385,9 +385,7 @@ mod tests {
         quorum_checker: Option<Arc<dyn QuorumChecker>>,
     ) -> ConnectionHandler {
         use crate::connection::deps::*;
-        use frogdb_core::{
-            ClientRegistry, CommandRegistry, NoopMetricsRecorder, ShardMessage,
-        };
+        use frogdb_core::{ClientRegistry, CommandRegistry, NoopMetricsRecorder, ShardMessage};
         use tokio::sync::mpsc;
 
         // Create a loopback TCP pair
@@ -404,9 +402,9 @@ mod tests {
         let shard_senders = Arc::new(vec![tx]);
         let acl_manager = frogdb_core::AclManager::new(Default::default());
         let client_registry = Arc::new(ClientRegistry::new());
-        let config_manager = Arc::new(
-            crate::runtime_config::ConfigManager::new(&crate::config::Config::default()),
-        );
+        let config_manager = Arc::new(crate::runtime_config::ConfigManager::new(
+            &crate::config::Config::default(),
+        ));
         let snapshot_coordinator: Arc<dyn frogdb_core::persistence::SnapshotCoordinator> =
             Arc::new(frogdb_core::NoopSnapshotCoordinator::new());
         let function_registry = frogdb_core::SharedFunctionRegistry::default();
@@ -430,11 +428,7 @@ mod tests {
         let config = ConnectionConfig::default_for_testing(1);
         let observability = ObservabilityDeps::default();
 
-        let client_handle = client_registry.register(
-            1,
-            "127.0.0.1:9999".parse().unwrap(),
-            None,
-        );
+        let client_handle = client_registry.register(1, "127.0.0.1:9999".parse().unwrap(), None);
 
         ConnectionHandler::from_deps(
             tcp_stream,
@@ -476,7 +470,10 @@ mod tests {
         let handler = make_test_handler(Some(qc)).await;
 
         let result = handler.run_pre_checks("GET", &[]);
-        assert!(result.is_none(), "GET should be allowed when quorum is lost");
+        assert!(
+            result.is_none(),
+            "GET should be allowed when quorum is lost"
+        );
     }
 
     #[tokio::test]
@@ -485,7 +482,10 @@ mod tests {
         let handler = make_test_handler(Some(qc)).await;
 
         let result = handler.run_pre_checks("SET", &[]);
-        assert!(result.is_none(), "SET should be allowed when quorum is present");
+        assert!(
+            result.is_none(),
+            "SET should be allowed when quorum is present"
+        );
     }
 
     #[tokio::test]
@@ -493,6 +493,9 @@ mod tests {
         let handler = make_test_handler(None).await;
 
         let result = handler.run_pre_checks("SET", &[]);
-        assert!(result.is_none(), "SET should be allowed in standalone mode (no quorum checker)");
+        assert!(
+            result.is_none(),
+            "SET should be allowed in standalone mode (no quorum checker)"
+        );
     }
 }

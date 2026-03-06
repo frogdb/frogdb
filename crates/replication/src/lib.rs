@@ -35,6 +35,7 @@ pub mod frame;
 pub mod fullsync;
 pub mod primary;
 pub mod replica;
+pub mod split_brain_log;
 pub mod state;
 pub mod tracker;
 
@@ -42,7 +43,7 @@ pub use frame::{
     FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec, serialize_command_to_resp,
 };
 pub use fullsync::{FullSyncMetadata, FullSyncState};
-pub use primary::{LagThresholdConfig, PrimaryReplicationHandler};
+pub use primary::{LagThresholdConfig, PrimaryReplicationHandler, SplitBrainBufferConfig};
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use state::ReplicationState;
 pub use tracker::{ReplicaInfo, ReplicationTrackerImpl};
@@ -71,6 +72,10 @@ pub trait ReplicationBroadcaster: Send + Sync {
 
     /// Get the current replication offset.
     fn current_offset(&self) -> u64;
+
+    /// Extract commands with offset > `last_replicated_offset` from the ring buffer.
+    /// Returns `(offset, RESP-encoded command)` pairs in order. Non-destructive.
+    fn extract_divergent_writes(&self, last_replicated_offset: u64) -> Vec<(u64, Bytes)>;
 }
 
 /// No-op broadcaster for when not running as primary or no replicas connected.
@@ -87,6 +92,10 @@ impl ReplicationBroadcaster for NoopBroadcaster {
 
     fn current_offset(&self) -> u64 {
         0
+    }
+
+    fn extract_divergent_writes(&self, _last_replicated_offset: u64) -> Vec<(u64, Bytes)> {
+        Vec::new()
     }
 }
 
