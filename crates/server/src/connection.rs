@@ -48,7 +48,8 @@ use bytes::BytesMut;
 use frogdb_core::{
     AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
     CommandFlags, CommandRegistry, MetricsRecorder, PauseMode, PubSubMessage, PubSubSender,
-    QuorumChecker, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    command::QuorumChecker,
     persistence::SnapshotCoordinator,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
@@ -179,7 +180,7 @@ pub struct ConnectionHandler {
     /// Whether this server is a replica (rejects write commands from clients).
     is_replica: bool,
 
-    /// Optional quorum checker for self-fencing (rejects writes on quorum loss).
+    /// Optional quorum checker for self-fencing (write rejection on quorum loss).
     quorum_checker: Option<Arc<dyn QuorumChecker>>,
 }
 

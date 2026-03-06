@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use frogdb_core::{
     AclManager, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry, MetricsRecorder,
-    QuorumChecker, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    command::QuorumChecker,
     persistence::SnapshotCoordinator,
 };
 use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
@@ -95,7 +96,7 @@ pub struct ClusterDeps {
     /// Primary replication handler for PSYNC command.
     pub primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
 
-    /// Quorum checker for self-fencing (rejects writes on quorum loss).
+    /// Optional quorum checker for self-fencing (write rejection on quorum loss).
     pub quorum_checker: Option<Arc<dyn QuorumChecker>>,
 }
 
@@ -113,7 +114,6 @@ impl ClusterDeps {
         network_factory: Arc<ClusterNetworkFactory>,
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
-        quorum_checker: Option<Arc<dyn QuorumChecker>>,
     ) -> Self {
         Self {
             cluster_state: Some(cluster_state),
@@ -122,7 +122,7 @@ impl ClusterDeps {
             network_factory: Some(network_factory),
             replication_tracker,
             primary_replication_handler,
-            quorum_checker,
+            quorum_checker: None,
         }
     }
 

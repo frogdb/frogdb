@@ -113,15 +113,14 @@ impl ConnectionHandler {
             ));
         }
 
-        // Self-fencing: reject writes when cluster quorum is lost
+        // Self-fence: reject writes when quorum is lost in cluster mode
         if let Some(ref qc) = self.quorum_checker
             && let Some(cmd_impl) = self.registry.get(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
-            && !self.is_fencing_exempt(cmd_name)
             && !qc.has_quorum()
         {
             return Some(Response::error(
-                "CLUSTERDOWN The cluster is down (quorum lost)",
+                "CLUSTERDOWN The cluster is down (quorum lost, writes rejected)",
             ));
         }
 
@@ -179,20 +178,6 @@ impl ConnectionHandler {
         }
 
         None
-    }
-
-    /// Check if a command is exempt from self-fencing (quorum loss write rejection).
-    /// Infrastructure and connection-level commands are always allowed.
-    pub(crate) fn is_fencing_exempt(&self, cmd_name: &str) -> bool {
-        if matches!(cmd_name, "CLUSTER" | "PING" | "COMMAND" | "TIME" | "DEBUG") {
-            return true;
-        }
-        self.registry.get_entry(cmd_name).is_some_and(|entry| {
-            matches!(
-                entry.execution_strategy(),
-                ExecutionStrategy::ConnectionLevel(_)
-            )
-        })
     }
 
     /// Check if a command is exempt from slot validation in cluster mode.
@@ -372,5 +357,142 @@ impl ConnectionHandler {
 
     fn ask_response(slot: u16, addr: SocketAddr) -> Response {
         Response::error(format!("ASK {} {}:{}", slot, addr.ip(), addr.port()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frogdb_core::command::QuorumChecker;
+    use std::sync::Arc;
+
+    struct MockQuorumChecker {
+        has_quorum: bool,
+    }
+
+    impl QuorumChecker for MockQuorumChecker {
+        fn has_quorum(&self) -> bool {
+            self.has_quorum
+        }
+        fn count_reachable_nodes(&self) -> usize {
+            if self.has_quorum { 2 } else { 1 }
+        }
+    }
+
+    /// Helper to create a ConnectionHandler for testing pre-checks.
+    /// Uses a loopback TCP connection and minimal deps.
+    async fn make_test_handler(
+        quorum_checker: Option<Arc<dyn QuorumChecker>>,
+    ) -> ConnectionHandler {
+        use crate::connection::deps::*;
+        use frogdb_core::{
+            ClientRegistry, CommandRegistry, NoopMetricsRecorder, ShardMessage,
+        };
+        use tokio::sync::mpsc;
+
+        // Create a loopback TCP pair
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let connect_fut = tokio::net::TcpStream::connect(addr);
+        let (stream, _) = tokio::join!(async { listener.accept().await.unwrap() }, connect_fut);
+        let tcp_stream: crate::net::TcpStream = stream.0;
+
+        let mut registry = CommandRegistry::new();
+        crate::register_commands(&mut registry);
+        let registry = Arc::new(registry);
+        let (tx, _rx) = mpsc::channel::<ShardMessage>(1);
+        let shard_senders = Arc::new(vec![tx]);
+        let acl_manager = frogdb_core::AclManager::new(Default::default());
+        let client_registry = Arc::new(ClientRegistry::new());
+        let config_manager = Arc::new(
+            crate::runtime_config::ConfigManager::new(&crate::config::Config::default()),
+        );
+        let snapshot_coordinator: Arc<dyn frogdb_core::persistence::SnapshotCoordinator> =
+            Arc::new(frogdb_core::NoopSnapshotCoordinator::new());
+        let function_registry = frogdb_core::SharedFunctionRegistry::default();
+
+        let core = CoreDeps {
+            registry,
+            shard_senders,
+            metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
+            acl_manager,
+        };
+        let admin = AdminDeps {
+            client_registry: client_registry.clone(),
+            config_manager,
+            snapshot_coordinator,
+            function_registry,
+        };
+        let cluster = ClusterDeps {
+            quorum_checker,
+            ..ClusterDeps::default()
+        };
+        let config = ConnectionConfig::default_for_testing(1);
+        let observability = ObservabilityDeps::default();
+
+        let client_handle = client_registry.register(
+            1,
+            "127.0.0.1:9999".parse().unwrap(),
+            None,
+        );
+
+        ConnectionHandler::from_deps(
+            tcp_stream,
+            "127.0.0.1:9999".parse().unwrap(),
+            1,
+            0,
+            client_handle,
+            core,
+            admin,
+            cluster,
+            config,
+            observability,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_self_fence_write_rejected_when_quorum_lost() {
+        let qc = Arc::new(MockQuorumChecker { has_quorum: false });
+        let handler = make_test_handler(Some(qc)).await;
+
+        let result = handler.run_pre_checks("SET", &[]);
+        assert!(result.is_some());
+        let resp = result.unwrap();
+        match resp {
+            Response::Error(msg) => {
+                assert!(
+                    msg.starts_with(b"CLUSTERDOWN"),
+                    "expected CLUSTERDOWN error, got: {}",
+                    String::from_utf8_lossy(&msg)
+                );
+            }
+            other => panic!("expected Error response, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_self_fence_read_allowed_when_quorum_lost() {
+        let qc = Arc::new(MockQuorumChecker { has_quorum: false });
+        let handler = make_test_handler(Some(qc)).await;
+
+        let result = handler.run_pre_checks("GET", &[]);
+        assert!(result.is_none(), "GET should be allowed when quorum is lost");
+    }
+
+    #[tokio::test]
+    async fn test_self_fence_write_allowed_when_quorum_present() {
+        let qc = Arc::new(MockQuorumChecker { has_quorum: true });
+        let handler = make_test_handler(Some(qc)).await;
+
+        let result = handler.run_pre_checks("SET", &[]);
+        assert!(result.is_none(), "SET should be allowed when quorum is present");
+    }
+
+    #[tokio::test]
+    async fn test_self_fence_no_quorum_checker_standalone() {
+        let handler = make_test_handler(None).await;
+
+        let result = handler.run_pre_checks("SET", &[]);
+        assert!(result.is_none(), "SET should be allowed in standalone mode (no quorum checker)");
     }
 }
