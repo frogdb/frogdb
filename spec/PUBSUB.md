@@ -739,7 +739,7 @@ channel2
 :25        # 25 subscribers
 ```
 
-**DEBUG Command for Limits:** **[Not Yet Implemented]**
+**DEBUG Command for Limits:**
 
 ```
 DEBUG PUBSUB LIMITS

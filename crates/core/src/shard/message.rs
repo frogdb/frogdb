@@ -13,8 +13,8 @@ use crate::vll::{ExecuteSignal, LockMode, ShardReadyResult};
 
 use super::counters::HotShardStatsResponse;
 use super::types::{
-    BigKeysScanResponse, PartialResult, ShardMemoryStats, TransactionResult, VllQueueInfo,
-    WalLagStatsResponse,
+    BigKeysScanResponse, PartialResult, PubSubLimitsInfo, ShardMemoryStats, TransactionResult,
+    VllQueueInfo, WalLagStatsResponse,
 };
 
 /// Messages sent to shard workers.
@@ -419,6 +419,12 @@ pub enum ShardMessage {
     GetVllQueueInfo {
         /// Channel to send the response.
         response_tx: oneshot::Sender<VllQueueInfo>,
+    },
+
+    /// Get pub/sub limits info from this shard.
+    GetPubSubLimitsInfo {
+        /// Channel to send the response.
+        response_tx: oneshot::Sender<PubSubLimitsInfo>,
     },
 
     /// Shutdown signal.
