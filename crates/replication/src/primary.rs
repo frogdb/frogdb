@@ -15,7 +15,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -45,6 +45,20 @@ const RDB_OPCODE_RESIZEDB: u8 = 0xFB;
 /// RDB end-of-file opcode.
 const RDB_OPCODE_EOF: u8 = 0xFF;
 
+/// Configuration for proactive lag-threshold disconnection.
+#[derive(Debug, Clone)]
+pub struct LagThresholdConfig {
+    /// Max replication lag in bytes before proactive disconnect. 0 = disabled.
+    pub threshold_bytes: u64,
+    /// Max replication lag in seconds (since last ACK) before proactive disconnect. 0 = disabled.
+    pub threshold_secs: u64,
+    /// Cooldown after a proactive disconnect before allowing another.
+    pub cooldown: Duration,
+}
+
+/// How often to check lag thresholds (every N frames).
+const LAG_CHECK_INTERVAL: u64 = 100;
+
 /// Primary replication handler.
 ///
 /// Manages all replica connections and coordinates WAL streaming.
@@ -67,6 +81,9 @@ pub struct PrimaryReplicationHandler {
 
     /// Directory for storing temporary checkpoint data.
     data_dir: PathBuf,
+
+    /// Proactive lag-threshold disconnect configuration.
+    lag_config: LagThresholdConfig,
 }
 
 /// Handle to a replica connection.
@@ -101,6 +118,7 @@ impl PrimaryReplicationHandler {
         tracker: Arc<ReplicationTrackerImpl>,
         rocks_store: Option<Arc<RocksStore>>,
         data_dir: PathBuf,
+        lag_config: LagThresholdConfig,
     ) -> Self {
         let (wal_broadcast, _) = broadcast::channel(10000);
 
@@ -111,6 +129,7 @@ impl PrimaryReplicationHandler {
             connections: Arc::new(RwLock::new(HashMap::new())),
             rocks_store,
             data_dir,
+            lag_config,
         }
     }
 
@@ -444,8 +463,16 @@ impl PrimaryReplicationHandler {
             }
         });
 
+        // Capture lag config for write task
+        let lag_threshold_bytes = self.lag_config.threshold_bytes;
+        let lag_threshold_secs = self.lag_config.threshold_secs;
+        let lag_cooldown = self.lag_config.cooldown;
+        let lag_tracker = self.tracker.clone();
+        let lag_enabled = lag_threshold_bytes > 0 || lag_threshold_secs > 0;
+
         // Write task - forward frames to replica
         let write_task = tokio::spawn(async move {
+            let mut frame_count: u64 = 0;
             loop {
                 tokio::select! {
                     // Receive frame from broadcast channel
@@ -456,6 +483,32 @@ impl PrimaryReplicationHandler {
                                 if let Err(e) = write_half.write_all(&encoded).await {
                                     tracing::warn!(error = %e, "Error writing to replica");
                                     break;
+                                }
+
+                                // Proactive lag check (amortized to every N frames)
+                                if lag_enabled {
+                                    frame_count += 1;
+                                    if frame_count.is_multiple_of(LAG_CHECK_INTERVAL) {
+                                        let byte_exceeded = lag_threshold_bytes > 0
+                                            && lag_tracker.replica_lag(replica_id)
+                                                .is_some_and(|lag| lag >= lag_threshold_bytes);
+                                        let time_exceeded = lag_threshold_secs > 0
+                                            && lag_tracker.replica_lag_secs(replica_id)
+                                                .is_some_and(|secs| secs >= lag_threshold_secs as f64);
+
+                                        if (byte_exceeded || time_exceeded)
+                                            && !lag_tracker.is_in_lag_cooldown(replica_id, lag_cooldown)
+                                        {
+                                            tracing::warn!(
+                                                replica_id = replica_id,
+                                                byte_exceeded,
+                                                time_exceeded,
+                                                "Replica exceeded lag threshold, disconnecting for FULLRESYNC"
+                                            );
+                                            lag_tracker.record_lag_disconnect(replica_id);
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                             Err(broadcast::error::RecvError::Closed) => {

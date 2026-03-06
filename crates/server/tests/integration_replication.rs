@@ -3232,8 +3232,7 @@ async fn test_wait_returns_correct_count_with_partial_ack() {
 /// Test that replicas reject write commands with READONLY error while allowing reads.
 #[tokio::test]
 async fn test_replica_readonly_enforcement() {
-    let (primary, replica) =
-        start_primary_replica_pair(TestServerConfig::default()).await;
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
 
     // Write commands should be rejected with READONLY error
     let set_resp = replica.send("SET", &["key1", "value1"]).await;

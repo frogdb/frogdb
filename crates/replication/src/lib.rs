@@ -42,7 +42,7 @@ pub use frame::{
     FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec, serialize_command_to_resp,
 };
 pub use fullsync::{FullSyncMetadata, FullSyncState};
-pub use primary::PrimaryReplicationHandler;
+pub use primary::{LagThresholdConfig, PrimaryReplicationHandler};
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use state::ReplicationState;
 pub use tracker::{ReplicaInfo, ReplicationTrackerImpl};

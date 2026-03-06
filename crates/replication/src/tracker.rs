@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
 /// Information about a connected replica.
@@ -104,6 +104,10 @@ pub struct ReplicationTrackerImpl {
 
     /// Channel for notifying waiters about ACKs
     ack_notify: broadcast::Sender<(u64, u64)>, // (replica_id, offset)
+
+    /// Timestamps of proactive lag disconnects, keyed by socket address.
+    /// Address-based (not replica_id) because replica IDs change on reconnect.
+    lag_disconnect_times: RwLock<HashMap<SocketAddr, Instant>>,
 }
 
 impl Default for ReplicationTrackerImpl {
@@ -121,6 +125,7 @@ impl ReplicationTrackerImpl {
             next_replica_id: AtomicU64::new(1),
             current_offset: AtomicU64::new(0),
             ack_notify,
+            lag_disconnect_times: RwLock::new(HashMap::new()),
         }
     }
 
@@ -258,6 +263,35 @@ impl ReplicationTrackerImpl {
     /// Subscribe to ACK notifications.
     pub fn subscribe_acks(&self) -> broadcast::Receiver<(u64, u64)> {
         self.ack_notify.subscribe()
+    }
+
+    /// Calculate time-based lag for a specific replica (seconds since last ACK).
+    pub fn replica_lag_secs(&self, replica_id: u64) -> Option<f64> {
+        self.replicas
+            .read()
+            .get(&replica_id)
+            .map(|r| r.last_ack_time.elapsed().as_secs_f64())
+    }
+
+    /// Record that a replica was proactively disconnected due to lag.
+    pub fn record_lag_disconnect(&self, replica_id: u64) {
+        if let Some(info) = self.replicas.read().get(&replica_id) {
+            self.lag_disconnect_times
+                .write()
+                .insert(info.address, Instant::now());
+        }
+    }
+
+    /// Check if a replica is within the cooldown window after a proactive lag disconnect.
+    pub fn is_in_lag_cooldown(&self, replica_id: u64, cooldown: Duration) -> bool {
+        let addr = match self.replicas.read().get(&replica_id) {
+            Some(info) => info.address,
+            None => return false,
+        };
+        self.lag_disconnect_times
+            .read()
+            .get(&addr)
+            .is_some_and(|t| t.elapsed() < cooldown)
     }
 }
 
@@ -494,5 +528,59 @@ mod tests {
 
         let streaming = tracker.get_streaming_replicas();
         assert_eq!(streaming.len(), 2);
+    }
+
+    #[test]
+    fn test_replica_lag_secs() {
+        let tracker = ReplicationTrackerImpl::new();
+
+        // Non-existent replica
+        assert!(tracker.replica_lag_secs(999).is_none());
+
+        let id = tracker.register_replica(test_addr());
+        tracker.set_state(id, ReplicaState::Streaming);
+
+        // Just registered, lag should be very small
+        let lag = tracker.replica_lag_secs(id).unwrap();
+        assert!(lag < 1.0);
+    }
+
+    #[test]
+    fn test_lag_disconnect_cooldown() {
+        let tracker = ReplicationTrackerImpl::new();
+        let id = tracker.register_replica(test_addr());
+        tracker.set_state(id, ReplicaState::Streaming);
+
+        // Not in cooldown initially
+        let cooldown = Duration::from_secs(60);
+        assert!(!tracker.is_in_lag_cooldown(id, cooldown));
+
+        // Record disconnect
+        tracker.record_lag_disconnect(id);
+
+        // Now in cooldown
+        assert!(tracker.is_in_lag_cooldown(id, cooldown));
+
+        // Not in cooldown with zero-duration cooldown
+        assert!(!tracker.is_in_lag_cooldown(id, Duration::ZERO));
+    }
+
+    #[test]
+    fn test_lag_cooldown_address_based() {
+        let tracker = ReplicationTrackerImpl::new();
+        let addr: SocketAddr = "127.0.0.1:6380".parse().unwrap();
+
+        // First connection
+        let id1 = tracker.register_replica(addr);
+        tracker.set_state(id1, ReplicaState::Streaming);
+        tracker.record_lag_disconnect(id1);
+        tracker.unregister_replica(id1);
+
+        // Second connection from same address (simulates reconnect)
+        let id2 = tracker.register_replica(addr);
+        tracker.set_state(id2, ReplicaState::Streaming);
+
+        // Cooldown should still apply because same address
+        assert!(tracker.is_in_lag_cooldown(id2, Duration::from_secs(60)));
     }
 }

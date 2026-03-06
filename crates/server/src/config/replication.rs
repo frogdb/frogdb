@@ -70,6 +70,18 @@ pub struct ReplicationConfigSection {
     /// Reconnection backoff - maximum delay (milliseconds).
     #[serde(default = "default_reconnect_backoff_max_ms")]
     pub reconnect_backoff_max_ms: u64,
+
+    /// Max replication lag in bytes before proactive disconnect. 0 = disabled.
+    #[serde(default)]
+    pub replication_lag_threshold_bytes: u64,
+
+    /// Max replication lag in seconds (since last ACK) before proactive disconnect. 0 = disabled.
+    #[serde(default)]
+    pub replication_lag_threshold_secs: u64,
+
+    /// Cooldown seconds after proactive lag disconnect before allowing another.
+    #[serde(default = "default_fullresync_cooldown_secs")]
+    pub fullresync_cooldown_secs: u64,
 }
 
 fn default_replication_role() -> String {
@@ -116,6 +128,10 @@ fn default_reconnect_backoff_max_ms() -> u64 {
     30000
 }
 
+fn default_fullresync_cooldown_secs() -> u64 {
+    60
+}
+
 impl Default for ReplicationConfigSection {
     fn default() -> Self {
         Self {
@@ -132,6 +148,9 @@ impl Default for ReplicationConfigSection {
             handshake_timeout_ms: default_handshake_timeout_ms(),
             reconnect_backoff_initial_ms: default_reconnect_backoff_initial_ms(),
             reconnect_backoff_max_ms: default_reconnect_backoff_max_ms(),
+            replication_lag_threshold_bytes: 0,
+            replication_lag_threshold_secs: 0,
+            fullresync_cooldown_secs: default_fullresync_cooldown_secs(),
         }
     }
 }
@@ -218,6 +237,9 @@ mod tests {
         assert_eq!(config.handshake_timeout_ms, 10000);
         assert_eq!(config.reconnect_backoff_initial_ms, 100);
         assert_eq!(config.reconnect_backoff_max_ms, 30000);
+        assert_eq!(config.replication_lag_threshold_bytes, 0);
+        assert_eq!(config.replication_lag_threshold_secs, 0);
+        assert_eq!(config.fullresync_cooldown_secs, 60);
     }
 
     #[test]
