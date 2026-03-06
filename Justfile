@@ -223,6 +223,14 @@ causal-profile workload="mixed" duration="90" *args:
 # Install: brew bundle / nix-shell
 # =============================================================================
 
+# Build with tracing-flame profiling feature
+build-profiling:
+    {{dyld-env}} {{rocksdb-env}} cargo build -p frogdb-server --features profiling
+
+# Run with tracing-flame profiling feature
+run-profiling *args:
+    {{dyld-env}} {{rocksdb-env}} cargo run -p frogdb-server --features profiling -- {{args}}
+
 # Build with profiling symbols
 build-profile:
     {{dyld-env}} {{rocksdb-env}} cargo build --profile profiling

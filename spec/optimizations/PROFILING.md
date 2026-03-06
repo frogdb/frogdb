@@ -50,8 +50,8 @@ Instrumentation is split into two tiers:
 | tokio-metrics | `tokio-metrics` | Per-task busy/idle/scheduled timing via `TaskMonitor` |
 | tracing spans | `tracing` | Span-based latency analysis at task/operation granularity |
 
-- [ ] Add `tokio-metrics` `TaskMonitor` instrumentation for key task types (connection handler, shard operations, WAL writes)
-- [ ] Add `tracing` span instrumentation for critical request paths
+- [x] Add `tokio-metrics` `TaskMonitor` instrumentation for key task types (connection handler, shard workers, WAL sync)
+- [x] Add `tracing` span instrumentation for critical request paths (WAL sync, snapshots, active expiry, transactions)
 
 *Feature-gated (`profiling`)* — The subscriber layers that consume spans. These have non-trivial CPU/memory overhead and are compiled out by default behind a cargo feature flag (`--features profiling`), following the existing pattern in `crates/server/Cargo.toml` (cf. `causal-profile = ["dep:tokio-coz"]`).
 
@@ -61,9 +61,9 @@ Instrumentation is split into two tiers:
 | tracing-flame | `tracing-flame` | Async-aware flamegraphs — captures await/idle time, not just CPU |
 | tracing-tracy | `tracing-tracy` | Real-time interactive profiling via Tracy with nanosecond precision |
 
-- [ ] Integrate `tracing-timing` for per-operation latency histograms
-- [ ] Add `tracing-flame` `FlameLayer` for async-aware flamegraph generation
-- [ ] Evaluate `tracing-tracy` for interactive real-time profiling during development
+- ~Integrate `tracing-timing` for per-operation latency histograms~ — Skipped: redundant with existing Prometheus latency histograms via CommandTimer
+- [x] Add `tracing-flame` `FlameLayer` for async-aware flamegraph generation
+- ~Evaluate `tracing-tracy` for interactive real-time profiling during development~ — Skipped: requires Tracy GUI; samply and cargo-flamegraph cover interactive profiling
 
 > **Research concept:** For causal profiling adapted to async runtimes, see [TOKIO_CAUSAL_PROFILER.md](../TOKIO_CAUSAL_PROFILER.md).
 - [ ] Add `scan.rs` benchmark - SCAN with 10K, 100K, 1M keys

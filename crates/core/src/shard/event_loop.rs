@@ -68,7 +68,14 @@ impl ShardWorker {
                             let _ = response_tx.send(self.shard_version);
                         }
                         ShardMessage::ExecTransaction { commands, watches, conn_id, protocol_version, response_tx } => {
-                            let result = self.execute_transaction(commands, &watches, conn_id, protocol_version).await;
+                            let result = if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
+                                let shard_id = self.shard_id();
+                                self.execute_transaction(commands, &watches, conn_id, protocol_version)
+                                    .instrument(tracing::info_span!("shard_exec_txn", shard_id))
+                                    .await
+                            } else {
+                                self.execute_transaction(commands, &watches, conn_id, protocol_version).await
+                            };
                             let _ = response_tx.send(result);
                         }
 
@@ -300,7 +307,12 @@ impl ShardWorker {
 
                 // Active expiry task
                 _ = expiry_interval.tick() => {
-                    self.run_active_expiry();
+                    if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
+                        let _span = tracing::info_span!("active_expiry", shard_id = self.shard_id()).entered();
+                        self.run_active_expiry();
+                    } else {
+                        self.run_active_expiry();
+                    }
                 }
 
                 // Periodic metrics collection

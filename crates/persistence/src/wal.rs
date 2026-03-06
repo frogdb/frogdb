@@ -707,22 +707,30 @@ fn do_flush(
 pub fn spawn_periodic_sync(
     rocks: Arc<RocksStore>,
     interval_ms: u64,
+    monitor: Option<tokio_metrics::TaskMonitor>,
 ) -> tokio::task::JoinHandle<()> {
     info!(interval_ms, "Periodic WAL sync started");
     let interval = Duration::from_millis(interval_ms);
 
-    tokio::spawn(async move {
+    let future = async move {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             ticker.tick().await;
 
+            let _span = tracing::info_span!("wal_sync").entered();
             if let Err(e) = rocks.flush() {
                 tracing::warn!(error = %e, "Failed to sync WAL");
             }
         }
-    })
+    };
+
+    if let Some(monitor) = monitor {
+        tokio::spawn(monitor.instrument(future))
+    } else {
+        tokio::spawn(future)
+    }
 }
 
 #[cfg(test)]

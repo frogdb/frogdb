@@ -17,6 +17,7 @@ thiserror.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio-metrics = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

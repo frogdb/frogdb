@@ -11,6 +11,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 
 use crate::rocks::RocksStore;
 use frogdb_types::traits::MetricsRecorder;
@@ -744,7 +745,7 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
 
                 tracing::info!(epoch = current_epoch, "Starting scheduled snapshot");
             }
-        });
+        }.instrument(tracing::info_span!("snapshot_create")));
 
         // Return handle immediately (background task completes asynchronously)
         // The completion callback is empty since the background task manages state

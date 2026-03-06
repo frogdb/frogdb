@@ -20,6 +20,7 @@ use frogdb_core::{
 use frogdb_debug::{ConfigEntry, DebugState, ServerInfo};
 use frogdb_telemetry::{
     HealthChecker, PrometheusRecorder, SharedTracer, StatusCollector, SystemMetricsCollector,
+    TaskMonitorRegistry,
 };
 
 use crate::observability_server::ObservabilityServer;
@@ -164,6 +165,12 @@ pub struct Server {
     /// Optional primary replication handler (only when running as primary).
     /// Used for PSYNC connection handoff.
     primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
+
+    /// Optional connection task monitor for tokio-metrics instrumentation.
+    conn_monitor: Option<tokio_metrics::TaskMonitor>,
+
+    /// Background handle for the tokio-metrics task monitor collector.
+    _task_monitor_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Server {
@@ -317,10 +324,16 @@ impl Server {
 
         info!(num_shards, "Initializing shards");
 
+        // Create task monitor registry for tokio-metrics instrumentation
+        let mut task_registry = TaskMonitorRegistry::new();
+        let shard_monitor = task_registry.register("shard_worker");
+        let conn_monitor = task_registry.register("connection");
+        let wal_sync_monitor = task_registry.register("wal_sync");
+
         // Initialize persistence if enabled
         let (rocks_store, recovered_stores, periodic_sync_handle) = if config.persistence.enabled {
             let (rocks, stores, sync_handle) =
-                Self::init_persistence(&config.persistence, num_shards)?;
+                Self::init_persistence(&config.persistence, num_shards, Some(wal_sync_monitor))?;
             (Some(rocks), Some(stores), sync_handle)
         } else {
             info!("Persistence disabled");
@@ -848,9 +861,9 @@ impl Server {
             // Share the per-request spans toggle with shard workers
             worker.per_request_spans = config_manager.per_request_spans_flag();
 
-            let handle = spawn(async move {
+            let handle = spawn(shard_monitor.instrument(async move {
                 worker.run().await;
-            });
+            }));
 
             shard_handles.push(handle);
         }
@@ -886,6 +899,10 @@ impl Server {
             num_shards,
         ));
         config_manager.set_shard_notifier(shard_notifier);
+
+        // Spawn task monitor collector (tokio-metrics)
+        let task_monitor_handle =
+            task_registry.spawn_collector(metrics_recorder.clone(), Duration::from_secs(10));
 
         // Create latency band tracker if enabled
         let band_tracker = if config.latency_bands.enabled {
@@ -935,6 +952,8 @@ impl Server {
             replica_handler,
             replica_frame_rx,
             primary_replication_handler,
+            conn_monitor: Some(conn_monitor),
+            _task_monitor_handle: Some(task_monitor_handle),
         })
     }
 
@@ -973,6 +992,7 @@ impl Server {
     fn init_persistence(
         config: &PersistenceConfig,
         num_shards: usize,
+        wal_sync_monitor: Option<tokio_metrics::TaskMonitor>,
     ) -> Result<PersistenceInitResult> {
         use std::fs;
 
@@ -1048,7 +1068,7 @@ impl Server {
                 interval_ms = config.sync_interval_ms,
                 "Starting periodic WAL sync"
             );
-            Some(spawn_periodic_sync(rocks.clone(), config.sync_interval_ms))
+            Some(spawn_periodic_sync(rocks.clone(), config.sync_interval_ms, wal_sync_monitor))
         } else {
             None
         };
@@ -1216,6 +1236,7 @@ impl Server {
             None
         };
 
+
         // Determine if admin port is enabled (used for both acceptors)
         let admin_enabled = self.config.admin.enabled;
 
@@ -1342,6 +1363,7 @@ impl Server {
             self.primary_replication_handler.clone(),
             is_replica,
             quorum_checker.clone(),
+            self.conn_monitor.clone(),
         );
 
         // Spawn main acceptor task
@@ -1381,6 +1403,7 @@ impl Server {
                 self.primary_replication_handler.clone(),
                 is_replica,
                 quorum_checker.clone(),
+                self.conn_monitor.clone(),
             );
 
             Some(spawn(async move {

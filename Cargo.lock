@@ -1352,6 +1352,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-metrics",
  "tracing",
 ]
 
@@ -1455,11 +1456,13 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-coz",
+ "tokio-metrics",
  "tokio-util",
  "toml",
  "tower 0.5.3",
  "tracing",
  "tracing-appender",
+ "tracing-flame",
  "tracing-subscriber",
  "turmoil",
  "zip",
@@ -1487,6 +1490,7 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "tokio",
+ "tokio-metrics",
  "tracing",
 ]
 
@@ -4278,6 +4282,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-metrics"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e0410015c6db7b67b9c9ab2a3af4d74a942d637ff248d0d055073750deac6f9"
+dependencies = [
+ "futures-util",
+ "pin-project-lite",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "tokio-native-tls"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4531,6 +4547,17 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
  "valuable",
+]
+
+[[package]]
+name = "tracing-flame"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bae117ee14789185e129aaee5d93750abe67fdc5a9a62650452bfe4e122a3a9"
+dependencies = [
+ "lazy_static",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
