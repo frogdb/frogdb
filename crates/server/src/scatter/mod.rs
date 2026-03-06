@@ -90,6 +90,9 @@ pub fn strategy_for_op(op: &ScatterOp) -> Option<Box<dyn ScatterGatherStrategy>>
         | ScatterOp::Copy { .. }
         | ScatterOp::CopySet { .. }
         | ScatterOp::RandomKey
-        | ScatterOp::Dump => None,
+        | ScatterOp::Dump
+        | ScatterOp::TsQueryIndex { .. }
+        | ScatterOp::TsMget { .. }
+        | ScatterOp::TsMrange { .. } => None,
     }
 }

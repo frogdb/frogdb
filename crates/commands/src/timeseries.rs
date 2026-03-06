@@ -4,8 +4,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Aggregation, Arity, Command, CommandContext, CommandError, CommandFlags, DuplicatePolicy,
-    TimeSeriesValue, Value, WalStrategy,
+    Aggregation, Arity, Command, CommandContext, CommandError, CommandFlags, DownsampleRule,
+    DuplicatePolicy, ExecutionStrategy, ServerWideOp, TimeSeriesValue, Value, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -227,76 +227,89 @@ impl Command for TsAlterCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        let ts = ctx
-            .store
-            .get_mut(key)
-            .ok_or(CommandError::InvalidArgument {
-                message: "TSDB: the key does not exist".to_string(),
-            })?
-            .as_timeseries_mut()
-            .ok_or(CommandError::WrongType)?;
+        // Parse labels separately to update the label index after releasing the borrow.
+        let mut labels_to_update: Option<Vec<(String, String)>> = None;
 
-        let mut i = 1;
-        while i < args.len() {
-            let opt = std::str::from_utf8(&args[i])
-                .map_err(|_| CommandError::InvalidArgument {
-                    message: "Invalid option".to_string(),
+        {
+            let ts = ctx
+                .store
+                .get_mut(key)
+                .ok_or(CommandError::InvalidArgument {
+                    message: "TSDB: the key does not exist".to_string(),
                 })?
-                .to_uppercase();
+                .as_timeseries_mut()
+                .ok_or(CommandError::WrongType)?;
 
-            match opt.as_str() {
-                "RETENTION" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "RETENTION requires a value".to_string(),
-                        });
-                    }
-                    let retention: u64 = parse_int(&args[i], "retention")?;
-                    ts.set_retention_ms(retention);
-                }
-                "CHUNK_SIZE" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "CHUNK_SIZE requires a value".to_string(),
-                        });
-                    }
-                    let chunk_size: usize = parse_int(&args[i], "chunk_size")?;
-                    ts.set_chunk_size(chunk_size);
-                }
-                "DUPLICATE_POLICY" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "DUPLICATE_POLICY requires a value".to_string(),
-                        });
-                    }
-                    let policy_str = std::str::from_utf8(&args[i]).map_err(|_| {
-                        CommandError::InvalidArgument {
-                            message: "Invalid duplicate policy".to_string(),
+            let mut i = 1;
+            while i < args.len() {
+                let opt = std::str::from_utf8(&args[i])
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid option".to_string(),
+                    })?
+                    .to_uppercase();
+
+                match opt.as_str() {
+                    "RETENTION" => {
+                        i += 1;
+                        if i >= args.len() {
+                            return Err(CommandError::InvalidArgument {
+                                message: "RETENTION requires a value".to_string(),
+                            });
                         }
-                    })?;
-                    let policy = DuplicatePolicy::parse(policy_str).ok_or_else(|| {
-                        CommandError::InvalidArgument {
-                            message: format!("Unknown duplicate policy: {}", policy_str),
+                        let retention: u64 = parse_int(&args[i], "retention")?;
+                        ts.set_retention_ms(retention);
+                    }
+                    "CHUNK_SIZE" => {
+                        i += 1;
+                        if i >= args.len() {
+                            return Err(CommandError::InvalidArgument {
+                                message: "CHUNK_SIZE requires a value".to_string(),
+                            });
                         }
-                    })?;
-                    ts.set_duplicate_policy(policy);
+                        let chunk_size: usize = parse_int(&args[i], "chunk_size")?;
+                        ts.set_chunk_size(chunk_size);
+                    }
+                    "DUPLICATE_POLICY" => {
+                        i += 1;
+                        if i >= args.len() {
+                            return Err(CommandError::InvalidArgument {
+                                message: "DUPLICATE_POLICY requires a value".to_string(),
+                            });
+                        }
+                        let policy_str = std::str::from_utf8(&args[i]).map_err(|_| {
+                            CommandError::InvalidArgument {
+                                message: "Invalid duplicate policy".to_string(),
+                            }
+                        })?;
+                        let policy = DuplicatePolicy::parse(policy_str).ok_or_else(|| {
+                            CommandError::InvalidArgument {
+                                message: format!("Unknown duplicate policy: {}", policy_str),
+                            }
+                        })?;
+                        ts.set_duplicate_policy(policy);
+                    }
+                    "LABELS" => {
+                        i += 1;
+                        let labels = parse_labels(args, i)?;
+                        ts.set_labels(labels.clone());
+                        labels_to_update = Some(labels);
+                        break;
+                    }
+                    _ => {
+                        return Err(CommandError::InvalidArgument {
+                            message: format!("Unknown option: {}", opt),
+                        });
+                    }
                 }
-                "LABELS" => {
-                    i += 1;
-                    let labels = parse_labels(args, i)?;
-                    ts.set_labels(labels);
-                    break;
-                }
-                _ => {
-                    return Err(CommandError::InvalidArgument {
-                        message: format!("Unknown option: {}", opt),
-                    });
-                }
+                i += 1;
             }
-            i += 1;
+        } // borrow on ctx.store released
+
+        // Update label index if labels were changed
+        if let Some(labels) = labels_to_update
+            && let Some(idx) = ctx.store.ts_label_index_mut()
+        {
+            idx.update(key.clone(), &labels);
         }
 
         Ok(Response::ok())
@@ -431,7 +444,11 @@ impl Command for TsAddCommand {
                 }
 
                 match result {
-                    Ok(ts_val) => Ok(Response::Integer(ts_val)),
+                    Ok(ts_val) => {
+                        // Process inline downsampling
+                        process_downsample_rules(ctx, key, timestamp);
+                        Ok(Response::Integer(ts_val))
+                    }
                     Err(e) => Err(CommandError::InvalidArgument {
                         message: format!("TSDB: {:?}", e),
                     }),
@@ -517,7 +534,10 @@ impl Command for TsMaddCommand {
             match ctx.store.get_mut(key) {
                 Some(value_ref) => match value_ref.as_timeseries_mut() {
                     Some(ts) => match ts.add(timestamp, value) {
-                        Ok(ts_val) => results.push(Response::Integer(ts_val)),
+                        Ok(ts_val) => {
+                            process_downsample_rules(ctx, key, timestamp);
+                            results.push(Response::Integer(ts_val));
+                        }
                         Err(e) => {
                             results.push(Response::Error(Bytes::from(format!("TSDB: {:?}", e))))
                         }
@@ -696,6 +716,7 @@ fn execute_incrby(
                     .map_err(|e| CommandError::InvalidArgument {
                         message: format!("TSDB: {:?}", e),
                     })?;
+            process_downsample_rules(ctx, key, timestamp);
             Ok(Response::Integer(timestamp))
         }
         None => {
@@ -1088,6 +1109,22 @@ impl Command for TsInfoCommand {
                 result.push(Response::bulk(Bytes::from("labels")));
                 result.push(Response::Array(labels));
 
+                // Add rules
+                let rules: Vec<Response> = ts
+                    .rules()
+                    .iter()
+                    .map(|rule| {
+                        Response::Array(vec![
+                            Response::bulk(rule.dest_key.clone()),
+                            Response::Integer(rule.bucket_duration_ms),
+                            Response::bulk(Bytes::from(rule.aggregation.as_str())),
+                        ])
+                    })
+                    .collect();
+
+                result.push(Response::bulk(Bytes::from("rules")));
+                result.push(Response::Array(rules));
+
                 Ok(Response::Array(result))
             }
             None => Err(CommandError::InvalidArgument {
@@ -1101,6 +1138,355 @@ impl Command for TsInfoCommand {
             vec![]
         } else {
             vec![&args[0]]
+        }
+    }
+}
+
+// =============================================================================
+// TS.QUERYINDEX
+// =============================================================================
+
+/// TS.QUERYINDEX filter1 [filter2 ...]
+pub struct TsQueryIndexCommand;
+
+impl Command for TsQueryIndexCommand {
+    fn name(&self) -> &'static str {
+        "TS.QUERYINDEX"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(1)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::TsQueryIndex)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        // Handled via ServerWide dispatch
+        Ok(Response::Array(vec![]))
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// TS.MGET
+// =============================================================================
+
+/// TS.MGET [WITHLABELS | SELECTED_LABELS l1 ...] FILTER filter1 [filter2 ...]
+pub struct TsMgetCommand;
+
+impl Command for TsMgetCommand {
+    fn name(&self) -> &'static str {
+        "TS.MGET"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2) // At least FILTER + one filter expr
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::TsMget)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::Array(vec![]))
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// TS.MRANGE
+// =============================================================================
+
+/// TS.MRANGE fromTimestamp toTimestamp [FILTER_BY_TS ts ...] [FILTER_BY_VALUE min max]
+///   [WITHLABELS | SELECTED_LABELS l1 ...] [COUNT count]
+///   [AGGREGATION type bucketDuration] FILTER filter1 [filter2 ...]
+pub struct TsMrangeCommand;
+
+impl Command for TsMrangeCommand {
+    fn name(&self) -> &'static str {
+        "TS.MRANGE"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(4) // from to FILTER filter
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::TsMrange)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::Array(vec![]))
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// TS.MREVRANGE
+// =============================================================================
+
+/// TS.MREVRANGE fromTimestamp toTimestamp [options...] FILTER filter1 [filter2 ...]
+pub struct TsMrevrangeCommand;
+
+impl Command for TsMrevrangeCommand {
+    fn name(&self) -> &'static str {
+        "TS.MREVRANGE"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(4)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::TsMrevrange)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::Array(vec![]))
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// TS.CREATERULE
+// =============================================================================
+
+/// TS.CREATERULE sourceKey destKey AGGREGATION aggregationType bucketDuration
+pub struct TsCreateRuleCommand;
+
+impl Command for TsCreateRuleCommand {
+    fn name(&self) -> &'static str {
+        "TS.CREATERULE"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(5) // sourceKey destKey AGGREGATION type bucket
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        let source_key = &args[0];
+        let dest_key = &args[1];
+
+        // args[2] should be "AGGREGATION"
+        let agg_keyword = std::str::from_utf8(&args[2])
+            .map_err(|_| CommandError::InvalidArgument {
+                message: "Invalid argument".to_string(),
+            })?
+            .to_uppercase();
+        if agg_keyword != "AGGREGATION" {
+            return Err(CommandError::InvalidArgument {
+                message: "TSDB: AGGREGATION keyword expected".to_string(),
+            });
+        }
+
+        let agg_str = std::str::from_utf8(&args[3]).map_err(|_| CommandError::InvalidArgument {
+            message: "Invalid aggregation type".to_string(),
+        })?;
+        let aggregation =
+            Aggregation::parse(agg_str).ok_or_else(|| CommandError::InvalidArgument {
+                message: format!("TSDB: Unknown aggregation type: {}", agg_str),
+            })?;
+
+        let bucket_duration_ms: i64 = parse_int(&args[4], "bucket duration")?;
+        if bucket_duration_ms <= 0 {
+            return Err(CommandError::InvalidArgument {
+                message: "TSDB: bucket duration must be positive".to_string(),
+            });
+        }
+
+        // Verify destination exists and is a TimeSeries
+        if ctx.store.get(dest_key).is_none() {
+            return Err(CommandError::InvalidArgument {
+                message: "TSDB: the key does not exist".to_string(),
+            });
+        }
+
+        // Add the rule to the source
+        let rule = DownsampleRule::new(dest_key.clone(), bucket_duration_ms, aggregation);
+
+        let ts = ctx
+            .store
+            .get_mut(source_key)
+            .ok_or(CommandError::InvalidArgument {
+                message: "TSDB: the key does not exist".to_string(),
+            })?
+            .as_timeseries_mut()
+            .ok_or(CommandError::WrongType)?;
+
+        ts.add_rule(rule)
+            .map_err(|e| CommandError::InvalidArgument {
+                message: format!("TSDB: {}", e),
+            })?;
+
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.len() >= 2 {
+            vec![&args[0], &args[1]]
+        } else if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
+    }
+}
+
+// =============================================================================
+// TS.DELETERULE
+// =============================================================================
+
+/// TS.DELETERULE sourceKey destKey
+pub struct TsDeleteRuleCommand;
+
+impl Command for TsDeleteRuleCommand {
+    fn name(&self) -> &'static str {
+        "TS.DELETERULE"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(2) // sourceKey destKey
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        let source_key = &args[0];
+        let dest_key = &args[1];
+
+        let ts = ctx
+            .store
+            .get_mut(source_key)
+            .ok_or(CommandError::InvalidArgument {
+                message: "TSDB: the key does not exist".to_string(),
+            })?
+            .as_timeseries_mut()
+            .ok_or(CommandError::WrongType)?;
+
+        ts.remove_rule(dest_key)
+            .map_err(|e| CommandError::InvalidArgument {
+                message: format!("TSDB: {}", e),
+            })?;
+
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.len() >= 2 {
+            vec![&args[0], &args[1]]
+        } else if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
+    }
+}
+
+/// Process inline downsampling rules after a sample is added to a source key.
+///
+/// Uses the sequential-release pattern: collect pending writes from the source
+/// borrow, release it, then write aggregated values to destination keys.
+fn process_downsample_rules(ctx: &mut CommandContext, source_key: &[u8], timestamp: i64) {
+    use frogdb_core::timeseries::aggregation::aggregate;
+
+    // Collect pending writes
+    let pending_writes: Vec<(Bytes, i64, f64)> = {
+        let Some(value_ref) = ctx.store.get_mut(source_key) else {
+            return;
+        };
+        let Some(ts) = value_ref.as_timeseries_mut() else {
+            return;
+        };
+
+        // Phase 1: read rules + aggregate (immutable borrow)
+        let mut writes = Vec::new();
+        let mut bucket_updates: Vec<(usize, i64)> = Vec::new();
+        for (idx, rule) in ts.rules().iter().enumerate() {
+            let new_bucket = rule.bucket_for(timestamp);
+            if let Some(prev_bucket) = rule.current_bucket_start
+                && new_bucket != prev_bucket
+            {
+                let bucket_end = prev_bucket + rule.bucket_duration_ms - 1;
+                let samples = ts.range(prev_bucket, bucket_end);
+                if let Some(agg_val) = aggregate(&samples, rule.aggregation) {
+                    writes.push((rule.dest_key.clone(), prev_bucket, agg_val));
+                }
+            }
+            bucket_updates.push((idx, new_bucket));
+        }
+        // Phase 2: update bucket tracking (mutable borrow)
+        for (idx, new_bucket) in bucket_updates {
+            ts.rules_mut()[idx].current_bucket_start = Some(new_bucket);
+        }
+        writes
+    }; // source borrow released
+
+    // Write aggregated values to destination keys
+    for (dest_key, bucket_ts, agg_val) in pending_writes {
+        if let Some(dest_val) = ctx.store.get_mut(&dest_key)
+            && let Some(dest_ts) = dest_val.as_timeseries_mut()
+        {
+            let _ = dest_ts.add(bucket_ts, agg_val); // best-effort
         }
     }
 }

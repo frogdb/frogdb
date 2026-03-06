@@ -6,7 +6,7 @@
 //! - Label indexing for efficient FILTER queries
 //! - Configurable retention and duplicate policies
 
-mod aggregation;
+pub mod aggregation;
 mod chunk;
 mod compression;
 mod downsample;

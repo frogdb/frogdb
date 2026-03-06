@@ -280,6 +280,12 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(timeseries::TsRangeCommand);
     registry.register(timeseries::TsRevrangeCommand);
     registry.register(timeseries::TsInfoCommand);
+    registry.register(timeseries::TsQueryIndexCommand);
+    registry.register(timeseries::TsMgetCommand);
+    registry.register(timeseries::TsMrangeCommand);
+    registry.register(timeseries::TsMrevrangeCommand);
+    registry.register(timeseries::TsCreateRuleCommand);
+    registry.register(timeseries::TsDeleteRuleCommand);
 
     // JSON commands
     registry.register(json::JsonSetCommand);
