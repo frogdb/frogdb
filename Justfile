@@ -281,17 +281,21 @@ cross-build-arm:
 cross-verify:
     @file target/x86_64-unknown-linux-gnu/release/frogdb-server
 
-# Build Docker image (requires cross-build first)
-docker-build: cross-build
+# Build Docker image via cross-compilation (requires zigbuild)
+docker-cross-build: cross-build
     docker build -t frogdb:latest .
 
 # Build benchmark Docker image (ARM-native, for Apple Silicon)
 docker-build-bench: cross-build-arm
     docker build -f Dockerfile.bench -t frogdb:latest .
 
-# Build Docker image entirely inside Docker (no cross-compilation needed, uses system RocksDB)
-docker-build-full:
-    docker build -f Dockerfile.builder -t frogdb:latest .
+# Build production Docker image (in-Docker, system libs, minimal runtime)
+docker-build-prod:
+    docker build -f Dockerfile.builder --build-arg BUILD_TARGET=prod -t frogdb:latest .
+
+# Build debug Docker image for Jepsen/benchmarking (in-Docker, includes debug tools)
+docker-build-debug:
+    docker build -f Dockerfile.builder --build-arg BUILD_TARGET=debug -t frogdb:latest .
 
 # Run a Jepsen test: just jepsen register --time-limit 30
 jepsen test *args:

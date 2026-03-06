@@ -7,7 +7,7 @@
 #
 # Usage:
 #   docker build -f Dockerfile.builder -t frogdb:latest .
-#   just docker-build-full
+#   docker build -f Dockerfile.builder --build-arg BUILD_TARGET=debug -t frogdb:latest .
 
 # ---------------------------------------------------------------------------
 # Stage 1: Prepare dependency recipe (cargo-chef)
@@ -26,12 +26,13 @@ RUN cargo chef prepare --recipe-path recipe.json
 # ---------------------------------------------------------------------------
 FROM rust:alpine3.21 AS builder
 
-# System RocksDB + compression libs + build tools
+# System RocksDB + compression libs + jemalloc + build tools
 RUN apk add --no-cache \
     rocksdb-dev \
     snappy-dev \
     lz4-dev \
     zstd-dev \
+    jemalloc-dev \
     clang-dev \
     openssl-dev \
     musl-dev \
@@ -43,6 +44,8 @@ RUN cargo install cargo-chef --locked
 ENV ROCKSDB_LIB_DIR=/usr/lib
 ENV SNAPPY_LIB_DIR=/usr/lib
 ENV ZSTD_SYS_USE_PKG_CONFIG=1
+# Tell tikv-jemalloc-sys to skip C compilation and use system jemalloc
+ENV JEMALLOC_OVERRIDE=/usr/lib/libjemalloc.so.2
 
 WORKDIR /app
 
@@ -58,26 +61,33 @@ RUN cargo build --release --bin frogdb-server
 RUN grep -q 'cargo:rustc-link-lib=dylib=rocksdb' target/release/build/librocksdb-sys-*/output && \
     grep -q 'cargo:rustc-link-lib=dylib=snappy' target/release/build/librocksdb-sys-*/output && \
     echo "Verified: RocksDB and Snappy linked from system libraries"
+RUN ldd target/release/frogdb-server | grep -q 'libjemalloc' && \
+    echo "Verified: jemalloc dynamically linked" || \
+    echo "Warning: jemalloc not dynamically linked (may be statically linked or unused)"
 
 # ---------------------------------------------------------------------------
-# Stage 3: Minimal runtime image
+# Stage 3: Runtime image variants
 # ---------------------------------------------------------------------------
-FROM alpine:3.21
+ARG BUILD_TARGET=prod
 
+# Production: minimal runtime with non-root user
+FROM alpine:3.21 AS runtime-prod
 RUN apk add --no-cache \
-    rocksdb \
-    snappy \
-    lz4-libs \
-    zstd-libs \
-    libssl3 \
-    libgcc \
-    redis
-
-# Create non-root user
+    rocksdb snappy lz4-libs zstd-libs jemalloc libssl3 libgcc redis
 RUN adduser -D -H frogdb
-
-# Create data directory
 RUN mkdir -p /data && chown frogdb:frogdb /data
+USER frogdb
+
+# Debug: includes Jepsen/benchmarking tools, runs as root
+FROM alpine:3.21 AS runtime-debug
+RUN apk add --no-cache \
+    rocksdb snappy lz4-libs zstd-libs jemalloc libssl3 libgcc redis \
+    iptables iproute2 procps bash strace
+RUN mkdir -p /data
+USER root
+
+# Select variant based on BUILD_TARGET arg
+FROM runtime-${BUILD_TARGET} AS runtime
 
 # Copy built binary
 COPY --from=builder /app/target/release/frogdb-server /usr/local/bin/frogdb-server
@@ -95,7 +105,5 @@ VOLUME /data
 
 HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=3 \
     CMD redis-cli -p ${FROGDB_SERVER__PORT:-6379} PING || exit 1
-
-USER frogdb
 
 CMD ["frogdb-server"]

@@ -727,21 +727,47 @@ def print_summary(results: list[TestResult], c: Color) -> None:
 # =============================================================================
 
 
+def build_frogdb(root: Path, c: Color, mode: str = "cross") -> None:
+    """Build FrogDB Docker image using the specified build mode."""
+    if mode == "docker":
+        print(c.bold("Building FrogDB in Docker (Dockerfile.builder)..."))
+        result = subprocess.run(
+            [
+                "docker",
+                "build",
+                "-f",
+                "Dockerfile.builder",
+                "--build-arg",
+                "BUILD_TARGET=debug",
+                "-t",
+                "frogdb:latest",
+                ".",
+            ],
+            cwd=root,
+        )
+        if result.returncode != 0:
+            print(c.red("Docker build failed."))
+            sys.exit(1)
+    else:
+        print(c.bold("Cross-compiling FrogDB..."))
+        result = subprocess.run(["just", "cross-build"], cwd=root)
+        if result.returncode != 0:
+            print(c.red("Cross-build failed."))
+            sys.exit(1)
+        print(c.bold("Building Docker image..."))
+        result = subprocess.run(["docker", "build", "-t", "frogdb:latest", "."], cwd=root)
+        if result.returncode != 0:
+            print(c.red("Docker build failed."))
+            sys.exit(1)
+
+
 def cmd_run(args: argparse.Namespace, extra_args: list[str]) -> None:
     c = Color(enabled=False if args.no_color else None)
     root = get_project_root()
     preflight(c)
 
     if args.build:
-        print(c.bold("Building FrogDB for Jepsen..."))
-        result = subprocess.run(["just", "cross-build"], cwd=root)
-        if result.returncode != 0:
-            print(c.red("Cross-build failed."))
-            sys.exit(1)
-        result = subprocess.run(["docker", "build", "-t", "frogdb:latest", "."], cwd=root)
-        if result.returncode != 0:
-            print(c.red("Docker build failed."))
-            sys.exit(1)
+        build_frogdb(root, c, args.build_mode)
 
     tests = resolve_tests(args.test, args.suite, c)
     parallel = args.parallel
@@ -899,19 +925,7 @@ def cmd_list(args: argparse.Namespace) -> None:
 def cmd_build(args: argparse.Namespace) -> None:
     root = get_project_root()
     c = Color()
-
-    print(c.bold("Cross-compiling FrogDB..."))
-    result = subprocess.run(["just", "cross-build"], cwd=root)
-    if result.returncode != 0:
-        print(c.red("Cross-build failed."))
-        sys.exit(1)
-
-    print(c.bold("Building Docker image..."))
-    result = subprocess.run(["docker", "build", "-t", "frogdb:latest", "."], cwd=root)
-    if result.returncode != 0:
-        print(c.red("Docker build failed."))
-        sys.exit(1)
-
+    build_frogdb(root, c, args.build_mode)
     print(c.green("Build complete."))
 
 
@@ -981,6 +995,12 @@ def main() -> None:
     )
     p_run.add_argument("--no-build", dest="build", action="store_false")
     p_run.add_argument(
+        "--build-mode",
+        choices=["cross", "docker"],
+        default="cross",
+        help="Build mode: cross (zigbuild + Dockerfile) or docker (Dockerfile.builder)",
+    )
+    p_run.add_argument(
         "--teardown",
         action="store_true",
         default=False,
@@ -1016,7 +1036,13 @@ def main() -> None:
     )
 
     # --- build ---
-    sub.add_parser("build", help="Cross-compile and build Docker image")
+    p_build = sub.add_parser("build", help="Build FrogDB Docker image")
+    p_build.add_argument(
+        "--build-mode",
+        choices=["cross", "docker"],
+        default="cross",
+        help="Build mode: cross (zigbuild + Dockerfile) or docker (Dockerfile.builder)",
+    )
 
     # --- up ---
     p_up = sub.add_parser("up", help="Start Docker Compose topology")

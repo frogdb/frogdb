@@ -22,7 +22,9 @@ services:
   frogdb:
     build:
       context: ..
-      dockerfile: Dockerfile.bench
+      dockerfile: ${FROGDB_DOCKERFILE:-Dockerfile.bench}
+      args:
+        BUILD_TARGET: debug
     container_name: benchmark-frogdb
     ports:
       - "16379:6379"

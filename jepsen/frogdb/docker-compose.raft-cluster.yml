@@ -19,7 +19,9 @@ services:
     image: frogdb:latest
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: ${FROGDB_DOCKERFILE:-Dockerfile}
+      args:
+        BUILD_TARGET: debug
     container_name: frogdb-raft-n1
     hostname: n1
     ports:
@@ -54,7 +56,9 @@ services:
     image: frogdb:latest
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: ${FROGDB_DOCKERFILE:-Dockerfile}
+      args:
+        BUILD_TARGET: debug
     container_name: frogdb-raft-n2
     hostname: n2
     ports:
@@ -89,7 +93,9 @@ services:
     image: frogdb:latest
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: ${FROGDB_DOCKERFILE:-Dockerfile}
+      args:
+        BUILD_TARGET: debug
     container_name: frogdb-raft-n3
     hostname: n3
     ports:
@@ -124,7 +130,9 @@ services:
     image: frogdb:latest
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: ${FROGDB_DOCKERFILE:-Dockerfile}
+      args:
+        BUILD_TARGET: debug
     container_name: frogdb-raft-n4
     hostname: n4
     ports:
@@ -158,7 +166,9 @@ services:
     image: frogdb:latest
     build:
       context: ../..
-      dockerfile: Dockerfile
+      dockerfile: ${FROGDB_DOCKERFILE:-Dockerfile}
+      args:
+        BUILD_TARGET: debug
     container_name: frogdb-raft-n5
     hostname: n5
     ports:
