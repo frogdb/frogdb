@@ -35,7 +35,7 @@ pub use debug_bundle::DebugBundleConfig;
 pub use distributed_tracing::TracingConfig;
 pub use json::JsonConfig;
 pub use latency::{LatencyBandsConfig, LatencyConfig};
-pub use logging::LoggingConfig;
+pub use logging::{LogOutput, LoggingConfig, LoggingGuard, RotationConfig, RotationFrequency};
 pub use memory::MemoryConfig;
 pub use metrics::MetricsConfig;
 pub use persistence::{PersistenceConfig, SnapshotConfig};
@@ -358,6 +358,9 @@ impl Config {
             );
         }
 
+        // Validate logging config (rotation constraints)
+        self.logging.validate()?;
+
         // Validate metrics config
         self.metrics.validate()?;
 
@@ -398,6 +401,9 @@ impl Config {
         if !self.acl.aclfile.is_empty() {
             validate_path_parent(Path::new(&self.acl.aclfile), "acl.aclfile")?;
         }
+        if let Some(ref file_path) = self.logging.file_path {
+            validate_path_parent(file_path, "logging.file_path")?;
+        }
 
         // Run cross-field validators
         let report = validators::run_all_validators(self);
@@ -414,68 +420,12 @@ impl Config {
     /// a simple integer comparison — eliminating ~5% CPU overhead from
     /// `EnvFilter::cares_about_span` regex matching on the hot path.
     ///
-    /// Returns a reload handle so `CONFIG SET loglevel` can change the level
-    /// at runtime.
-    pub fn init_logging(&self) -> Result<crate::runtime_config::LogReloadHandle> {
-        use crate::runtime_config::LogReloadHandle;
-
-        if std::env::var("RUST_LOG").is_ok() {
-            // Developer/debug mode: use EnvFilter for granular per-module filtering
-            let env_filter = EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(&self.logging.level));
-            let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
-
-            match self.logging.format.to_lowercase().as_str() {
-                "json" => {
-                    tracing_subscriber::registry()
-                        .with(filter_layer)
-                        .with(fmt::layer().json())
-                        .init();
-                }
-                _ => {
-                    tracing_subscriber::registry()
-                        .with(filter_layer)
-                        .with(fmt::layer())
-                        .init();
-                }
-            }
-
-            Ok(LogReloadHandle::new(Box::new(move |level: &str| {
-                let filter =
-                    EnvFilter::try_new(level).map_err(|e| format!("invalid EnvFilter: {e}"))?;
-                reload_handle
-                    .reload(filter)
-                    .map_err(|e| format!("reload failed: {e}"))
-            })))
-        } else {
-            // Production mode: use LevelFilter (fast integer comparison)
-            let level: LevelFilter = self.logging.level.parse().unwrap_or(LevelFilter::INFO);
-            let (filter_layer, reload_handle) = reload::Layer::new(level);
-
-            match self.logging.format.to_lowercase().as_str() {
-                "json" => {
-                    tracing_subscriber::registry()
-                        .with(filter_layer)
-                        .with(fmt::layer().json())
-                        .init();
-                }
-                _ => {
-                    tracing_subscriber::registry()
-                        .with(filter_layer)
-                        .with(fmt::layer())
-                        .init();
-                }
-            }
-
-            Ok(LogReloadHandle::new(Box::new(move |level: &str| {
-                let filter: LevelFilter = level
-                    .parse()
-                    .map_err(|e| format!("invalid LevelFilter: {e}"))?;
-                reload_handle
-                    .reload(filter)
-                    .map_err(|e| format!("reload failed: {e}"))
-            })))
-        }
+    /// Returns a reload handle and a logging guard. The guard keeps the
+    /// non-blocking file writer alive; drop it to flush remaining logs.
+    pub fn init_logging(
+        &self,
+    ) -> Result<(crate::runtime_config::LogReloadHandle, LoggingGuard)> {
+        self.init_logging_inner::<tracing_subscriber::layer::Identity>(None)
     }
 
     /// Initialize logging with an additional tracing layer (e.g. for causal profiling).
@@ -484,70 +434,188 @@ impl Config {
     pub fn init_logging_with_layer<L>(
         &self,
         extra_layer: L,
-    ) -> Result<crate::runtime_config::LogReloadHandle>
+    ) -> Result<(crate::runtime_config::LogReloadHandle, LoggingGuard)>
+    where
+        L: tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
+    {
+        self.init_logging_inner(Some(extra_layer))
+    }
+
+    /// Unified logging initialization.
+    ///
+    /// Uses concrete `Option<fmt::Layer>` types rather than boxed trait objects
+    /// so the layers remain generic over the subscriber type and compose
+    /// correctly with `tracing_subscriber::registry().with(...)` chaining.
+    fn init_logging_inner<L>(
+        &self,
+        extra_layer: Option<L>,
+    ) -> Result<(crate::runtime_config::LogReloadHandle, LoggingGuard)>
     where
         L: tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
     {
         use crate::runtime_config::LogReloadHandle;
+        use tracing_subscriber::fmt::writer::BoxMakeWriter;
+
+        // Build console writer (unified type via BoxMakeWriter)
+        let console_writer: Option<BoxMakeWriter> = match self.logging.output {
+            LogOutput::Stdout => Some(BoxMakeWriter::new(std::io::stdout)),
+            LogOutput::Stderr => Some(BoxMakeWriter::new(std::io::stderr)),
+            LogOutput::None => None,
+        };
+
+        // Build file writer with non-blocking wrapper
+        let (file_writer, file_guard) = self.build_file_writer()?;
+        let guard = LoggingGuard {
+            _file_guard: file_guard,
+        };
+
+        let is_json = self.logging.format.to_lowercase() == "json";
 
         if std::env::var("RUST_LOG").is_ok() {
+            // Developer/debug mode: use EnvFilter for granular per-module filtering
             let env_filter = EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| EnvFilter::new(&self.logging.level));
             let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
 
-            match self.logging.format.to_lowercase().as_str() {
-                "json" => {
-                    tracing_subscriber::registry()
-                        .with(extra_layer)
-                        .with(filter_layer)
-                        .with(fmt::layer().json())
-                        .init();
-                }
-                _ => {
-                    tracing_subscriber::registry()
-                        .with(extra_layer)
-                        .with(filter_layer)
-                        .with(fmt::layer())
-                        .init();
-                }
+            if is_json {
+                let console = console_writer.map(|w| fmt::layer().json().with_writer(w));
+                let file = file_writer.map(|w| fmt::layer().json().with_writer(w));
+                tracing_subscriber::registry()
+                    .with(extra_layer)
+                    .with(filter_layer)
+                    .with(console)
+                    .with(file)
+                    .init();
+            } else {
+                let console = console_writer.map(|w| fmt::layer().with_writer(w));
+                let file = file_writer.map(|w| fmt::layer().with_writer(w));
+                tracing_subscriber::registry()
+                    .with(extra_layer)
+                    .with(filter_layer)
+                    .with(console)
+                    .with(file)
+                    .init();
             }
 
-            Ok(LogReloadHandle::new(Box::new(move |level: &str| {
-                let filter =
-                    EnvFilter::try_new(level).map_err(|e| format!("invalid EnvFilter: {e}"))?;
-                reload_handle
-                    .reload(filter)
-                    .map_err(|e| format!("reload failed: {e}"))
-            })))
+            Ok((
+                LogReloadHandle::new(Box::new(move |level: &str| {
+                    let filter = EnvFilter::try_new(level)
+                        .map_err(|e| format!("invalid EnvFilter: {e}"))?;
+                    reload_handle
+                        .reload(filter)
+                        .map_err(|e| format!("reload failed: {e}"))
+                })),
+                guard,
+            ))
         } else {
+            // Production mode: use LevelFilter (fast integer comparison)
             let level: LevelFilter = self.logging.level.parse().unwrap_or(LevelFilter::INFO);
             let (filter_layer, reload_handle) = reload::Layer::new(level);
 
-            match self.logging.format.to_lowercase().as_str() {
-                "json" => {
-                    tracing_subscriber::registry()
-                        .with(extra_layer)
-                        .with(filter_layer)
-                        .with(fmt::layer().json())
-                        .init();
-                }
-                _ => {
-                    tracing_subscriber::registry()
-                        .with(extra_layer)
-                        .with(filter_layer)
-                        .with(fmt::layer())
-                        .init();
-                }
+            if is_json {
+                let console = console_writer.map(|w| fmt::layer().json().with_writer(w));
+                let file = file_writer.map(|w| fmt::layer().json().with_writer(w));
+                tracing_subscriber::registry()
+                    .with(extra_layer)
+                    .with(filter_layer)
+                    .with(console)
+                    .with(file)
+                    .init();
+            } else {
+                let console = console_writer.map(|w| fmt::layer().with_writer(w));
+                let file = file_writer.map(|w| fmt::layer().with_writer(w));
+                tracing_subscriber::registry()
+                    .with(extra_layer)
+                    .with(filter_layer)
+                    .with(console)
+                    .with(file)
+                    .init();
             }
 
-            Ok(LogReloadHandle::new(Box::new(move |level: &str| {
-                let filter: LevelFilter = level
-                    .parse()
-                    .map_err(|e| format!("invalid LevelFilter: {e}"))?;
-                reload_handle
-                    .reload(filter)
-                    .map_err(|e| format!("reload failed: {e}"))
-            })))
+            Ok((
+                LogReloadHandle::new(Box::new(move |level: &str| {
+                    let filter: LevelFilter = level
+                        .parse()
+                        .map_err(|e| format!("invalid LevelFilter: {e}"))?;
+                    reload_handle
+                        .reload(filter)
+                        .map_err(|e| format!("reload failed: {e}"))
+                })),
+                guard,
+            ))
+        }
+    }
+
+    /// Build a non-blocking file writer with optional rotation.
+    /// Returns the `NonBlocking` writer (or None) and the `WorkerGuard` (or None).
+    fn build_file_writer(
+        &self,
+    ) -> Result<(
+        Option<tracing_appender::non_blocking::NonBlocking>,
+        Option<tracing_appender::non_blocking::WorkerGuard>,
+    )> {
+        let file_path = match self.logging.file_path {
+            Some(ref p) => p,
+            None => return Ok((None, None)),
+        };
+
+        let writer: Box<dyn std::io::Write + Send + Sync> = if let Some(ref rotation) =
+            self.logging.rotation
+        {
+            let appender = rolling_file::BasicRollingFileAppender::new(
+                file_path,
+                self.build_rolling_condition(rotation),
+                rotation.max_files as usize,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to create rolling file appender at '{}'",
+                    file_path.display()
+                )
+            })?;
+            Box::new(appender)
+        } else {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(file_path)
+                .with_context(|| {
+                    format!("failed to open log file '{}'", file_path.display())
+                })?;
+            Box::new(file)
+        };
+
+        let (non_blocking, guard) = tracing_appender::non_blocking(writer);
+        Ok((Some(non_blocking), Some(guard)))
+    }
+
+    /// Build the rolling condition from rotation config.
+    fn build_rolling_condition(
+        &self,
+        rotation: &logging::RotationConfig,
+    ) -> rolling_file::RollingConditionBasic {
+        use rolling_file::RollingConditionBasic;
+
+        match (&rotation.frequency, rotation.max_size_mb) {
+            (RotationFrequency::Never, 0) => {
+                // Validation should have caught this, but fallback to a sane default
+                RollingConditionBasic::new().daily()
+            }
+            (RotationFrequency::Never, size) => {
+                RollingConditionBasic::new().max_size(size * 1024 * 1024)
+            }
+            (RotationFrequency::Daily, 0) => RollingConditionBasic::new().daily(),
+            (RotationFrequency::Daily, size) => {
+                RollingConditionBasic::new()
+                    .daily()
+                    .max_size(size * 1024 * 1024)
+            }
+            (RotationFrequency::Hourly, 0) => RollingConditionBasic::new().hourly(),
+            (RotationFrequency::Hourly, size) => {
+                RollingConditionBasic::new()
+                    .hourly()
+                    .max_size(size * 1024 * 1024)
+            }
         }
     }
 
@@ -580,10 +648,22 @@ level = "info"
 # Log format (pretty, json)
 format = "pretty"
 
+# Console output destination (stdout, stderr, none)
+output = "stdout"
+
 # Enable per-request tracing spans (cmd_read, cmd_execute, cmd_route, etc.)
 # Disabled by default for production performance (~7% CPU savings).
 # Enable for debugging or when distributed tracing is needed.
 per_request_spans = false
+
+# File path for log output (optional, disabled by default).
+# When set, logs are written to the file in addition to console output.
+# file_path = "/var/log/frogdb/frogdb.log"
+
+# [logging.rotation]
+# max_size_mb = 100        # Rotate when file exceeds size (0 = no size rotation)
+# frequency = "daily"      # Time rotation: "daily", "hourly", or "never"
+# max_files = 5            # Max rotated files to retain (0 = unlimited)
 
 [persistence]
 # Whether persistence is enabled
@@ -1172,5 +1252,112 @@ mod tests {
         assert_eq!(config.server.port, 6380);
         assert_eq!(config.server.bind, "0.0.0.0");
         assert_eq!(config.logging.level, "debug");
+    }
+
+    // ===== File Logging Tests =====
+
+    #[test]
+    fn test_build_file_writer_none_when_no_file_path() {
+        let config = Config::default();
+        let (writer, guard) = config.build_file_writer().unwrap();
+        assert!(writer.is_none());
+        assert!(guard.is_none());
+    }
+
+    #[test]
+    fn test_build_file_writer_plain_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test.log");
+
+        let mut config = Config::default();
+        config.logging.file_path = Some(log_path.clone());
+
+        let (writer, guard) = config.build_file_writer().unwrap();
+        assert!(writer.is_some());
+        assert!(guard.is_some());
+
+        // Write through the non-blocking writer
+        use std::io::Write;
+        let mut nb = writer.unwrap();
+        writeln!(nb, "hello from test").unwrap();
+
+        // Drop guard to flush
+        drop(guard);
+
+        let contents = std::fs::read_to_string(&log_path).unwrap();
+        assert!(contents.contains("hello from test"));
+    }
+
+    #[test]
+    fn test_build_file_writer_with_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test.log");
+
+        let mut config = Config::default();
+        config.logging.file_path = Some(log_path.clone());
+        config.logging.rotation = Some(RotationConfig {
+            max_size_mb: 100,
+            frequency: RotationFrequency::Daily,
+            max_files: 3,
+        });
+
+        let (writer, guard) = config.build_file_writer().unwrap();
+        assert!(writer.is_some());
+        assert!(guard.is_some());
+
+        use std::io::Write;
+        let mut nb = writer.unwrap();
+        writeln!(nb, "rotated log line").unwrap();
+
+        drop(guard);
+
+        // The rolling file appender writes to a file with a suffix
+        let files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(!files.is_empty(), "should have created at least one log file");
+    }
+
+    #[test]
+    fn test_build_file_writer_nonexistent_parent_fails() {
+        let mut config = Config::default();
+        config.logging.file_path = Some(std::path::PathBuf::from("/nonexistent/dir/test.log"));
+
+        let result = config.build_file_writer();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_accept_config_with_file_logging() {
+        let toml = r#"
+            [logging]
+            level = "info"
+            format = "json"
+            output = "none"
+            file_path = "/tmp/frogdb-test.log"
+
+            [logging.rotation]
+            max_size_mb = 50
+            frequency = "hourly"
+            max_files = 10
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.logging.output, LogOutput::None);
+        assert_eq!(
+            config.logging.file_path,
+            Some(std::path::PathBuf::from("/tmp/frogdb-test.log"))
+        );
+        let rotation = config.logging.rotation.unwrap();
+        assert_eq!(rotation.max_size_mb, 50);
+        assert_eq!(rotation.frequency, RotationFrequency::Hourly);
+        assert_eq!(rotation.max_files, 10);
+    }
+
+    #[test]
+    fn test_validate_rotation_without_file_path_fails() {
+        let mut config = Config::default();
+        config.logging.rotation = Some(RotationConfig::default());
+        assert!(config.validate().is_err());
     }
 }

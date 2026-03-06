@@ -24,18 +24,18 @@ struct LogConfig {
     level: LogLevel,            // error, warn, info, debug, trace
     /// Output format
     format: LogFormat,          // json, pretty
-    /// Output destination
-    output: LogOutput,          // stdout, stderr, file
-    /// File path (if output = file)
+    /// Console output destination
+    output: LogOutput,          // stdout, stderr, none
+    /// File path for log output (optional, tees with console)
     file_path: Option<PathBuf>,
-    /// Log rotation settings
+    /// Log rotation settings (only when file_path is set)
     rotation: Option<RotationConfig>,
 }
 
 struct RotationConfig {
-    max_size_mb: u64,           // Rotate when file exceeds size
-    max_files: u32,             // Keep N rotated files
-    compress: bool,             // Compress rotated files
+    max_size_mb: u64,           // Rotate when file exceeds size (0 = disabled)
+    frequency: RotationFrequency, // daily, hourly, never
+    max_files: u32,             // Keep N rotated files (0 = unlimited)
 }
 ```
 
@@ -45,19 +45,19 @@ struct RotationConfig {
 [logging]
 level = "info"
 format = "json"                 # "json" or "pretty"
-output = "stdout"               # "stdout", "stderr", or "file"
+output = "stdout"               # "stdout", "stderr", or "none"
 per_request_spans = false       # Enable per-request tracing spans (~13% CPU overhead when enabled)
 # file_path = "/var/log/frogdb/frogdb.log"
 
-[logging.rotation]
-max_size_mb = 100
-max_files = 5
-compress = true
+# [logging.rotation]
+# max_size_mb = 100             # Rotate when file exceeds size (0 = no size rotation)
+# frequency = "daily"           # Time rotation: "daily", "hourly", or "never"
+# max_files = 5                 # Max rotated files to retain (0 = unlimited)
 ```
 
-> **Implementation note:** File output with rotation requires `tracing-appender` for non-blocking writes. The current implementation supports stdout/stderr via `tracing-subscriber`'s `fmt` layer; file output is specified but not yet implemented.
->
 > **Performance note:** `per_request_spans` defaults to `false` for production performance (~13% CPU savings). Enable for detailed per-request tracing during debugging.
+>
+> **File logging:** When `file_path` is set, logs are written to the file via a non-blocking background thread (`tracing-appender`). Console output continues independently based on the `output` setting. Set `output = "none"` to disable console and log only to file.
 
 ### Structured Fields
 
