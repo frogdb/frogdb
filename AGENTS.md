@@ -18,8 +18,8 @@
 ## Specs/Docs
 
 - When designing features, always research what implementation Redis, Valkey, and DragonflyDB use for the feature. This provides critical insight for decision making.
-- The design specs are located in the `spec/` subdirectory.
-- Always read the `README.md` file before starting any task to get context on the project. Then read `spec/INDEX.md` to get context on the state of the design itself.
+- The design specs are located in the `docs/spec/` subdirectory.
+- Always read the `README.md` file before starting any task to get context on the project. Then read `docs/spec/INDEX.md` to get context on the state of the design itself.
 - **Important:** The spec documents describe the **desired end-state** of FrogDB, not what's implemented yet. To know what to build in each phase, see `spec/ROADMAP.md`. Types and features documented in specs may not exist yet - ROADMAP.md tells you when they're added.
 - You will frequently be reading large markdown files. Be careful not to read more context than you need. Use CLI tools such as `grep`, `less`, `head` (among others) to minimize extraneous context when reading specs.
 - Unless told to conduct a broad, sweeping analysis of the spec, keep your investigations and analysis focused on the specific ask, minimizing extraneous context.

@@ -814,9 +814,7 @@ async fn test_json_debug_memory_default_path() {
         .await;
 
     // Omit path — should default to "$"
-    let response = client
-        .command(&["JSON.DEBUG", "MEMORY", "{k}doc"])
-        .await;
+    let response = client.command(&["JSON.DEBUG", "MEMORY", "{k}doc"]).await;
     match response {
         Response::Integer(size) => {
             assert!(size > 0, "Memory size should be positive, got {}", size);
@@ -835,7 +833,11 @@ async fn test_json_debug_memory_nonexistent_key() {
     let response = client
         .command(&["JSON.DEBUG", "MEMORY", "{k}nokey", "$"])
         .await;
-    assert_eq!(response, Response::Bulk(None), "Non-existent key should return null");
+    assert_eq!(
+        response,
+        Response::Bulk(None),
+        "Non-existent key should return null"
+    );
 
     server.shutdown().await;
 }

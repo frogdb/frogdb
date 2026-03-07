@@ -49,11 +49,7 @@ impl TaskMonitorRegistry {
 
             // Keep per-monitor interval iterators alive across ticks so we
             // only see the delta since the last collection.
-            let mut iters: Vec<_> = self
-                .monitors
-                .iter()
-                .map(|(_, m)| m.intervals())
-                .collect();
+            let mut iters: Vec<_> = self.monitors.iter().map(|(_, m)| m.intervals()).collect();
 
             loop {
                 ticker.tick().await;

@@ -5324,6 +5324,289 @@
       },
       "id": 74,
       "panels": [],
+      "title": "Split",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Total split-brain events detected",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 261
+      },
+      "id": 75,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(frogdb_split_brain_events_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Split Brain Events Total",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Total operations discarded during split-brain recovery",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 261
+      },
+      "id": 76,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(frogdb_split_brain_ops_discarded_total{instance=~\"$instance\"}[5m])",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Split Brain Ops Discarded Total",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Whether an unprocessed split-brain log file exists (1 = yes, 0 = no)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 269
+      },
+      "id": 77,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_split_brain_recovery_pending{instance=~\"$instance\"}",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Split Brain Recovery Pending",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 277
+      },
+      "id": 78,
+      "panels": [],
       "title": "Transactions",
       "type": "row"
     },
@@ -5386,9 +5669,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 261
+        "y": 278
       },
-      "id": 75,
+      "id": 79,
       "options": {
         "legend": {
           "calcs": [],
@@ -5476,9 +5759,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 261
+        "y": 278
       },
-      "id": 76,
+      "id": 80,
       "options": {
         "legend": {
           "calcs": [],
@@ -5588,9 +5871,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 269
+        "y": 286
       },
-      "id": 77,
+      "id": 81,
       "options": {
         "legend": {
           "calcs": [],
@@ -5647,9 +5930,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 277
+        "y": 294
       },
-      "id": 78,
+      "id": 82,
       "panels": [],
       "title": "Uptime",
       "type": "row"
@@ -5713,9 +5996,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 278
+        "y": 295
       },
-      "id": 79,
+      "id": 83,
       "options": {
         "legend": {
           "calcs": [],
@@ -5750,9 +6033,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 286
+        "y": 303
       },
-      "id": 80,
+      "id": 84,
       "panels": [],
       "title": "Wal",
       "type": "row"
@@ -5816,9 +6099,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 287
+        "y": 304
       },
-      "id": 81,
+      "id": 85,
       "options": {
         "legend": {
           "calcs": [],
@@ -5906,9 +6189,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 287
+        "y": 304
       },
-      "id": 82,
+      "id": 86,
       "options": {
         "legend": {
           "calcs": [],
@@ -5996,9 +6279,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 295
+        "y": 312
       },
-      "id": 83,
+      "id": 87,
       "options": {
         "legend": {
           "calcs": [],
@@ -6108,9 +6391,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 295
+        "y": 312
       },
-      "id": 84,
+      "id": 88,
       "options": {
         "legend": {
           "calcs": [],
@@ -6198,9 +6481,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 303
+        "y": 320
       },
-      "id": 85,
+      "id": 89,
       "options": {
         "legend": {
           "calcs": [],
@@ -6288,9 +6571,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 303
+        "y": 320
       },
-      "id": 86,
+      "id": 90,
       "options": {
         "legend": {
           "calcs": [],
@@ -6378,9 +6661,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 311
+        "y": 328
       },
-      "id": 87,
+      "id": 91,
       "options": {
         "legend": {
           "calcs": [],
@@ -6468,9 +6751,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 311
+        "y": 328
       },
-      "id": 88,
+      "id": 92,
       "options": {
         "legend": {
           "calcs": [],
@@ -6558,9 +6841,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 319
+        "y": 336
       },
-      "id": 89,
+      "id": 93,
       "options": {
         "legend": {
           "calcs": [],

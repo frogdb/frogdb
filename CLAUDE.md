@@ -30,7 +30,7 @@ just concurrency                        # run Shuttle + Turmoil concurrency test
 
 ## Design Documentation
 
-The `spec/` directory contains design documentation. Search/Consult it before making architectural changes.
+The `docs/spec/` directory contains design documentation. Search/Consult it before making architectural changes.
 
 ## Agent Guidelines
 

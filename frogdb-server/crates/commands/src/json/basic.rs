@@ -445,8 +445,8 @@ impl Command for JsonDebugCommand {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        let subcommand = String::from_utf8_lossy(args.first().map(|b| b.as_ref()).unwrap_or(b""))
-            .to_uppercase();
+        let subcommand =
+            String::from_utf8_lossy(args.first().map(|b| b.as_ref()).unwrap_or(b"")).to_uppercase();
         if subcommand == "MEMORY" && args.len() >= 2 {
             vec![args[1].as_ref()]
         } else {

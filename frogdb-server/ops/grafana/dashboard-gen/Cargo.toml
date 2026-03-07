@@ -11,7 +11,7 @@ name = "dashboard-gen"
 path = "src/main.rs"
 
 [dependencies]
-frogdb-telemetry = { path = "../../crates/telemetry" }
+frogdb-telemetry = { path = "../../../crates/telemetry" }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

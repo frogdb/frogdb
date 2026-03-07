@@ -1156,7 +1156,11 @@ impl Server {
                 interval_ms = config.sync_interval_ms,
                 "Starting periodic WAL sync"
             );
-            Some(spawn_periodic_sync(rocks.clone(), config.sync_interval_ms, wal_sync_monitor))
+            Some(spawn_periodic_sync(
+                rocks.clone(),
+                config.sync_interval_ms,
+                wal_sync_monitor,
+            ))
         } else {
             None
         };
@@ -1333,7 +1337,6 @@ impl Server {
         } else {
             None
         };
-
 
         // Determine if admin port is enabled (used for both acceptors)
         let admin_enabled = self.config.admin.enabled;

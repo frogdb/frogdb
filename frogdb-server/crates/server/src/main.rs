@@ -120,10 +120,13 @@ fn main() -> Result<()> {
     let (log_reload_handle, _logging_guard) =
         config.init_logging_with_layer(profiler.tracing_layer())?;
 
-    #[cfg(all(feature = "profiling", not(all(tokio_unstable, feature = "causal-profile"))))]
+    #[cfg(all(
+        feature = "profiling",
+        not(all(tokio_unstable, feature = "causal-profile"))
+    ))]
     let (_flame_guard, log_reload_handle, _logging_guard) = {
-        let path = std::env::var("FROGDB_FLAME_OUTPUT")
-            .unwrap_or_else(|_| "tracing-flame.folded".into());
+        let path =
+            std::env::var("FROGDB_FLAME_OUTPUT").unwrap_or_else(|_| "tracing-flame.folded".into());
         let (flame_layer, guard) = tracing_flame::FlameLayer::with_file(&path)
             .expect("failed to create flame output file");
         let (handle, logging_guard) = config.init_logging_with_layer(flame_layer)?;
@@ -131,10 +134,7 @@ fn main() -> Result<()> {
         (guard, handle, logging_guard)
     };
 
-    #[cfg(not(any(
-        all(tokio_unstable, feature = "causal-profile"),
-        feature = "profiling"
-    )))]
+    #[cfg(not(any(all(tokio_unstable, feature = "causal-profile"), feature = "profiling")))]
     let (log_reload_handle, _logging_guard) = config.init_logging()?;
 
     info!(config = %config.to_json(), "Starting FrogDB server");

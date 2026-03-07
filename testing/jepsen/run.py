@@ -52,12 +52,12 @@ PARALLEL_BASE_PORTS: dict["Topology", int] = {
 }
 
 TOPOLOGY_CONFIGS: dict[Topology, TopologyConfig] = {
-    Topology.SINGLE: TopologyConfig("jepsen/docker-compose.yml", ("n1",), node_count=1),
+    Topology.SINGLE: TopologyConfig("testing/jepsen/docker-compose.yml", ("n1",), node_count=1),
     Topology.REPLICATION: TopologyConfig(
-        "jepsen/frogdb/docker-compose.replication.yml", (), node_count=3
+        "testing/jepsen/frogdb/docker-compose.replication.yml", (), node_count=3
     ),
     Topology.RAFT: TopologyConfig(
-        "jepsen/frogdb/docker-compose.raft-cluster.yml", (), node_count=5, has_bus_ports=True
+        "testing/jepsen/frogdb/docker-compose.raft-cluster.yml", (), node_count=5, has_bus_ports=True
     ),
 }
 
@@ -330,8 +330,8 @@ class Color:
 
 
 def get_project_root() -> Path:
-    """Get the FrogDB project root (parent of jepsen/)."""
-    return Path(__file__).resolve().parent.parent
+    """Get the FrogDB project root (grandparent of testing/jepsen/)."""
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def preflight(c: Color) -> None:
@@ -469,7 +469,7 @@ def run_test(
         cmd.append("--cluster")
     cmd.extend(extra_args)
 
-    cwd = root / "jepsen" / "frogdb"
+    cwd = root / "testing" / "jepsen" / "frogdb"
 
     print()
     print(c.bold(f"  Test: {test.name}"))
@@ -568,7 +568,7 @@ def run_test_batch(
     ]
     cmd.extend(extra_args)
 
-    cwd = root / "jepsen" / "frogdb"
+    cwd = root / "testing" / "jepsen" / "frogdb"
 
     print()
     print(c.bold(f"  Batch: {len(tests)} tests in single JVM"))
@@ -736,7 +736,7 @@ def build_frogdb(root: Path, c: Color, mode: str = "cross") -> None:
                 "docker",
                 "build",
                 "-f",
-                "Dockerfile.builder",
+                "frogdb-server/docker/Dockerfile.builder",
                 "--build-arg",
                 "BUILD_TARGET=debug",
                 "-t",
@@ -755,7 +755,10 @@ def build_frogdb(root: Path, c: Color, mode: str = "cross") -> None:
             print(c.red("Cross-build failed."))
             sys.exit(1)
         print(c.bold("Building Docker image..."))
-        result = subprocess.run(["docker", "build", "-t", "frogdb:latest", "."], cwd=root)
+        result = subprocess.run(
+            ["docker", "build", "-f", "frogdb-server/docker/Dockerfile", "-t", "frogdb:latest", "."],
+            cwd=root,
+        )
         if result.returncode != 0:
             print(c.red("Docker build failed."))
             sys.exit(1)
@@ -950,7 +953,7 @@ def cmd_down(args: argparse.Namespace) -> None:
 
 def cmd_clean(args: argparse.Namespace) -> None:
     root = get_project_root()
-    store = root / "jepsen" / "frogdb" / "store"
+    store = root / "testing" / "jepsen" / "frogdb" / "store"
     if store.exists():
         shutil.rmtree(store)
         print(f"Removed {store}")
@@ -960,7 +963,7 @@ def cmd_clean(args: argparse.Namespace) -> None:
 
 def cmd_results(args: argparse.Namespace) -> None:
     root = get_project_root()
-    latest = root / "jepsen" / "frogdb" / "store" / "latest"
+    latest = root / "testing" / "jepsen" / "frogdb" / "store" / "latest"
     if not latest.exists():
         print("No results found. Run a test first.")
         sys.exit(1)
