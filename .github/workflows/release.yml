@@ -1,7 +1,7 @@
 # =============================================================================
 # GENERATED FILE - DO NOT EDIT DIRECTLY
 # =============================================================================
-# Source: tools/workflow-gen.py
+# Source: .github/workflows/workflow-gen.py
 # Regenerate with: just workflow-gen
 # =============================================================================
 
@@ -15,7 +15,7 @@ env:
 jobs:
   build-binaries:
     name: Build Release Binaries (${{ matrix.target }})
-    runs-on: self-hosted
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
@@ -71,7 +71,7 @@ jobs:
     needs:
     - build-binaries
     name: Docker Release
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -117,7 +117,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: '.'
-        file: './Dockerfile.multiarch'
+        file: './frogdb-server/docker/Dockerfile.multiarch'
         platforms: linux/amd64,linux/arm64
         push: 'true'
         tags: ${{ steps.meta.outputs.tags }}
@@ -129,7 +129,7 @@ jobs:
     needs:
     - docker
     name: Publish Helm Chart
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       pages: write
@@ -144,7 +144,7 @@ jobs:
         version: v3.13.0
     - name: Package Helm chart
       run: |-
-        helm package deploy/helm/frogdb --destination .helm-packages
+        helm package frogdb-server/ops/deploy/helm/frogdb --destination .helm-packages
         helm repo index .helm-packages --url https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/helm
     - name: Checkout gh-pages branch
       uses: actions/checkout@v4
@@ -174,7 +174,7 @@ jobs:
     - build-binaries
     - docker
     name: GitHub Release
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:

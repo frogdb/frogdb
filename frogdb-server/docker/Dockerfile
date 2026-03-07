@@ -2,7 +2,10 @@
 #
 # Expects pre-built cross-compiled binary from:
 #   cross build --release --target x86_64-unknown-linux-gnu --bin frogdb-server
-# Or use: just cross-build
+# Or use: just server cross-build
+#
+# Build context must be the repo root:
+#   docker build -f frogdb-server/docker/Dockerfile -t frogdb:latest .
 
 FROM --platform=linux/amd64 debian:bookworm-slim
 

@@ -5,7 +5,10 @@
 #
 # Expects pre-built cross-compiled binary from:
 #   cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server
-# Or use: just cross-build-arm
+# Or use: just server cross-build-arm
+#
+# Build context must be the repo root:
+#   docker build -f frogdb-server/docker/Dockerfile.bench -t frogdb:latest .
 
 FROM debian:bookworm-slim
 

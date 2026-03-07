@@ -1,29 +1,29 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/protocol",
-    "crates/types",
-    "crates/cluster",
-    "crates/persistence",
-    "crates/acl",
-    "crates/scripting",
-    "crates/vll",
-    "crates/replication",
-    "crates/commands",
-    "crates/core",
-    "crates/server",
-    "crates/debug",
-    "crates/telemetry",
-    "crates/metrics-derive",
-    "crates/testing",
-    "crates/browser-tests",
-    "crates/frogdb-macros",
-    "benches",
-    "helm/helm-gen",
-    "grafana/dashboard-gen",
-    "crates/tokio-coz",
-    "crates/test-harness",
-    "crates/redis-regression",
+    "frogdb-server/crates/protocol",
+    "frogdb-server/crates/types",
+    "frogdb-server/crates/cluster",
+    "frogdb-server/crates/persistence",
+    "frogdb-server/crates/acl",
+    "frogdb-server/crates/scripting",
+    "frogdb-server/crates/vll",
+    "frogdb-server/crates/replication",
+    "frogdb-server/crates/commands",
+    "frogdb-server/crates/core",
+    "frogdb-server/crates/server",
+    "frogdb-server/crates/debug",
+    "frogdb-server/crates/telemetry",
+    "frogdb-server/crates/metrics-derive",
+    "frogdb-server/crates/testing",
+    "frogdb-server/crates/browser-tests",
+    "frogdb-server/crates/frogdb-macros",
+    "frogdb-server/benchmarks",
+    "frogdb-server/ops/helm/helm-gen",
+    "frogdb-server/ops/grafana/dashboard-gen",
+    "frogdb-server/crates/tokio-coz",
+    "frogdb-server/crates/test-harness",
+    "frogdb-server/crates/redis-regression",
 ]
 
 [workspace.package]
@@ -109,22 +109,22 @@ linked-hash-map = "0.5"
 jsonpath-rust = "0.7"
 
 # Internal crates
-frogdb-vll = { path = "crates/vll" }
-frogdb-replication = { path = "crates/replication" }
-frogdb-commands = { path = "crates/commands" }
-frogdb-protocol = { path = "crates/protocol" }
-frogdb-types = { path = "crates/types" }
-frogdb-cluster = { path = "crates/cluster" }
-frogdb-persistence = { path = "crates/persistence" }
-frogdb-acl = { path = "crates/acl" }
-frogdb-scripting = { path = "crates/scripting" }
-frogdb-core = { path = "crates/core" }
-frogdb-debug = { path = "crates/debug" }
-frogdb-telemetry = { path = "crates/telemetry" }
-frogdb-metrics-derive = { path = "crates/metrics-derive" }
-frogdb-testing = { path = "crates/testing" }
-frogdb-test-harness = { path = "crates/test-harness" }
-tokio-coz = { path = "crates/tokio-coz" }
+frogdb-vll = { path = "frogdb-server/crates/vll" }
+frogdb-replication = { path = "frogdb-server/crates/replication" }
+frogdb-commands = { path = "frogdb-server/crates/commands" }
+frogdb-protocol = { path = "frogdb-server/crates/protocol" }
+frogdb-types = { path = "frogdb-server/crates/types" }
+frogdb-cluster = { path = "frogdb-server/crates/cluster" }
+frogdb-persistence = { path = "frogdb-server/crates/persistence" }
+frogdb-acl = { path = "frogdb-server/crates/acl" }
+frogdb-scripting = { path = "frogdb-server/crates/scripting" }
+frogdb-core = { path = "frogdb-server/crates/core" }
+frogdb-debug = { path = "frogdb-server/crates/debug" }
+frogdb-telemetry = { path = "frogdb-server/crates/telemetry" }
+frogdb-metrics-derive = { path = "frogdb-server/crates/metrics-derive" }
+frogdb-testing = { path = "frogdb-server/crates/testing" }
+frogdb-test-harness = { path = "frogdb-server/crates/test-harness" }
+tokio-coz = { path = "frogdb-server/crates/tokio-coz" }
 
 # Benchmarking
 criterion = { version = "0.5", features = ["async_tokio"] }

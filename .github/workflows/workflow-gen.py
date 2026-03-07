@@ -23,7 +23,7 @@ HEADER = """\
 # =============================================================================
 # GENERATED FILE - DO NOT EDIT DIRECTLY
 # =============================================================================
-# Source: tools/workflow-gen.py
+# Source: .github/workflows/workflow-gen.py
 # Regenerate with: just workflow-gen
 # =============================================================================
 
@@ -187,7 +187,7 @@ def docker_build_push_step(cache: bool = False) -> CommentedMap:
     s["uses"] = DOCKER_BUILD_PUSH
     w = CommentedMap()
     w["context"] = SQ(".")
-    w["file"] = SQ("./Dockerfile.multiarch")
+    w["file"] = SQ("./frogdb-server/docker/Dockerfile.multiarch")
     w["platforms"] = "linux/amd64,linux/arm64"
     w["push"] = SQ("true")
     w["tags"] = "${{ steps.meta.outputs.tags }}"
@@ -408,15 +408,15 @@ def test_workflow() -> CommentedMap:
         [
             checkout_step(),
             setup_helm_step(),
-            run_step("Lint Helm chart", "helm lint deploy/helm/frogdb"),
+            run_step("Lint Helm chart", "helm lint frogdb-server/ops/deploy/helm/frogdb"),
             run_step(
                 "Template Helm chart",
-                "helm template frogdb deploy/helm/frogdb --debug",
+                "helm template frogdb frogdb-server/ops/deploy/helm/frogdb --debug",
             ),
             run_step(
                 "Template cluster preset",
-                "helm template frogdb deploy/helm/frogdb"
-                " -f deploy/helm/frogdb/values-cluster.yaml --debug",
+                "helm template frogdb frogdb-server/ops/deploy/helm/frogdb"
+                " -f frogdb-server/ops/deploy/helm/frogdb/values-cluster.yaml --debug",
             ),
         ],
     )
@@ -596,7 +596,7 @@ def release_workflow() -> CommentedMap:
             run_step(
                 "Package Helm chart",
                 LiteralScalarString(
-                    "helm package deploy/helm/frogdb"
+                    "helm package frogdb-server/ops/deploy/helm/frogdb"
                     " --destination .helm-packages\n"
                     "helm repo index .helm-packages"
                     f" --url {HELM_REPO_URL}"

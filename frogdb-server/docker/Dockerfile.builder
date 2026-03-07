@@ -5,9 +5,11 @@
 #
 # Uses cargo-chef for dependency caching: code-only changes skip dep compilation.
 #
+# Build context must be the repo root (Cargo.toml + Cargo.lock live there).
+#
 # Usage:
-#   docker build -f Dockerfile.builder -t frogdb:latest .
-#   docker build -f Dockerfile.builder --build-arg BUILD_TARGET=debug -t frogdb:latest .
+#   docker build -f frogdb-server/docker/Dockerfile.builder -t frogdb:latest .
+#   docker build -f frogdb-server/docker/Dockerfile.builder --build-arg BUILD_TARGET=debug -t frogdb:latest .
 
 # ---------------------------------------------------------------------------
 # Stage 1: Prepare dependency recipe (cargo-chef)
@@ -18,7 +20,8 @@ RUN apk add --no-cache musl-dev
 RUN cargo install cargo-chef --locked
 
 WORKDIR /app
-COPY . .
+COPY Cargo.toml Cargo.lock ./
+COPY frogdb-server/ frogdb-server/
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ---------------------------------------------------------------------------
@@ -54,7 +57,8 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 # Build the actual project
-COPY . .
+COPY Cargo.toml Cargo.lock ./
+COPY frogdb-server/ frogdb-server/
 RUN cargo build --release --bin frogdb-server
 
 # Verify system libraries were linked (fail the build if not)

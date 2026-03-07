@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 PROFILE_DIR = Path("/tmp/claude")
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SERVER_PORT = 6379
 STARTUP_TIMEOUT = 30  # seconds
 

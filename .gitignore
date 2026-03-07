@@ -32,8 +32,8 @@ onyx/.env
 node_modules/
 
 # Documentation site build output
-docs-site/dist/
-docs-site/.astro/
+website/dist/
+website/.astro/
 
 # RocksDB data directories (created during testing/development)
 frogdb-data/
@@ -51,13 +51,13 @@ __pycache__/
 sweep.timestamp
 
 # Load test reports (generated benchmark data)
-loadtest/reports
+testing/loadtest/reports
 
 # redis dump files
 *.rdb
 
 # jepsen test results
-jepsen/frogdb/store
+testing/jepsen/frogdb/store
 
 # Code coverage profiling
 *.profraw

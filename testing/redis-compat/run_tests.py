@@ -53,7 +53,7 @@ def get_script_dir() -> Path:
 
 def get_project_root() -> Path:
     """Get the FrogDB project root directory."""
-    return get_script_dir().parent
+    return get_script_dir().parent.parent
 
 
 def parse_skiplists(script_dir: Path) -> tuple[list[str], list[str]]:
