@@ -7,10 +7,10 @@ description, and a cross-reference to the relevant spec.
 
 ## Cluster (Phases 4–6)
 
-| Item                           | Files | Description                                                                                                                      | Spec                                                                          |
-| ------------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Point-in-time rollback         | —     | Full resync replaces all local state (matches Redis behavior). Deferred; split-brain log provides audit trail for manual replay. | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#45-split-brain-handling)                    |
-| DFLYMIGRATE streaming protocol | —     | High-throughput streaming slot migration not implemented; only standard key-by-key MIGRATE exists                                | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#52-migration-protocol-commands-dflymigrate) |
+| Item                                     | Files | Description                                                                                                                      | Spec                                                                          |
+| ---------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Point-in-time rollback                   | —     | Full resync replaces all local state (matches Redis behavior). Deferred; split-brain log provides audit trail for manual replay. | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#45-split-brain-handling)                    |
+| Atomic slot migration + auto-rebalancing | —     | Valkey 9-style atomic slot transfer and built-in multi-dimensional rebalancing; replaces DFLYMIGRATE design                      | [CLUSTER_REBALANCING.md](CLUSTER_REBALANCING.md)                              |
 
 ---
 
