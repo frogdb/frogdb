@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 
 use frogdb_core::ClientRegistry;
 
+use crate::cluster_pubsub::ClusterPubSubForwarder;
 use crate::config::TracingConfig;
 use crate::replication::PrimaryReplicationHandler;
 use crate::runtime_config::ConfigManager;
@@ -97,6 +98,9 @@ pub struct ClusterDeps {
 
     /// Optional quorum checker for self-fencing (write rejection on quorum loss).
     pub quorum_checker: Option<Arc<dyn QuorumChecker>>,
+
+    /// Optional pub/sub forwarder for cross-node message delivery.
+    pub pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
 }
 
 impl ClusterDeps {
@@ -122,6 +126,7 @@ impl ClusterDeps {
             replication_tracker,
             primary_replication_handler,
             quorum_checker: None,
+            pubsub_forwarder: None,
         }
     }
 

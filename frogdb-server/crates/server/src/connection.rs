@@ -60,6 +60,7 @@ use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 use tracing::{Instrument, debug, info, trace, warn};
 
+use crate::cluster_pubsub::ClusterPubSubForwarder;
 use crate::config::TracingConfig;
 use crate::net::TcpStream;
 use crate::replication::PrimaryReplicationHandler;
@@ -181,6 +182,9 @@ pub struct ConnectionHandler {
 
     /// Optional quorum checker for self-fencing (write rejection on quorum loss).
     quorum_checker: Option<Arc<dyn QuorumChecker>>,
+
+    /// Optional pub/sub forwarder for cross-node message delivery in cluster mode.
+    cluster_pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
 }
 
 /// Result of processing a single command frame.
@@ -270,6 +274,7 @@ impl ConnectionHandler {
             per_request_spans: config.per_request_spans,
             is_replica: config.is_replica,
             quorum_checker: cluster.quorum_checker,
+            cluster_pubsub_forwarder: cluster.pubsub_forwarder,
         }
     }
 
@@ -336,6 +341,7 @@ impl ConnectionHandler {
             replication_tracker,
             primary_replication_handler,
             quorum_checker: None,
+            pubsub_forwarder: None,
         };
         let config = ConnectionConfig {
             num_shards,

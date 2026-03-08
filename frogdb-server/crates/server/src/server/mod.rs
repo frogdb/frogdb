@@ -1442,9 +1442,13 @@ impl Server {
                 .cluster_bus_listener
                 .take()
                 .expect("cluster_bus_listener must be set when cluster is enabled");
-            let raft = raft.clone();
+            let ctx = Arc::new(crate::cluster_bus::ClusterBusContext {
+                raft: raft.clone(),
+                shard_senders: self.shard_senders.clone(),
+                num_shards: self.config.server.num_shards.max(1),
+            });
             Some(spawn(async move {
-                if let Err(e) = crate::cluster_bus::run(cluster_bus_listener, raft).await {
+                if let Err(e) = crate::cluster_bus::run(cluster_bus_listener, ctx).await {
                     error!(error = %e, "Cluster bus server error");
                 }
             }))
@@ -1490,6 +1494,22 @@ impl Server {
                 self.replication_quorum_checker.clone()
             };
 
+        // Create cluster pub/sub forwarder (None in standalone mode)
+        let pubsub_forwarder: Option<Arc<crate::cluster_pubsub::ClusterPubSubForwarder>> =
+            if let (Some(cluster_state), Some(node_id), Some(network_factory)) =
+                (&self.cluster_state, self.node_id, &self.network_factory)
+            {
+                Some(Arc::new(
+                    crate::cluster_pubsub::ClusterPubSubForwarder::Cluster {
+                        cluster_state: cluster_state.clone(),
+                        network_factory: network_factory.clone(),
+                        node_id,
+                    },
+                ))
+            } else {
+                None
+            };
+
         // Create main acceptor (regular client connections)
         // When admin port is enabled, this acceptor blocks admin commands
         let is_replica = self.config.replication.is_replica();
@@ -1522,6 +1542,7 @@ impl Server {
             is_replica,
             quorum_checker.clone(),
             self.conn_monitor.clone(),
+            pubsub_forwarder.clone(),
         );
 
         // Spawn main acceptor task
@@ -1562,6 +1583,7 @@ impl Server {
                 is_replica,
                 quorum_checker.clone(),
                 self.conn_monitor.clone(),
+                pubsub_forwarder.clone(),
             );
 
             Some(spawn(async move {

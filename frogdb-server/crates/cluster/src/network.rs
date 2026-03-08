@@ -45,6 +45,16 @@ pub enum ClusterRpcRequest {
     InstallSnapshot(InstallSnapshotRequest<TypeConfig>),
     /// Forwarded client write (follower to leader).
     ForwardedWrite(ClusterCommand),
+    /// Broadcast pub/sub message to all nodes.
+    PubSubBroadcast {
+        channel: Vec<u8>,
+        message: Vec<u8>,
+    },
+    /// Forward sharded pub/sub message to the slot-owning node.
+    PubSubForward {
+        channel: Vec<u8>,
+        message: Vec<u8>,
+    },
 }
 
 /// RPC response types for cluster communication.
@@ -58,6 +68,10 @@ pub enum ClusterRpcResponse {
     InstallSnapshot(InstallSnapshotResponse<NodeId>),
     /// Response to ForwardedWrite.
     ForwardedWrite(Result<(), String>),
+    /// Response to PubSubBroadcast.
+    PubSubBroadcastResult { subscriber_count: usize },
+    /// Response to PubSubForward.
+    PubSubForwardResult { subscriber_count: usize },
     /// Error response.
     Error(String),
 }
@@ -178,7 +192,7 @@ impl ClusterNetwork {
     }
 
     /// Send an RPC request and receive the response.
-    async fn send_rpc(
+    pub async fn send_rpc(
         &self,
         request: ClusterRpcRequest,
     ) -> Result<ClusterRpcResponse, ClusterError> {
@@ -351,6 +365,13 @@ pub async fn handle_rpc_request(
             Ok(_) => ClusterRpcResponse::ForwardedWrite(Ok(())),
             Err(e) => ClusterRpcResponse::ForwardedWrite(Err(e.to_string())),
         },
+        // PubSub RPCs are handled by the server's cluster_bus module (which has
+        // access to shard_senders). This function only handles Raft-level RPCs.
+        ClusterRpcRequest::PubSubBroadcast { .. } | ClusterRpcRequest::PubSubForward { .. } => {
+            ClusterRpcResponse::Error(
+                "PubSub RPCs must be handled by the cluster bus, not the Raft handler".to_string(),
+            )
+        }
     }
 }
 

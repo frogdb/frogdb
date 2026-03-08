@@ -444,9 +444,8 @@ async fn test_pubsub_works_within_single_cluster_node() {
     harness.shutdown_all().await;
 }
 
-/// Documents that cross-node pub/sub forwarding is not yet implemented.
+/// Tests that cross-node pub/sub forwarding works in cluster mode.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: ClusterPubSubForwarder not built — messages not forwarded between cluster nodes"]
 async fn test_pubsub_cross_node_forwarded() {
     use frogdb_test_harness::cluster_harness::ClusterTestHarness;
 
@@ -753,11 +752,8 @@ async fn test_ssubscribe_client_receives_sunsubscribe_on_slot_migration() {
 // Tier 4: Cross-Node PubSub
 // ============================================================================
 
-/// Documents that PSUBSCRIBE on node A doesn't receive PUBLISH from node B.
-///
-/// Cross-node pub/sub forwarding (ClusterPubSubForwarder) is not built.
+/// Tests that PSUBSCRIBE on node A receives PUBLISH from node B.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: ClusterPubSubForwarder not built — pattern messages not forwarded between cluster nodes"]
 async fn test_psubscribe_cross_node_pattern_match_forwarded() {
     use frogdb_test_harness::cluster_harness::ClusterTestHarness;
 
@@ -809,6 +805,179 @@ async fn test_psubscribe_cross_node_pattern_match_forwarded() {
         );
         assert_eq!(arr[3], Response::Bulk(Some(Bytes::from("cross_msg"))));
     }
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that SPUBLISH on a non-owner node forwards to the owner and delivers.
+#[tokio::test]
+async fn test_spublish_cross_node_forwarded() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+    use frogdb_test_harness::cluster_helpers::{
+        is_error, is_moved_redirect, key_for_slot, slot_for_key,
+    };
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let channel = "spub_fwd_chan";
+    let slot = slot_for_key(channel.as_bytes());
+    let node_ids = harness.node_ids();
+
+    // Find the slot owner via a probe key
+    let probe_key = key_for_slot(slot);
+    let mut owner_nid = None;
+    for &nid in &node_ids {
+        let node = harness.node(nid).unwrap();
+        let resp = node.send("GET", &[&probe_key]).await;
+        if !is_error(&resp) {
+            owner_nid = Some(nid);
+            break;
+        } else if let Some((_slot, addr)) = is_moved_redirect(&resp) {
+            for &other_nid in &node_ids {
+                if harness.node(other_nid).unwrap().client_addr() == addr {
+                    owner_nid = Some(other_nid);
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    let owner_nid = match owner_nid {
+        Some(nid) => nid,
+        None => {
+            eprintln!("Could not find slot owner, skipping test");
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    // Find a non-owner node
+    let non_owner_nid = node_ids.iter().find(|&&nid| nid != owner_nid).copied();
+    let non_owner_nid = match non_owner_nid {
+        Some(nid) => nid,
+        None => {
+            eprintln!("No non-owner node found, skipping test");
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    // SSUBSCRIBE on the owner
+    let owner_node = harness.node(owner_nid).unwrap();
+    let mut subscriber = owner_node.connect().await;
+    subscriber.command(&["SSUBSCRIBE", channel]).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // SPUBLISH on a non-owner node (should be forwarded)
+    let non_owner_node = harness.node(non_owner_nid).unwrap();
+    let mut publisher = non_owner_node.connect().await;
+    let pub_resp = publisher
+        .command(&["SPUBLISH", channel, "forwarded_msg"])
+        .await;
+    assert!(
+        matches!(pub_resp, Response::Integer(n) if n >= 1),
+        "SPUBLISH on non-owner should forward and return >= 1, got: {:?}",
+        pub_resp
+    );
+
+    // Subscriber on owner should receive the message
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "Subscriber on slot owner should receive SPUBLISH forwarded from non-owner"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("smessage"))));
+        assert_eq!(arr[1], Response::Bulk(Some(Bytes::from(channel))));
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("forwarded_msg"))));
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that SSUBSCRIBE on a non-owner node gets a MOVED redirect.
+#[tokio::test]
+async fn test_ssubscribe_non_owner_returns_moved() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+    use frogdb_test_harness::cluster_helpers::{
+        is_error, is_moved_redirect, key_for_slot, slot_for_key,
+    };
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let channel = "ssub_moved_chan";
+    let slot = slot_for_key(channel.as_bytes());
+    let node_ids = harness.node_ids();
+
+    // Find the slot owner
+    let probe_key = key_for_slot(slot);
+    let mut owner_nid = None;
+    for &nid in &node_ids {
+        let node = harness.node(nid).unwrap();
+        let resp = node.send("GET", &[&probe_key]).await;
+        if !is_error(&resp) {
+            owner_nid = Some(nid);
+            break;
+        } else if let Some((_slot, addr)) = is_moved_redirect(&resp) {
+            for &other_nid in &node_ids {
+                if harness.node(other_nid).unwrap().client_addr() == addr {
+                    owner_nid = Some(other_nid);
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    let owner_nid = match owner_nid {
+        Some(nid) => nid,
+        None => {
+            eprintln!("Could not find slot owner, skipping test");
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    // Find a non-owner node
+    let non_owner_nid = node_ids.iter().find(|&&nid| nid != owner_nid).copied();
+    let non_owner_nid = match non_owner_nid {
+        Some(nid) => nid,
+        None => {
+            eprintln!("No non-owner node found, skipping test");
+            harness.shutdown_all().await;
+            return;
+        }
+    };
+
+    // SSUBSCRIBE on the non-owner — should get MOVED
+    let non_owner_node = harness.node(non_owner_nid).unwrap();
+    let mut client = non_owner_node.connect().await;
+    let resp = client.command(&["SSUBSCRIBE", channel]).await;
+
+    assert!(
+        is_moved_redirect(&resp).is_some(),
+        "SSUBSCRIBE on non-owner should return MOVED, got: {:?}",
+        resp
+    );
 
     harness.shutdown_all().await;
 }

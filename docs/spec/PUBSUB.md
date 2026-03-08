@@ -114,7 +114,7 @@ $<message_len>\r\n<message>\r\n
 
 ## Cluster Mode
 
-> **[Not Yet Implemented]** The entire Cluster Mode section below describes a future design for cross-node pub/sub forwarding. None of the types or functions described (ClusterPubSubForwarder, LocalOnlyForwarder, broadcast_to_cluster, forward_to_slot_owner) are currently implemented. Current pub/sub operates within a single node only.
+> **Implemented.** Cross-node pub/sub forwarding is implemented via `ClusterPubSubForwarder` enum (`Local` / `Cluster` variants) and cluster bus RPCs (`PubSubBroadcast`, `PubSubForward`). The spec code samples below show the original trait-based design; the actual implementation uses a concrete enum instead of a trait for simplicity.
 
 In cluster mode, pub/sub behavior extends beyond internal shards to coordinate across cluster nodes.
 

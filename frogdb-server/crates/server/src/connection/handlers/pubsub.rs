@@ -251,6 +251,9 @@ impl ConnectionHandler {
     }
 
     /// Handle PUBLISH command.
+    ///
+    /// In cluster mode, broadcasts to all other nodes via the forwarder and
+    /// sums the subscriber counts.
     pub(crate) async fn handle_publish(&self, args: &[Bytes]) -> Response {
         if args.len() != 2 {
             return Response::error("ERR wrong number of arguments for 'publish' command");
@@ -271,11 +274,21 @@ impl ConnectionHandler {
             })
             .await;
 
-        let total_count = response_rx.await.unwrap_or(0);
-        Response::Integer(total_count as i64)
+        let local_count = response_rx.await.unwrap_or(0);
+
+        // In cluster mode, also broadcast to all other nodes
+        let remote_count = match &self.cluster_pubsub_forwarder {
+            Some(forwarder) => forwarder.broadcast_publish(channel, message).await,
+            None => 0,
+        };
+
+        Response::Integer((local_count + remote_count) as i64)
     }
 
     /// Handle SSUBSCRIBE command (sharded subscriptions).
+    ///
+    /// In cluster mode, returns a MOVED redirect if the channel's slot belongs
+    /// to another node.
     pub(crate) async fn handle_ssubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
         if args.is_empty() {
             return vec![Response::error(
@@ -304,6 +317,14 @@ impl ConnectionHandler {
         let mut responses = Vec::with_capacity(args.len());
 
         for channel in args {
+            // In cluster mode, check if the slot belongs to another node
+            if let Some(forwarder) = &self.cluster_pubsub_forwarder
+                && let Some((slot, addr)) = forwarder.get_slot_owner_addr(channel)
+            {
+                responses.push(Response::error(format!("MOVED {} {}", slot, addr)));
+                continue;
+            }
+
             // Add to local tracking
             self.state
                 .pubsub
@@ -395,6 +416,9 @@ impl ConnectionHandler {
     }
 
     /// Handle SPUBLISH command (sharded publish).
+    ///
+    /// In cluster mode, forwards to the slot-owning node if the channel's slot
+    /// is not local.
     pub(crate) async fn handle_spublish(&self, args: &[Bytes]) -> Response {
         if args.len() != 2 {
             return Response::error("ERR wrong number of arguments for 'spublish' command");
@@ -403,7 +427,14 @@ impl ConnectionHandler {
         let channel = &args[0];
         let message = &args[1];
 
-        // Route to the owning shard only
+        // In cluster mode, forward to the slot owner if not local
+        if let Some(forwarder) = &self.cluster_pubsub_forwarder
+            && let Some(count) = forwarder.forward_spublish(channel, message).await
+        {
+            return Response::Integer(count as i64);
+        }
+
+        // Route to the owning shard locally
         let shard_id = shard_for_key(channel, self.num_shards);
         let (response_tx, response_rx) = oneshot::channel();
         let _ = self.shard_senders[shard_id]

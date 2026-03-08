@@ -7,6 +7,8 @@ use frogdb_core::{
     MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
     command::QuorumChecker, persistence::SnapshotCoordinator, shard::NewConnection,
 };
+
+use crate::cluster_pubsub::ClusterPubSubForwarder;
 use frogdb_telemetry::{SharedTracer, metric_names};
 use std::sync::atomic::AtomicI64;
 
@@ -136,6 +138,9 @@ pub struct Acceptor {
 
     /// Optional task monitor for connection handler tasks.
     conn_monitor: Option<tokio_metrics::TaskMonitor>,
+
+    /// Optional pub/sub forwarder for cross-node message delivery.
+    pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
 }
 
 impl Acceptor {
@@ -170,6 +175,7 @@ impl Acceptor {
         is_replica: bool,
         quorum_checker: Option<Arc<dyn QuorumChecker>>,
         conn_monitor: Option<tokio_metrics::TaskMonitor>,
+        pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         let per_request_spans = config_manager.per_request_spans_flag();
@@ -205,6 +211,7 @@ impl Acceptor {
             is_replica,
             quorum_checker,
             conn_monitor,
+            pubsub_forwarder,
         }
     }
 
@@ -275,6 +282,7 @@ impl Acceptor {
                         replication_tracker: self.replication_tracker.clone(),
                         primary_replication_handler: self.primary_replication_handler.clone(),
                         quorum_checker: self.quorum_checker.clone(),
+                        pubsub_forwarder: self.pubsub_forwarder.clone(),
                     };
                     let config = ConnectionConfig {
                         num_shards: self.shard_senders.len(),

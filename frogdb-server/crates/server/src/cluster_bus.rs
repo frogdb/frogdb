@@ -1,6 +1,6 @@
 //! Cluster bus TCP server for Raft RPC communication.
 //!
-//! This module provides a TCP server that handles incoming Raft RPC requests
+//! This module provides a TCP server that handles incoming RPC requests
 //! from other cluster nodes. It uses the length-prefixed JSON protocol defined
 //! in frogdb_core::cluster::network.
 
@@ -8,46 +8,50 @@ use std::sync::Arc;
 
 use frogdb_core::cluster::ClusterRaft;
 #[cfg(not(feature = "turmoil"))]
-use frogdb_core::cluster::{handle_rpc_request, parse_rpc_message, send_rpc_response};
+use frogdb_core::cluster::{
+    ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, parse_rpc_message, send_rpc_response,
+};
+#[cfg(not(feature = "turmoil"))]
+use frogdb_core::{ShardMessage, shard_for_key};
+#[cfg(not(feature = "turmoil"))]
+use tokio::sync::{mpsc, oneshot};
 
 use crate::net::TcpListener;
 #[cfg(not(feature = "turmoil"))]
 use tracing::warn;
 use tracing::{debug, error, info};
 
+/// Context for the cluster bus, providing access to Raft and shard infrastructure.
+pub struct ClusterBusContext {
+    pub raft: Arc<ClusterRaft>,
+    pub shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    pub num_shards: usize,
+}
+
 /// Run the cluster bus TCP server.
 ///
 /// This server listens for incoming connections from other cluster nodes
-/// and handles Raft RPC requests (AppendEntries, Vote, InstallSnapshot).
+/// and handles Raft RPCs and pub/sub forwarding requests.
 ///
 /// Accepts a pre-bound `TcpListener` so that the port is held open from
 /// `Server::new()` and never subject to TOCTOU port races.
-///
-/// # Arguments
-///
-/// * `listener` - Pre-bound TCP listener for cluster bus connections
-/// * `raft` - The Raft instance to handle requests
-///
-/// # Returns
-///
-/// This function runs indefinitely and only returns on error.
-pub async fn run(listener: TcpListener, raft: Arc<ClusterRaft>) -> std::io::Result<()> {
+pub async fn run(listener: TcpListener, ctx: Arc<ClusterBusContext>) -> std::io::Result<()> {
     let addr = listener.local_addr()?;
     info!(%addr, "Cluster bus listening");
 
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
-                let raft = raft.clone();
+                let ctx = ctx.clone();
                 tokio::spawn(async move {
                     debug!(%peer, "Cluster bus connection accepted");
                     #[cfg(not(feature = "turmoil"))]
-                    if let Err(e) = handle_connection(stream, &raft).await {
+                    if let Err(e) = handle_connection(stream, &ctx).await {
                         // Connection errors are expected when nodes disconnect
                         debug!(%peer, error = %e, "Cluster bus connection closed");
                     }
                     #[cfg(feature = "turmoil")]
-                    drop((stream, raft));
+                    drop((stream, ctx));
                 });
             }
             Err(e) => {
@@ -59,12 +63,13 @@ pub async fn run(listener: TcpListener, raft: Arc<ClusterRaft>) -> std::io::Resu
 
 /// Handle a single cluster bus connection.
 ///
-/// Reads RPC requests in a loop, processes them via Raft, and sends responses.
-/// The connection is kept open for multiple requests (connection reuse).
+/// Reads RPC requests in a loop, processes them, and sends responses.
+/// Raft RPCs are delegated to the Raft instance; pub/sub RPCs are handled
+/// by sending messages to the appropriate shard workers.
 #[cfg(not(feature = "turmoil"))]
 async fn handle_connection(
     mut stream: tokio::net::TcpStream,
-    raft: &ClusterRaft,
+    ctx: &ClusterBusContext,
 ) -> std::io::Result<()> {
     loop {
         // Parse the incoming RPC request
@@ -88,8 +93,17 @@ async fn handle_connection(
             }
         };
 
-        // Handle the request via Raft
-        let response = handle_rpc_request(raft, request).await;
+        // Dispatch based on request type
+        let response = match request {
+            ClusterRpcRequest::PubSubBroadcast { channel, message } => {
+                handle_pubsub_broadcast(&ctx.shard_senders, &channel, &message).await
+            }
+            ClusterRpcRequest::PubSubForward { channel, message } => {
+                handle_pubsub_forward(&ctx.shard_senders, ctx.num_shards, &channel, &message).await
+            }
+            // All Raft RPCs (AppendEntries, Vote, InstallSnapshot, ForwardedWrite)
+            raft_request => handle_rpc_request(&ctx.raft, raft_request).await,
+        };
 
         // Send the response
         if let Err(e) = send_rpc_response(&mut stream, response).await {
@@ -99,6 +113,52 @@ async fn handle_connection(
                 e.to_string(),
             ));
         }
+    }
+}
+
+/// Handle a PubSubBroadcast RPC: deliver to shard 0 (broadcast pub/sub coordinator).
+#[cfg(not(feature = "turmoil"))]
+async fn handle_pubsub_broadcast(
+    shard_senders: &[mpsc::Sender<ShardMessage>],
+    channel: &[u8],
+    message: &[u8],
+) -> ClusterRpcResponse {
+    let (response_tx, response_rx) = oneshot::channel();
+    let _ = shard_senders[0]
+        .send(ShardMessage::Publish {
+            channel: bytes::Bytes::copy_from_slice(channel),
+            message: bytes::Bytes::copy_from_slice(message),
+            response_tx,
+        })
+        .await;
+
+    let count = response_rx.await.unwrap_or(0);
+    ClusterRpcResponse::PubSubBroadcastResult {
+        subscriber_count: count,
+    }
+}
+
+/// Handle a PubSubForward RPC: deliver to the shard that owns the channel's slot.
+#[cfg(not(feature = "turmoil"))]
+async fn handle_pubsub_forward(
+    shard_senders: &[mpsc::Sender<ShardMessage>],
+    num_shards: usize,
+    channel: &[u8],
+    message: &[u8],
+) -> ClusterRpcResponse {
+    let shard_id = shard_for_key(channel, num_shards);
+    let (response_tx, response_rx) = oneshot::channel();
+    let _ = shard_senders[shard_id]
+        .send(ShardMessage::ShardedPublish {
+            channel: bytes::Bytes::copy_from_slice(channel),
+            message: bytes::Bytes::copy_from_slice(message),
+            response_tx,
+        })
+        .await;
+
+    let count: usize = response_rx.await.unwrap_or_default();
+    ClusterRpcResponse::PubSubForwardResult {
+        subscriber_count: count,
     }
 }
 
