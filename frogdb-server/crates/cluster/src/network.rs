@@ -55,6 +55,8 @@ pub enum ClusterRpcRequest {
         channel: Vec<u8>,
         message: Vec<u8>,
     },
+    /// Lightweight health probe for failover scoring.
+    HealthProbe,
 }
 
 /// RPC response types for cluster communication.
@@ -72,6 +74,11 @@ pub enum ClusterRpcResponse {
     PubSubBroadcastResult { subscriber_count: usize },
     /// Response to PubSubForward.
     PubSubForwardResult { subscriber_count: usize },
+    /// Response to HealthProbe.
+    HealthProbeResponse {
+        node_id: NodeId,
+        replication_offset: u64,
+    },
     /// Error response.
     Error(String),
 }
@@ -174,6 +181,20 @@ impl ClusterNetwork {
             addr,
             connect_timeout_ms: 5000,
             request_timeout_ms: 10000,
+        }
+    }
+
+    /// Send a lightweight health probe to query a node's replication offset.
+    pub async fn health_probe(&self) -> Result<(NodeId, u64), ClusterError> {
+        let request = ClusterRpcRequest::HealthProbe;
+        match self.send_rpc(request).await? {
+            ClusterRpcResponse::HealthProbeResponse {
+                node_id,
+                replication_offset,
+            } => Ok((node_id, replication_offset)),
+            _ => Err(ClusterError::NetworkError(
+                "unexpected response type for health probe".to_string(),
+            )),
         }
     }
 
@@ -371,6 +392,11 @@ pub async fn handle_rpc_request(
             ClusterRpcResponse::Error(
                 "PubSub RPCs must be handled by the cluster bus, not the Raft handler".to_string(),
             )
+        }
+        ClusterRpcRequest::HealthProbe => {
+            // HealthProbe is handled locally by the cluster bus before reaching here.
+            // If it does reach here, return an error.
+            ClusterRpcResponse::Error("HealthProbe must be handled by cluster bus".to_string())
         }
     }
 }

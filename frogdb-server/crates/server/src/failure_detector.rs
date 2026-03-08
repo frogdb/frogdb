@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use frogdb_core::cluster::{ClusterCommand, ClusterRaft, ClusterState, NodeId, NodeRole};
+use frogdb_core::cluster::{
+    ClusterCommand, ClusterNetwork, ClusterRaft, ClusterState, NodeId, NodeInfo, NodeRole,
+};
 use frogdb_core::command::QuorumChecker;
 use openraft::ServerState;
 
@@ -216,6 +218,9 @@ impl FailureDetector {
     }
 
     /// Trigger automatic failover for a failed primary.
+    ///
+    /// Queries each candidate replica's replication offset via a HealthProbe RPC,
+    /// then applies a scoring formula to select the replica with the least data loss.
     async fn trigger_auto_failover(&self, failed_node_id: NodeId) {
         let snapshot = self.cluster_state.snapshot();
 
@@ -236,12 +241,63 @@ impl FailureDetector {
             return;
         }
 
-        // Select first replica (could be enhanced to pick best replica by replication offset)
-        let new_primary = replicas[0];
+        // Query each replica's replication offset via HealthProbe RPC
+        let mut replica_offsets: Vec<(NodeId, u64)> = Vec::new();
+        for replica in &replicas {
+            let net = ClusterNetwork::new(replica.id, replica.cluster_addr);
+            match tokio::time::timeout(
+                Duration::from_millis(self.config.connect_timeout_ms),
+                net.health_probe(),
+            )
+            .await
+            {
+                Ok(Ok((_nid, offset))) => replica_offsets.push((replica.id, offset)),
+                _ => {
+                    tracing::warn!(
+                        replica_id = replica.id,
+                        "Could not query replica offset for scoring"
+                    );
+                    replica_offsets.push((replica.id, 0)); // Unreachable gets worst offset
+                }
+            }
+        }
+
+        let max_offset = replica_offsets.iter().map(|(_, o)| *o).max().unwrap_or(0);
+
+        // Score and select best replica (lowest score wins)
+        let best = replicas
+            .iter()
+            .filter(|r| r.replica_priority != 0) // Exclude never-promote
+            .min_by(|a, b| {
+                let score_a = compute_replica_score(a, max_offset, &replica_offsets);
+                let score_b = compute_replica_score(b, max_offset, &replica_offsets);
+                score_a.cmp(&score_b).then_with(|| a.id.cmp(&b.id)) // Deterministic tiebreaker
+            });
+
+        let new_primary = match best {
+            Some(node) => node,
+            None => {
+                tracing::warn!(
+                    node_id = failed_node_id,
+                    "Primary failed but all replicas have priority 0 (never-promote)"
+                );
+                return;
+            }
+        };
+
+        let replica_offset = replica_offsets
+            .iter()
+            .find(|(id, _)| *id == new_primary.id)
+            .map(|(_, o)| *o)
+            .unwrap_or(0);
+
         tracing::info!(
             failed_primary = failed_node_id,
             new_primary = new_primary.id,
-            "Triggering automatic failover"
+            replica_offset = replica_offset,
+            max_offset = max_offset,
+            score = compute_replica_score(new_primary, max_offset, &replica_offsets),
+            "Triggering automatic failover with lag-based scoring"
         );
 
         // Promote replica: change role to Primary
@@ -274,6 +330,28 @@ impl FailureDetector {
     pub fn config(&self) -> &FailureDetectorConfig {
         &self.config
     }
+}
+
+/// Compute a failover score for a replica. Lower score = better candidate.
+///
+/// Formula from the spec (docs/spec/CLUSTER.md lines 1733-1755):
+/// ```text
+/// score = (priority == 0 ? u64::MAX : priority * 100_000)
+///       + (max_offset - replica_offset) * 1_000
+/// ```
+///
+/// Priority 0 means never promote (returns u64::MAX).
+fn compute_replica_score(node: &NodeInfo, max_offset: u64, offsets: &[(NodeId, u64)]) -> u64 {
+    let priority = node.replica_priority;
+    if priority == 0 {
+        return u64::MAX;
+    }
+    let replica_offset = offsets
+        .iter()
+        .find(|(id, _)| *id == node.id)
+        .map(|(_, o)| *o)
+        .unwrap_or(0);
+    (priority as u64) * 100_000 + max_offset.saturating_sub(replica_offset) * 1_000
 }
 
 impl QuorumChecker for FailureDetector {
@@ -362,5 +440,80 @@ mod tests {
         let health = NodeHealth::default();
         assert_eq!(health.failure_count, 0);
         assert!(!health.is_marked_fail);
+    }
+
+    fn make_node(id: NodeId, priority: u32) -> NodeInfo {
+        let mut node = NodeInfo::new_replica(
+            id,
+            "127.0.0.1:6379".parse().unwrap(),
+            "127.0.0.1:16379".parse().unwrap(),
+            1,
+        );
+        node.replica_priority = priority;
+        node
+    }
+
+    #[test]
+    fn test_compute_replica_score_priority_zero_excluded() {
+        let node = make_node(10, 0);
+        let offsets = vec![(10, 1000u64)];
+        assert_eq!(compute_replica_score(&node, 1000, &offsets), u64::MAX);
+    }
+
+    #[test]
+    fn test_compute_replica_score_lower_priority_is_better() {
+        let node_a = make_node(10, 50);
+        let node_b = make_node(11, 100);
+        let offsets = vec![(10, 1000u64), (11, 1000)];
+        let score_a = compute_replica_score(&node_a, 1000, &offsets);
+        let score_b = compute_replica_score(&node_b, 1000, &offsets);
+        assert!(score_a < score_b, "Lower priority should give lower score");
+    }
+
+    #[test]
+    fn test_compute_replica_score_higher_offset_is_better() {
+        let node_a = make_node(10, 100);
+        let node_b = make_node(11, 100);
+        let offsets = vec![(10, 900u64), (11, 500)];
+        let max_offset = 1000;
+        let score_a = compute_replica_score(&node_a, max_offset, &offsets);
+        let score_b = compute_replica_score(&node_b, max_offset, &offsets);
+        assert!(
+            score_a < score_b,
+            "Higher offset (less lag) should give lower score"
+        );
+    }
+
+    #[test]
+    fn test_compute_replica_score_equal_scores_tiebreak_by_node_id() {
+        let node_a = make_node(10, 100);
+        let node_b = make_node(11, 100);
+        let offsets = vec![(10, 1000u64), (11, 1000)];
+        let score_a = compute_replica_score(&node_a, 1000, &offsets);
+        let score_b = compute_replica_score(&node_b, 1000, &offsets);
+        assert_eq!(score_a, score_b, "Same priority and offset = same score");
+        // Tiebreaker is handled in the min_by comparator, not in compute_replica_score
+    }
+
+    #[test]
+    fn test_compute_replica_score_formula() {
+        let node = make_node(10, 100);
+        let offsets = vec![(10, 800u64)];
+        let max_offset = 1000;
+        let score = compute_replica_score(&node, max_offset, &offsets);
+        // priority * 100_000 + lag * 1_000
+        // 100 * 100_000 + (1000 - 800) * 1_000 = 10_000_000 + 200_000 = 10_200_000
+        assert_eq!(score, 10_200_000);
+    }
+
+    #[test]
+    fn test_compute_replica_score_no_offset_found() {
+        let node = make_node(10, 100);
+        let offsets: Vec<(NodeId, u64)> = vec![]; // Node not in offsets list
+        let max_offset = 1000;
+        let score = compute_replica_score(&node, max_offset, &offsets);
+        // offset defaults to 0, so lag = 1000
+        // 100 * 100_000 + 1000 * 1_000 = 10_000_000 + 1_000_000 = 11_000_000
+        assert_eq!(score, 11_000_000);
     }
 }

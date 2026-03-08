@@ -12,6 +12,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -77,6 +78,9 @@ pub struct ReplicaReplicationHandler {
 
     /// Directory for storing checkpoint data
     data_dir: PathBuf,
+
+    /// Optional shared replication offset for cluster bus HealthProbe responses.
+    shared_offset: Option<Arc<AtomicU64>>,
 }
 
 /// Connection to the primary for replication.
@@ -95,6 +99,9 @@ pub struct ReplicaConnection {
 
     /// Directory for storing checkpoint data
     data_dir: PathBuf,
+
+    /// Optional shared replication offset for cluster bus HealthProbe responses.
+    shared_offset: Option<Arc<AtomicU64>>,
 }
 
 /// State of the replica connection.
@@ -145,9 +152,16 @@ impl ReplicaReplicationHandler {
             frame_tx,
             shutdown,
             data_dir,
+            shared_offset: None,
         };
 
         (handler, frame_rx)
+    }
+
+    /// Set a shared replication offset handle for cluster bus HealthProbe responses.
+    /// Must be called before `start()`.
+    pub fn set_shared_offset(&mut self, offset: Arc<AtomicU64>) {
+        self.shared_offset = Some(offset);
     }
 
     /// Start replication - connects to primary and begins streaming.
@@ -198,6 +212,7 @@ impl ReplicaReplicationHandler {
             state: self.state.clone(),
             connection_state: ConnectionState::Connected,
             data_dir: self.data_dir.clone(),
+            shared_offset: self.shared_offset.clone(),
         };
 
         // Perform handshake
@@ -321,6 +336,11 @@ impl ReplicaConnection {
                 state.replication_id = new_repl_id.clone();
                 state.replication_offset = new_offset;
                 drop(state);
+
+                // Mirror to shared atomic for cluster bus HealthProbe
+                if let Some(ref shared) = self.shared_offset {
+                    shared.store(new_offset, Ordering::Release);
+                }
 
                 tracing::info!(
                     replication_id = %new_repl_id,
@@ -569,6 +589,11 @@ impl ReplicaConnection {
             state.replication_offset = metadata.replication_offset;
         }
 
+        // Mirror to shared atomic for cluster bus HealthProbe
+        if let Some(ref shared) = self.shared_offset {
+            shared.store(metadata.replication_offset, Ordering::Release);
+        }
+
         // The checkpoint is staged for loading on the next restart (when
         // RocksStore::load_staged_checkpoint() will apply it). For now,
         // proceed to WAL streaming so the replica can receive incremental
@@ -608,6 +633,11 @@ impl ReplicaConnection {
                                 state.increment_offset(frame.encoded_size() as u64);
                                 let offset = state.replication_offset;
                                 drop(state);
+
+                                // Mirror to shared atomic for cluster bus HealthProbe
+                                if let Some(ref shared) = self.shared_offset {
+                                    shared.store(offset, Ordering::Release);
+                                }
 
                                 tracing::trace!(
                                     sequence = frame.sequence,

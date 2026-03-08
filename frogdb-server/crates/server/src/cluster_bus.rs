@@ -5,8 +5,9 @@
 //! in frogdb_core::cluster::network.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use frogdb_core::cluster::ClusterRaft;
+use frogdb_core::cluster::{ClusterRaft, NodeId};
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::{
     ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, parse_rpc_message, send_rpc_response,
@@ -26,12 +27,14 @@ pub struct ClusterBusContext {
     pub raft: Arc<ClusterRaft>,
     pub shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
     pub num_shards: usize,
+    pub node_id: NodeId,
+    pub replication_offset: Arc<AtomicU64>,
 }
 
 /// Run the cluster bus TCP server.
 ///
 /// This server listens for incoming connections from other cluster nodes
-/// and handles Raft RPCs and pub/sub forwarding requests.
+/// and handles Raft RPCs, pub/sub forwarding, and HealthProbe requests.
 ///
 /// Accepts a pre-bound `TcpListener` so that the port is held open from
 /// `Server::new()` and never subject to TOCTOU port races.
@@ -64,8 +67,8 @@ pub async fn run(listener: TcpListener, ctx: Arc<ClusterBusContext>) -> std::io:
 /// Handle a single cluster bus connection.
 ///
 /// Reads RPC requests in a loop, processes them, and sends responses.
-/// Raft RPCs are delegated to the Raft instance; pub/sub RPCs are handled
-/// by sending messages to the appropriate shard workers.
+/// Raft RPCs are delegated to the Raft instance; pub/sub and HealthProbe
+/// RPCs are handled locally.
 #[cfg(not(feature = "turmoil"))]
 async fn handle_connection(
     mut stream: tokio::net::TcpStream,
@@ -101,6 +104,10 @@ async fn handle_connection(
             ClusterRpcRequest::PubSubForward { channel, message } => {
                 handle_pubsub_forward(&ctx.shard_senders, ctx.num_shards, &channel, &message).await
             }
+            ClusterRpcRequest::HealthProbe => ClusterRpcResponse::HealthProbeResponse {
+                node_id: ctx.node_id,
+                replication_offset: ctx.replication_offset.load(Ordering::Acquire),
+            },
             // All Raft RPCs (AppendEntries, Vote, InstallSnapshot, ForwardedWrite)
             raft_request => handle_rpc_request(&ctx.raft, raft_request).await,
         };
