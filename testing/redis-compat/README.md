@@ -1,6 +1,7 @@
 # Redis Compatibility Test Harness
 
-This directory contains tools for running the official Redis 7.x Tcl test suite against FrogDB to verify Redis protocol compatibility.
+This directory contains tools for running the official Redis 7.x Tcl test suite against FrogDB to
+verify Redis protocol compatibility.
 
 ## Prerequisites
 
@@ -12,11 +13,11 @@ brew bundle  # Installs tcl-tk and uv from Brewfile
 
 ### Manual Installation
 
-| Dependency | Version | Installation |
-|------------|---------|--------------|
-| Tcl | 8.5+ | `brew install tcl-tk` or system package manager |
-| uv | Latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| Python | 3.11+ | Managed automatically by uv |
+| Dependency | Version | Installation                                       |
+| ---------- | ------- | -------------------------------------------------- |
+| Tcl        | 8.5+    | `brew install tcl-tk` or system package manager    |
+| uv         | Latest  | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| Python     | 3.11+   | Managed automatically by uv                        |
 
 ## Usage
 
@@ -67,9 +68,9 @@ just redis-compat --tags slow --tags large-memory
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FROGDB_PORT` | 6399 | Port for FrogDB during tests |
+| Variable      | Default | Description                  |
+| ------------- | ------- | ---------------------------- |
+| `FROGDB_PORT` | 6399    | Port for FrogDB during tests |
 
 ### Clean Test Cache
 
@@ -116,7 +117,8 @@ See [spec/ROADMAP.md](../../spec/ROADMAP.md) for implementation timeline.
 
 ### `skiplist-flaky.txt`
 
-Tests with timing or ordering issues that fail intermittently. Initially empty; populated as flaky tests are discovered during testing.
+Tests with timing or ordering issues that fail intermittently. Initially empty; populated as flaky
+tests are discovered during testing.
 
 ## Adding Expected Failures
 

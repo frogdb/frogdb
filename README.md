@@ -1,11 +1,12 @@
 # FrogDB (Sunbird?)- Agent Context
 
 FrogDB is a Redis-compatible memory-first database written in Rust. Its goals are to to be correct,
-very very fast/efficient, memory safe, durable, scalable, and easy to operate in the wild. It intends to supplant prior
-solutions by trying to be better in every way.
+very very fast/efficient, memory safe, durable, scalable, and easy to operate in the wild. It
+intends to supplant prior solutions by trying to be better in every way.
 
 It is wire-compatible with Redis v6+ (RESP2 + RESP3 compatible) so you can use it with existing
-Redis clients. [Planned] If you don't need redis compatibility It includes a custom high-performance network protocol with clients for major languages built around
+Redis clients. [Planned] If you don't need redis compatibility It includes a custom high-performance
+network protocol with clients for major languages built around
 
 [Planned] It includes a migration mode + tooling to migrate your existing Redis/Valkey/DragonflyDB
 deployment to a FrogDB deployment with zero or close-to-zero downtime with no data loss.
@@ -18,7 +19,8 @@ To manage FrogDB in cluster mode you can use a Kubernetes operator, TKTK.
 
 ## Documentation
 
-For user and operator documentation, visit the [FrogDB Documentation Site](./docs-site/) or run locally:
+For user and operator documentation, visit the [FrogDB Documentation Site](./docs-site/) or run
+locally:
 
 ```bash
 just docs-install  # Install dependencies
@@ -32,19 +34,21 @@ just docs-dev      # Start development server at localhost:4321
   compatibility.
 - _Fastness/Efficiency_: Extensive benchmarking to ensure the performance cost of every change or
   feature detail across memory, compute and I/O are understood and kept to a minimum.
-- _Memory/Thread Safety_: Using Rust while avoiding usages of `unsafe` as much as possible to minimize
-  bugs/crashes and security vulnerabilities.
-- _Durability_: supports multiple modes of persistence that are tunable to balance performance and safety
-  depending on use case.
-- _Scalable_: Built with clustered operation in mind from the start. Scales vertically with additional cores.
-- _Easy to operate_: Provide those responsible for running the software with the information they need
-  to diagnose problems and take action to resolve them as much as possible. Integrate with existing
-  CNCF and other ecosystems to make integration easy. Online cluster resizing, recovery tools, and
-  more.
+- _Memory/Thread Safety_: Using Rust while avoiding usages of `unsafe` as much as possible to
+  minimize bugs/crashes and security vulnerabilities.
+- _Durability_: supports multiple modes of persistence that are tunable to balance performance and
+  safety depending on use case.
+- _Scalable_: Built with clustered operation in mind from the start. Scales vertically with
+  additional cores.
+- _Easy to operate_: Provide those responsible for running the software with the information they
+  need to diagnose problems and take action to resolve them as much as possible. Integrate with
+  existing CNCF and other ecosystems to make integration easy. Online cluster resizing, recovery
+  tools, and more.
 
 ## Design Spec
 
-Root document located in `spec/INDEX.md`. Supplemental documents describing various parts of the system are located within the `spec/` directory.
+Root document located in `spec/INDEX.md`. Supplemental documents describing various parts of the
+system are located within the `spec/` directory.
 
 ## Building & Running
 
@@ -144,7 +148,9 @@ just concurrency
 
 #### Concurrency Testing
 
-FrogDB uses [Shuttle](https://github.com/awslabs/shuttle) for deterministic concurrency testing. Shuttle tests run concurrent code under a randomized scheduler to catch race conditions and ordering bugs.
+FrogDB uses [Shuttle](https://github.com/awslabs/shuttle) for deterministic concurrency testing.
+Shuttle tests run concurrent code under a randomized scheduler to catch race conditions and ordering
+bugs.
 
 ```bash
 # Run all shuttle concurrency tests (1000 iterations each)
