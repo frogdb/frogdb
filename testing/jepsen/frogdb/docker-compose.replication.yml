@@ -30,6 +30,7 @@ services:
       FROGDB_SERVER__PORT: 6379
       FROGDB_PERSISTENCE__DATA_DIR: /data
       FROGDB_REPLICATION__ROLE: primary
+      FROGDB_REPLICATION__SELF_FENCE_ON_REPLICA_LOSS: "true"
     cap_add:
       - NET_ADMIN  # For iptables-based partition testing
     restart: unless-stopped

@@ -39,6 +39,7 @@ use crate::replication::{
     LagThresholdConfig, PrimaryReplicationHandler, ReplicaCommandExecutor,
     ReplicaReplicationHandler, SplitBrainBufferConfig, consume_frames,
 };
+use crate::replication_quorum::ReplicationQuorumChecker;
 use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
 
 use util::{
@@ -165,6 +166,9 @@ pub struct Server {
     /// Optional primary replication handler (only when running as primary).
     /// Used for PSYNC connection handoff.
     primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
+
+    /// Optional replication quorum checker (only when running as primary with self-fencing).
+    replication_quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>>,
 
     /// Optional connection task monitor for tokio-metrics instrumentation.
     conn_monitor: Option<tokio_metrics::TaskMonitor>,
@@ -481,6 +485,7 @@ impl Server {
                     max_entries: config.replication.split_brain_buffer_size,
                     max_bytes: config.replication.split_brain_buffer_max_mb * 1024 * 1024,
                 },
+                config.replication.replica_write_timeout_ms,
             ));
 
             // Store a reference for PSYNC connection handoff
@@ -526,6 +531,19 @@ impl Server {
             // Standalone mode
             (Arc::new(NoopBroadcaster), None)
         };
+
+        // Create replication quorum checker for primary self-fencing
+        let replication_quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>> =
+            if config.replication.is_primary() && config.replication.self_fence_on_replica_loss {
+                replication_tracker.as_ref().map(|tracker| {
+                    Arc::new(ReplicationQuorumChecker::new(
+                        tracker.clone(),
+                        Duration::from_millis(config.replication.replica_freshness_timeout_ms),
+                    )) as Arc<dyn frogdb_core::command::QuorumChecker>
+                })
+            } else {
+                None
+            };
 
         // Initialize cluster state and Raft if cluster mode is enabled
         // NOTE: This must happen before shard creation so we can pass raft to workers
@@ -980,6 +998,8 @@ impl Server {
             }
             if let Some(ref detector) = failure_detector {
                 worker.set_quorum_checker(detector.clone());
+            } else if let Some(ref rqc) = replication_quorum_checker {
+                worker.set_quorum_checker(rqc.clone());
             }
 
             // Share the per-request spans toggle with shard workers
@@ -1076,6 +1096,7 @@ impl Server {
             replica_handler,
             replica_frame_rx,
             primary_replication_handler,
+            replication_quorum_checker,
             conn_monitor: Some(conn_monitor),
             _task_monitor_handle: Some(task_monitor_handle),
         })
@@ -1466,7 +1487,7 @@ impl Server {
                     .clone()
                     .map(|fd| fd as Arc<dyn frogdb_core::command::QuorumChecker>)
             } else {
-                None
+                self.replication_quorum_checker.clone()
             };
 
         // Create main acceptor (regular client connections)
