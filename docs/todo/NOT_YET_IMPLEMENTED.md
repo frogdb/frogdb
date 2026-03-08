@@ -5,21 +5,12 @@ description, and a cross-reference to the relevant spec.
 
 ---
 
-## Critical / Data-Integrity
-
-| Item                                    | Files                     | Description                                                                                                                                                         | Spec |
-| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| ~~Replication-mode partition recovery~~ | `crates/replication/src/` | ✅ Implemented: `ReplicationQuorumChecker` fences primary when all replica ACKs go stale (`self_fence_on_replica_loss` config, default true). Stream write timeout forces TCP disconnect during iptables partitions. | —    |
-
----
-
 ## Cluster (Phases 4–6)
 
-| Item                           | Files                                   | Description                                                                                                                      | Spec                                                                          |
-| ------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Replica-lag scoring            | `crates/server/src/failure_detector.rs` | Auto-failover picks first available replica arbitrarily instead of scoring by replication lag                                    | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#phase-4-failover-support--partial)          |
-| Point-in-time rollback         | —                                       | Full resync replaces all local state (matches Redis behavior). Deferred; split-brain log provides audit trail for manual replay. | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#45-split-brain-handling)                    |
-| DFLYMIGRATE streaming protocol | —                                       | High-throughput streaming slot migration not implemented; only standard key-by-key MIGRATE exists                                | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#52-migration-protocol-commands-dflymigrate) |
+| Item                           | Files | Description                                                                                                                      | Spec                                                                          |
+| ------------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Point-in-time rollback         | —     | Full resync replaces all local state (matches Redis behavior). Deferred; split-brain log provides audit trail for manual replay. | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#45-split-brain-handling)                    |
+| DFLYMIGRATE streaming protocol | —     | High-throughput streaming slot migration not implemented; only standard key-by-key MIGRATE exists                                | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#52-migration-protocol-commands-dflymigrate) |
 
 ---
 
@@ -28,10 +19,9 @@ description, and a cross-reference to the relevant spec.
 Items described in spec documentation as if implemented, but not present in the codebase. Spec files
 have been annotated with `[Not Yet Implemented]` markers.
 
-| Item                       | Description                                                                                                                                                                                     | Spec                                            |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| Cluster pub/sub forwarding | `ClusterPubSubForwarder` trait, `LocalOnlyForwarder`, `broadcast_to_cluster()`, `forward_to_slot_owner()` — entire cross-node pub/sub design (~440 lines). Current pub/sub is single-node only. | [PUBSUB.md](PUBSUB.md#cluster-mode)             |
-| DTrace/USDT probes         | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Feature does not exist in Cargo.toml.                                                                                     | [DEBUGGING.md](DEBUGGING.md#dtrace-usdt-probes) |
+| Item               | Description                                                                                                 | Spec                                            |
+| ------------------ | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| DTrace/USDT probes | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Feature does not exist in Cargo.toml. | [DEBUGGING.md](DEBUGGING.md#dtrace-usdt-probes) |
 
 ---
 
@@ -65,35 +55,6 @@ have been annotated with `[Not Yet Implemented]` markers.
 | ------------------------------- | ----------------------------------------------------------------------- | ------------------------ |
 | Enhanced LATENCY DOCTOR         | Correlation detection, SLOWLOG cross-reference, scatter-gather analysis | [ROADMAP.md](ROADMAP.md) |
 | Automated alert rule generation | `/alerts/prometheus` endpoint for generated alerting rules              | [ROADMAP.md](ROADMAP.md) |
-
----
-
-## Jepsen Test Status
-
-33 tests across three topologies (31 PASS, 2 Expected Failure). Tests marked **Expected Failure**
-detect real unimplemented features and will pass once the corresponding item above is implemented.
-
-### Single-node (19/19 PASS)
-
-All single-node tests pass.
-
-### Replication (4/5 PASS, 1 Expected Failure)
-
-| Test              | Status           | Root Cause                                                                                                       | Cross-ref                                   |
-| ----------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| basic-replication | PASS             | —                                                                                                                | —                                           |
-| failover          | PASS             | —                                                                                                                | —                                           |
-| split-brain       | PASS             | —                                                                                                                | —                                           |
-| zombie            | PASS             | Primary self-fences when replica ACKs go stale (`self_fence_on_replica_loss`).                                   | ~~Replication-mode partition recovery~~ (above) |
-| replication-chaos | Expected Failure | Reads observe older values during replication lag. Checker may be too strict for async replication under faults. | —                                           |
-
-### Raft cluster (8/9 PASS, 1 Expected Failure)
-
-| Test       | Status           | Root Cause                                                                                                                  | Cross-ref                       |
-| ---------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| cross-slot | Expected Failure | Slot balancing after clean restart leaves some slots unserved during `CLUSTERDOWN` windows; cross-slot balance checks fail. | Separate cluster recovery issue |
-
----
 
 ## Future / Research
 

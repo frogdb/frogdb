@@ -40,49 +40,6 @@ When a failing suite is fixed (0 errors):
 
 ## Full Suite Results
 
-### Passed
-
-| Suite                      | Notes                                                                                                                                                        |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `unit/printver`            |                                                                                                                                                              |
-| `unit/dump`                | DUMP/RESTORE working                                                                                                                                         |
-| `unit/auth`                | AUTH working                                                                                                                                                 |
-| `unit/info`                |                                                                                                                                                              |
-| `unit/type/incr`           |                                                                                                                                                              |
-| `unit/type/list-2`         |                                                                                                                                                              |
-| `unit/type/list-3`         |                                                                                                                                                              |
-| `unit/type/string`         | Fixed: SET GET NX/WRONGTYPE, SUBSTR alias                                                                                                                    |
-| `unit/quit`                |                                                                                                                                                              |
-| `unit/acl`                 | ACL working                                                                                                                                                  |
-| `unit/acl-v2`              | ACL v2 working                                                                                                                                               |
-| `unit/pubsub`              | Fixed: RESP3 PING format; skips for CLIENT REPLY OFF, keyspace notif                                                                                         |
-| `unit/pubsubshard`         |                                                                                                                                                              |
-| `unit/scan`                | Fixed: hash-based cursors for SSCAN/HSCAN/ZSCAN                                                                                                              |
-| `unit/keyspace`            | Fixed: COPY DB validation, glob backtracking                                                                                                                 |
-| `unit/hyperloglog`         | Fixed: arity (PFCOUNT/PFMERGE/PFDEBUG), TODENSE; skips for corruption/sparse                                                                                 |
-| `unit/other`               | Fixed: HELP commands, StringValue leading zeros; skips for SELECT/PIPELINING                                                                                 |
-| `unit/limits`              |                                                                                                                                                              |
-| `unit/obuf-limits`         |                                                                                                                                                              |
-| `unit/memefficiency`       |                                                                                                                                                              |
-| `unit/wait`                |                                                                                                                                                              |
-| `unit/networking`          |                                                                                                                                                              |
-| `unit/client-eviction`     |                                                                                                                                                              |
-| `unit/violations`          |                                                                                                                                                              |
-| `unit/replybufsize`        |                                                                                                                                                              |
-| `unit/type/hash`           |                                                                                                                                                              |
-| `unit/type/set`            |                                                                                                                                                              |
-| `unit/type/list`           |                                                                                                                                                              |
-| `unit/type/stream`         |                                                                                                                                                              |
-| `unit/type/stream-cgroups` |                                                                                                                                                              |
-| `unit/tracking`            |                                                                                                                                                              |
-| `unit/protocol`            |                                                                                                                                                              |
-| `unit/info-command`        | Fixed: COMMAND INFO metadata                                                                                                                                 |
-| `unit/bitops`              | Fixed: BITCOUNT range normalization, SETBIT/BITFIELD dirty tracking                                                                                          |
-| `unit/type/zset`           | Fixed: ZPOPMIN/ZPOPMAX RESP3 format, ZRANDMEMBER randomness/overflow, ZRANGE/ZRANGESTORE REV+LIMIT, float e+308 format, ZINTERCARD/ZDIFFSTORE error messages |
-| `unit/expire`              | Fixed: EXPIRE/PEXPIRE option conflict error messages, big-integer overflow bounds, EXPIRETIME/PEXPIRETIME off-by-one rounding                                |
-| `unit/geo`                 | Fixed: 9-area geohash scanning for pole-crossing/oblique iteration order, antimeridian bbox wrapping                                                         |
-| `unit/functions`           | Fixed: Lua sandbox global protection and loader restrictions                                                                                                 |
-
 ### Failed
 
 | Suite        | Errors | Category               |
