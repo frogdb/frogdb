@@ -21,5 +21,6 @@
     ],
     "workbench.colorCustomizations": {
         "activityBar.background": "#B610EF"
-    }
+    },
+    "markdown.validate.enabled": true
 }

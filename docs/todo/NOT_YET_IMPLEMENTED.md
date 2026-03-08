@@ -1,6 +1,7 @@
 # FrogDB — Not Yet Implemented
 
-Tracking document for known unimplemented spec areas. Each item lists affected files, a brief description, and a cross-reference to the relevant spec.
+Tracking document for known unimplemented spec areas. Each item lists affected files, a brief
+description, and a cross-reference to the relevant spec.
 
 ---
 
@@ -14,26 +15,23 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 
 ## Cluster (Phases 4–6)
 
-| Item                                     | Files                                   | Description                                                                                                                                                  | Spec                                                                          |
-| ---------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| ~~Self-fencing~~                         | `crates/server/src/connection/guards.rs` | ✅ Implemented: write commands rejected with CLUSTERDOWN when quorum lost (`self_fence_on_quorum_loss` config, default true) | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#43-self-fencing) |
-| Replica-lag scoring                      | `crates/server/src/failure_detector.rs` | Auto-failover picks first available replica arbitrarily instead of scoring by replication lag                                                                | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#phase-4-failover-support--partial)          |
-| ~~Split-brain discarded-writes log~~     | `crates/replication/src/split_brain_log.rs` | ✅ Implemented: ring buffer captures recent commands; on demotion, divergent writes logged to `split_brain_discarded_<timestamp>.log` before resync | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#45-split-brain-handling)                    |
-| Point-in-time rollback                   | —                                       | Full resync replaces all local state (matches Redis behavior). Deferred; split-brain log provides audit trail for manual replay. | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#45-split-brain-handling)                    |
-| DFLYMIGRATE streaming protocol           | —                                       | High-throughput streaming slot migration not implemented; only standard key-by-key MIGRATE exists                                                            | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#52-migration-protocol-commands-dflymigrate) |
-| Chaos / Jepsen / Turmoil cluster testing | `jepsen/frogdb/`                        | Jepsen test suite implemented (33 tests across single/replication/raft); see [Jepsen Test Status](#jepsen-test-status) below for current pass/fail breakdown | [ROADMAP.md](ROADMAP.md), [TESTING.md](TESTING.md)                            |
+| Item                           | Files                                   | Description                                                                                                                      | Spec                                                                          |
+| ------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Replica-lag scoring            | `crates/server/src/failure_detector.rs` | Auto-failover picks first available replica arbitrarily instead of scoring by replication lag                                    | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#phase-4-failover-support--partial)          |
+| Point-in-time rollback         | —                                       | Full resync replaces all local state (matches Redis behavior). Deferred; split-brain log provides audit trail for manual replay. | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#45-split-brain-handling)                    |
+| DFLYMIGRATE streaming protocol | —                                       | High-throughput streaming slot migration not implemented; only standard key-by-key MIGRATE exists                                | [CLUSTER_PLAN.md](CLUSTER_PLAN.md#52-migration-protocol-commands-dflymigrate) |
 
 ---
 
 ## Spec-Described but Unimplemented
 
-Items described in spec documentation as if implemented, but not present in the codebase. Spec files have been annotated with `[Not Yet Implemented]` markers.
+Items described in spec documentation as if implemented, but not present in the codebase. Spec files
+have been annotated with `[Not Yet Implemented]` markers.
 
-| Item                                    | Description                                                                                                                                                                                     | Spec                                                               |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Cluster pub/sub forwarding              | `ClusterPubSubForwarder` trait, `LocalOnlyForwarder`, `broadcast_to_cluster()`, `forward_to_slot_owner()` — entire cross-node pub/sub design (~440 lines). Current pub/sub is single-node only. | [PUBSUB.md](PUBSUB.md#cluster-mode)                                |
-| ~~Blocking commands during slot migration~~ | ✅ Implemented: `SlotMigrationCompleteEvent` fires on all nodes when migration completes; shard drains blocked waiters for migrated slot keys and sends `-MOVED` responses | [BLOCKING.md](BLOCKING.md#cluster-mode-slot-migration-interaction) |
-| DTrace/USDT probes                      | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Feature does not exist in Cargo.toml.                                                                                     | [DEBUGGING.md](DEBUGGING.md#dtrace-usdt-probes)                    |
+| Item                       | Description                                                                                                                                                                                     | Spec                                            |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| Cluster pub/sub forwarding | `ClusterPubSubForwarder` trait, `LocalOnlyForwarder`, `broadcast_to_cluster()`, `forward_to_slot_owner()` — entire cross-node pub/sub design (~440 lines). Current pub/sub is single-node only. | [PUBSUB.md](PUBSUB.md#cluster-mode)             |
+| DTrace/USDT probes         | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Feature does not exist in Cargo.toml.                                                                                     | [DEBUGGING.md](DEBUGGING.md#dtrace-usdt-probes) |
 
 ---
 
@@ -72,7 +70,8 @@ Items described in spec documentation as if implemented, but not present in the 
 
 ## Jepsen Test Status
 
-33 tests across three topologies (31 PASS, 2 Expected Failure). Tests marked **Expected Failure** detect real unimplemented features and will pass once the corresponding item above is implemented.
+33 tests across three topologies (31 PASS, 2 Expected Failure). Tests marked **Expected Failure**
+detect real unimplemented features and will pass once the corresponding item above is implemented.
 
 ### Single-node (19/19 PASS)
 
@@ -90,26 +89,9 @@ All single-node tests pass.
 
 ### Raft cluster (8/9 PASS, 1 Expected Failure)
 
-| Test                      | Status           | Root Cause                                                                                                                  | Cross-ref                       |
-| ------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| cluster-formation         | PASS             | —                                                                                                                           | —                               |
-| leader-election           | PASS             | —                                                                                                                           | —                               |
-| key-routing               | PASS             | —                                                                                                                           | —                               |
-| leader-election-partition | PASS             | —                                                                                                                           | —                               |
-| key-routing-kill          | PASS             | —                                                                                                                           | —                               |
-| raft-chaos                | PASS             | —                                                                                                                           | —                               |
-| slot-migration            | PASS             | —                                                                                                                           | —                               |
-| slot-migration-partition  | PASS             | —                                                                                                                           | —                               |
-| cross-slot                | Expected Failure | Slot balancing after clean restart leaves some slots unserved during `CLUSTERDOWN` windows; cross-slot balance checks fail. | Separate cluster recovery issue |
-
----
-
-## Refactoring
-
-| Item                     | Files                       | Description                                                                                  | Spec                                                  |
-| ------------------------ | --------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| types.rs split (partial) | `crates/types/src/types.rs` | Core value types (String, List, Set, Hash, SortedSet, Stream) still in monolithic `types.rs` | [ROADMAP.md](ROADMAP.md#split-typesrs-partially-done) |
-| ~~Config magic numbers~~ | `crates/server/src/config/*.rs` | ~~Timeout values and sizes use inline literals instead of named constants~~ **DONE** — extracted to `pub const DEFAULT_*` in each module | [ROADMAP.md](ROADMAP.md#config-magic-numbers-low-effort) |
+| Test       | Status           | Root Cause                                                                                                                  | Cross-ref                       |
+| ---------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| cross-slot | Expected Failure | Slot balancing after clean restart leaves some slots unserved during `CLUSTERDOWN` windows; cross-slot balance checks fail. | Separate cluster recovery issue |
 
 ---
 

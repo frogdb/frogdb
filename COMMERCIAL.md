@@ -12,13 +12,13 @@ A Commercial License is available for organizations that:
 
 ## Use Cases Requiring a Commercial License
 
-| Use Case                       | BSL          | AGPLv3        | Commercial |
-| ------------------------------ | ------------ | ------------- | ---------- |
-| Managed FrogDB service (DBaaS) | ❌           | ✅ (copyleft) | ✅         |
-| Building a competing database  | ❌           | ✅ (copyleft) | ✅         |
-| Proprietary modifications      | ❌           | ❌            | ✅         |
-| OEM/embedded licensing         | Case-by-case | ❌            | ✅         |
-| Enterprise indemnification     | ❌           | ❌            | ✅         |
+| Use Case                       | BSL          | AGPLv3       | Commercial |
+| ------------------------------ | ------------ | ------------ | ---------- |
+| Managed FrogDB service (DBaaS) | ❌            | ✅ (copyleft) | ✅          |
+| Building a competing database  | ❌            | ✅ (copyleft) | ✅          |
+| Proprietary modifications      | ❌            | ❌            | ✅          |
+| OEM/embedded licensing         | Case-by-case | ❌            | ✅          |
+| Enterprise indemnification     | ❌            | ❌            | ✅          |
 
 ## License Options
 
@@ -87,19 +87,25 @@ We typically respond within 2 business days.
 
 ### Do I need a commercial license to use FrogDB in my SaaS product?
 
-**No**, as long as FrogDB is just your data layer and you're not offering database functionality as the primary service. A web app, API service, or mobile backend that uses FrogDB for storage is permitted under the BSL.
+**No**, as long as FrogDB is just your data layer and you're not offering database functionality as
+the primary service. A web app, API service, or mobile backend that uses FrogDB for storage is
+permitted under the BSL.
 
 ### Can I try FrogDB before purchasing a commercial license?
 
-**Yes.** You can use FrogDB under the BSL or AGPLv3 for development, testing, and evaluation. A commercial license is only required when you want to use FrogDB in ways not permitted by those licenses.
+**Yes.** You can use FrogDB under the BSL or AGPLv3 for development, testing, and evaluation. A
+commercial license is only required when you want to use FrogDB in ways not permitted by those
+licenses.
 
 ### What if I start with AGPLv3 and later want to switch to Commercial?
 
-You can switch at any time. The commercial license would apply to your use going forward. Note that any AGPLv3-licensed code you've already distributed would remain under AGPLv3.
+You can switch at any time. The commercial license would apply to your use going forward. Note that
+any AGPLv3-licensed code you've already distributed would remain under AGPLv3.
 
 ### Do commercial licenses include support?
 
-Support options are available and can be bundled with commercial licenses. We offer email support, priority response times, and dedicated support contracts depending on your needs.
+Support options are available and can be bundled with commercial licenses. We offer email support,
+priority response times, and dedicated support contracts depending on your needs.
 
 ### Can I get a trial commercial license?
 

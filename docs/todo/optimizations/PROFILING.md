@@ -15,33 +15,36 @@ Build with `just build-profile`.
 
 ## CPU Profiling (sampled)
 
-| Tool | Platform | Command |
-|------|----------|---------|
-| cargo-flamegraph | All | `just profile-flamegraph` |
-| samply | All | `just profile-samply` |
-| perf | Linux | `just profile-perf` |
+| Tool             | Platform | Command                   |
+| ---------------- | -------- | ------------------------- |
+| cargo-flamegraph | All      | `just profile-flamegraph` |
+| samply           | All      | `just profile-samply`     |
+| perf             | Linux    | `just profile-perf`       |
 
 ## Memory Profiling
 
-| Tool | Platform | Use Case |
-|------|----------|----------|
-| heaptrack | Linux | Allocation tracking, leak detection |
-| DHAT (valgrind) | Linux | Heap profiling |
-| jemalloc prof | All | Production heap profiling |
+| Tool            | Platform | Use Case                            |
+| --------------- | -------- | ----------------------------------- |
+| heaptrack       | Linux    | Allocation tracking, leak detection |
+| DHAT (valgrind) | Linux    | Heap profiling                      |
+| jemalloc prof   | All      | Production heap profiling           |
 
 ## tokio-metrics (always-on)
 
-Per-task busy/idle/scheduled timing via `TaskMonitor` wrappers. These add only lightweight atomic counters and are always compiled in.
+Per-task busy/idle/scheduled timing via `TaskMonitor` wrappers. These add only lightweight atomic
+counters and are always compiled in.
 
 **Instrumented tasks:**
 
-| Task | Monitor name | Location |
-|------|-------------|----------|
-| Connection handlers | `connection` | `crates/server/src/acceptor.rs` |
-| Shard workers | `shard_worker` | `crates/server/src/server/mod.rs` |
-| WAL periodic sync | `wal_sync` | `crates/persistence/src/wal.rs` |
+| Task                | Monitor name   | Location                          |
+| ------------------- | -------------- | --------------------------------- |
+| Connection handlers | `connection`   | `crates/server/src/acceptor.rs`   |
+| Shard workers       | `shard_worker` | `crates/server/src/server/mod.rs` |
+| WAL periodic sync   | `wal_sync`     | `crates/persistence/src/wal.rs`   |
 
-**Registry:** `TaskMonitorRegistry` (`crates/telemetry/src/task_monitors.rs`) creates monitors and spawns a background collector that drains interval stats every 10 seconds into the Prometheus metrics recorder.
+**Registry:** `TaskMonitorRegistry` (`crates/telemetry/src/task_monitors.rs`) creates monitors and
+spawns a background collector that drains interval stats every 10 seconds into the Prometheus
+metrics recorder.
 
 **Exposed metrics** (label `task="<monitor name>"`):
 
@@ -60,21 +63,24 @@ curl -s localhost:9090/metrics | grep frogdb_task_
 
 ## Tracing spans (always-on)
 
-Span instrumentation for critical paths. Spans compile to a single atomic load when no matching subscriber is active.
+Span instrumentation for critical paths. Spans compile to a single atomic load when no matching
+subscriber is active.
 
-| Span | Location | Gate |
-|------|----------|------|
-| `wal_sync` | `crates/persistence/src/wal.rs` — periodic flush loop | Unconditional |
-| `snapshot_create` | `crates/persistence/src/snapshot.rs` — background snapshot task | Unconditional |
-| `shard_execute` | `crates/core/src/shard/event_loop.rs` — command execution | `per_request_spans` |
-| `shard_exec_txn` | `crates/core/src/shard/event_loop.rs` — transaction execution | `per_request_spans` |
-| `active_expiry` | `crates/core/src/shard/event_loop.rs` — TTL expiry sweep | `per_request_spans` |
+| Span              | Location                                                        | Gate                |
+| ----------------- | --------------------------------------------------------------- | ------------------- |
+| `wal_sync`        | `crates/persistence/src/wal.rs` — periodic flush loop           | Unconditional       |
+| `snapshot_create` | `crates/persistence/src/snapshot.rs` — background snapshot task | Unconditional       |
+| `shard_execute`   | `crates/core/src/shard/event_loop.rs` — command execution       | `per_request_spans` |
+| `shard_exec_txn`  | `crates/core/src/shard/event_loop.rs` — transaction execution   | `per_request_spans` |
+| `active_expiry`   | `crates/core/src/shard/event_loop.rs` — TTL expiry sweep        | `per_request_spans` |
 
-Spans gated on `per_request_spans` are controlled at runtime via `CONFIG SET per-request-spans yes|no`.
+Spans gated on `per_request_spans` are controlled at runtime via `CONFIG SET per-request-spans
+yes|no`.
 
 ## tracing-flame (feature-gated)
 
-Async-aware flamegraphs that capture await/idle time in addition to CPU time. Compiled out by default behind `--features profiling`.
+Async-aware flamegraphs that capture await/idle time in addition to CPU time. Compiled out by
+default behind `--features profiling`.
 
 **Build & run:**
 ```bash
@@ -95,11 +101,13 @@ redis-benchmark -h 127.0.0.1 -p 6379 -n 100000 -c 50 -t get,set
 inferno-flamegraph < tracing-flame.folded > flamegraph.svg
 ```
 
-The `FlameLayer` is set up in `crates/server/src/main.rs`, following the same `#[cfg(feature = "...")]` pattern as `causal-profile`.
+The `FlameLayer` is set up in `crates/server/src/main.rs`, following the same `#[cfg(feature =
+"...")]` pattern as `causal-profile`.
 
 ## Causal Profiling (tokio-coz)
 
-See [TOKIO_CAUSAL_PROFILER.md](../TOKIO_CAUSAL_PROFILER.md) for the async-adapted causal profiling design.
+See [TOKIO_CAUSAL_PROFILER.md](../TOKIO_CAUSAL_PROFILER.md) for the async-adapted causal profiling
+design.
 
 ```bash
 just build-causal
@@ -108,10 +116,10 @@ just causal-profile
 
 ## Not integrated
 
-| Tool | Reason |
-|------|--------|
-| tracing-timing | Redundant with existing Prometheus latency histograms via `CommandTimer` |
-| tracing-tracy | Requires Tracy GUI; samply and cargo-flamegraph cover interactive profiling |
+| Tool           | Reason                                                                      |
+| -------------- | --------------------------------------------------------------------------- |
+| tracing-timing | Redundant with existing Prometheus latency histograms via `CommandTimer`    |
+| tracing-tracy  | Requires Tracy GUI; samply and cargo-flamegraph cover interactive profiling |
 
 ## Benchmark TODOs
 

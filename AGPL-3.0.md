@@ -1,6 +1,7 @@
 # GNU Affero General Public License v3.0 (AGPLv3)
 
-FrogDB is available under the GNU Affero General Public License v3.0 as an alternative to the Business Source License.
+FrogDB is available under the GNU Affero General Public License v3.0 as an alternative to the
+Business Source License.
 
 ## Summary
 
@@ -18,11 +19,14 @@ The AGPLv3 is a strong copyleft license that:
 
 ### Network Use is Distribution (Section 13)
 
-Unlike GPL, AGPLv3 treats offering software over a network as distribution. If you modify FrogDB and allow users to interact with it over a network, you must offer those users access to the modified source code.
+Unlike GPL, AGPLv3 treats offering software over a network as distribution. If you modify FrogDB and
+allow users to interact with it over a network, you must offer those users access to the modified
+source code.
 
 ### Copyleft
 
-All derivative works must be licensed under AGPLv3. If you modify FrogDB, your modifications must also be available under AGPLv3.
+All derivative works must be licensed under AGPLv3. If you modify FrogDB, your modifications must
+also be available under AGPLv3.
 
 ### Patent Grant
 
@@ -34,7 +38,8 @@ Choose the AGPLv3 license if:
 
 - You need an OSI-approved open-source license
 - You're comfortable with copyleft requirements
-- You want to offer FrogDB as a managed service and are willing to release your service code under AGPLv3
+- You want to offer FrogDB as a managed service and are willing to release your service code under
+  AGPLv3
 - Your organization's policies require OSI-approved licenses
 - You're contributing modifications back to the community
 
