@@ -31,7 +31,6 @@ pub mod status;
 pub mod transaction;
 
 // Re-export commonly used types
-pub use admin::AdminHandler;
 pub use scatter::ScatterHandler;
 
 use frogdb_protocol::Response;

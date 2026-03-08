@@ -38,6 +38,14 @@ pub(crate) struct ShardObservability {
     pub peak_memory: u64,
 }
 
+impl ShardObservability {
+    pub(crate) fn reset_stats(&mut self) {
+        self.latency_monitor.reset(&[]);
+        self.slowlog.reset();
+        self.peak_memory = 0;
+    }
+}
+
 /// Memory management: eviction config, pool, memory limit.
 pub(crate) struct ShardEviction {
     pub config: EvictionConfig,

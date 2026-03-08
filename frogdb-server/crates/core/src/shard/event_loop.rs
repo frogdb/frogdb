@@ -222,12 +222,7 @@ impl ShardWorker {
                         }
 
                         ShardMessage::ResetStats { response_tx } => {
-                            // Reset latency monitor (all events)
-                            self.observability.latency_monitor.reset(&[]);
-                            // Reset slowlog
-                            self.observability.slowlog.reset();
-                            // Reset peak memory
-                            self.observability.peak_memory = 0;
+                            self.observability.reset_stats();
                             let _ = response_tx.send(());
                         }
 
