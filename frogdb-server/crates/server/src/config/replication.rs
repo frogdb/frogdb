@@ -95,6 +95,22 @@ pub struct ReplicationConfigSection {
     /// Maximum memory in MB for the split-brain command buffer.
     #[serde(default = "default_split_brain_buffer_max_mb")]
     pub split_brain_buffer_max_mb: usize,
+
+    /// Reject writes when primary loses all replica ACK freshness.
+    /// Prevents zombie writes during network partitions.
+    #[serde(default = "default_self_fence_on_replica_loss")]
+    pub self_fence_on_replica_loss: bool,
+
+    /// Freshness timeout for replica ACKs (ms).
+    /// If no replica ACKs within this window, the primary fences itself.
+    /// Should be >= 3x ack_interval_ms to tolerate missed ACKs.
+    #[serde(default = "default_replica_freshness_timeout_ms")]
+    pub replica_freshness_timeout_ms: u64,
+
+    /// Write timeout for streaming to replicas (ms). 0 = disabled.
+    /// Forces TCP disconnect when iptables drops packets.
+    #[serde(default = "default_replica_write_timeout_ms")]
+    pub replica_write_timeout_ms: u64,
 }
 
 fn default_replication_role() -> String {
@@ -113,6 +129,9 @@ pub const DEFAULT_RECONNECT_BACKOFF_MAX_MS: u64 = 30000;
 pub const DEFAULT_SPLIT_BRAIN_LOG_ENABLED: bool = true;
 pub const DEFAULT_SPLIT_BRAIN_BUFFER_SIZE: usize = 10_000;
 pub const DEFAULT_SPLIT_BRAIN_BUFFER_MAX_MB: usize = 64;
+pub const DEFAULT_SELF_FENCE_ON_REPLICA_LOSS: bool = true;
+pub const DEFAULT_REPLICA_FRESHNESS_TIMEOUT_MS: u64 = 3000;
+pub const DEFAULT_REPLICA_WRITE_TIMEOUT_MS: u64 = 5000;
 
 fn default_primary_port() -> u16 {
     DEFAULT_PRIMARY_PORT
@@ -170,6 +189,18 @@ fn default_split_brain_buffer_max_mb() -> usize {
     DEFAULT_SPLIT_BRAIN_BUFFER_MAX_MB
 }
 
+fn default_self_fence_on_replica_loss() -> bool {
+    DEFAULT_SELF_FENCE_ON_REPLICA_LOSS
+}
+
+fn default_replica_freshness_timeout_ms() -> u64 {
+    DEFAULT_REPLICA_FRESHNESS_TIMEOUT_MS
+}
+
+fn default_replica_write_timeout_ms() -> u64 {
+    DEFAULT_REPLICA_WRITE_TIMEOUT_MS
+}
+
 impl Default for ReplicationConfigSection {
     fn default() -> Self {
         Self {
@@ -192,6 +223,9 @@ impl Default for ReplicationConfigSection {
             split_brain_log_enabled: default_split_brain_log_enabled(),
             split_brain_buffer_size: default_split_brain_buffer_size(),
             split_brain_buffer_max_mb: default_split_brain_buffer_max_mb(),
+            self_fence_on_replica_loss: default_self_fence_on_replica_loss(),
+            replica_freshness_timeout_ms: default_replica_freshness_timeout_ms(),
+            replica_write_timeout_ms: default_replica_write_timeout_ms(),
         }
     }
 }
@@ -224,6 +258,17 @@ impl ReplicationConfigSection {
 
         if self.ack_interval_ms == 0 {
             anyhow::bail!("ack_interval_ms must be > 0");
+        }
+
+        if self.self_fence_on_replica_loss
+            && self.replica_freshness_timeout_ms < self.ack_interval_ms
+        {
+            tracing::warn!(
+                replica_freshness_timeout_ms = self.replica_freshness_timeout_ms,
+                ack_interval_ms = self.ack_interval_ms,
+                "replica_freshness_timeout_ms is less than ack_interval_ms; \
+                 this may cause spurious write rejections"
+            );
         }
 
         Ok(())
@@ -301,6 +346,15 @@ mod tests {
         assert_eq!(
             config.split_brain_buffer_max_mb,
             DEFAULT_SPLIT_BRAIN_BUFFER_MAX_MB
+        );
+        assert!(config.self_fence_on_replica_loss);
+        assert_eq!(
+            config.replica_freshness_timeout_ms,
+            DEFAULT_REPLICA_FRESHNESS_TIMEOUT_MS
+        );
+        assert_eq!(
+            config.replica_write_timeout_ms,
+            DEFAULT_REPLICA_WRITE_TIMEOUT_MS
         );
     }
 

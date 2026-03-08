@@ -6,9 +6,9 @@ Tracking document for known unimplemented spec areas. Each item lists affected f
 
 ## Critical / Data-Integrity
 
-| Item                                | Files                     | Description                                                                                                                                                         | Spec |
-| ----------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| Replication-mode partition recovery | `crates/replication/src/` | After a network partition heals, async writes to the old primary are not rolled back or fenced. Jepsen zombie test confirms stale writes survive partition healing. | —    |
+| Item                                    | Files                     | Description                                                                                                                                                         | Spec |
+| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| ~~Replication-mode partition recovery~~ | `crates/replication/src/` | ✅ Implemented: `ReplicationQuorumChecker` fences primary when all replica ACKs go stale (`self_fence_on_replica_loss` config, default true). Stream write timeout forces TCP disconnect during iptables partitions. | —    |
 
 ---
 
@@ -72,20 +72,20 @@ Items described in spec documentation as if implemented, but not present in the 
 
 ## Jepsen Test Status
 
-33 tests across three topologies (30 PASS, 3 Expected Failure). Tests marked **Expected Failure** detect real unimplemented features and will pass once the corresponding item above is implemented.
+33 tests across three topologies (31 PASS, 2 Expected Failure). Tests marked **Expected Failure** detect real unimplemented features and will pass once the corresponding item above is implemented.
 
 ### Single-node (19/19 PASS)
 
 All single-node tests pass.
 
-### Replication (3/5 PASS, 2 Expected Failure)
+### Replication (4/5 PASS, 1 Expected Failure)
 
 | Test              | Status           | Root Cause                                                                                                       | Cross-ref                                   |
 | ----------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
 | basic-replication | PASS             | —                                                                                                                | —                                           |
 | failover          | PASS             | —                                                                                                                | —                                           |
 | split-brain       | PASS             | —                                                                                                                | —                                           |
-| zombie            | Expected Failure | No partition recovery / write rollback. Stale async writes persist after partition heals.                        | Replication-mode partition recovery (above) |
+| zombie            | PASS             | Primary self-fences when replica ACKs go stale (`self_fence_on_replica_loss`).                                   | ~~Replication-mode partition recovery~~ (above) |
 | replication-chaos | Expected Failure | Reads observe older values during replication lag. Checker may be too strict for async replication under faults. | —                                           |
 
 ### Raft cluster (8/9 PASS, 1 Expected Failure)

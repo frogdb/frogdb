@@ -169,6 +169,9 @@ pub struct PrimaryReplicationHandler {
 
     /// Ring buffer for split-brain divergent-write detection.
     ring_buffer: Option<ReplicationRingBuffer>,
+
+    /// Timeout for write_all to replicas (ms). 0 = disabled.
+    write_timeout_ms: u64,
 }
 
 /// Handle to a replica connection.
@@ -205,6 +208,7 @@ impl PrimaryReplicationHandler {
         data_dir: PathBuf,
         lag_config: LagThresholdConfig,
         split_brain_config: SplitBrainBufferConfig,
+        write_timeout_ms: u64,
     ) -> Self {
         let (wal_broadcast, _) = broadcast::channel(10000);
 
@@ -226,6 +230,7 @@ impl PrimaryReplicationHandler {
             data_dir,
             lag_config,
             ring_buffer,
+            write_timeout_ms,
         }
     }
 
@@ -565,6 +570,11 @@ impl PrimaryReplicationHandler {
         let lag_cooldown = self.lag_config.cooldown;
         let lag_tracker = self.tracker.clone();
         let lag_enabled = lag_threshold_bytes > 0 || lag_threshold_secs > 0;
+        let write_timeout = if self.write_timeout_ms > 0 {
+            Some(Duration::from_millis(self.write_timeout_ms))
+        } else {
+            None
+        };
 
         // Write task - forward frames to replica
         let write_task = tokio::spawn(async move {
@@ -576,7 +586,22 @@ impl PrimaryReplicationHandler {
                         match frame {
                             Ok(frame) => {
                                 let encoded = frame.encode();
-                                if let Err(e) = write_half.write_all(&encoded).await {
+                                let write_result = if let Some(timeout_dur) = write_timeout {
+                                    match tokio::time::timeout(timeout_dur, write_half.write_all(&encoded)).await {
+                                        Ok(r) => r,
+                                        Err(_) => {
+                                            tracing::warn!(
+                                                replica_id = replica_id,
+                                                timeout_ms = timeout_dur.as_millis() as u64,
+                                                "Write to replica timed out, disconnecting"
+                                            );
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    write_half.write_all(&encoded).await
+                                };
+                                if let Err(e) = write_result {
                                     tracing::warn!(error = %e, "Error writing to replica");
                                     break;
                                 }
@@ -626,7 +651,22 @@ impl PrimaryReplicationHandler {
                         match frame {
                             Some(frame) => {
                                 let encoded = frame.encode();
-                                if let Err(e) = write_half.write_all(&encoded).await {
+                                let write_result = if let Some(timeout_dur) = write_timeout {
+                                    match tokio::time::timeout(timeout_dur, write_half.write_all(&encoded)).await {
+                                        Ok(r) => r,
+                                        Err(_) => {
+                                            tracing::warn!(
+                                                replica_id = replica_id,
+                                                timeout_ms = timeout_dur.as_millis() as u64,
+                                                "Write to replica timed out (direct channel), disconnecting"
+                                            );
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    write_half.write_all(&encoded).await
+                                };
+                                if let Err(e) = write_result {
                                     tracing::warn!(error = %e, "Error writing to replica");
                                     break;
                                 }

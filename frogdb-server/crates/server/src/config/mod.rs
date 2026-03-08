@@ -874,6 +874,16 @@ reconnect_backoff_initial_ms = 100
 # Reconnection backoff - maximum delay (milliseconds).
 reconnect_backoff_max_ms = 30000
 
+# Reject writes when primary cannot reach any replica (quorum fencing).
+# Prevents zombie writes during network partitions. Default: true.
+self_fence_on_replica_loss = true
+
+# Freshness timeout for replica ACKs (ms). Default: 3000.
+replica_freshness_timeout_ms = 3000
+
+# Write timeout for streaming to replicas (ms). 0=disabled. Default: 5000.
+replica_write_timeout_ms = 5000
+
 [cluster]
 # Whether cluster mode is enabled.
 # When enabled, FrogDB runs as part of a Raft-coordinated cluster.
