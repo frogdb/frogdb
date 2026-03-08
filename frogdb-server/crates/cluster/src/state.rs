@@ -356,6 +356,14 @@ pub struct DemotionEvent {
     pub epoch: u64,
 }
 
+/// Event emitted when a slot migration completes (fires on ALL nodes).
+#[derive(Debug, Clone)]
+pub struct SlotMigrationCompleteEvent {
+    pub slot: u16,
+    pub source_node: NodeId,
+    pub target_node: NodeId,
+}
+
 /// Raft state machine for cluster coordination.
 pub struct ClusterStateMachine {
     state: ClusterState,
@@ -363,6 +371,8 @@ pub struct ClusterStateMachine {
     self_node_id: Option<NodeId>,
     /// Channel to notify when this node is demoted from primary to replica.
     demotion_tx: Option<mpsc::UnboundedSender<DemotionEvent>>,
+    /// Channel to notify when a slot migration completes.
+    migration_complete_tx: Option<mpsc::UnboundedSender<SlotMigrationCompleteEvent>>,
 }
 
 impl ClusterStateMachine {
@@ -372,6 +382,7 @@ impl ClusterStateMachine {
             state: ClusterState::new(),
             self_node_id: None,
             demotion_tx: None,
+            migration_complete_tx: None,
         }
     }
 
@@ -381,6 +392,7 @@ impl ClusterStateMachine {
             state,
             self_node_id: None,
             demotion_tx: None,
+            migration_complete_tx: None,
         }
     }
 
@@ -395,6 +407,18 @@ impl ClusterStateMachine {
         let (tx, rx) = mpsc::unbounded_channel();
         self.self_node_id = Some(self_node_id);
         self.demotion_tx = Some(tx);
+        rx
+    }
+
+    /// Configure slot migration completion notifications.
+    ///
+    /// When a `CompleteSlotMigration` command is successfully applied,
+    /// a `SlotMigrationCompleteEvent` is sent through the returned receiver.
+    pub fn enable_migration_complete_notification(
+        &mut self,
+    ) -> mpsc::UnboundedReceiver<SlotMigrationCompleteEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.migration_complete_tx = Some(tx);
         rx
     }
 
@@ -458,10 +482,35 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
                         });
                     }
 
+                    // Extract migration event data before apply consumes cmd
+                    let migration_event = if let ClusterCommand::CompleteSlotMigration {
+                        slot,
+                        source_node,
+                        target_node,
+                    } = &cmd
+                    {
+                        Some(SlotMigrationCompleteEvent {
+                            slot: *slot,
+                            source_node: *source_node,
+                            target_node: *target_node,
+                        })
+                    } else {
+                        None
+                    };
+
                     let result = self.state.apply_command(cmd).unwrap_or_else(|e| {
                         tracing::warn!(error = %e, "Failed to apply cluster command");
                         ClusterResponse::Error(e.to_string())
                     });
+
+                    // Emit migration complete event on success
+                    if let Some(event) = migration_event
+                        && !matches!(result, ClusterResponse::Error(_))
+                        && let Some(ref tx) = self.migration_complete_tx
+                    {
+                        let _ = tx.send(event);
+                    }
+
                     results.push(result);
                 }
                 EntryPayload::Membership(membership) => {
@@ -483,6 +532,7 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
             state: self.state.clone(),
             self_node_id: None,
             demotion_tx: None,
+            migration_complete_tx: None,
         }
     }
 
@@ -816,5 +866,63 @@ mod tests {
 
         // No event for node 1 watching
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_migration_complete_event_fires() {
+        let cluster = ClusterState::new();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_migration_complete_notification();
+
+        // Add two nodes and assign slot 42 to node 1
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        sm.state()
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        sm.state()
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+        sm.state()
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::single(42)],
+            })
+            .unwrap();
+
+        // Begin migration
+        let begin = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 1,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::BeginSlotMigration {
+                slot: 42,
+                source_node: 1,
+                target_node: 2,
+            }),
+        };
+        sm.apply(vec![begin]).await.unwrap();
+        // No event for begin
+        assert!(rx.try_recv().is_err());
+
+        // Complete migration
+        let complete = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 2,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::CompleteSlotMigration {
+                slot: 42,
+                source_node: 1,
+                target_node: 2,
+            }),
+        };
+        sm.apply(vec![complete]).await.unwrap();
+
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.slot, 42);
+        assert_eq!(event.source_node, 1);
+        assert_eq!(event.target_node, 2);
     }
 }

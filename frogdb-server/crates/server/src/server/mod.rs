@@ -560,6 +560,9 @@ impl Server {
                 None
             };
 
+            // Enable slot migration completion notifications for blocked client handling
+            let migration_rx = state_machine.enable_migration_complete_notification();
+
             // Initialize Raft network factory
             let network_factory = ClusterNetworkFactory::new();
 
@@ -834,6 +837,39 @@ impl Server {
                                     &*metrics, 1.0,
                                 );
                             }
+                        }
+                    }
+                });
+            }
+
+            // Spawn slot migration handler for blocked client MOVED responses
+            {
+                let cluster_for_migration = cluster.clone();
+                let shard_senders_for_migration = shard_senders.clone();
+                let num_shards_for_migration = num_shards;
+                spawn(async move {
+                    let mut migration_rx = migration_rx;
+                    while let Some(event) = migration_rx.recv().await {
+                        let target_addr = match cluster_for_migration.get_node(event.target_node) {
+                            Some(node_info) => node_info.addr,
+                            None => {
+                                tracing::warn!(
+                                    slot = event.slot,
+                                    target_node = event.target_node,
+                                    "Migration complete but target node not found in cluster state"
+                                );
+                                continue;
+                            }
+                        };
+
+                        let target_shard = event.slot as usize % num_shards_for_migration;
+                        if let Some(sender) = shard_senders_for_migration.get(target_shard) {
+                            let _ = sender
+                                .send(ShardMessage::SlotMigrated {
+                                    slot: event.slot,
+                                    target_addr,
+                                })
+                                .await;
                         }
                     }
                 });
