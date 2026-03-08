@@ -404,6 +404,13 @@ pub enum ShardMessage {
     // =========================================================================
     // Cluster / Raft messages
     // =========================================================================
+    /// Notify shard that a slot has migrated to a new node.
+    /// All blocked clients waiting on keys in this slot receive `-MOVED`.
+    SlotMigrated {
+        slot: u16,
+        target_addr: std::net::SocketAddr,
+    },
+
     /// Execute a Raft command asynchronously.
     /// Used by cluster commands (CLUSTER MEET, CLUSTER FORGET, etc.) that need
     /// to call async Raft operations from synchronous command handlers.

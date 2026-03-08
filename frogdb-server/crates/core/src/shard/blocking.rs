@@ -78,6 +78,47 @@ impl ShardWorker {
         }
     }
 
+    /// Handle a slot migration completion by sending `-MOVED` to all blocked clients
+    /// waiting on keys in the migrated slot.
+    pub(crate) fn handle_slot_migrated(&mut self, slot: u16, target_addr: std::net::SocketAddr) {
+        let drained = self.wait_queue.drain_waiters_for_slot(slot);
+
+        if drained.is_empty() {
+            return;
+        }
+
+        let shard_label = self.shard_id().to_string();
+        let moved_count = drained.len();
+
+        for entry in drained {
+            tracing::debug!(
+                shard_id = self.shard_id(),
+                conn_id = entry.conn_id,
+                slot,
+                "Sending MOVED to blocked client after slot migration"
+            );
+
+            let _ = entry.response_tx.send(Response::error(format!(
+                "MOVED {} {}:{}",
+                slot,
+                target_addr.ip(),
+                target_addr.port()
+            )));
+        }
+
+        self.observability.metrics_recorder.increment_counter(
+            "frogdb_blocked_migration_moved_total",
+            moved_count as u64,
+            &[("shard", &shard_label)],
+        );
+
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_blocked_clients",
+            self.wait_queue.waiter_count() as f64,
+            &[("shard", &shard_label)],
+        );
+    }
+
     /// Check for expired blocking waits and send nil responses.
     pub(crate) fn check_waiter_timeouts(&mut self) {
         let now = Instant::now();

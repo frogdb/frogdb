@@ -252,6 +252,63 @@ impl ShardWaitQueue {
         expired
     }
 
+    /// Drain all waiters whose keys belong to the given slot.
+    ///
+    /// Used when a slot migrates to another node — all blocked clients
+    /// for keys in that slot must receive `-MOVED` responses.
+    pub fn drain_waiters_for_slot(&mut self, slot: u16) -> Vec<WaitEntry> {
+        // Collect keys that belong to this slot
+        let matching_keys: Vec<Bytes> = self
+            .waiters_by_key
+            .keys()
+            .filter(|key| super::helpers::slot_for_key(key) == slot)
+            .cloned()
+            .collect();
+
+        // Collect unique entry indices to drain
+        let mut indices_to_drain = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for key in &matching_keys {
+            if let Some(waiters) = self.waiters_by_key.get(key) {
+                for &idx in waiters {
+                    if seen.insert(idx) {
+                        indices_to_drain.push(idx);
+                    }
+                }
+            }
+        }
+
+        let mut drained = Vec::new();
+
+        for idx in indices_to_drain {
+            if let Some(entry) = self.entries[idx].take() {
+                // Remove from ALL key indices (entry may span multiple keys)
+                for key in &entry.keys {
+                    if let Some(waiters) = self.waiters_by_key.get_mut(key) {
+                        waiters.retain(|&i| i != idx);
+                        if waiters.is_empty() {
+                            self.waiters_by_key.remove(key);
+                        }
+                    }
+                }
+
+                // Remove from conn_entries
+                if let Some(conn_entries) = self.conn_entries.get_mut(&entry.conn_id) {
+                    conn_entries.retain(|&i| i != idx);
+                    if conn_entries.is_empty() {
+                        self.conn_entries.remove(&entry.conn_id);
+                    }
+                }
+
+                self.free_slots.push(idx);
+                self.waiter_count -= 1;
+                drained.push(entry);
+            }
+        }
+
+        drained
+    }
+
     /// Check if there are any waiters for a key.
     pub fn has_waiters(&self, key: &Bytes) -> bool {
         self.waiters_by_key
@@ -268,5 +325,96 @@ impl ShardWaitQueue {
     /// Get the number of keys with waiters.
     pub fn blocked_keys_count(&self) -> usize {
         self.waiters_by_key.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::BlockingOp;
+
+    fn make_entry(conn_id: u64, keys: Vec<&str>) -> WaitEntry {
+        let (tx, _rx) = oneshot::channel();
+        WaitEntry {
+            conn_id,
+            keys: keys
+                .into_iter()
+                .map(|k| Bytes::from(k.to_string()))
+                .collect(),
+            op: BlockingOp::BLPop,
+            response_tx: tx,
+            deadline: None,
+        }
+    }
+
+    #[test]
+    fn test_drain_empty_queue() {
+        let mut queue = ShardWaitQueue::new();
+        let drained = queue.drain_waiters_for_slot(100);
+        assert!(drained.is_empty());
+    }
+
+    #[test]
+    fn test_drain_matching_slot() {
+        let mut queue = ShardWaitQueue::new();
+
+        // "{slot0}" hashes to a known slot; we'll use slot_for_key to find it
+        let key = b"{testslot}key1";
+        let slot = super::super::helpers::slot_for_key(key);
+
+        queue
+            .register(make_entry(1, vec!["{testslot}key1"]))
+            .unwrap();
+        queue
+            .register(make_entry(2, vec!["{testslot}key2"]))
+            .unwrap();
+
+        let drained = queue.drain_waiters_for_slot(slot);
+        assert_eq!(drained.len(), 2);
+        assert_eq!(queue.waiter_count(), 0);
+        assert_eq!(queue.blocked_keys_count(), 0);
+    }
+
+    #[test]
+    fn test_drain_non_matching_slot() {
+        let mut queue = ShardWaitQueue::new();
+
+        let key = b"{testslot}key1";
+        let matching_slot = super::super::helpers::slot_for_key(key);
+        // Pick a different slot
+        let other_slot = (matching_slot + 1) % 16384;
+
+        queue
+            .register(make_entry(1, vec!["{testslot}key1"]))
+            .unwrap();
+
+        let drained = queue.drain_waiters_for_slot(other_slot);
+        assert!(drained.is_empty());
+        assert_eq!(queue.waiter_count(), 1);
+        assert_eq!(queue.blocked_keys_count(), 1);
+    }
+
+    #[test]
+    fn test_drain_updates_counts() {
+        let mut queue = ShardWaitQueue::new();
+
+        let key = b"{draintest}a";
+        let slot = super::super::helpers::slot_for_key(key);
+
+        // Register 3 waiters on matching slot, 1 on different slot
+        queue.register(make_entry(1, vec!["{draintest}a"])).unwrap();
+        queue.register(make_entry(2, vec!["{draintest}b"])).unwrap();
+        queue.register(make_entry(3, vec!["{draintest}c"])).unwrap();
+        queue
+            .register(make_entry(4, vec!["unrelated_key"]))
+            .unwrap();
+
+        assert_eq!(queue.waiter_count(), 4);
+        assert_eq!(queue.blocked_keys_count(), 4);
+
+        let drained = queue.drain_waiters_for_slot(slot);
+        assert_eq!(drained.len(), 3);
+        assert_eq!(queue.waiter_count(), 1);
+        assert_eq!(queue.blocked_keys_count(), 1);
     }
 }
