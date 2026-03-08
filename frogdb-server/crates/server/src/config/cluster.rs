@@ -69,6 +69,11 @@ pub struct ClusterConfigSection {
     /// split-brain data divergence. Reads remain available. (default: true)
     #[serde(default = "default_self_fence_on_quorum_loss")]
     pub self_fence_on_quorum_loss: bool,
+
+    /// Priority for replica promotion during auto-failover (default: 100).
+    /// Lower values are preferred. 0 means this replica will never be promoted.
+    #[serde(default = "default_replica_priority")]
+    pub replica_priority: u32,
 }
 
 pub const DEFAULT_CLUSTER_BUS_ADDR: &str = "127.0.0.1:16379";
@@ -77,6 +82,7 @@ pub const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 250;
 pub const DEFAULT_CLUSTER_CONNECT_TIMEOUT_MS: u64 = 5000;
 pub const DEFAULT_CLUSTER_REQUEST_TIMEOUT_MS: u64 = 10000;
 pub const DEFAULT_FAIL_THRESHOLD: u32 = 5;
+pub const DEFAULT_REPLICA_PRIORITY: u32 = 100;
 
 fn default_self_fence_on_quorum_loss() -> bool {
     true
@@ -110,6 +116,10 @@ fn default_fail_threshold() -> u32 {
     DEFAULT_FAIL_THRESHOLD
 }
 
+fn default_replica_priority() -> u32 {
+    DEFAULT_REPLICA_PRIORITY
+}
+
 impl Default for ClusterConfigSection {
     fn default() -> Self {
         Self {
@@ -126,6 +136,7 @@ impl Default for ClusterConfigSection {
             auto_failover: false,
             fail_threshold: default_fail_threshold(),
             self_fence_on_quorum_loss: default_self_fence_on_quorum_loss(),
+            replica_priority: default_replica_priority(),
         }
     }
 }

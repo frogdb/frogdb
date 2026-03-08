@@ -6767,9 +6767,9 @@ async fn test_minority_node_rejects_writes_on_quorum_loss() {
 
 /// Tests that auto-failover selects the most caught-up replica as new leader.
 ///
-/// Currently FrogDB picks `replicas[0]` arbitrarily.
+/// With lag-based scoring, the replica with the highest replication offset
+/// (and thus least data loss) is promoted.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: failover selects replicas[0] arbitrarily — no lag-based scoring"]
 async fn test_auto_failover_selects_most_caught_up_replica() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(5).await.unwrap();

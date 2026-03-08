@@ -45,6 +45,8 @@ pub enum ClusterRpcRequest {
     InstallSnapshot(InstallSnapshotRequest<TypeConfig>),
     /// Forwarded client write (follower to leader).
     ForwardedWrite(ClusterCommand),
+    /// Lightweight health probe for failover scoring.
+    HealthProbe,
 }
 
 /// RPC response types for cluster communication.
@@ -58,6 +60,11 @@ pub enum ClusterRpcResponse {
     InstallSnapshot(InstallSnapshotResponse<NodeId>),
     /// Response to ForwardedWrite.
     ForwardedWrite(Result<(), String>),
+    /// Response to HealthProbe.
+    HealthProbeResponse {
+        node_id: NodeId,
+        replication_offset: u64,
+    },
     /// Error response.
     Error(String),
 }
@@ -160,6 +167,20 @@ impl ClusterNetwork {
             addr,
             connect_timeout_ms: 5000,
             request_timeout_ms: 10000,
+        }
+    }
+
+    /// Send a lightweight health probe to query a node's replication offset.
+    pub async fn health_probe(&self) -> Result<(NodeId, u64), ClusterError> {
+        let request = ClusterRpcRequest::HealthProbe;
+        match self.send_rpc(request).await? {
+            ClusterRpcResponse::HealthProbeResponse {
+                node_id,
+                replication_offset,
+            } => Ok((node_id, replication_offset)),
+            _ => Err(ClusterError::NetworkError(
+                "unexpected response type for health probe".to_string(),
+            )),
         }
     }
 
@@ -351,6 +372,11 @@ pub async fn handle_rpc_request(
             Ok(_) => ClusterRpcResponse::ForwardedWrite(Ok(())),
             Err(e) => ClusterRpcResponse::ForwardedWrite(Err(e.to_string())),
         },
+        ClusterRpcRequest::HealthProbe => {
+            // HealthProbe is handled locally by the cluster bus before reaching here.
+            // If it does reach here, return an error.
+            ClusterRpcResponse::Error("HealthProbe must be handled by cluster bus".to_string())
+        }
     }
 }
 

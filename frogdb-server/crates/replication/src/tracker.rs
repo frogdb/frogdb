@@ -99,8 +99,9 @@ pub struct ReplicationTrackerImpl {
     /// Next replica ID
     next_replica_id: AtomicU64,
 
-    /// Current replication offset (primary's write position)
-    current_offset: AtomicU64,
+    /// Current replication offset (primary's write position).
+    /// Wrapped in Arc so it can be shared with the cluster bus for HealthProbe responses.
+    current_offset: Arc<AtomicU64>,
 
     /// Channel for notifying waiters about ACKs
     ack_notify: broadcast::Sender<(u64, u64)>, // (replica_id, offset)
@@ -123,7 +124,7 @@ impl ReplicationTrackerImpl {
         Self {
             replicas: RwLock::new(HashMap::new()),
             next_replica_id: AtomicU64::new(1),
-            current_offset: AtomicU64::new(0),
+            current_offset: Arc::new(AtomicU64::new(0)),
             ack_notify,
             lag_disconnect_times: RwLock::new(HashMap::new()),
         }
@@ -132,6 +133,12 @@ impl ReplicationTrackerImpl {
     /// Create a new tracker as Arc (for shared ownership).
     pub fn new_arc() -> Arc<Self> {
         Arc::new(Self::new())
+    }
+
+    /// Get a shared handle to the replication offset atomic.
+    /// Used by the cluster bus to respond to HealthProbe RPCs.
+    pub fn shared_offset(&self) -> Arc<AtomicU64> {
+        self.current_offset.clone()
     }
 
     /// Register a new replica connection.

@@ -68,6 +68,14 @@ pub struct NodeInfo {
     pub config_epoch: ConfigEpoch,
     /// Flags describing node state.
     pub flags: NodeFlags,
+    /// Priority for replica promotion during auto-failover.
+    /// Lower values are preferred. 0 means never promote.
+    #[serde(default = "default_replica_priority")]
+    pub replica_priority: u32,
+}
+
+fn default_replica_priority() -> u32 {
+    100
 }
 
 impl NodeInfo {
@@ -81,6 +89,7 @@ impl NodeInfo {
             primary_id: None,
             config_epoch: 0,
             flags: NodeFlags::default(),
+            replica_priority: 100,
         }
     }
 
@@ -99,6 +108,7 @@ impl NodeInfo {
             primary_id: Some(primary_id),
             config_epoch: 0,
             flags: NodeFlags::default(),
+            replica_priority: 100,
         }
     }
 

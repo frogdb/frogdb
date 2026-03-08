@@ -175,6 +175,9 @@ pub struct Server {
 
     /// Background handle for the tokio-metrics task monitor collector.
     _task_monitor_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Shared replication offset for cluster bus HealthProbe responses.
+    shared_replication_offset: Option<Arc<AtomicU64>>,
 }
 
 impl Server {
@@ -448,6 +451,7 @@ impl Server {
         let mut replica_handler: Option<Arc<ReplicaReplicationHandler>> = None;
         let mut replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>> = None;
         let mut primary_replication_handler: Option<Arc<PrimaryReplicationHandler>> = None;
+        let mut shared_replication_offset: Option<Arc<AtomicU64>> = None;
 
         let (replication_broadcaster, replication_tracker): (
             SharedBroadcaster,
@@ -469,6 +473,11 @@ impl Server {
 
             let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
             tracker.set_offset(repl_state.replication_offset);
+
+            // Wire up shared replication offset for cluster bus HealthProbe
+            if config.cluster.enabled {
+                shared_replication_offset = Some(tracker.shared_offset());
+            }
 
             let handler = Arc::new(PrimaryReplicationHandler::new(
                 repl_state,
@@ -515,12 +524,19 @@ impl Server {
                 "Initialized replica replication state"
             );
 
-            let (handler, frame_rx) = ReplicaReplicationHandler::new(
+            let (mut handler, frame_rx) = ReplicaReplicationHandler::new(
                 primary_addr,
                 config.server.port,
                 repl_state,
                 config.persistence.data_dir.clone(),
             );
+
+            // Wire up shared replication offset for cluster bus HealthProbe
+            if config.cluster.enabled {
+                let offset = Arc::new(AtomicU64::new(0));
+                handler.set_shared_offset(offset.clone());
+                shared_replication_offset = Some(offset);
+            }
 
             replica_handler = Some(Arc::new(handler));
             replica_frame_rx = Some(frame_rx);
@@ -687,8 +703,9 @@ impl Server {
                 .map(|l| l.local_addr())
                 .transpose()?
                 .unwrap_or_else(|| config.cluster.cluster_bus_socket_addr());
-            let this_node =
+            let mut this_node =
                 frogdb_core::cluster::NodeInfo::new_primary(node_id, client_addr, cluster_bus_addr);
+            this_node.replica_priority = config.cluster.replica_priority;
             cluster.add_node(this_node);
             info!(node_id = node_id, "Node added to cluster state");
 
@@ -726,11 +743,12 @@ impl Server {
             {
                 let raft_clone = raft.clone();
                 let network_factory = network_factory_clone.clone();
-                let self_node = frogdb_core::cluster::NodeInfo::new_primary(
+                let mut self_node = frogdb_core::cluster::NodeInfo::new_primary(
                     node_id,
                     client_addr,
                     cluster_bus_addr,
                 );
+                self_node.replica_priority = config.cluster.replica_priority;
                 tokio::spawn(async move {
                     for attempt in 0..30 {
                         let cmd = frogdb_core::cluster::ClusterCommand::AddNode {
@@ -1099,6 +1117,7 @@ impl Server {
             replication_quorum_checker,
             conn_monitor: Some(conn_monitor),
             _task_monitor_handle: Some(task_monitor_handle),
+            shared_replication_offset,
         })
     }
 
@@ -1443,8 +1462,18 @@ impl Server {
                 .take()
                 .expect("cluster_bus_listener must be set when cluster is enabled");
             let raft = raft.clone();
+            let node_id = self
+                .node_id
+                .expect("node_id must be set when cluster is enabled");
+            let replication_offset = self
+                .shared_replication_offset
+                .clone()
+                .unwrap_or_else(|| Arc::new(AtomicU64::new(0)));
             Some(spawn(async move {
-                if let Err(e) = crate::cluster_bus::run(cluster_bus_listener, raft).await {
+                if let Err(e) =
+                    crate::cluster_bus::run(cluster_bus_listener, raft, node_id, replication_offset)
+                        .await
+                {
                     error!(error = %e, "Cluster bus server error");
                 }
             }))

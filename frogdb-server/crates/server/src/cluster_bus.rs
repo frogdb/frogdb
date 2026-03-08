@@ -5,10 +5,13 @@
 //! in frogdb_core::cluster::network.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use frogdb_core::cluster::ClusterRaft;
+use frogdb_core::cluster::{ClusterRaft, NodeId};
 #[cfg(not(feature = "turmoil"))]
-use frogdb_core::cluster::{handle_rpc_request, parse_rpc_message, send_rpc_response};
+use frogdb_core::cluster::{
+    ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, parse_rpc_message, send_rpc_response,
+};
 
 use crate::net::TcpListener;
 #[cfg(not(feature = "turmoil"))]
@@ -18,7 +21,8 @@ use tracing::{debug, error, info};
 /// Run the cluster bus TCP server.
 ///
 /// This server listens for incoming connections from other cluster nodes
-/// and handles Raft RPC requests (AppendEntries, Vote, InstallSnapshot).
+/// and handles Raft RPC requests (AppendEntries, Vote, InstallSnapshot)
+/// as well as lightweight HealthProbe requests for failover scoring.
 ///
 /// Accepts a pre-bound `TcpListener` so that the port is held open from
 /// `Server::new()` and never subject to TOCTOU port races.
@@ -27,11 +31,18 @@ use tracing::{debug, error, info};
 ///
 /// * `listener` - Pre-bound TCP listener for cluster bus connections
 /// * `raft` - The Raft instance to handle requests
+/// * `node_id` - This node's cluster ID
+/// * `replication_offset` - Shared atomic holding this node's replication offset
 ///
 /// # Returns
 ///
 /// This function runs indefinitely and only returns on error.
-pub async fn run(listener: TcpListener, raft: Arc<ClusterRaft>) -> std::io::Result<()> {
+pub async fn run(
+    listener: TcpListener,
+    raft: Arc<ClusterRaft>,
+    node_id: NodeId,
+    replication_offset: Arc<AtomicU64>,
+) -> std::io::Result<()> {
     let addr = listener.local_addr()?;
     info!(%addr, "Cluster bus listening");
 
@@ -39,15 +50,18 @@ pub async fn run(listener: TcpListener, raft: Arc<ClusterRaft>) -> std::io::Resu
         match listener.accept().await {
             Ok((stream, peer)) => {
                 let raft = raft.clone();
+                let replication_offset = replication_offset.clone();
                 tokio::spawn(async move {
                     debug!(%peer, "Cluster bus connection accepted");
                     #[cfg(not(feature = "turmoil"))]
-                    if let Err(e) = handle_connection(stream, &raft).await {
+                    if let Err(e) =
+                        handle_connection(stream, &raft, node_id, &replication_offset).await
+                    {
                         // Connection errors are expected when nodes disconnect
                         debug!(%peer, error = %e, "Cluster bus connection closed");
                     }
                     #[cfg(feature = "turmoil")]
-                    drop((stream, raft));
+                    drop((stream, raft, replication_offset));
                 });
             }
             Err(e) => {
@@ -60,11 +74,14 @@ pub async fn run(listener: TcpListener, raft: Arc<ClusterRaft>) -> std::io::Resu
 /// Handle a single cluster bus connection.
 ///
 /// Reads RPC requests in a loop, processes them via Raft, and sends responses.
+/// HealthProbe requests are handled locally without Raft involvement.
 /// The connection is kept open for multiple requests (connection reuse).
 #[cfg(not(feature = "turmoil"))]
 async fn handle_connection(
     mut stream: tokio::net::TcpStream,
     raft: &ClusterRaft,
+    node_id: NodeId,
+    replication_offset: &AtomicU64,
 ) -> std::io::Result<()> {
     loop {
         // Parse the incoming RPC request
@@ -88,8 +105,15 @@ async fn handle_connection(
             }
         };
 
-        // Handle the request via Raft
-        let response = handle_rpc_request(raft, request).await;
+        // Handle HealthProbe locally (no Raft involvement needed)
+        let response = if matches!(request, ClusterRpcRequest::HealthProbe) {
+            ClusterRpcResponse::HealthProbeResponse {
+                node_id,
+                replication_offset: replication_offset.load(Ordering::Acquire),
+            }
+        } else {
+            handle_rpc_request(raft, request).await
+        };
 
         // Send the response
         if let Err(e) = send_rpc_response(&mut stream, response).await {
