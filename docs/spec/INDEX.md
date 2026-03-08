@@ -404,6 +404,7 @@ These sources document how similar systems handle edge cases and can be consulte
 | [FAILURE_MODES.md](FAILURE_MODES.md) | Error handling, recovery |
 | [CONSISTENCY.md](CONSISTENCY.md) | Consistency guarantees |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Docker, K8s deployment |
+| [ROLLING_UPGRADE.md](ROLLING_UPGRADE.md) | Zero-downtime rolling upgrade for replication and cluster modes |
 | [COMPATIBILITY.md](COMPATIBILITY.md) | Redis incompatibilities and migration guide |
 | [NOT_YET_IMPLEMENTED.md](NOT_YET_IMPLEMENTED.md) | Tracking document for known unimplemented spec areas |
 | [optimizations/](optimizations/INDEX.md) | Performance profiling and optimization strategies |

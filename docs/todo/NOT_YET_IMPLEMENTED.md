@@ -45,7 +45,7 @@ have been annotated with `[Not Yet Implemented]` markers.
 | ------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------- |
 | Client tracking / client-side caching | CLIENT TRACKING — complex feature with high memory overhead       | [COMPATIBILITY.md](COMPATIBILITY.md#not-yet-implemented) |
 | TLS (full implementation)             | Server TLS, mTLS, hot-reloading, replication TLS, cluster bus TLS | [TLS.md](TLS.md)                                         |
-| Rolling upgrade (cluster mode)        | Only single-node upgrade documented                               | [DEPLOYMENT.md](DEPLOYMENT.md)                           |
+| Rolling upgrade (cluster mode)        | Full spec written; implementation not started                     | [ROLLING_UPGRADE.md](../spec/ROLLING_UPGRADE.md)         |
 
 ---
 

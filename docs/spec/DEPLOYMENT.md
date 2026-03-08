@@ -559,12 +559,11 @@ redis-cli -h localhost -p 6379 get testkey  # Should return "testvalue"
 
 ## Upgrade Procedure
 
-### Rolling Upgrade (Future: Cluster Mode)
+### Rolling Upgrade (Replication & Cluster Mode)
 
-1. Upgrade replicas first
-2. Promote replica to primary
-3. Upgrade old primary as new replica
-4. Repeat for all nodes
+See [ROLLING_UPGRADE.md](ROLLING_UPGRADE.md) for the full specification covering
+mixed-version rolling upgrades, version negotiation, feature gating, and finalization
+semantics for both replication-mode and Raft cluster-mode topologies.
 
 ### Single Node Upgrade
 
