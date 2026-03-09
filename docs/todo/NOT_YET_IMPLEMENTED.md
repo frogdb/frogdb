@@ -46,6 +46,7 @@ have been annotated with `[Not Yet Implemented]` markers.
 | Client tracking / client-side caching | CLIENT TRACKING — complex feature with high memory overhead       | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#not-yet-implemented) |
 | TLS (full implementation)             | Server TLS, mTLS, hot-reloading, replication TLS, cluster bus TLS | [TLS.md](../spec/TLS.md)                                         |
 | Rolling upgrade (cluster mode)        | Full spec written; implementation not started                     | [ROLLING_UPGRADE.md](../spec/ROLLING_UPGRADE.md)         |
+| Two-tier storage (RAM + disk)         | Demote values to RocksDB on memory pressure instead of evicting; promote on access | [TIERED.md](../spec/TIERED.md)                           |
 
 ---
 
@@ -62,6 +63,6 @@ These are documented design aspirations, not near-term work:
 
 | Item                                               | Spec                                                             |
 | -------------------------------------------------- | ---------------------------------------------------------------- |
-| Tiered storage backends (S3, DynamoDB, Azure, GCS) | [TIERED.md](../spec/TIERED.md)                                           |
+| Cold storage backends (S3, DynamoDB, Azure, GCS)   | [TIERED.md](../spec/TIERED.md)                                           |
 | io_uring integration                               | [optimizations/ASYNC_RUNTIME.md](optimizations/ASYNC_RUNTIME.md) |
 | Dashtable (DragonflyDB-style hash table)           | [STORAGE.md](../spec/STORAGE.md)                                         |

@@ -1,33 +1,34 @@
-# FrogDB Tiered Storage
+# FrogDB Two-Tier Storage
 
-This document specifies tiered storage architecture for FrogDB: Hot (in-memory), Warm (SSD/RocksDB), and Cold (remote object storage).
+This document specifies two-tier storage for FrogDB: Hot (in-memory) and Warm (local SSD via RocksDB). When memory pressure triggers eviction, values are **demoted** to disk instead of deleted, and transparently **promoted** back to RAM on access.
 
 ## Overview
 
-Tiered storage automatically moves data between storage tiers based on access patterns:
-
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                      Tiered Storage Architecture                      │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                       │
-│   HOT (Memory)         WARM (SSD)           COLD (Remote)            │
-│   ┌──────────┐        ┌──────────┐        ┌──────────────┐           │
-│   │HashMapSt │  ───▶  │ RocksDB  │  ───▶  │ S3/DynamoDB  │           │
-│   │  (fast)  │ demote │  (local) │ demote │   (cheap)    │           │
-│   └──────────┘        └──────────┘        └──────────────┘           │
-│        ▲                   │                    │                     │
-│        │      promote      │       promote      │                     │
-│        └───────────────────┴────────────────────┘                     │
-│                                                                       │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                  Two-Tier Storage Architecture                │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│   HOT (RAM)                    WARM (Disk)                   │
+│   ┌──────────────────┐        ┌──────────────────┐          │
+│   │ HashMapStore      │ demote │ RocksDB column   │          │
+│   │ keys + metadata + │ ─────▶ │ family stores    │          │
+│   │ hot values        │        │ demoted values   │          │
+│   └──────────────────┘        └──────────────────┘          │
+│          ▲                          │                        │
+│          │         promote          │                        │
+│          └──────────────────────────┘                        │
+│                                                              │
+│   Keys and metadata ALWAYS remain in RAM.                    │
+│   Only values are demoted to disk.                           │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-| Tier | Storage | Latency | Cost | Use Case |
-|------|---------|---------|------|----------|
-| **Hot** | In-memory (HashMapStore) | < 1μs | $$$ | Frequently accessed data |
-| **Warm** | Local SSD (RocksDB) | < 1ms | $$ | Recently accessed, overflow |
-| **Cold** | Remote (S3, DynamoDB) | 10-100ms | $ | Archival, rarely accessed |
+| Tier | Storage | Latency | Contents |
+|------|---------|---------|----------|
+| **Hot** | In-memory (HashMapStore) | < 1μs | Keys + metadata + values |
+| **Warm** | Local SSD (RocksDB CF) | ~50–200μs (NVMe) | Demoted values only |
 
 ---
 
@@ -35,342 +36,177 @@ Tiered storage automatically moves data between storage tiers based on access pa
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| **Promotion strategy** | Eager | Accessed cold/warm keys immediately promoted to hot |
-| **Eviction integration** | Demote instead of delete | When hot tier hits maxmemory, demote to warm/cold |
-| **Warm tier backend** | RocksDB | Reuse existing persistence infrastructure |
-| **Cold tier** | Pluggable trait | Support S3, DynamoDB, or custom backends |
-| **Tier metadata** | In-memory index | Fast O(1) lookup of key location |
-| **Async model** | Block until complete | Simple semantics, connection waits for cold read |
+| **Promotion strategy** | Eager on access | Accessed warm values immediately promoted to hot |
+| **Eviction integration** | Demote instead of delete | When hot tier hits maxmemory, demote value to warm |
+| **Warm tier backend** | RocksDB column family | Reuse existing persistence infrastructure |
+| **Key/metadata location** | Always in RAM | O(1) EXISTS, SCAN, eviction sampling, TTL checks |
+| **Value storage** | `ValueLocation` enum | Tombstone in existing store (Option B) |
+| **I/O model** | Synchronous | RocksDB reads are blocking but fast (~50–200μs on NVMe) |
 | **TTL keys** | Eligible for demotion | Expiry checked on promotion |
 
 ---
 
-## New Abstractions
+## Core Abstraction: ValueLocation
 
-### TierLocation Enum
+Instead of maintaining a separate index for warm keys, the existing `Entry` struct is extended with a `ValueLocation` enum. This preserves all existing SCAN, EXISTS, key counting, sampling, and eviction logic without changes — they already iterate entries.
 
 ```rust
-/// Identifies which storage tier a key resides in
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TierLocation {
-    /// In-memory HashMapStore (fastest)
-    Hot,
-    /// Local SSD via RocksDB (fast, persistent)
+/// Where a key's value currently resides
+#[derive(Debug)]
+enum ValueLocation {
+    /// Value is in RAM (normal case)
+    Hot(Arc<Value>),
+    /// Value has been demoted to RocksDB warm tier
     Warm,
-    /// Remote object storage (slow, cheapest)
-    Cold,
 }
-```
 
-### TierIndex
-
-Tracks the location of keys not in the hot tier:
-
-```rust
-/// Index mapping keys to their storage tier
+/// Entry in the store with value location and metadata.
 ///
-/// Note: Hot tier keys are NOT tracked here - they exist in HashMapStore.
-/// This index only tracks warm and cold tier keys.
-pub struct TierIndex {
-    /// Key -> tier location (warm or cold only)
-    locations: HashMap<Bytes, TierLocation>,
-
-    /// Statistics
-    warm_count: usize,
-    cold_count: usize,
+/// Keys and metadata are ALWAYS in RAM. Only the value may be on disk.
+#[derive(Debug)]
+struct Entry {
+    location: ValueLocation,
+    metadata: KeyMetadata,
 }
 
-impl TierIndex {
-    /// Check if a key exists in warm or cold tier
-    pub fn get(&self, key: &[u8]) -> Option<TierLocation> {
-        self.locations.get(key).copied()
+impl Entry {
+    /// Returns the in-memory value, or None if demoted to warm tier.
+    fn hot_value(&self) -> Option<&Arc<Value>> {
+        match &self.location {
+            ValueLocation::Hot(v) => Some(v),
+            ValueLocation::Warm => None,
+        }
     }
 
-    /// Track a key as being in warm or cold tier
-    pub fn insert(&mut self, key: Bytes, location: TierLocation) {
-        debug_assert!(location != TierLocation::Hot);
-        // Update counts
-        if let Some(old) = self.locations.insert(key, location) {
-            self.decrement_count(old);
-        }
-        self.increment_count(location);
-    }
-
-    /// Remove tracking when key is promoted to hot or deleted
-    pub fn remove(&mut self, key: &[u8]) -> Option<TierLocation> {
-        if let Some(loc) = self.locations.remove(key) {
-            self.decrement_count(loc);
-            Some(loc)
-        } else {
-            None
-        }
+    /// Returns true if the value is currently in RAM.
+    fn is_hot(&self) -> bool {
+        matches!(self.location, ValueLocation::Hot(_))
     }
 }
 ```
 
-### ColdStorage Trait
-
-Pluggable interface for remote storage backends:
-
-```rust
-use async_trait::async_trait;
-
-/// Trait for cold storage backends (S3, DynamoDB, etc.)
-///
-/// All operations are async since cold storage involves network I/O.
-#[async_trait]
-pub trait ColdStorage: Send + Sync {
-    /// Retrieve a value and its metadata from cold storage
-    async fn get(&self, key: &[u8]) -> Result<Option<ColdEntry>, ColdStorageError>;
-
-    /// Store a value with metadata in cold storage
-    async fn set(&self, key: &[u8], entry: &ColdEntry) -> Result<(), ColdStorageError>;
-
-    /// Delete a key from cold storage
-    async fn delete(&self, key: &[u8]) -> Result<bool, ColdStorageError>;
-
-    /// Check if a key exists (without retrieving value)
-    async fn contains(&self, key: &[u8]) -> Result<bool, ColdStorageError>;
-
-    /// Scan keys with cursor-based pagination
-    /// Returns (next_cursor, keys) where empty cursor means end
-    async fn scan(
-        &self,
-        cursor: &str,
-        count: usize,
-        pattern: Option<&[u8]>,
-    ) -> Result<(String, Vec<Bytes>), ColdStorageError>;
-
-    /// Batch get for efficiency (optional, default calls get() in loop)
-    async fn batch_get(&self, keys: &[&[u8]]) -> Result<Vec<Option<ColdEntry>>, ColdStorageError> {
-        let mut results = Vec::with_capacity(keys.len());
-        for key in keys {
-            results.push(self.get(key).await?);
-        }
-        Ok(results)
-    }
-}
-
-/// Entry stored in cold storage
-pub struct ColdEntry {
-    pub value: Value,
-    pub metadata: KeyMetadata,
-    /// Unix timestamp (ms) when demoted to cold
-    pub demoted_at: u64,
-}
-
-/// Errors from cold storage operations
-#[derive(Debug, thiserror::Error)]
-pub enum ColdStorageError {
-    #[error("connection failed: {0}")]
-    Connection(String),
-    #[error("timeout after {0}ms")]
-    Timeout(u64),
-    #[error("key not found")]
-    NotFound,
-    #[error("serialization error: {0}")]
-    Serialization(String),
-    #[error("backend error: {0}")]
-    Backend(String),
-}
-```
-
-### TieredStore
-
-Wraps hot, warm, and cold tiers behind the `Store` trait:
-
-```rust
-/// Tiered storage implementation
-///
-/// Provides transparent access to keys across all tiers.
-/// Keys are automatically promoted on access and demoted on memory pressure.
-pub struct TieredStore {
-    /// Hot tier: in-memory HashMap (fastest)
-    hot: HashMapStore,
-
-    /// Warm tier: local RocksDB (optional)
-    warm: Option<Arc<RocksStore>>,
-
-    /// Cold tier: remote storage (optional)
-    cold: Option<Arc<dyn ColdStorage>>,
-
-    /// Index tracking warm/cold key locations
-    index: TierIndex,
-
-    /// Tiered storage configuration
-    config: TieredConfig,
-
-    /// Tokio runtime handle for blocking on async cold operations
-    runtime: tokio::runtime::Handle,
-
-    /// Metrics
-    metrics: TieredMetrics,
-}
-
-impl Store for TieredStore {
-    fn get(&self, key: &[u8]) -> Option<Value> {
-        // 1. Check hot tier first
-        if let Some(value) = self.hot.get(key) {
-            return Some(value);
-        }
-
-        // 2. Check tier index for warm/cold location
-        match self.index.get(key) {
-            Some(TierLocation::Warm) => self.get_from_warm_and_promote(key),
-            Some(TierLocation::Cold) => self.get_from_cold_and_promote(key),
-            None => None, // Key doesn't exist
-            Some(TierLocation::Hot) => unreachable!(),
-        }
-    }
-
-    fn set(&mut self, key: Bytes, value: Value) -> Option<Value> {
-        // Always write to hot tier
-        // If key was in warm/cold, remove from those tiers
-        if let Some(location) = self.index.remove(&key) {
-            self.delete_from_tier(&key, location);
-        }
-        self.hot.set(key, value)
-    }
-
-    fn delete(&mut self, key: &[u8]) -> bool {
-        // Delete from all tiers
-        let hot_deleted = self.hot.delete(key);
-        let index_removed = self.index.remove(key);
-
-        if let Some(location) = index_removed {
-            self.delete_from_tier(key, location);
-        }
-
-        hot_deleted || index_removed.is_some()
-    }
-
-    fn memory_used(&self) -> usize {
-        // Only report hot tier memory for maxmemory enforcement
-        self.hot.memory_used()
-    }
-
-    // ... other Store methods
-}
-```
+This approach (Option B from design discussion) is simpler than a separate `TierIndex` because:
+- Existing SCAN iterates `data: HashMap<Bytes, Entry>` — warm keys appear naturally
+- EXISTS checks the same HashMap — no secondary lookup needed
+- Eviction sampling already iterates entries — warm keys are skippable via `is_hot()`
+- Key counting, TTL expiry, and metadata access all work unchanged
+- `memory_used()` only counts `Hot` entries toward maxmemory
 
 ---
 
 ## Tier Operations
 
-### Promotion (Cold/Warm → Hot)
+### Demotion (Hot → Warm)
 
-When a key in warm or cold tier is accessed, it is immediately promoted to hot:
+When memory pressure triggers eviction and a tiered policy is active, values are demoted to the RocksDB warm column family instead of deleted:
 
 ```rust
-impl TieredStore {
-    fn get_from_warm_and_promote(&mut self, key: &[u8]) -> Option<Value> {
-        // Read from RocksDB warm tier
-        let entry = self.warm.as_ref()?.get_entry(key)?;
+impl HashMapStore {
+    /// Demote a key's value from RAM to the warm tier (RocksDB).
+    ///
+    /// The key and metadata remain in RAM. Only the serialized value
+    /// is written to the warm column family.
+    fn demote_key(
+        &mut self,
+        key: &[u8],
+        warm: &RocksStore,
+    ) -> Result<usize, DemotionError> {
+        let entry = self.data.get_mut(key)
+            .ok_or(DemotionError::KeyNotFound)?;
 
-        // Check TTL before promoting
-        if let Some(expires_at) = entry.metadata.expires_at {
-            if Instant::now() >= expires_at {
-                // Key expired - delete and return None
-                self.warm.as_ref()?.delete(key);
-                self.index.remove(key);
-                self.metrics.expired_on_promote.inc();
-                return None;
-            }
-        }
+        // Only demote hot values
+        let value = match &entry.location {
+            ValueLocation::Hot(v) => v.clone(),
+            ValueLocation::Warm => return Err(DemotionError::AlreadyWarm),
+        };
 
-        // Promote to hot tier
-        self.hot.set_with_metadata(
-            Bytes::copy_from_slice(key),
-            entry.value.clone(),
-            entry.metadata,
-        );
+        let memory_freed = value.memory_size();
 
-        // Remove from warm tier and index
-        self.warm.as_ref()?.delete(key);
-        self.index.remove(key);
+        // Serialize and write value to RocksDB warm column family
+        let serialized = serialize_value(&value);
+        warm.put_cf(WARM_CF, key, &serialized)?;
 
-        self.metrics.promotions_warm_to_hot.inc();
-        Some(entry.value)
-    }
+        // Replace hot value with warm marker — key + metadata stay in RAM
+        entry.location = ValueLocation::Warm;
+        self.memory_used -= memory_freed;
 
-    fn get_from_cold_and_promote(&mut self, key: &[u8]) -> Option<Value> {
-        let cold = self.cold.as_ref()?;
-
-        // Block on async cold storage read
-        let entry = self.runtime.block_on(async {
-            cold.get(key).await
-        }).ok()??;
-
-        // Check TTL before promoting
-        if let Some(expires_at) = entry.metadata.expires_at {
-            if Instant::now() >= expires_at {
-                // Key expired - delete from cold and return None
-                let _ = self.runtime.block_on(cold.delete(key));
-                self.index.remove(key);
-                self.metrics.expired_on_promote.inc();
-                return None;
-            }
-        }
-
-        // Promote to hot tier
-        self.hot.set_with_metadata(
-            Bytes::copy_from_slice(key),
-            entry.value.clone(),
-            entry.metadata,
-        );
-
-        // Remove from cold tier and index
-        let _ = self.runtime.block_on(cold.delete(key));
-        self.index.remove(key);
-
-        self.metrics.promotions_cold_to_hot.inc();
-        Some(entry.value)
+        Ok(memory_freed)
     }
 }
 ```
 
-### Demotion (Hot → Warm/Cold)
+### Promotion (Warm → Hot)
 
-When memory pressure triggers eviction, keys are demoted instead of deleted:
+When a warm key is accessed, its value is eagerly promoted back to RAM:
 
 ```rust
-impl TieredStore {
-    /// Demote a key from hot tier to warm (or cold if warm unavailable)
-    pub fn demote_key(&mut self, key: &[u8]) -> Result<usize, DemotionError> {
-        // Get entry from hot tier
-        let entry = self.hot.get_entry(key)
-            .ok_or(DemotionError::KeyNotFound)?;
+impl HashMapStore {
+    /// Promote a warm key's value back to RAM.
+    ///
+    /// Reads the serialized value from RocksDB, deserializes it,
+    /// and replaces the Warm marker with a Hot value.
+    fn promote_key(
+        &mut self,
+        key: &[u8],
+        warm: &RocksStore,
+    ) -> Option<Arc<Value>> {
+        let entry = self.data.get_mut(key)?;
 
-        let memory_freed = entry.metadata.memory_size;
-
-        // Try warm tier first
-        if let Some(warm) = &self.warm {
-            warm.set_entry(key, &entry)?;
-            self.index.insert(Bytes::copy_from_slice(key), TierLocation::Warm);
-            self.hot.delete(key);
-            self.metrics.demotions_hot_to_warm.inc();
-            return Ok(memory_freed);
+        // Only promote warm values
+        if entry.is_hot() {
+            return entry.hot_value().cloned();
         }
 
-        // Fall back to cold tier
-        if let Some(cold) = &self.cold {
-            let cold_entry = ColdEntry {
-                value: entry.value,
-                metadata: entry.metadata,
-                demoted_at: current_unix_ms(),
-            };
-
-            self.runtime.block_on(async {
-                cold.set(key, &cold_entry).await
-            })?;
-
-            self.index.insert(Bytes::copy_from_slice(key), TierLocation::Cold);
-            self.hot.delete(key);
-            self.metrics.demotions_hot_to_cold.inc();
-            return Ok(memory_freed);
+        // Check TTL before promoting
+        if let Some(expires_at) = entry.metadata.expires_at {
+            if Instant::now() >= expires_at {
+                // Key expired — delete entirely
+                self.delete(key);
+                warm.delete_cf(WARM_CF, key).ok();
+                return None;
+            }
         }
 
-        Err(DemotionError::NoTierAvailable)
+        // Read from RocksDB
+        let serialized = warm.get_cf(WARM_CF, key)?;
+        let value = Arc::new(deserialize_value(&serialized).ok()?);
+
+        let memory_added = value.memory_size();
+
+        // Promote to hot
+        entry.location = ValueLocation::Hot(value.clone());
+        self.memory_used += memory_added;
+
+        // Remove from warm tier
+        warm.delete_cf(WARM_CF, key).ok();
+
+        Some(value)
+    }
+}
+```
+
+### GET with Transparent Promotion
+
+```rust
+impl Store for HashMapStore {
+    fn get(&mut self, key: &[u8]) -> Option<Arc<Value>> {
+        // Fast path: key not in store at all
+        if !self.data.contains_key(key) {
+            return None;
+        }
+
+        let entry = self.data.get(key)?;
+
+        match &entry.location {
+            ValueLocation::Hot(v) => {
+                // Hot path — same as today, no disk I/O
+                Some(v.clone())
+            }
+            ValueLocation::Warm => {
+                // Warm path — promote from disk
+                self.promote_key(key, &self.warm_store)
+            }
+        }
     }
 }
 ```
@@ -384,7 +220,6 @@ impl TieredStore {
 New eviction policies that demote instead of delete:
 
 ```rust
-/// Eviction policy variants
 pub enum EvictionPolicy {
     // Existing policies (delete keys)
     NoEviction,
@@ -396,10 +231,10 @@ pub enum EvictionPolicy {
     AllkeysRandom,
     VolatileTtl,
 
-    // New tiered policies (demote keys)
-    /// Demote least recently used keys instead of deleting
+    // Tiered policies (demote values to disk)
+    /// Demote least recently used values instead of deleting
     TieredLru,
-    /// Demote least frequently used keys instead of deleting
+    /// Demote least frequently used values instead of deleting
     TieredLfu,
 }
 ```
@@ -407,76 +242,51 @@ pub enum EvictionPolicy {
 ### Eviction Flow with Tiering
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Tiered Eviction Flow                              │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                       │
-│   Write Operation                                                     │
-│        │                                                              │
-│        ▼                                                              │
-│   Check Memory: hot.memory_used() > config.hot_maxmemory ?           │
-│        │                                                              │
-│        ├── No ──▶ Proceed with write                                 │
-│        │                                                              │
-│        ▼ Yes                                                          │
-│   Select victim key (LRU/LFU sampling)                               │
-│        │                                                              │
-│        ▼                                                              │
-│   ┌────────────────────────────────────────────┐                     │
-│   │ Policy == TieredLru or TieredLfu ?         │                     │
-│   └────────────────┬───────────────────────────┘                     │
-│        │           │                                                  │
-│        │ Yes       │ No (standard policy)                            │
-│        ▼           ▼                                                  │
-│   demote_key()   delete_key()                                        │
-│        │           │                                                  │
-│        ▼           │                                                  │
-│   Memory freed     │                                                  │
-│   Data preserved   │                                                  │
-│        │           │                                                  │
-│        └───────────┴──▶ Retry write                                  │
-│                                                                       │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    Tiered Eviction Flow                       │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│   Write Operation                                            │
+│        │                                                     │
+│        ▼                                                     │
+│   Check Memory: store.memory_used() > config.hot_maxmemory ? │
+│        │                                                     │
+│        ├── No ──▶ Proceed with write                         │
+│        │                                                     │
+│        ▼ Yes                                                 │
+│   Select victim key (LRU/LFU sampling, skip Warm entries)    │
+│        │                                                     │
+│        ▼                                                     │
+│   ┌────────────────────────────────────────────┐             │
+│   │ Policy == TieredLru or TieredLfu ?         │             │
+│   └────────────────┬───────────────────────────┘             │
+│        │           │                                         │
+│        │ Yes       │ No (standard policy)                    │
+│        ▼           ▼                                         │
+│   demote_key()   delete_key()                                │
+│        │           │                                         │
+│        ▼           │                                         │
+│   Memory freed     │                                         │
+│   Value on disk    │                                         │
+│   Key+meta in RAM  │                                         │
+│        │           │                                         │
+│        └───────────┴──▶ Retry write                          │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-### Memory Threshold Configuration
+Note: Eviction sampling must **skip entries that are already `Warm`** — their values are already on disk and freeing them would only reclaim the ~80 bytes of key + metadata overhead, which is not worthwhile.
+
+### Memory Accounting
 
 ```rust
-/// Configuration for tiered storage
-pub struct TieredConfig {
-    /// Enable tiered storage
-    pub enabled: bool,
-
-    /// Hot tier memory limit (triggers demotion when exceeded)
-    /// This replaces maxmemory when tiered storage is enabled
-    pub hot_maxmemory: u64,
-
-    /// Warm tier settings
-    pub warm: WarmTierConfig,
-
-    /// Cold tier settings
-    pub cold: ColdTierConfig,
-
-    /// Eviction policy (should be TieredLru or TieredLfu for tiered storage)
-    pub eviction_policy: EvictionPolicy,
-}
-
-pub struct WarmTierConfig {
-    pub enabled: bool,
-    /// Use existing RocksDB persistence or separate instance
-    pub use_persistence_rocks: bool,
-    /// Column family name for warm tier data
-    pub column_family: String,
-}
-
-pub struct ColdTierConfig {
-    pub enabled: bool,
-    /// Backend type: "s3", "dynamodb", "noop", etc.
-    pub backend: String,
-    /// Backend-specific configuration (JSON)
-    pub backend_config: serde_json::Value,
-    /// Timeout for cold storage operations (ms)
-    pub timeout_ms: u64,
+impl HashMapStore {
+    fn memory_used(&self) -> usize {
+        // Only count Hot values toward maxmemory.
+        // Warm entries contribute ~80 bytes each (key + metadata)
+        // but their values are NOT counted.
+        self.memory_used
+    }
 }
 ```
 
@@ -484,106 +294,80 @@ pub struct ColdTierConfig {
 
 ## Warm Tier: RocksDB Integration
 
-The warm tier reuses FrogDB's existing RocksDB infrastructure:
+The warm tier reuses FrogDB's existing RocksDB persistence infrastructure with a dedicated column family:
+
+### Column Family Layout
+
+| Column Family | Purpose |
+|---------------|---------|
+| `shard_N` | Persistence (WAL recovery) |
+| `tiered_warm` | Warm tier value storage |
+
+Using a separate column family allows:
+- Independent compaction settings (warm tier data is write-heavy during demotion bursts)
+- Different compression (warm tier uses heavier compression since data is accessed less frequently)
+- Clear separation of persistence vs. tiering concerns
+
+### Initialization
 
 ```rust
-impl TieredStore {
-    /// Initialize warm tier using existing RocksDB instance
+impl HashMapStore {
+    /// Initialize warm tier using existing RocksDB instance.
     fn init_warm_tier(
-        rocks: Arc<RocksStore>,
+        rocks: &RocksStore,
         config: &WarmTierConfig,
     ) -> Result<(), StorageError> {
         // Create dedicated column family for warm tier
-        // Separate from persistence column families (shard_0, shard_1, etc.)
         rocks.create_column_family(&config.column_family)?;
         Ok(())
     }
 }
 ```
 
-### Warm Tier Column Family
-
-| Column Family | Purpose |
-|---------------|---------|
-| `shard_N` | Persistence (WAL recovery) |
-| `tiered_warm` | Warm tier storage |
-
-Using a separate column family allows:
-- Independent compaction settings
-- Different compression (warm tier may use heavier compression)
-- Clear separation of persistence vs. tiering concerns
-
 ### Serialization
 
-Warm tier uses the same serialization as persistence:
+Warm tier uses the same serialization format as persistence — no new serialization code needed:
 
 ```rust
-/// Serialize entry for warm/cold storage
-fn serialize_entry(entry: &Entry) -> Vec<u8> {
-    // Reuse existing persistence serialization
+/// Serialize a value for warm tier storage.
+/// Reuses existing persistence serialization.
+fn serialize_value(value: &Value) -> Vec<u8> {
     let mut buf = Vec::new();
-    serialize_value(&entry.value, &mut buf);
-    serialize_metadata(&entry.metadata, &mut buf);
+    persistence::serialize_value(value, &mut buf);
     buf
 }
 
-/// Deserialize entry from warm/cold storage
-fn deserialize_entry(data: &[u8]) -> Result<Entry, DeserializeError> {
-    let (value, rest) = deserialize_value(data)?;
-    let metadata = deserialize_metadata(rest)?;
-    Ok(Entry { value, metadata })
+/// Deserialize a value from warm tier storage.
+fn deserialize_value(data: &[u8]) -> Result<Value, DeserializeError> {
+    persistence::deserialize_value(data)
 }
 ```
+
+Note: Only the **value** is serialized to the warm tier. Metadata (TTL, LRU/LFU counters, type info) stays in the in-memory `Entry` and is never written to the warm column family.
 
 ---
 
-## Cold Tier: Backend Interface
+## SCAN Command Behavior
 
-### NoopColdStorage (Testing)
+SCAN naturally covers both tiers because all keys (hot and warm) are in the same in-memory `HashMap<Bytes, Entry>`:
 
 ```rust
-/// No-op cold storage for testing and disabled cold tier
-pub struct NoopColdStorage;
-
-#[async_trait]
-impl ColdStorage for NoopColdStorage {
-    async fn get(&self, _key: &[u8]) -> Result<Option<ColdEntry>, ColdStorageError> {
-        Ok(None)
-    }
-
-    async fn set(&self, _key: &[u8], _entry: &ColdEntry) -> Result<(), ColdStorageError> {
-        Ok(())
-    }
-
-    async fn delete(&self, _key: &[u8]) -> Result<bool, ColdStorageError> {
-        Ok(false)
-    }
-
-    async fn contains(&self, _key: &[u8]) -> Result<bool, ColdStorageError> {
-        Ok(false)
-    }
-
-    async fn scan(
+impl HashMapStore {
+    fn scan(
         &self,
-        _cursor: &str,
-        _count: usize,
-        _pattern: Option<&[u8]>,
-    ) -> Result<(String, Vec<Bytes>), ColdStorageError> {
-        Ok((String::new(), vec![]))
+        cursor: u64,
+        count: usize,
+        pattern: Option<&[u8]>,
+    ) -> (u64, Vec<Bytes>) {
+        // Unchanged — iterates self.data which contains ALL keys
+        // (both hot and warm). No special cursor encoding needed.
+        // Both tiers are local, so SCAN is always fast.
+        self.data.scan(cursor, count, pattern)
     }
 }
 ```
 
-### Future Backend Implementations
-
-| Backend | Module | Key Characteristics |
-|---------|--------|---------------------|
-| S3 | `tiered/backends/s3.rs` | Cheap, high latency, good for large values |
-| DynamoDB | `tiered/backends/dynamodb.rs` | Lower latency, item size limits |
-| Azure Blob | `tiered/backends/azure.rs` | Azure-native workloads |
-| GCS | `tiered/backends/gcs.rs` | GCP-native workloads |
-
-Backend implementations are deferred - only the trait is defined initially.
+This is a significant simplification over the three-tier SCAN which required cursor encoding to track tier transitions (2 bits for tier + 62 bits for tier-specific cursor) and could be slow when scanning the cold tier.
 
 ---
 
@@ -593,18 +377,19 @@ Backend implementations are deferred - only the trait is defined initially.
 
 ```rust
 pub struct ShardWorker {
-    /// Tiered store (replaces HashMapStore when tiering enabled)
-    store: TieredStore,  // Was: HashMapStore
+    /// Store — HashMapStore with optional warm tier support
+    store: HashMapStore,
 
-    /// Tokio runtime handle for async cold operations
-    runtime: tokio::runtime::Handle,
+    /// RocksDB instance for warm tier (shared with persistence)
+    warm_rocks: Option<Arc<RocksStore>>,
 
     // ... other fields unchanged
 }
 
 impl ShardWorker {
     fn execute_command(&mut self, cmd: &Command, args: &[Bytes]) -> Response {
-        // Store trait is unchanged - tiering is transparent
+        // Store trait is unchanged — tiering is transparent.
+        // GET may trigger a promotion; SET always writes to hot tier.
         let mut ctx = CommandContext {
             store: &mut self.store,
             // ...
@@ -614,29 +399,48 @@ impl ShardWorker {
 }
 ```
 
-### Background Demotion Task
+### SET Behavior
 
-Proactively demote warm tier keys to cold tier:
+Writes always go to the hot tier. If the key was previously demoted, the warm copy is cleaned up:
 
 ```rust
-impl ShardWorker {
-    /// Background task: demote warm keys to cold based on age
-    async fn background_warm_to_cold_demotion(&mut self) {
-        if !self.config.tiered.cold.enabled {
-            return;
+impl Store for HashMapStore {
+    fn set(&mut self, key: Bytes, value: Value) -> Option<Value> {
+        // If key exists and is Warm, remove from RocksDB
+        if let Some(entry) = self.data.get(&key) {
+            if !entry.is_hot() {
+                if let Some(warm) = &self.warm_store {
+                    warm.delete_cf(WARM_CF, &key).ok();
+                }
+            }
         }
 
-        let threshold = Duration::from_secs(
-            self.config.tiered.warm_to_cold_age_secs
-        );
+        // Write to hot tier (standard path)
+        self.data.insert(key, Entry {
+            location: ValueLocation::Hot(Arc::new(value)),
+            metadata: KeyMetadata::new(),
+        })
+    }
+}
+```
 
-        // Scan warm tier for old keys
-        let candidates = self.store.scan_warm_tier_by_age(threshold);
+### DELETE Behavior
 
-        for key in candidates.iter().take(BATCH_SIZE) {
-            if let Err(e) = self.store.demote_warm_to_cold(key) {
-                tracing::warn!("warm->cold demotion failed: {}", e);
+Deletes remove the key from both RAM and warm tier:
+
+```rust
+impl Store for HashMapStore {
+    fn delete(&mut self, key: &[u8]) -> bool {
+        if let Some(entry) = self.data.remove(key) {
+            // If value was warm, clean up RocksDB
+            if !entry.is_hot() {
+                if let Some(warm) = &self.warm_store {
+                    warm.delete_cf(WARM_CF, key).ok();
+                }
             }
+            true
+        } else {
+            false
         }
     }
 }
@@ -653,42 +457,20 @@ impl ShardWorker {
 enabled = false
 
 [tiered_storage.hot]
-# Memory limit for hot tier (triggers demotion when exceeded)
-# When tiered storage is enabled, this replaces the global maxmemory setting
+# Memory limit for hot tier (triggers demotion when exceeded).
+# When tiered storage is enabled, this replaces the global maxmemory setting.
 maxmemory = "1gb"
 
 [tiered_storage.warm]
-enabled = true
-# Use a dedicated column family in the existing RocksDB instance
+# Column family name for warm tier data in the existing RocksDB instance.
 column_family = "tiered_warm"
-# Compression for warm tier (heavier than hot, lighter than cold)
+# Compression for warm tier (heavier than hot since data is accessed less).
 compression = "lz4"
 
-[tiered_storage.cold]
-enabled = false
-# Backend: "noop", "s3", "dynamodb" (only noop implemented initially)
-backend = "noop"
-# Timeout for cold storage operations
-timeout_ms = 30000
-
-# Backend-specific configuration (when backend = "s3")
-# [tiered_storage.cold.s3]
-# bucket = "my-frogdb-cold-storage"
-# prefix = "frogdb/"
-# region = "us-east-1"
-
-# Backend-specific configuration (when backend = "dynamodb")
-# [tiered_storage.cold.dynamodb]
-# table = "frogdb-cold-storage"
-# region = "us-east-1"
-
 [tiered_storage.policy]
-# Eviction policy when tiered storage is enabled
-# Should be "tiered-lru" or "tiered-lfu" for demotion behavior
+# Eviction policy when tiered storage is enabled.
+# Should be "tiered-lru" or "tiered-lfu" for demotion behavior.
 eviction_policy = "tiered-lru"
-
-# Age threshold for automatic warm->cold demotion (0 = disabled)
-warm_to_cold_age_secs = 3600  # 1 hour
 ```
 
 ### CONFIG GET/SET Support
@@ -699,20 +481,126 @@ CONFIG GET tiered_storage.hot.maxmemory
 CONFIG SET tiered_storage.hot.maxmemory 2gb
 ```
 
+### Configuration Struct
+
+```rust
+pub struct TieredConfig {
+    /// Enable tiered storage
+    pub enabled: bool,
+
+    /// Hot tier memory limit (triggers demotion when exceeded).
+    /// Replaces maxmemory when tiered storage is enabled.
+    pub hot_maxmemory: u64,
+
+    /// Warm tier settings
+    pub warm: WarmTierConfig,
+
+    /// Eviction policy (should be TieredLru or TieredLfu)
+    pub eviction_policy: EvictionPolicy,
+}
+
+pub struct WarmTierConfig {
+    /// Column family name for warm tier data
+    pub column_family: String,
+
+    /// Compression algorithm for warm tier
+    pub compression: CompressionType,
+}
+```
+
+---
+
+## Recovery Behavior
+
+### Startup with Tiered Storage
+
+On startup, all keys are loaded into RAM with their metadata, but values start as `Warm`:
+
+```
+1. Scan RocksDB warm column family for all keys
+2. For each key: load key + metadata into HashMapStore as Entry { location: Warm, metadata }
+3. Hot tier starts with all keys but no values in RAM
+4. Values are promoted lazily on first access
+```
+
+This gives fast startup (no need to deserialize all values) and naturally adapts to access patterns — frequently accessed keys are promoted quickly.
+
+### Index Reconstruction
+
+```rust
+impl HashMapStore {
+    /// Rebuild store from warm tier on startup.
+    ///
+    /// Loads all keys and metadata into RAM, marking values as Warm.
+    /// Values will be promoted lazily on access.
+    fn rebuild_from_warm(&mut self, warm: &RocksStore) -> Result<(), StorageError> {
+        let iter = warm.iter_cf(WARM_CF)?;
+
+        for (key, serialized_value) in iter {
+            // Extract metadata from the serialized entry
+            // (or store metadata separately in a metadata CF)
+            let metadata = extract_metadata(&key, &serialized_value)?;
+
+            self.data.insert(Bytes::from(key), Entry {
+                location: ValueLocation::Warm,
+                metadata,
+            });
+        }
+
+        Ok(())
+    }
+}
+```
+
+### Persistence Interaction
+
+The warm tier and persistence (WAL) are independent:
+- **Persistence** captures the full key+value for durability/recovery
+- **Warm tier** stores demoted values for memory overflow
+
+On crash recovery, data is restored from the WAL/RocksDB persistence column families as usual. If tiered storage is enabled, the warm column family may also contain demoted values that need to be reconciled — keys present in both persistence and warm should prefer the persistence copy (it's newer).
+
+---
+
+## Replication
+
+Tiered storage is **primary-local** — it does not affect the replication protocol:
+
+- **Primary** demotes/promotes values locally based on its own memory pressure
+- **Replication stream** sends standard SET/DEL commands as before
+- **Replicas** receive full values via replication (they may independently decide to tier based on their own memory pressure)
+
+A demoted key on the primary is invisible to replicas — they just see the key as if it were hot. This means replicas may have different hot/warm distributions than the primary, which is fine since tiering is a local memory optimization.
+
+---
+
+## Latency Characteristics
+
+| Operation | Hot Key | Warm Key | Notes |
+|-----------|---------|----------|-------|
+| GET | < 1μs | ~50–200μs | NVMe point read + deserialization |
+| EXISTS | < 1μs | < 1μs | Key always in RAM |
+| TTL | < 1μs | < 1μs | Metadata always in RAM |
+| SCAN | < 1μs/key | < 1μs/key | Keys always in RAM, no value fetch |
+| SET | < 1μs | < 1μs + RocksDB delete | Warm cleanup if overwriting demoted key |
+| DEL | < 1μs | < 1μs + RocksDB delete | Warm cleanup for demoted key |
+
+The warm key read latency (~50–200μs on NVMe) is the same order of magnitude as a network round-trip to the client, so the client-perceived latency for a warm key is roughly **2x** that of a hot key.
+
 ---
 
 ## Metrics
 
-### New Prometheus Metrics
+### Prometheus Metrics
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `frogdb_tiered_keys` | Gauge | tier, shard | Keys in each tier |
-| `frogdb_tiered_bytes` | Gauge | tier, shard | Bytes in each tier (hot only) |
-| `frogdb_tiered_promotions_total` | Counter | from_tier, to_tier, shard | Promotion count |
-| `frogdb_tiered_demotions_total` | Counter | from_tier, to_tier, shard | Demotion count |
-| `frogdb_tiered_cold_latency_ms` | Histogram | operation, shard | Cold storage latency |
-| `frogdb_tiered_expired_on_promote_total` | Counter | tier, shard | Keys found expired during promotion |
+| `frogdb_tiered_keys` | Gauge | tier={hot,warm}, shard | Keys in each tier |
+| `frogdb_tiered_bytes` | Gauge | shard | Hot tier bytes (memory used) |
+| `frogdb_tiered_promotions_total` | Counter | shard | Warm → Hot promotion count |
+| `frogdb_tiered_demotions_total` | Counter | shard | Hot → Warm demotion count |
+| `frogdb_tiered_warm_read_seconds` | Histogram | shard | Warm tier read latency |
+| `frogdb_tiered_expired_on_promote_total` | Counter | shard | Keys found expired during promotion |
 
 ### INFO Command Extensions
 
@@ -722,132 +610,104 @@ tiered_enabled:1
 tiered_hot_keys:1000000
 tiered_hot_bytes:1073741824
 tiered_warm_keys:500000
-tiered_cold_keys:2000000
-tiered_promotions_warm_to_hot:12345
-tiered_promotions_cold_to_hot:678
-tiered_demotions_hot_to_warm:9876
-tiered_demotions_hot_to_cold:543
-tiered_demotions_warm_to_cold:210
+tiered_promotions:12345
+tiered_demotions:9876
+tiered_expired_on_promote:42
 ```
 
 ---
 
 ## Implementation Files
 
-### New Files
-
-| File | Purpose |
-|------|---------|
-| `crates/core/src/tiered/mod.rs` | Module root, `TierLocation` enum, re-exports |
-| `crates/core/src/tiered/store.rs` | `TieredStore` implementation |
-| `crates/core/src/tiered/index.rs` | `TierIndex` key location tracking |
-| `crates/core/src/tiered/cold.rs` | `ColdStorage` trait, `ColdEntry`, errors |
-| `crates/core/src/tiered/config.rs` | `TieredConfig` and sub-configs |
-| `crates/core/src/tiered/backends/mod.rs` | Backend implementations module |
-| `crates/core/src/tiered/backends/noop.rs` | `NoopColdStorage` for testing |
-
 ### Modified Files
 
 | File | Changes |
 |------|---------|
-| `crates/core/src/lib.rs` | Add `pub mod tiered;` |
-| `crates/core/src/store.rs` | Add `get_entry()` method to `Store` trait |
+| `crates/core/src/store/hashmap.rs` | Add `ValueLocation` enum to `Entry`, `demote_key()`, `promote_key()` |
+| `crates/core/src/store/mod.rs` | Store trait: `get()` may now do disk I/O for warm keys |
 | `crates/core/src/eviction/policy.rs` | Add `TieredLru`, `TieredLfu` variants |
-| `crates/core/src/eviction/mod.rs` | Add demotion logic path |
-| `crates/core/src/shard.rs` | Use `TieredStore`, add background demotion task |
+| `crates/core/src/shard/eviction.rs` | `check_memory_for_write()`: demote instead of delete for tiered policies |
+| `crates/core/src/shard/worker.rs` | Initialize warm RocksDB column family, wire through to store |
 | `crates/server/src/config/mod.rs` | Add `TieredStorageConfig` section |
-| `crates/server/src/server.rs` | Initialize tiered storage if enabled |
+| `crates/server/src/server.rs` | Initialize warm column family if tiered storage enabled |
+
+### No New Crate Needed
+
+All changes fit within existing crates. No `tiered/` module tree, no `ColdStorage` trait, no async backend infrastructure.
 
 ---
 
-## Recovery Behavior
+## Complex Data Types
 
-### Startup with Tiered Storage
+### Whole-Value Tiering
+
+This spec demotes the **entire `Value` enum** as a serialized blob — all types (String, Hash, List, Set,
+SortedSet, Stream, BloomFilter, HyperLogLog, TimeSeries, Json) are eligible for demotion. On
+promotion, the full in-memory structure is reconstructed from the serialized form.
+
+This is the same approach Redis Enterprise originally used and is the simplest correct design. It
+works because we already serialize every type for persistence — no new serialization code is needed.
+
+### The Partial-Access Problem
+
+Strings are ideal for whole-value tiering because every access (`GET`, `GETRANGE`, `APPEND`) reads
+or replaces the entire value. For collection types, most commands touch a fraction of the data:
+
+| Command | Work required on a warm key |
+|---------|-----------------------------|
+| `GET key` (string) | Deserialize whole value — required anyway |
+| `HGET key field` | Deserialize entire hash to extract one field |
+| `HSET key field val` | Deserialize entire hash, modify one field, promote whole hash |
+| `LINDEX key 5` | Deserialize entire list to access one element |
+| `SISMEMBER key member` | Deserialize entire set for one membership check |
+| `ZSCORE key member` | Deserialize entire sorted set for one score lookup |
+
+This is why DragonflyDB limited their SSD tiering to strings only — their architecture (io_uring with
+direct I/O, 4KB page binpacking per thread) doesn't lend itself to deserializing complex structures,
+and strings avoid the partial-access overhead entirely.
+
+### Why Whole-Value Is Acceptable
+
+For most workloads, the partial-access cost is negligible:
+
+1. **Most collections are small.** The median Redis hash/set has < 100 elements. Deserializing 100
+   fields takes single-digit microseconds — negligible next to the ~50–200μs disk read.
+
+2. **Large collections free the most memory.** A 10MB hash that gets demoted frees 10MB of RAM. The
+   one-time deserialization cost on re-access is a good tradeoff for that memory savings.
+
+3. **Eager promotion is self-correcting.** After the first access, the entire structure is back in
+   RAM and all subsequent commands are fast. If a collection is accessed frequently enough for
+   deserialization cost to matter, LRU/LFU would keep it hot and never demote it in the first place.
+
+4. **The pathological case is already pathological.** A 100K-field hash where you access one field
+   and never touch it again is a case where application-level partitioning (splitting the hash into
+   smaller keys) is the right solution regardless of tiering.
+
+### Future: Per-Field Tiering
+
+A more sophisticated approach keeps collection scaffolding in RAM and demotes individual field values:
 
 ```
-1. Load TierIndex from warm tier (RocksDB scan)
-2. Cold tier index is NOT preloaded (lazy discovery)
-3. Hot tier starts empty (populated via access)
+Hash "user:123" (10K fields)
+  RAM:  HashMap<field_name → FieldLocation>   ← scaffolding stays in memory
+  Disk: individual field values               ← only values on disk
+
+HGET user:123 email → scaffolding lookup (RAM) → read one value (disk)
 ```
 
-### Index Reconstruction
+This would be more efficient for partial access to large collections, but dramatically increases
+complexity:
 
-```rust
-impl TieredStore {
-    /// Rebuild tier index from warm tier on startup
-    fn rebuild_index_from_warm(&mut self) -> Result<(), StorageError> {
-        if let Some(warm) = &self.warm {
-            let mut cursor = String::new();
-            loop {
-                let (next, keys) = warm.scan(&cursor, 1000)?;
-                for key in keys {
-                    self.index.insert(key, TierLocation::Warm);
-                }
-                if next.is_empty() {
-                    break;
-                }
-                cursor = next;
-            }
-        }
-        Ok(())
-    }
-}
-```
+- Every collection type needs its own tiering strategy (HashMap, VecDeque, SkipList, etc.)
+- RocksDB key scheme becomes `{key}\x00{field}` — many more RocksDB keys, more compaction overhead
+- `HGETALL` on a demoted hash becomes N disk reads instead of 1 whole-value read
+- Sorted set range queries need the score index (SkipList/BTreeMap) in RAM with values on disk
+- Per-field serialization format diverges from persistence serialization
 
-### Cold Tier Discovery
-
-Cold tier keys are discovered lazily:
-1. Key not found in hot or warm tier
-2. Key not in TierIndex
-3. Check cold tier (expensive)
-4. If found, add to TierIndex and promote
-
-This avoids loading the entire cold tier inventory on startup.
-
----
-
-## SCAN Command Behavior
-
-SCAN must enumerate keys across all tiers:
-
-```rust
-impl TieredStore {
-    fn scan(
-        &self,
-        cursor: u64,
-        count: usize,
-        pattern: Option<&[u8]>,
-    ) -> (u64, Vec<Bytes>) {
-        // Cursor encoding: tier (2 bits) + tier-specific cursor (62 bits)
-        let tier = (cursor >> 62) as u8;
-        let tier_cursor = cursor & 0x3FFFFFFFFFFFFFFF;
-
-        match tier {
-            0 => {
-                // Scan hot tier
-                let (next, keys) = self.hot.scan(tier_cursor, count, pattern);
-                if next == 0 {
-                    // Hot tier exhausted, move to warm
-                    (1 << 62, keys)
-                } else {
-                    (next, keys)
-                }
-            }
-            1 => {
-                // Scan warm tier
-                // ...
-            }
-            2 => {
-                // Scan cold tier (expensive!)
-                // ...
-            }
-            _ => (0, vec![]),
-        }
-    }
-}
-```
-
-**Note:** SCAN across cold tier may be slow. Consider warning users or limiting cold tier SCAN.
+This is a potential future optimization once whole-value tiering proves its value in production. It
+would primarily benefit workloads with very large collections (10K+ elements) and partial-access
+patterns.
 
 ---
 
@@ -855,11 +715,12 @@ impl TieredStore {
 
 | Aspect | Trade-off |
 |--------|-----------|
-| **Cold access latency** | Blocking model adds 10-100ms latency for cold key access |
-| **TierIndex memory** | ~50 bytes per warm/cold key for index overhead |
-| **SCAN performance** | Full SCAN touching cold tier will be slow |
-| **Consistency** | Demotion/promotion are not atomic with commands |
-| **Recovery time** | Warm tier index must be rebuilt on startup |
+| **Per-key RAM overhead** | ~80 bytes per warm key (key bytes + metadata). Keys can never be fully evicted to reclaim this. |
+| **Warm access latency** | ~50–200μs for NVMe reads, vs < 1μs for hot. Acceptable for infrequently accessed data. |
+| **Recovery time** | Must scan warm column family on startup to rebuild key index |
+| **Atomicity** | Demotion/promotion are not atomic with commands (same as current eviction) |
+| **Collection deserialization** | Partial-access commands (HGET, LINDEX) on warm collections deserialize the entire value. Acceptable for typical sizes; see [Complex Data Types](#complex-data-types). |
+| **No cold tier** | Very large datasets (>> local disk) still require application-level tiering to remote storage |
 
 ---
 
@@ -867,18 +728,18 @@ impl TieredStore {
 
 | Enhancement | Description |
 |-------------|-------------|
-| **Lazy promotion** | Option to read from cold without promoting |
-| **Async promotion** | Non-blocking cold reads with callback |
-| **Tiered SCAN** | Skip cold tier option for SCAN |
-| **Key patterns** | Route specific key patterns to specific tiers |
-| **Compression** | Different compression per tier |
-| **Encryption** | Encrypt data in cold storage |
+| **Lazy promotion** | Option to read warm values without promoting (saves memory for one-off reads) |
+| **Compression** | Per-tier compression settings (heavier for warm) |
+| **Key patterns** | Route specific key patterns to always stay hot |
+| **Warm-only writes** | Write large values directly to warm tier |
+| **Per-field tiering** | Demote individual field values within collections, keeping scaffolding in RAM |
+| **Cold tier** | S3/DynamoDB backends for archival (see [NOT_YET_IMPLEMENTED.md](../todo/NOT_YET_IMPLEMENTED.md)) |
 
 ---
 
 ## References
 
-- [STORAGE.md](STORAGE.md) - Storage layer architecture
-- [EVICTION.md](EVICTION.md) - Eviction policies
-- [PERSISTENCE.md](PERSISTENCE.md) - RocksDB integration
-- [CONFIGURATION.md](CONFIGURATION.md) - Configuration reference
+- [STORAGE.md](STORAGE.md) — Storage layer architecture
+- [EVICTION.md](EVICTION.md) — Eviction policies
+- [PERSISTENCE.md](PERSISTENCE.md) — RocksDB integration
+- [CONFIGURATION.md](CONFIGURATION.md) — Configuration reference
