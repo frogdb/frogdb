@@ -52,7 +52,6 @@ have been annotated with `[Not Yet Implemented]` markers.
 
 | Item                            | Description                                                             | Spec                             |
 | ------------------------------- | ----------------------------------------------------------------------- | -------------------------------- |
-| Enhanced LATENCY DOCTOR         | Correlation detection, SLOWLOG cross-reference, scatter-gather analysis | [ROADMAP.md](../spec/ROADMAP.md) |
 | Automated alert rule generation | `/alerts/prometheus` endpoint for generated alerting rules              | [ROADMAP.md](../spec/ROADMAP.md) |
 
 ## Future / Research
