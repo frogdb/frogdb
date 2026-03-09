@@ -226,7 +226,7 @@ mod unit_tests {
         let tmp = TempDir::new().unwrap();
         let rocks = RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap();
 
-        let (mut store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
+        let (store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
 
         assert_eq!(store.len(), 0);
         assert!(expiry_index.is_empty());
@@ -281,7 +281,7 @@ mod unit_tests {
             .unwrap();
 
         // Recover
-        let (mut store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
+        let (store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
 
         assert_eq!(store.len(), 1);
         assert_eq!(expiry_index.len(), 1);

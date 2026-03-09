@@ -98,7 +98,7 @@ mod tests {
     fn test_format_event() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 56604);
         let event = MonitorEvent {
-            timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::new(1339844074, 277166_000),
+            timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::new(1339844074, 277_166_000),
             client_addr: addr,
             cmd_name: "SET".to_string(),
             args: vec![Bytes::from("key"), Bytes::from("value")],

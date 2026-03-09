@@ -524,7 +524,7 @@ mod recovery_correctness {
         harness.crash();
 
         // Recover
-        let (mut stores, _stats) = harness.recover();
+        let (stores, _stats) = harness.recover();
 
         // Expiry index should contain the 2 keys with expiry
         let expiry_index = &stores[0].1;
@@ -618,7 +618,7 @@ mod recovery_correctness {
         harness.flush();
         harness.crash();
 
-        let (mut stores, stats) = harness.recover();
+        let (stores, stats) = harness.recover();
 
         // Total should be 10 + 20 + 30 + 40 = 100
         assert_eq!(stats.keys_loaded, 100);
@@ -640,7 +640,7 @@ mod recovery_correctness {
         harness.flush();
         harness.crash();
 
-        let (mut stores, stats) = harness.recover();
+        let (stores, stats) = harness.recover();
 
         assert_eq!(stats.keys_loaded, 1);
         assert_eq!(stores[0].0.len(), 1);
@@ -746,7 +746,7 @@ mod fault_injection {
 
         // Reopen - RocksDB should replay WAL
         let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (mut stores, stats) = recover_all_shards(&rocks).unwrap();
+        let (stores, stats) = recover_all_shards(&rocks).unwrap();
 
         // All sync'd keys should be present
         assert_eq!(stats.keys_loaded, 50);
@@ -784,7 +784,7 @@ mod fault_injection {
 
         // Reopen and recover
         let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (mut stores, stats) = recover_all_shards(&rocks).unwrap();
+        let (stores, stats) = recover_all_shards(&rocks).unwrap();
 
         // 10 valid keys should be loaded, 1 should fail
         assert_eq!(stats.keys_loaded, 10);
@@ -819,7 +819,7 @@ mod stress {
         harness.crash();
 
         let start = Instant::now();
-        let (mut stores, stats) = harness.recover();
+        let (stores, stats) = harness.recover();
         let duration = start.elapsed();
 
         assert_eq!(stats.keys_loaded, n);
@@ -1020,7 +1020,7 @@ mod disk_failure {
 
         // Reopen and recover from WAL (no snapshots involved)
         let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (mut stores, stats) = recover_all_shards(&rocks).unwrap();
+        let (stores, stats) = recover_all_shards(&rocks).unwrap();
 
         assert_eq!(stats.keys_loaded, 30);
         assert_eq!(stores[0].0.len(), 30);
@@ -1103,7 +1103,7 @@ mod edge_cases {
         // Don't write anything, just crash
         harness.crash();
 
-        let (mut stores, stats) = harness.recover();
+        let (stores, stats) = harness.recover();
 
         assert_eq!(stats.keys_loaded, 0);
         assert_eq!(stats.keys_expired_skipped, 0);
@@ -1283,7 +1283,7 @@ mod async_wal {
 
         // Reopen and recover
         let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (mut stores, stats) = recover_all_shards(&rocks).unwrap();
+        let (stores, stats) = recover_all_shards(&rocks).unwrap();
 
         assert_eq!(stats.keys_loaded, 50);
         assert_eq!(stores[0].0.len(), 50);

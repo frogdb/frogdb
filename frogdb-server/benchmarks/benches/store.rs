@@ -116,7 +116,7 @@ fn bench_delete(c: &mut Criterion) {
                 b.iter_batched(
                     || {
                         // Setup: create store and pick a key to delete
-                        let (mut store, keys) = populate_store(size, 128);
+                        let (store, keys) = populate_store(size, 128);
                         let key = keys[size / 2].clone();
                         (store, key)
                     },
@@ -137,7 +137,7 @@ fn bench_contains(c: &mut Criterion) {
     let mut group = c.benchmark_group("store/contains");
 
     for store_size in [100, 1_000, 10_000, 100_000] {
-        let (mut store, keys) = populate_store(store_size, 128);
+        let (store, keys) = populate_store(store_size, 128);
         let existing_key = &keys[store_size / 2];
         let missing_key = Bytes::from("nonexistent:key");
 
@@ -191,7 +191,7 @@ fn bench_scan(c: &mut Criterion) {
     let mut group = c.benchmark_group("store/scan");
 
     for store_size in [1_000, 10_000, 100_000] {
-        let (mut store, _) = populate_store(store_size, 128);
+        let (store, _) = populate_store(store_size, 128);
 
         group.throughput(Throughput::Elements(10)); // Scan returns 10 keys per call
 
@@ -226,7 +226,7 @@ fn bench_sample_keys(c: &mut Criterion) {
     let mut group = c.benchmark_group("store/sample_keys");
 
     for store_size in [1_000, 10_000, 100_000] {
-        let (mut store, _) = populate_store(store_size, 128);
+        let (store, _) = populate_store(store_size, 128);
 
         for sample_size in [5, 16] {
             group.throughput(Throughput::Elements(sample_size as u64));
