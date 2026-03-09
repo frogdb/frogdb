@@ -48,6 +48,14 @@ build-debug:
 release:
     {{dyld-env}} {{rocksdb-env}} cargo build --release
 
+# Build with USDT probe support (DTrace/bpftrace)
+build-usdt:
+    {{dyld-env}} {{rocksdb-env}} cargo build --features usdt
+
+# Build release with USDT probe support
+release-usdt:
+    {{dyld-env}} {{rocksdb-env}} cargo build --release --features usdt
+
 # =============================================================================
 # Rust: Test
 # =============================================================================

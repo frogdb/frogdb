@@ -75,7 +75,8 @@
       "Bash(just redis-compat:*)",
       "WebFetch(domain:docs.docker.com)",
       "Bash(uvx ruff:*)",
-      "Bash(just:*)"
+      "Bash(just:*)",
+      "Bash(DYLD_LIBRARY_PATH=/opt/homebrew/opt/llvm/lib ROCKSDB_LIB_DIR=/opt/homebrew/lib SNAPPY_LIB_DIR=/opt/homebrew/lib cargo test:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

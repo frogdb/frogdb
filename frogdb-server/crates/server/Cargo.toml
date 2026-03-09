@@ -14,9 +14,10 @@ shuttle = ["dep:shuttle", "frogdb-core/shuttle"]
 turmoil = ["dep:turmoil"]
 causal-profile = ["dep:tokio-coz"]
 profiling = ["dep:tracing-flame"]
+usdt = ["frogdb-core/usdt"]
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)', 'cfg(feature, values("usdt"))'] }
 
 [dependencies]
 frogdb-protocol.workspace = true

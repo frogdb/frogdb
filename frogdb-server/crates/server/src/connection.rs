@@ -587,6 +587,12 @@ impl ConnectionHandler {
         // Compute the uppercase command name once for the entire pipeline
         let cmd_name = cmd.name_uppercase_string();
 
+        // Fire USDT probe: command-start
+        let first_key = cmd.args.first()
+            .map(|k| std::str::from_utf8(k).unwrap_or("<binary>"))
+            .unwrap_or("");
+        frogdb_core::probes::fire_command_start(&cmd_name, first_key, self.state.id);
+
         // Wait if server is paused (for non-exempt commands)
         self.wait_if_paused(&cmd_name).await;
 
@@ -633,11 +639,20 @@ impl ConnectionHandler {
         // Calculate elapsed time in microseconds for slowlog
         let elapsed_us = now.elapsed().as_micros() as u64;
 
+        // Check for errors in responses (reused by probe + metrics)
+        let has_error = responses.iter().any(|r| matches!(r, Response::Error(_)));
+
+        // Fire USDT probe: command-done
+        frogdb_core::probes::fire_command_done(
+            &cmd_name,
+            elapsed_us,
+            if has_error { "error" } else { "ok" },
+        );
+
         // Record per-client command statistics
         self.state.local_stats.record_command(&cmd_name, elapsed_us);
 
-        // Record metrics - check for errors in responses
-        let has_error = responses.iter().any(|r| matches!(r, Response::Error(_)));
+        // Record metrics
         if has_error {
             timer.finish_with_error("command_error");
             if let Some(ref span) = request_span {

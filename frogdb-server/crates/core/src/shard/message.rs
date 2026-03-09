@@ -438,6 +438,60 @@ pub enum ShardMessage {
     Shutdown,
 }
 
+impl ShardMessage {
+    /// Return a static string identifying the message variant, for USDT probes.
+    pub fn probe_type_str(&self) -> &'static str {
+        match self {
+            ShardMessage::Execute { .. } => "Execute",
+            ShardMessage::ScatterRequest { .. } => "ScatterRequest",
+            ShardMessage::GetVersion { .. } => "GetVersion",
+            ShardMessage::ExecTransaction { .. } => "ExecTransaction",
+            ShardMessage::Subscribe { .. } => "Subscribe",
+            ShardMessage::Unsubscribe { .. } => "Unsubscribe",
+            ShardMessage::PSubscribe { .. } => "PSubscribe",
+            ShardMessage::PUnsubscribe { .. } => "PUnsubscribe",
+            ShardMessage::Publish { .. } => "Publish",
+            ShardMessage::ShardedSubscribe { .. } => "ShardedSubscribe",
+            ShardMessage::ShardedUnsubscribe { .. } => "ShardedUnsubscribe",
+            ShardMessage::ShardedPublish { .. } => "ShardedPublish",
+            ShardMessage::PubSubIntrospection { .. } => "PubSubIntrospection",
+            ShardMessage::ConnectionClosed { .. } => "ConnectionClosed",
+            ShardMessage::EvalScript { .. } => "EvalScript",
+            ShardMessage::EvalScriptSha { .. } => "EvalScriptSha",
+            ShardMessage::ScriptLoad { .. } => "ScriptLoad",
+            ShardMessage::ScriptExists { .. } => "ScriptExists",
+            ShardMessage::ScriptFlush { .. } => "ScriptFlush",
+            ShardMessage::ScriptKill { .. } => "ScriptKill",
+            ShardMessage::FunctionCall { .. } => "FunctionCall",
+            ShardMessage::BlockWait { .. } => "BlockWait",
+            ShardMessage::UnregisterWait { .. } => "UnregisterWait",
+            ShardMessage::SlowlogGet { .. } => "SlowlogGet",
+            ShardMessage::SlowlogLen { .. } => "SlowlogLen",
+            ShardMessage::SlowlogReset { .. } => "SlowlogReset",
+            ShardMessage::SlowlogAdd { .. } => "SlowlogAdd",
+            ShardMessage::MemoryUsage { .. } => "MemoryUsage",
+            ShardMessage::MemoryStats { .. } => "MemoryStats",
+            ShardMessage::WalLagStats { .. } => "WalLagStats",
+            ShardMessage::ScanBigKeys { .. } => "ScanBigKeys",
+            ShardMessage::LatencyLatest { .. } => "LatencyLatest",
+            ShardMessage::LatencyHistory { .. } => "LatencyHistory",
+            ShardMessage::LatencyReset { .. } => "LatencyReset",
+            ShardMessage::HotShardStats { .. } => "HotShardStats",
+            ShardMessage::ResetStats { .. } => "ResetStats",
+            ShardMessage::UpdateConfig { .. } => "UpdateConfig",
+            ShardMessage::VllLockRequest { .. } => "VllLockRequest",
+            ShardMessage::VllExecute { .. } => "VllExecute",
+            ShardMessage::VllAbort { .. } => "VllAbort",
+            ShardMessage::VllContinuationLock { .. } => "VllContinuationLock",
+            ShardMessage::SlotMigrated { .. } => "SlotMigrated",
+            ShardMessage::RaftCommand { .. } => "RaftCommand",
+            ShardMessage::GetVllQueueInfo { .. } => "GetVllQueueInfo",
+            ShardMessage::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
+            ShardMessage::Shutdown => "Shutdown",
+        }
+    }
+}
+
 /// Operation type for scatter-gather.
 #[derive(Debug, Clone)]
 pub enum ScatterOp {

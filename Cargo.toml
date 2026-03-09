@@ -140,6 +140,9 @@ tower = "0.5"
 tokio-metrics = "0.4"
 tracing-flame = "0.2"
 
+# USDT probes (DTrace/bpftrace)
+usdt = "0.6"
+
 [profile.dev]
 split-debuginfo = "unpacked"
 debug = "line-tables-only"

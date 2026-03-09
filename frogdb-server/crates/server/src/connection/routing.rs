@@ -318,6 +318,13 @@ impl ConnectionHandler {
             response_tx,
         };
 
+        // Fire USDT probe: shard-message-sent
+        frogdb_core::probes::fire_shard_message_sent(
+            self.shard_id as u64,
+            shard_id as u64,
+            "Execute",
+        );
+
         // Send to shard
         if self.shard_senders[shard_id].send(msg).await.is_err() {
             return Response::error("ERR shard unavailable");

@@ -549,27 +549,18 @@ info threads               # See all thread states
 thread apply all bt        # Backtrace for all threads
 ```
 
-### DTrace/USDT Probes `[FrogDB]` **[Not Yet Implemented]**
+### DTrace/USDT Probes `[FrogDB]`
 
-> The USDT probe infrastructure described below is an aspirational design. The `usdt` Cargo feature does not yet exist in the codebase.
-
-FrogDB can be compiled with USDT (User Statically Defined Tracing) probes for zero-overhead-when-disabled tracing.
+FrogDB can be compiled with USDT (User Statically Defined Tracing) probes for zero-overhead-when-disabled tracing via DTrace (macOS/illumos) or bpftrace/eBPF (Linux). Powered by the [Oxide `usdt` crate](https://github.com/oxidecomputer/usdt) v0.6.
 
 #### Enabling USDT Probes
 
-```toml
-# Cargo.toml
-[features]
-usdt = ["dep:usdt"]
-
-[dependencies]
-usdt = { version = "0.5", optional = true }
-```
-
-Build:
 ```bash
-cargo build --release --features usdt
+just build-usdt           # debug build with probes
+just release-usdt         # release build with probes
 ```
+
+The `usdt` Cargo feature is defined in `frogdb-server` and forwarded to `frogdb-core`. When disabled (the default), all probe fire-sites compile to no-ops.
 
 #### Probe Definitions
 
@@ -577,11 +568,16 @@ cargo build --release --features usdt
 |-------|-----------|-------------|
 | `frogdb:::command-start` | (command, key, conn_id) | Command execution begins |
 | `frogdb:::command-done` | (command, latency_us, status) | Command execution completes |
-| `frogdb:::shard-message-sent` | (from_shard, to_shard, msg_type) | Cross-shard message |
+| `frogdb:::shard-message-sent` | (from_shard, to_shard, msg_type) | Cross-shard message routed |
 | `frogdb:::shard-message-received` | (shard, msg_type, queue_depth) | Message received by shard |
-| `frogdb:::key-expired` | (key, shard_id) | Key expiration |
+| `frogdb:::key-expired` | (key, shard_id) | Active expiry deleted key |
 | `frogdb:::key-evicted` | (key, shard_id, policy) | Key eviction |
-| `frogdb:::memory-pressure` | (used, max, action) | Memory limit approached |
+| `frogdb:::memory-pressure` | (used, max, action) | Memory limit exceeded |
+| `frogdb:::wal-write` | (shard_id, key, bytes) | WAL write for a key |
+| `frogdb:::scatter-start` | (command, shard_count, txid) | Scatter-gather operation begins |
+| `frogdb:::scatter-done` | (command, latency_us, shard_count) | Scatter-gather operation completes |
+| `frogdb:::pubsub-publish` | (channel, subscribers) | Broadcast PUBLISH delivered |
+| `frogdb:::connection-accept` | (conn_id, addr) | New TCP connection accepted |
 
 #### DTrace Examples (macOS/illumos)
 
@@ -590,41 +586,49 @@ cargo build --release --features usdt
 sudo dtrace -l -n 'frogdb*:::'
 
 # Trace all commands
-sudo dtrace -n 'frogdb:::command-start { printf("%s %s conn=%d\n", copyinstr(arg0), copyinstr(arg1), arg2); }'
+sudo dtrace -n 'frogdb*:::command-start { printf("%s %s conn=%d\n", copyinstr(arg0), copyinstr(arg1), arg2); }'
 
 # Command latency histogram
 sudo dtrace -n '
-frogdb:::command-done {
+frogdb*:::command-done {
     @latency[copyinstr(arg0)] = quantize(arg1);
 }
 tick-10s { printa(@); clear(@); }'
 
 # Trace slow commands (>10ms)
 sudo dtrace -n '
-frogdb:::command-done
+frogdb*:::command-done
 /arg1 > 10000/ {
     printf("%s took %d us\n", copyinstr(arg0), arg1);
 }'
 
 # Cross-shard message tracing
 sudo dtrace -n '
-frogdb:::shard-message-sent {
+frogdb*:::shard-message-sent {
     printf("shard %d -> shard %d: %s\n", arg0, arg1, copyinstr(arg2));
 }'
+
+# Scatter-gather latency
+sudo dtrace -n '
+frogdb*:::scatter-done {
+    printf("%s across %d shards: %d us\n", copyinstr(arg0), arg2, arg1);
+}'
+
+# WAL write activity
+sudo dtrace -n '
+frogdb*:::wal-write {
+    @bytes[arg0] = sum(arg2);
+}
+tick-5s { printa(@); clear(@); }'
 ```
 
 #### Registering Probes
 
-Probes must be registered at startup:
+Probes are registered automatically at server startup when the `usdt` feature is enabled. The registration call in `main.rs`:
 
 ```rust
-fn main() {
-    // Register USDT probes with the system
-    #[cfg(feature = "usdt")]
-    frogdb::probes::register().expect("Failed to register USDT probes");
-
-    // Start server...
-}
+#[cfg(feature = "usdt")]
+frogdb_core::probes::register().expect("Failed to register USDT probes");
 ```
 
 ### eBPF/bpftrace (Linux)

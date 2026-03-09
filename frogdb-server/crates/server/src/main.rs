@@ -137,6 +137,10 @@ fn main() -> Result<()> {
     #[cfg(not(any(all(tokio_unstable, feature = "causal-profile"), feature = "profiling")))]
     let (log_reload_handle, _logging_guard) = config.init_logging()?;
 
+    // Register USDT probes (no-op when feature is disabled)
+    #[cfg(feature = "usdt")]
+    frogdb_core::probes::register().expect("Failed to register USDT probes");
+
     info!(config = %config.to_json(), "Starting FrogDB server");
 
     // Build runtime with hooks when profiling

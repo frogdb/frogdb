@@ -28,6 +28,13 @@ impl ShardWorker {
         if let Some(ref wal) = self.persistence.wal_writer
             && let Some(value) = self.store.get(key)
         {
+            // Fire USDT probe: wal-write
+            crate::probes::fire_wal_write(
+                self.shard_id() as u64,
+                std::str::from_utf8(key).unwrap_or("<binary>"),
+                value.memory_size() as u64,
+            );
+
             let metadata = self
                 .store
                 .get_metadata(key)

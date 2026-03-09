@@ -69,6 +69,13 @@ impl ScatterGatherExecutor {
         let mode = strategy.lock_mode();
         let txid = next_txid();
 
+        // Fire USDT probe: scatter-start
+        frogdb_core::probes::fire_scatter_start(
+            command_name,
+            partition.shard_keys.len() as u64,
+            txid,
+        );
+
         // Phase 1: Send VllLockRequest to each shard (in sorted order for deadlock prevention)
         let shard_count = partition.shard_keys.len();
         let mut ready_receivers: Vec<(usize, oneshot::Receiver<ShardReadyResult>)> =
@@ -227,6 +234,13 @@ impl ScatterGatherExecutor {
             "frogdb_scatter_gather_shards",
             num_shards as f64,
             &[("command", command_name)],
+        );
+
+        // Fire USDT probe: scatter-done
+        frogdb_core::probes::fire_scatter_done(
+            command_name,
+            start.elapsed().as_micros() as u64,
+            num_shards as u64,
         );
 
         // Phase 5: Merge results

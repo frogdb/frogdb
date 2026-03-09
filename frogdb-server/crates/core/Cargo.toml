@@ -7,6 +7,7 @@ description = "Core data structures, commands, and storage for FrogDB"
 
 [features]
 shuttle = ["dep:shuttle", "frogdb-types/shuttle"]
+usdt = ["dep:usdt"]
 
 [dependencies]
 frogdb-types.workspace = true
@@ -37,6 +38,7 @@ hex.workspace = true
 linked-hash-map.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+usdt = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
