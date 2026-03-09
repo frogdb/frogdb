@@ -7,10 +7,11 @@ description, and a cross-reference to the relevant spec.
 
 ## Cluster (Phases 4–6)
 
-| Item                                     | Files | Description                                                                                                                      | Spec                                                                          |
-| ---------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Point-in-time rollback                   | —     | Full resync replaces all local state (matches Redis behavior). Deferred; split-brain log provides audit trail for manual replay. | [CLUSTER_PLAN.md](../spec/CLUSTER_PLAN.md#45-split-brain-handling)                    |
-| Atomic slot migration + auto-rebalancing | —     | Valkey 9-style atomic slot transfer and built-in multi-dimensional rebalancing; replaces DFLYMIGRATE design                      | [CLUSTER_REBALANCING.md](CLUSTER_REBALANCING.md)                              |
+| Item                                     | Files | Description                                                                                                                      | Spec                                                               |
+| ---------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Point-in-time rollback                   | —     | Full resync replaces all local state (matches Redis behavior). Deferred; split-brain log provides audit trail for manual replay. | [CLUSTER_PLAN.md](../spec/CLUSTER_PLAN.md#45-split-brain-handling) |
+| Split-brain replay                       | —     | `SPLITBRAIN` server command, automatic replay on recovery, and `frogdb-admin split-brain-replay` CLI tool for replaying divergent writes after split-brain events | [SPLIT_BRAIN_REPLAY.md](SPLIT_BRAIN_REPLAY.md) |
+| Atomic slot migration + auto-rebalancing | —     | Valkey 9-style atomic slot transfer and built-in multi-dimensional rebalancing; replaces DFLYMIGRATE design                      | [CLUSTER_REBALANCING.md](CLUSTER_REBALANCING.md)                   |
 
 ---
 
@@ -27,22 +28,19 @@ have been annotated with `[Not Yet Implemented]` markers.
 
 ## Stub / Unimplemented Commands
 
-| Command                 | Status        | Notes                                                                               | Spec                                                                               |
-| ----------------------- | ------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Command                 | Status        | Notes                                                                               | Spec                                                                                               |
+| ----------------------- | ------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | MONITOR                 | Not planned   | Spec describes behavior but implementation not prioritized (~50% throughput impact) | [DEBUGGING.md](../spec/DEBUGGING.md#monitor-command), [COMPATIBILITY.md](../spec/COMPATIBILITY.md) |
-| MODULE commands         | Not planned   | No modular architecture                                                             | [COMPATIBILITY.md](../spec/COMPATIBILITY.md)                                               |
-| DEBUG SEGFAULT          | Not planned   | Intentionally omitted (dangerous)                                                   | [DEBUGGING.md](../spec/DEBUGGING.md#dangerous-commands-not-implemented)                    |
-| DEBUG RELOAD            | Not planned   | Intentionally omitted (dangerous)                                                   | [DEBUGGING.md](../spec/DEBUGGING.md#dangerous-commands-not-implemented)                    |
-| DEBUG CRASH-AND-RECOVER | Not planned   | Intentionally omitted (dangerous)                                                   | [DEBUGGING.md](../spec/DEBUGGING.md#dangerous-commands-not-implemented)                    |
-| CONFIG REWRITE          | Not supported | Intentional: runtime changes are transient                                          | [CONFIGURATION.md](../spec/CONFIGURATION.md)                                               |
-| SELECT                  | Not supported | Intentional: single database per instance                                           | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#single-database)                               |
+| MODULE commands         | Not planned   | No modular architecture                                                             | [COMPATIBILITY.md](../spec/COMPATIBILITY.md)                                                       |
+| CONFIG REWRITE          | Not supported | Intentional: runtime changes are transient                                          | [CONFIGURATION.md](../spec/CONFIGURATION.md)                                                       |
+| SELECT                  | Not supported | Intentional: single database per instance                                           | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#single-database)                                       |
 
 ---
 
 ## Deferred Features
 
-| Item                                  | Description                                                       | Spec                                                     |
-| ------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------- |
+| Item                                  | Description                                                       | Spec                                                             |
+| ------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------- |
 | Client tracking / client-side caching | CLIENT TRACKING — complex feature with high memory overhead       | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#not-yet-implemented) |
 | TLS (full implementation)             | Server TLS, mTLS, hot-reloading, replication TLS, cluster bus TLS | [TLS.md](../spec/TLS.md)                                         |
 | Rolling upgrade (cluster mode)        | Full spec written; implementation not started                     | [ROLLING_UPGRADE.md](../spec/ROLLING_UPGRADE.md)         |
@@ -52,8 +50,8 @@ have been annotated with `[Not Yet Implemented]` markers.
 
 ## Operational Readiness
 
-| Item                            | Description                                                             | Spec                     |
-| ------------------------------- | ----------------------------------------------------------------------- | ------------------------ |
+| Item                            | Description                                                             | Spec                             |
+| ------------------------------- | ----------------------------------------------------------------------- | -------------------------------- |
 | Enhanced LATENCY DOCTOR         | Correlation detection, SLOWLOG cross-reference, scatter-gather analysis | [ROADMAP.md](../spec/ROADMAP.md) |
 | Automated alert rule generation | `/alerts/prometheus` endpoint for generated alerting rules              | [ROADMAP.md](../spec/ROADMAP.md) |
 
@@ -65,4 +63,4 @@ These are documented design aspirations, not near-term work:
 | -------------------------------------------------- | ---------------------------------------------------------------- |
 | Cold storage backends (S3, DynamoDB, Azure, GCS)   | [TIERED.md](../spec/TIERED.md)                                           |
 | io_uring integration                               | [optimizations/ASYNC_RUNTIME.md](optimizations/ASYNC_RUNTIME.md) |
-| Dashtable (DragonflyDB-style hash table)           | [STORAGE.md](../spec/STORAGE.md)                                         |
+| Dashtable (DragonflyDB-style hash table)           | [STORAGE.md](../spec/STORAGE.md)                                 |
