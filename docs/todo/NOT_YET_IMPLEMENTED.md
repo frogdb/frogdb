@@ -32,7 +32,6 @@ have been annotated with `[Not Yet Implemented]` markers.
 | ----------------------- | ------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | MONITOR                 | Not planned   | Spec describes behavior but implementation not prioritized (~50% throughput impact) | [DEBUGGING.md](../spec/DEBUGGING.md#monitor-command), [COMPATIBILITY.md](../spec/COMPATIBILITY.md) |
 | MODULE commands         | Not planned   | No modular architecture                                                             | [COMPATIBILITY.md](../spec/COMPATIBILITY.md)                                                       |
-| CONFIG REWRITE          | Not supported | Intentional: runtime changes are transient                                          | [CONFIGURATION.md](../spec/CONFIGURATION.md)                                                       |
 | SELECT                  | Not supported | Intentional: single database per instance                                           | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#single-database)                                       |
 
 ---

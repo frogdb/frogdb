@@ -4,7 +4,7 @@
 //! - CONFIG GET - Get configuration parameters
 //! - CONFIG SET - Set configuration parameters
 //! - CONFIG RESETSTAT - Reset server statistics
-//! - CONFIG REWRITE - Rewrite configuration file (no-op)
+//! - CONFIG REWRITE - Rewrite configuration file (unsupported, returns error)
 //! - CONFIG HELP - Show help text
 //!
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
@@ -31,7 +31,7 @@ impl ConnectionHandler {
             "GET" => self.handle_config_get(&args[1..]),
             "SET" => self.handle_config_set(&args[1..]).await,
             "RESETSTAT" => self.handle_config_resetstat().await,
-            "REWRITE" => Response::ok(),
+            "REWRITE" => Response::error("ERR CONFIG REWRITE is not supported. Use the configuration file to persist changes."),
             "HELP" => self.handle_config_help(),
             _ => Response::error(format!(
                 "ERR unknown subcommand '{}'. Try CONFIG HELP.",
