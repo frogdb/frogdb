@@ -11,6 +11,8 @@
 #   docker build -f frogdb-server/docker/Dockerfile.builder -t frogdb:latest .
 #   docker build -f frogdb-server/docker/Dockerfile.builder --build-arg BUILD_TARGET=debug -t frogdb:latest .
 
+ARG BUILD_TARGET=prod
+
 # ---------------------------------------------------------------------------
 # Stage 1: Prepare dependency recipe (cargo-chef)
 # ---------------------------------------------------------------------------
@@ -35,11 +37,12 @@ RUN apk add --no-cache \
     snappy-dev \
     lz4-dev \
     zstd-dev \
-    jemalloc-dev \
     clang-dev \
     openssl-dev \
     musl-dev \
-    pkgconf
+    pkgconf \
+    make \
+    mold
 
 RUN cargo install cargo-chef --locked
 
@@ -47,37 +50,39 @@ RUN cargo install cargo-chef --locked
 ENV ROCKSDB_LIB_DIR=/usr/lib
 ENV SNAPPY_LIB_DIR=/usr/lib
 ENV ZSTD_SYS_USE_PKG_CONFIG=1
-# Tell tikv-jemalloc-sys to skip C compilation and use system jemalloc
-ENV JEMALLOC_OVERRIDE=/usr/lib/libjemalloc.so.2
+# tikv-jemalloc-sys builds jemalloc from source (requires _rjem_ symbol prefix
+# that system jemalloc doesn't provide). This is fast (~10s) unlike RocksDB.
+# Dynamic musl linking (-crt-static) so build scripts can dlopen libclang for bindgen.
+# Mold linker for faster linking.
+ENV RUSTFLAGS="-C target-feature=-crt-static -C link-arg=-fuse-ld=mold"
 
 WORKDIR /app
 
 # Cache dependencies (only invalidated by Cargo.toml/Cargo.lock changes)
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --profile docker --recipe-path recipe.json
 
 # Build the actual project
 COPY Cargo.toml Cargo.lock ./
 COPY frogdb-server/ frogdb-server/
-RUN cargo build --release --bin frogdb-server
+RUN cargo build --profile docker --bin frogdb-server
 
 # Verify system libraries were linked (fail the build if not)
-RUN grep -q 'cargo:rustc-link-lib=dylib=rocksdb' target/release/build/librocksdb-sys-*/output && \
-    grep -q 'cargo:rustc-link-lib=dylib=snappy' target/release/build/librocksdb-sys-*/output && \
+RUN grep -q 'cargo:rustc-link-lib=dylib=rocksdb' target/docker/build/librocksdb-sys-*/output && \
+    grep -q 'cargo:rustc-link-lib=dylib=snappy' target/docker/build/librocksdb-sys-*/output && \
     echo "Verified: RocksDB and Snappy linked from system libraries"
-RUN ldd target/release/frogdb-server | grep -q 'libjemalloc' && \
-    echo "Verified: jemalloc dynamically linked" || \
-    echo "Warning: jemalloc not dynamically linked (may be statically linked or unused)"
+# tikv-jemalloc-sys statically links jemalloc; verify the symbol is present
+RUN nm target/docker/frogdb-server 2>/dev/null | grep -q '_rjem_malloc' && \
+    echo "Verified: jemalloc statically linked (tikv-jemalloc-sys)" || \
+    echo "Warning: jemalloc symbols not found"
 
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime image variants
 # ---------------------------------------------------------------------------
-ARG BUILD_TARGET=prod
-
 # Production: minimal runtime with non-root user
 FROM alpine:3.21 AS runtime-prod
 RUN apk add --no-cache \
-    rocksdb snappy lz4-libs zstd-libs jemalloc libssl3 libgcc redis
+    rocksdb snappy lz4-libs zstd-libs libssl3 libgcc redis
 RUN adduser -D -H frogdb
 RUN mkdir -p /data && chown frogdb:frogdb /data
 USER frogdb
@@ -85,7 +90,7 @@ USER frogdb
 # Debug: includes Jepsen/benchmarking tools, runs as root
 FROM alpine:3.21 AS runtime-debug
 RUN apk add --no-cache \
-    rocksdb snappy lz4-libs zstd-libs jemalloc libssl3 libgcc redis \
+    rocksdb snappy lz4-libs zstd-libs libssl3 libgcc redis \
     iptables iproute2 procps bash strace
 RUN mkdir -p /data
 USER root
@@ -94,7 +99,7 @@ USER root
 FROM runtime-${BUILD_TARGET} AS runtime
 
 # Copy built binary
-COPY --from=builder /app/target/release/frogdb-server /usr/local/bin/frogdb-server
+COPY --from=builder /app/target/docker/frogdb-server /usr/local/bin/frogdb-server
 
 # Environment variables for configuration (use __ for nested fields)
 # TODO: should this be 127.0.0.1 for security by default?

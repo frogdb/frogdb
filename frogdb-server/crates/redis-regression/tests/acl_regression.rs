@@ -98,7 +98,7 @@ async fn acl_list_returns_correct_info() {
     assert!(rules.iter().any(|r| r.contains("myuser")));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acl_getuser_returns_info() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

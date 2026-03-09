@@ -148,6 +148,11 @@ debug = "line-tables-only"
 lto = true
 codegen-units = 1
 
+[profile.docker]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+
 [profile.profiling]
 inherits = "release"
 debug = true
