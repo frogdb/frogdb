@@ -45,6 +45,7 @@ DOCKER_BUILD_PUSH = "docker/build-push-action@v5"
 GH_RELEASE = "softprops/action-gh-release@v1"
 SETUP_UV = "astral-sh/setup-uv@v5"
 SETUP_JUST = "extractions/setup-just@v2"
+INSTALL_NEXTEST = "taiki-e/install-action@nextest"
 
 ZIG_VERSION = "0.11.0"
 HELM_VERSION = "v3.13.0"
@@ -345,8 +346,9 @@ def test_workflow() -> CommentedMap:
         [
             checkout_step(),
             rust_toolchain_step(),
+            omap(name="Install nextest", uses=INSTALL_NEXTEST),
             cargo_cache_step("test"),
-            run_step("Run unit tests", "cargo test --all"),
+            run_step("Run unit tests", "cargo nextest run --all"),
         ],
     )
 
@@ -355,10 +357,11 @@ def test_workflow() -> CommentedMap:
         [
             checkout_step(),
             rust_toolchain_step(),
+            omap(name="Install nextest", uses=INSTALL_NEXTEST),
             cargo_cache_step("shuttle"),
             run_step(
                 "Run Shuttle concurrency tests",
-                "cargo test -p frogdb-core --features shuttle --test concurrency",
+                "cargo nextest run -p frogdb-core --features shuttle --test concurrency",
             ),
         ],
     )
@@ -368,10 +371,11 @@ def test_workflow() -> CommentedMap:
         [
             checkout_step(),
             rust_toolchain_step(),
+            omap(name="Install nextest", uses=INSTALL_NEXTEST),
             cargo_cache_step("turmoil"),
             run_step(
                 "Run Turmoil simulation tests",
-                "cargo test -p frogdb-server --features turmoil --test simulation",
+                "cargo nextest run -p frogdb-server --features turmoil --test simulation",
             ),
         ],
     )

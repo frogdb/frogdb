@@ -16,7 +16,7 @@ just check                              # type-check the workspace
 just check frogdb-core                  # type-check a single crate
 just test                               # run all tests
 just test frogdb-server                 # run all tests for a specific crate
-just test frogdb-server test_publish    # run tests matching a pattern (with --nocapture)
+just test frogdb-server test_publish    # run tests matching a regex pattern
 just lint                               # clippy on the workspace
 just lint frogdb-persistence            # clippy on a specific crate
 just lint-py                            # ruff check
@@ -27,9 +27,10 @@ just concurrency                        # run Shuttle + Turmoil concurrency test
 ```
 
 - when running a single test, target the owning crate to avoid rebuilding the entire workspace:
-  `just test frogdb-server test_name` or `cargo test -p frogdb-server test_name -- --nocapture`
-- `cargo test` accepts substring patterns (not regex) for test name filtering; use `cargo nextest
-  run -E 'test(/pattern/)'` for regex
+  `just test frogdb-server test_name`
+- tests are run via `cargo nextest` (not `cargo test`); pattern args use regex filter expressions
+  (`-E 'test(/pattern/)'`), which `just test` handles automatically
+- nextest enforces a 15s hard timeout per test (configured in `.config/nextest.toml`)
 - this project uses multiple git worktrees; to clean stale artifacts in the current worktree run
   `just clean-stale`
 - if theres a script/tool, create a Justfile target for it

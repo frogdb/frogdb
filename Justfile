@@ -54,12 +54,12 @@ release:
 
 # Run tests (optionally for a specific crate and/or matching a pattern)
 test crate="" pattern="":
-    {{dyld-env}} {{rocksdb-env}} cargo test {{ if crate != "" { "-p " + crate } else { "--all" } }} {{ if pattern != "" { pattern + " -- --nocapture" } else { "" } }}
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run {{ if crate != "" { "-p " + crate } else { "--all" } }} {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }}
 
 # Run concurrency tests (Shuttle + Turmoil)
 concurrency:
-    {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-core --features shuttle --test concurrency
-    {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-server --features turmoil --test simulation
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-core --features shuttle --test concurrency
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil --test simulation
 
 # Run the full test suite (unit + integration + concurrency + simulation)
 test-all: test concurrency
@@ -72,7 +72,7 @@ test-coz:
 
 # Run browser integration tests (requires chromedriver running on port 9515)
 test-browser:
-    {{dyld-env}} {{rocksdb-env}} cargo test -p frogdb-browser-tests --features browser-tests
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-browser-tests --features browser-tests
 
 # Run all benchmarks
 bench:
@@ -339,6 +339,10 @@ docs-preview:
 # Maintenance
 # =============================================================================
 
+# Install cargo-nextest (test runner with timeouts and better output)
+nextest-install:
+    cargo binstall cargo-nextest --secure
+
 cargo-sweep-install:
     cargo install cargo-sweep
 
@@ -386,7 +390,7 @@ watch:
 
 # Watch for changes and run tests (requires: cargo install cargo-watch)
 watch-test:
-    {{dyld-env}} {{rocksdb-env}} cargo watch -x 'test --all'
+    {{dyld-env}} {{rocksdb-env}} cargo watch -s 'cargo nextest run --all'
 
 # =============================================================================
 # Debug UI Assets
