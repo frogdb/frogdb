@@ -44,7 +44,9 @@ RUN apk add --no-cache \
     make \
     mold
 
-RUN cargo install cargo-chef --locked
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-chef --locked
 
 # Tell librocksdb-sys, snappy-sys, and zstd-sys to use system libraries
 ENV ROCKSDB_LIB_DIR=/usr/lib
@@ -60,21 +62,25 @@ WORKDIR /app
 
 # Cache dependencies (only invalidated by Cargo.toml/Cargo.lock changes)
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --profile docker --recipe-path recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo chef cook --profile docker --recipe-path recipe.json
 
-# Build the actual project
+# Build the actual project, verify linkage, and copy binary out of cache mount
 COPY Cargo.toml Cargo.lock ./
 COPY frogdb-server/ frogdb-server/
-RUN cargo build --profile docker --bin frogdb-server
-
-# Verify system libraries were linked (fail the build if not)
-RUN grep -q 'cargo:rustc-link-lib=dylib=rocksdb' target/docker/build/librocksdb-sys-*/output && \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --profile docker --bin frogdb-server && \
+    cp target/docker/frogdb-server /usr/local/bin/frogdb-server && \
+    grep -q 'cargo:rustc-link-lib=dylib=rocksdb' target/docker/build/librocksdb-sys-*/output && \
     grep -q 'cargo:rustc-link-lib=dylib=snappy' target/docker/build/librocksdb-sys-*/output && \
-    echo "Verified: RocksDB and Snappy linked from system libraries"
-# tikv-jemalloc-sys statically links jemalloc; verify the symbol is present
-RUN nm target/docker/frogdb-server 2>/dev/null | grep -q '_rjem_malloc' && \
+    echo "Verified: RocksDB and Snappy linked from system libraries" && \
+    (nm /usr/local/bin/frogdb-server 2>/dev/null | grep -q '_rjem_malloc' && \
     echo "Verified: jemalloc statically linked (tikv-jemalloc-sys)" || \
-    echo "Warning: jemalloc symbols not found"
+    echo "Warning: jemalloc symbols not found")
 
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime image variants
@@ -99,7 +105,7 @@ USER root
 FROM runtime-${BUILD_TARGET} AS runtime
 
 # Copy built binary
-COPY --from=builder /app/target/docker/frogdb-server /usr/local/bin/frogdb-server
+COPY --from=builder /usr/local/bin/frogdb-server /usr/local/bin/frogdb-server
 
 # Environment variables for configuration (use __ for nested fields)
 # TODO: should this be 127.0.0.1 for security by default?
