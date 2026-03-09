@@ -238,7 +238,7 @@ These features are planned but not available in the current implementation. Chec
 
 | Command Category | Status | Notes |
 |------------------|--------|-------|
-| DEBUG (unsafe) | Not planned | DEBUG SEGFAULT, DEBUG RELOAD, DEBUG CRASH-AND-RECOVER |
+| DEBUG (unsafe) | Rejected | DEBUG SEGFAULT, RELOAD, CRASH-AND-RECOVER, SET-ACTIVE-EXPIRE, OOM, PANIC return explicit errors |
 | MONITOR | Not planned | Diagnostic command not prioritized |
 | MODULE commands | Not planned | No modular architecture |
 

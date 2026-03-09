@@ -1597,3 +1597,64 @@ async fn test_debug_help_includes_structsize() {
 
     server.shutdown().await;
 }
+
+// =========================================================================
+// DEBUG unsafe command rejection tests
+// =========================================================================
+
+#[tokio::test]
+async fn test_debug_unsafe_commands_rejected() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let unsafe_subcommands = [
+        "SEGFAULT",
+        "RELOAD",
+        "CRASH-AND-RECOVER",
+        "SET-ACTIVE-EXPIRE",
+        "OOM",
+        "PANIC",
+    ];
+
+    for subcmd in &unsafe_subcommands {
+        let response = client.command(&["DEBUG", subcmd]).await;
+        match response {
+            Response::Error(e) => {
+                let err_str = String::from_utf8_lossy(&e);
+                assert!(
+                    err_str.contains("not supported") && err_str.contains("unsafe"),
+                    "DEBUG {} should return 'not supported (unsafe command)', got: {}",
+                    subcmd,
+                    err_str
+                );
+            }
+            _ => panic!(
+                "DEBUG {} should return error, got {:?}",
+                subcmd, response
+            ),
+        }
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_debug_unknown_subcommand_rejected() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["DEBUG", "NONSENSE"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("Unknown DEBUG subcommand"),
+                "Expected 'Unknown DEBUG subcommand' error, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}

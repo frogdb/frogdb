@@ -266,7 +266,16 @@ impl ConnectionHandler {
                     )])
                 }
             }
-            _ => None, // Fall through for other DEBUG subcommands
+            // Dangerous commands — intentionally not supported
+            b"SEGFAULT" | b"RELOAD" | b"CRASH-AND-RECOVER" | b"SET-ACTIVE-EXPIRE" | b"OOM"
+            | b"PANIC" => Some(vec![Response::error(format!(
+                "ERR DEBUG {} is not supported (unsafe command)",
+                String::from_utf8_lossy(&subcommand)
+            ))]),
+            _ => Some(vec![Response::error(format!(
+                "ERR Unknown DEBUG subcommand '{}'",
+                String::from_utf8_lossy(&subcommand)
+            ))])
         }
     }
 
