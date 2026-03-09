@@ -18,6 +18,11 @@ system-lib-dir := env("FROGDB_LIB_DIR", "/opt/homebrew/lib")
 # on macOS the zstd compilation is fast so we don't bother).
 rocksdb-env := if use-system-rocksdb != "" { "ROCKSDB_LIB_DIR=" + system-lib-dir + " SNAPPY_LIB_DIR=" + system-lib-dir } else { "" }
 
+# sccache: automatically use as rustc wrapper if installed (speeds up clean builds, branch/worktree switches)
+# Disable with: RUSTC_WRAPPER="" just <recipe>
+sccache-default := `which sccache 2>/dev/null || echo ""`
+export RUSTC_WRAPPER := env("RUSTC_WRAPPER", sccache-default)
+
 # Shorthand for frogdb-server subdirectory
 server-dir := justfile_directory() / "frogdb-server"
 
@@ -383,6 +388,20 @@ clean-worktrees:
             cargo sweep --time 0 "$dir"
         fi
     done
+
+# Show sccache statistics
+sccache-stats:
+    sccache --show-stats
+
+# Clear the sccache cache
+sccache-clear:
+    sccache --stop-server 2>/dev/null || true
+    rm -rf "$(sccache --show-stats 2>/dev/null | grep 'Cache location' | awk '{print $NF}')" || true
+    @echo "sccache cache cleared"
+
+# Zero sccache counters (keep cache, reset hit/miss stats)
+sccache-zero:
+    sccache --zero-stats
 
 # Watch for changes and type-check (requires: cargo install cargo-watch)
 watch:
