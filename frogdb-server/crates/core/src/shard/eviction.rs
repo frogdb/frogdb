@@ -117,6 +117,8 @@ impl ShardWorker {
             EvictionPolicy::AllkeysLfu => self.evict_lfu(false),
             EvictionPolicy::VolatileLfu => self.evict_lfu(true),
             EvictionPolicy::VolatileTtl => self.evict_ttl(),
+            EvictionPolicy::TieredLru => self.demote_lru(),
+            EvictionPolicy::TieredLfu => self.demote_lfu(),
         }
     }
 
@@ -244,6 +246,78 @@ impl ShardWorker {
                     now,
                 );
                 self.eviction.pool.maybe_insert_ttl(candidate);
+            }
+        }
+    }
+
+    /// Demote the least recently used key to warm tier.
+    fn demote_lru(&mut self) -> bool {
+        // Sample keys and update pool
+        self.sample_for_eviction(false);
+
+        // Get worst candidate from pool
+        if let Some(candidate) = self.eviction.pool.pop_worst() {
+            self.demote_for_eviction(&candidate.key)
+        } else {
+            false
+        }
+    }
+
+    /// Demote the least frequently used key to warm tier.
+    fn demote_lfu(&mut self) -> bool {
+        // Sample keys and update pool with LFU ranking
+        self.sample_for_eviction_lfu(false);
+
+        // Get worst candidate from pool
+        if let Some(candidate) = self.eviction.pool.pop_worst() {
+            self.demote_for_eviction(&candidate.key)
+        } else {
+            false
+        }
+    }
+
+    /// Demote a key to warm tier for eviction (updates metrics and pool).
+    fn demote_for_eviction(&mut self, key: &[u8]) -> bool {
+        // Remove from eviction pool
+        self.eviction.pool.remove(key);
+
+        // Try to demote
+        match self.store.demote_key(key) {
+            Ok(bytes_freed) => {
+                self.increment_version();
+
+                let shard_label = self.shard_id().to_string();
+                let policy_label = self.eviction.config.policy.to_string();
+                self.observability.metrics_recorder.increment_counter(
+                    "frogdb_tiered_demotions_total",
+                    1,
+                    &[("shard", &shard_label), ("policy", &policy_label)],
+                );
+                self.observability.metrics_recorder.increment_counter(
+                    "frogdb_tiered_bytes_demoted_total",
+                    bytes_freed as u64,
+                    &[("shard", &shard_label)],
+                );
+
+                tracing::debug!(
+                    shard_id = self.shard_id(),
+                    key = %String::from_utf8_lossy(key),
+                    bytes_freed,
+                    policy = %self.eviction.config.policy,
+                    "Demoted key to warm tier"
+                );
+
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    shard_id = self.shard_id(),
+                    key = %String::from_utf8_lossy(key),
+                    error = %e,
+                    "Failed to demote key"
+                );
+                // Fall back to deletion
+                self.delete_for_eviction(key)
             }
         }
     }

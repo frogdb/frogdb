@@ -17,7 +17,7 @@ impl ShardWorker {
     ///
     /// Returns None if the key doesn't exist.
     pub(crate) fn calculate_key_memory_usage(&self, key: &[u8]) -> Option<usize> {
-        let value = self.store.get(key)?;
+        let value = self.store.get_hot(key)?;
 
         // Calculate approximate memory usage:
         // - Key size
@@ -80,7 +80,7 @@ impl ShardWorker {
         for key in all_keys {
             if let Some(memory) = self.calculate_key_memory_usage(&key)
                 && memory >= threshold_bytes
-                && let Some(value) = self.store.get(&key)
+                && let Some(value) = self.store.get_hot(&key)
             {
                 big_keys.push(BigKeyInfo {
                     key: key.clone(),

@@ -42,7 +42,7 @@ const DEFAULT_SECTIONS: &[&[u8]] = &[
 ];
 
 /// Additional sections included only in "all" / "everything" (not in "default").
-const EXTRA_SECTIONS: &[&[u8]] = &[b"commandstats", b"latency_baseline"];
+const EXTRA_SECTIONS: &[&[u8]] = &[b"commandstats", b"latency_baseline", b"tiered"];
 
 pub struct InfoCommand;
 
@@ -138,6 +138,7 @@ fn append_section(
         b"keyspace" => build_keyspace_info(ctx),
         b"commandstats" => build_commandstats_info(),
         b"latency_baseline" => build_latency_baseline_info(),
+        b"tiered" => build_tiered_info(ctx),
         _ => String::new(),
     };
     info.push_str(&section_info);
@@ -458,6 +459,26 @@ fn build_keyspace_info(ctx: &mut CommandContext) -> String {
             key_count
         )
     }
+}
+
+fn build_tiered_info(ctx: &mut CommandContext) -> String {
+    let warm_keys = ctx.store.warm_key_count();
+    let hot_keys = ctx.store.hot_key_count();
+    let promotions = ctx.store.promotion_count();
+    let demotions = ctx.store.demotion_count();
+    let expired_on_promote = ctx.store.expired_on_promote_count();
+    let enabled = if warm_keys > 0 || demotions > 0 { 1 } else { 0 };
+
+    format!(
+        "# Tiered\r\n\
+         tiered_enabled:{}\r\n\
+         tiered_hot_keys:{}\r\n\
+         tiered_warm_keys:{}\r\n\
+         tiered_promotions:{}\r\n\
+         tiered_demotions:{}\r\n\
+         tiered_expired_on_promote:{}\r\n\r\n",
+        enabled, hot_keys, warm_keys, promotions, demotions, expired_on_promote,
+    )
 }
 
 fn build_latency_baseline_info() -> String {

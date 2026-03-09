@@ -114,6 +114,8 @@ impl MemoryConfig {
             "volatile-random",
             "allkeys-random",
             "volatile-ttl",
+            "tiered-lru",
+            "tiered-lfu",
         ];
 
         if !valid_policies.contains(&self.maxmemory_policy.to_lowercase().as_str()) {

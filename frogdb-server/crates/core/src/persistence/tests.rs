@@ -179,7 +179,7 @@ mod integration {
         // Phase 2: Reopen and recover
         {
             let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-            let (stores, stats) = recover_all_shards(&rocks).unwrap();
+            let (mut stores, stats) = recover_all_shards(&rocks).unwrap();
 
             assert_eq!(stores.len(), 2);
             assert_eq!(stats.keys_loaded, 100);
@@ -609,7 +609,7 @@ mod integration {
         // Phase 2: Recover and verify all types
         {
             let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-            let (stores, stats) = recover_all_shards(&rocks).unwrap();
+            let (mut stores, stats) = recover_all_shards(&rocks).unwrap();
 
             assert_eq!(stats.keys_loaded, 5);
 

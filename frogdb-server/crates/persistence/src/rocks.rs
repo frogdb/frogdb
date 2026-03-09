@@ -117,13 +117,28 @@ pub struct RocksStore {
     num_shards: usize,
     /// Pre-computed column family names to avoid allocating on every operation.
     cf_names: Vec<String>,
+    /// Whether warm tier column families are enabled.
+    warm_enabled: bool,
+    /// Pre-computed warm CF names: ["tiered_warm_0", "tiered_warm_1", ...].
+    warm_cf_names: Vec<String>,
 }
 
 impl RocksStore {
     /// Open or create a RocksDB database at the given path.
     ///
     /// Creates one column family per shard named "shard_0", "shard_1", etc.
+    /// When `warm_enabled` is true, also creates "tiered_warm_0", "tiered_warm_1", etc.
     pub fn open(path: &Path, num_shards: usize, config: &RocksConfig) -> Result<Self, RocksError> {
+        Self::open_with_warm(path, num_shards, config, false)
+    }
+
+    /// Open with optional warm tier column families.
+    pub fn open_with_warm(
+        path: &Path,
+        num_shards: usize,
+        config: &RocksConfig,
+        warm_enabled: bool,
+    ) -> Result<Self, RocksError> {
         let path_str = path.display().to_string();
         info!(
             path = %path_str,
@@ -178,6 +193,14 @@ impl RocksStore {
 
         // Build column family descriptors
         let cf_names: Vec<String> = (0..num_shards).map(|i| format!("shard_{}", i)).collect();
+        let warm_cf_names: Vec<String> = if warm_enabled {
+            (0..num_shards)
+                .map(|i| format!("tiered_warm_{}", i))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let all_cf_names: Vec<&String> = cf_names.iter().chain(warm_cf_names.iter()).collect();
 
         // Check if database exists
         let db_exists = path.exists() && path.join("CURRENT").exists();
@@ -194,10 +217,13 @@ impl RocksStore {
                 cf_descriptors.push(ColumnFamilyDescriptor::new("default", Options::default()));
             }
 
-            // Add shard CFs
-            for cf_name in &cf_names {
+            // Add shard CFs and warm CFs
+            for cf_name in &all_cf_names {
                 if existing_cfs.contains(cf_name) {
-                    cf_descriptors.push(ColumnFamilyDescriptor::new(cf_name, cf_opts.clone()));
+                    cf_descriptors.push(ColumnFamilyDescriptor::new(
+                        cf_name.as_str(),
+                        cf_opts.clone(),
+                    ));
                 }
             }
 
@@ -212,13 +238,11 @@ impl RocksStore {
                 RocksError::from(e)
             })?;
 
-            // Create any missing shard CFs
-            // Note: We need to iterate and create each missing CF
-            // This is a workaround since open_cf_descriptors doesn't create missing CFs
-            for cf_name in &cf_names {
+            // Create any missing shard or warm CFs
+            for cf_name in &all_cf_names {
                 if !existing_cfs.contains(cf_name) {
                     debug!(cf_name = %cf_name, "Creating column family");
-                    db.create_cf(cf_name, &cf_opts).map_err(|e| {
+                    db.create_cf(cf_name.as_str(), &cf_opts).map_err(|e| {
                         error!(path = %path_str, error = %e, "Failed to open RocksDB");
                         RocksError::from(e)
                     })?;
@@ -228,9 +252,9 @@ impl RocksStore {
             db
         } else {
             // Create new database with all column families
-            let cf_descriptors: Vec<ColumnFamilyDescriptor> = cf_names
+            let cf_descriptors: Vec<ColumnFamilyDescriptor> = all_cf_names
                 .iter()
-                .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()))
+                .map(|name| ColumnFamilyDescriptor::new(name.as_str(), cf_opts.clone()))
                 .collect();
 
             DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(&db_opts, path, cf_descriptors)
@@ -240,11 +264,13 @@ impl RocksStore {
             })?
         };
 
-        info!(path = %path_str, num_shards, "RocksDB opened");
+        info!(path = %path_str, num_shards, warm_enabled, "RocksDB opened");
         Ok(Self {
             db,
             num_shards,
             cf_names,
+            warm_enabled,
+            warm_cf_names,
         })
     }
 
@@ -382,6 +408,64 @@ impl RocksStore {
     /// Iterate over all key-value pairs in a shard.
     pub fn iter_cf(&self, shard_id: usize) -> Result<RocksIterator<'_>, RocksError> {
         let cf = self.cf_handle(shard_id)?;
+        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
+        Ok(RocksIterator { inner: iter })
+    }
+
+    // ========================================================================
+    // Warm tier operations
+    // ========================================================================
+
+    /// Whether warm tier column families are enabled.
+    pub fn warm_enabled(&self) -> bool {
+        self.warm_enabled
+    }
+
+    /// Get the column family handle for a warm shard.
+    fn warm_cf_handle(&self, shard_id: usize) -> Result<StdArc<BoundColumnFamily<'_>>, RocksError> {
+        if !self.warm_enabled {
+            return Err(RocksError::ColumnFamilyNotFound(
+                "warm tier not enabled".to_string(),
+            ));
+        }
+        if shard_id >= self.num_shards {
+            return Err(RocksError::InvalidShardId(shard_id));
+        }
+        let cf_name = &self.warm_cf_names[shard_id];
+        self.db
+            .cf_handle(cf_name)
+            .ok_or_else(|| RocksError::ColumnFamilyNotFound(cf_name.clone()))
+    }
+
+    /// Put a key-value pair into a warm shard.
+    pub fn put_warm(&self, shard_id: usize, key: &[u8], value: &[u8]) -> Result<(), RocksError> {
+        let cf = self.warm_cf_handle(shard_id)?;
+        self.db.put_cf(&cf, key, value).map_err(|e| {
+            error!(shard_id, key_len = key.len(), error = %e, "RocksDB warm put failed");
+            RocksError::from(e)
+        })?;
+        Ok(())
+    }
+
+    /// Get a value from a warm shard.
+    pub fn get_warm(&self, shard_id: usize, key: &[u8]) -> Result<Option<Vec<u8>>, RocksError> {
+        let cf = self.warm_cf_handle(shard_id)?;
+        Ok(self.db.get_cf(&cf, key)?)
+    }
+
+    /// Delete a key from a warm shard.
+    pub fn delete_warm(&self, shard_id: usize, key: &[u8]) -> Result<(), RocksError> {
+        let cf = self.warm_cf_handle(shard_id)?;
+        self.db.delete_cf(&cf, key).map_err(|e| {
+            error!(shard_id, key_len = key.len(), error = %e, "RocksDB warm delete failed");
+            RocksError::from(e)
+        })?;
+        Ok(())
+    }
+
+    /// Iterate over all key-value pairs in a warm shard.
+    pub fn iter_warm_cf(&self, shard_id: usize) -> Result<RocksIterator<'_>, RocksError> {
+        let cf = self.warm_cf_handle(shard_id)?;
         let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
         Ok(RocksIterator { inner: iter })
     }
@@ -657,6 +741,80 @@ mod unit_tests {
         let store = RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap();
 
         let result = store.put(5, b"key", b"value");
+        assert!(matches!(result, Err(RocksError::InvalidShardId(5))));
+    }
+
+    #[test]
+    fn test_warm_cf_disabled_by_default() {
+        let tmp = TempDir::new().unwrap();
+        let store = RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap();
+        assert!(!store.warm_enabled());
+        assert!(store.put_warm(0, b"k", b"v").is_err());
+    }
+
+    #[test]
+    fn test_warm_cf_put_get_delete() {
+        let tmp = TempDir::new().unwrap();
+        let store =
+            RocksStore::open_with_warm(tmp.path(), 2, &RocksConfig::default(), true).unwrap();
+        assert!(store.warm_enabled());
+
+        // Put and get
+        store.put_warm(0, b"key1", b"val1").unwrap();
+        assert_eq!(store.get_warm(0, b"key1").unwrap(), Some(b"val1".to_vec()));
+
+        // Different shard isolation
+        assert_eq!(store.get_warm(1, b"key1").unwrap(), None);
+
+        // Delete
+        store.delete_warm(0, b"key1").unwrap();
+        assert_eq!(store.get_warm(0, b"key1").unwrap(), None);
+    }
+
+    #[test]
+    fn test_warm_cf_iterate() {
+        let tmp = TempDir::new().unwrap();
+        let store =
+            RocksStore::open_with_warm(tmp.path(), 2, &RocksConfig::default(), true).unwrap();
+
+        store.put_warm(0, b"a", b"1").unwrap();
+        store.put_warm(0, b"b", b"2").unwrap();
+        store.put_warm(0, b"c", b"3").unwrap();
+
+        let items: Vec<_> = store.iter_warm_cf(0).unwrap().collect();
+        assert_eq!(items.len(), 3);
+
+        // Shard 1 should be empty
+        let items: Vec<_> = store.iter_warm_cf(1).unwrap().collect();
+        assert_eq!(items.len(), 0);
+    }
+
+    #[test]
+    fn test_warm_cf_reopen() {
+        let tmp = TempDir::new().unwrap();
+
+        {
+            let store =
+                RocksStore::open_with_warm(tmp.path(), 2, &RocksConfig::default(), true).unwrap();
+            store.put_warm(0, b"persist", b"data").unwrap();
+        }
+
+        // Reopen with warm enabled
+        let store =
+            RocksStore::open_with_warm(tmp.path(), 2, &RocksConfig::default(), true).unwrap();
+        assert_eq!(
+            store.get_warm(0, b"persist").unwrap(),
+            Some(b"data".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_warm_cf_invalid_shard() {
+        let tmp = TempDir::new().unwrap();
+        let store =
+            RocksStore::open_with_warm(tmp.path(), 2, &RocksConfig::default(), true).unwrap();
+
+        let result = store.put_warm(5, b"key", b"value");
         assert!(matches!(result, Err(RocksError::InvalidShardId(5))));
     }
 }

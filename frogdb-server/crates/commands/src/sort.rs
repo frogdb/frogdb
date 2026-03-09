@@ -109,7 +109,10 @@ impl SortOptions {
 }
 
 /// Extract elements from a List, Set, or Sorted Set.
-fn extract_elements(ctx: &CommandContext, key: &Bytes) -> Result<Option<Vec<Bytes>>, CommandError> {
+fn extract_elements(
+    ctx: &mut CommandContext,
+    key: &Bytes,
+) -> Result<Option<Vec<Bytes>>, CommandError> {
     let value = match ctx.store.get(key) {
         Some(v) => v,
         None => return Ok(None),
@@ -127,7 +130,7 @@ fn extract_elements(ctx: &CommandContext, key: &Bytes) -> Result<Option<Vec<Byte
 /// Supports two forms:
 /// - `prefix_*_suffix` -> GET string key
 /// - `prefix_*->field` -> GET hash key -> HGET field
-fn resolve_pattern(ctx: &CommandContext, pattern: &[u8], element: &[u8]) -> Option<Bytes> {
+fn resolve_pattern(ctx: &mut CommandContext, pattern: &[u8], element: &[u8]) -> Option<Bytes> {
     // Find the `*` in the pattern
     let star_pos = pattern.iter().position(|&b| b == b'*')?;
 
@@ -194,7 +197,7 @@ fn resolve_pattern(ctx: &CommandContext, pattern: &[u8], element: &[u8]) -> Opti
 /// Compute the sort key for an element.
 /// Returns None if the element should be sorted as if it had score 0 (for missing external keys).
 fn compute_sort_key(
-    ctx: &CommandContext,
+    ctx: &mut CommandContext,
     element: &Bytes,
     by_pattern: &Option<Bytes>,
     alpha: bool,

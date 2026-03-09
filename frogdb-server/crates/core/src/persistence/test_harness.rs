@@ -453,7 +453,7 @@ impl TestDataGenerator {
 
 /// Verify that a recovered store matches expected data.
 pub fn verify_store_contains(
-    stores: &[(HashMapStore, ExpiryIndex)],
+    stores: &mut [(HashMapStore, ExpiryIndex)],
     shard_id: usize,
     key: &[u8],
 ) -> bool {
@@ -465,7 +465,7 @@ pub fn verify_store_contains(
 
 /// Verify that a string value matches.
 pub fn verify_string_value(
-    stores: &[(HashMapStore, ExpiryIndex)],
+    stores: &mut [(HashMapStore, ExpiryIndex)],
     shard_id: usize,
     key: &[u8],
     expected: &str,
@@ -495,7 +495,7 @@ pub fn verify_expiry_index_contains(
 
 /// Verify sorted set has expected members.
 pub fn verify_sorted_set(
-    stores: &[(HashMapStore, ExpiryIndex)],
+    stores: &mut [(HashMapStore, ExpiryIndex)],
     shard_id: usize,
     key: &[u8],
     expected_len: usize,
@@ -546,9 +546,9 @@ mod tests {
         assert!(harness.rocks.is_none());
 
         // Recover
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
         assert_eq!(stats.keys_loaded, 1);
-        assert!(verify_string_value(&stores, 0, b"key", "value"));
+        assert!(verify_string_value(&mut stores, 0, b"key", "value"));
     }
 
     #[test]

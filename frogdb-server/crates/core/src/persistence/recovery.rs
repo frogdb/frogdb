@@ -10,7 +10,7 @@ use std::time::Instant;
 use super::rocks::RocksStore;
 use super::serialization::{SerializationError, deserialize};
 use crate::noop::ExpiryIndex;
-use crate::store::HashMapStore;
+use crate::store::{HashMapStore, Store};
 
 /// Statistics from recovery.
 #[derive(Debug, Clone, Default)]
@@ -29,6 +29,12 @@ pub struct RecoveryStats {
 
     /// Number of keys that failed to deserialize.
     pub keys_failed: u64,
+
+    /// Number of warm keys recovered from tiered storage.
+    pub warm_keys_loaded: u64,
+
+    /// Number of stale warm keys skipped (hot copy exists).
+    pub warm_keys_stale: u64,
 }
 
 /// Error during recovery.
@@ -107,6 +113,60 @@ pub fn recover_shard(
     Ok((store, expiry_index, stats))
 }
 
+/// Recover warm entries for a shard.
+///
+/// Scans the warm CF and inserts entries as `Warm` into the store.
+/// Keys that already exist in the store (from hot recovery) are skipped.
+fn recover_warm_shard(
+    rocks: &RocksStore,
+    shard_id: usize,
+    store: &mut HashMapStore,
+    stats: &mut RecoveryStats,
+) -> Result<(), RecoveryError> {
+    let now = Instant::now();
+
+    for (key, value) in rocks.iter_warm_cf(shard_id)? {
+        match deserialize(&value) {
+            Ok((val, metadata)) => {
+                // Skip expired keys
+                if let Some(expires_at) = metadata.expires_at
+                    && expires_at <= now
+                {
+                    stats.keys_expired_skipped += 1;
+                    // Clean up stale warm entry
+                    let _ = rocks.delete_warm(shard_id, &key);
+                    continue;
+                }
+
+                let key_bytes = Bytes::copy_from_slice(&key);
+
+                // Hot copy wins — restore_warm_entry checks for duplicates
+                if store.contains(&key_bytes) {
+                    stats.warm_keys_stale += 1;
+                    // Delete stale warm copy
+                    let _ = rocks.delete_warm(shard_id, &key);
+                    continue;
+                }
+
+                let key_type = val.key_type();
+                store.restore_warm_entry(key_bytes, metadata, key_type);
+                stats.warm_keys_loaded += 1;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    shard_id,
+                    key = ?String::from_utf8_lossy(&key),
+                    error = %e,
+                    "Failed to deserialize warm key during recovery"
+                );
+                stats.keys_failed += 1;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Recover all shards from RocksDB.
 ///
 /// Returns a vector of (store, expiry_index) pairs, one per shard.
@@ -118,12 +178,17 @@ pub fn recover_all_shards(
     let mut results = Vec::with_capacity(rocks.num_shards());
 
     for shard_id in 0..rocks.num_shards() {
-        let (store, expiry_index, stats) = recover_shard(rocks, shard_id)?;
+        let (mut store, expiry_index, stats) = recover_shard(rocks, shard_id)?;
 
         total_stats.keys_loaded += stats.keys_loaded;
         total_stats.keys_expired_skipped += stats.keys_expired_skipped;
         total_stats.bytes_loaded += stats.bytes_loaded;
         total_stats.keys_failed += stats.keys_failed;
+
+        // Recover warm entries if warm tier is enabled
+        if rocks.warm_enabled() {
+            recover_warm_shard(rocks, shard_id, &mut store, &mut total_stats)?;
+        }
 
         results.push((store, expiry_index));
     }
@@ -136,6 +201,8 @@ pub fn recover_all_shards(
         total_expired = total_stats.keys_expired_skipped,
         total_failed = total_stats.keys_failed,
         total_bytes = total_stats.bytes_loaded,
+        warm_keys = total_stats.warm_keys_loaded,
+        warm_stale = total_stats.warm_keys_stale,
         total_duration_ms = total_stats.duration_ms,
         "Full recovery complete"
     );
@@ -159,7 +226,7 @@ mod unit_tests {
         let tmp = TempDir::new().unwrap();
         let rocks = RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap();
 
-        let (store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
+        let (mut store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
 
         assert_eq!(store.len(), 0);
         assert!(expiry_index.is_empty());
@@ -185,7 +252,7 @@ mod unit_tests {
             .unwrap();
 
         // Recover
-        let (store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
+        let (mut store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
 
         assert_eq!(store.len(), 2);
         assert!(expiry_index.is_empty()); // No expiry set
@@ -214,7 +281,7 @@ mod unit_tests {
             .unwrap();
 
         // Recover
-        let (store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
+        let (mut store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
 
         assert_eq!(store.len(), 1);
         assert_eq!(expiry_index.len(), 1);
@@ -244,7 +311,7 @@ mod unit_tests {
             .unwrap();
 
         // Recover
-        let (store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
+        let (mut store, expiry_index, stats) = recover_shard(&rocks, 0).unwrap();
 
         assert_eq!(store.len(), 1);
         assert!(expiry_index.is_empty());
@@ -273,7 +340,7 @@ mod unit_tests {
             .unwrap();
 
         // Recover
-        let (store, _, stats) = recover_shard(&rocks, 0).unwrap();
+        let (mut store, _, stats) = recover_shard(&rocks, 0).unwrap();
 
         assert_eq!(store.len(), 1);
         assert_eq!(stats.keys_loaded, 1);

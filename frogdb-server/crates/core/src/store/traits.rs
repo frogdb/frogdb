@@ -23,8 +23,8 @@ use crate::types::{KeyMetadata, KeyType, SetOptions, SetResult, Value};
 /// This trait provides the fundamental CRUD operations that all stores must implement.
 /// It represents the minimal interface for a key-value store.
 pub trait StorageOps: Send {
-    /// Get a value by key.
-    fn get(&self, key: &[u8]) -> Option<Arc<Value>>;
+    /// Get a value by key. May promote warm values to hot (requires `&mut self`).
+    fn get(&mut self, key: &[u8]) -> Option<Arc<Value>>;
 
     /// Set a value, returns previous value if any.
     fn set(&mut self, key: Bytes, value: Value) -> Option<Value>;

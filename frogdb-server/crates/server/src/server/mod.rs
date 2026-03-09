@@ -339,8 +339,12 @@ impl Server {
 
         // Initialize persistence if enabled
         let (rocks_store, recovered_stores, periodic_sync_handle) = if config.persistence.enabled {
-            let (rocks, stores, sync_handle) =
-                Self::init_persistence(&config.persistence, num_shards, Some(wal_sync_monitor))?;
+            let (rocks, stores, sync_handle) = Self::init_persistence(
+                &config.persistence,
+                num_shards,
+                Some(wal_sync_monitor),
+                config.tiered_storage.enabled,
+            )?;
             (Some(rocks), Some(stores), sync_handle)
         } else {
             info!("Persistence disabled");
@@ -1001,6 +1005,13 @@ impl Server {
             // Set function registry on each shard
             worker.set_function_registry(function_registry.clone());
 
+            // Wire warm store for tiered storage
+            if config.tiered_storage.enabled
+                && let Some(ref rocks) = rocks_store
+            {
+                worker.store.set_warm_store(rocks.clone(), shard_id);
+            }
+
             // Set cluster-related fields if cluster mode is enabled
             if let Some(ref raft_instance) = raft {
                 worker.set_raft(raft_instance.clone());
@@ -1157,6 +1168,7 @@ impl Server {
         config: &PersistenceConfig,
         num_shards: usize,
         wal_sync_monitor: Option<tokio_metrics::TaskMonitor>,
+        warm_enabled: bool,
     ) -> Result<PersistenceInitResult> {
         use std::fs;
 
@@ -1202,11 +1214,12 @@ impl Server {
             },
         };
 
-        // Open RocksDB
-        let rocks = Arc::new(RocksStore::open(
+        // Open RocksDB (with optional warm tier column families)
+        let rocks = Arc::new(RocksStore::open_with_warm(
             &config.data_dir,
             num_shards,
             &rocks_config,
+            warm_enabled,
         )?);
 
         // Recover data if database has existing data

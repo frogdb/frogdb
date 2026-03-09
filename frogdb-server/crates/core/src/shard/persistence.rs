@@ -26,7 +26,7 @@ impl ShardWorker {
     /// Persist a key's current state to WAL after a write operation.
     pub(crate) async fn persist_key_to_wal(&self, key: &[u8]) {
         if let Some(ref wal) = self.persistence.wal_writer
-            && let Some(value) = self.store.get(key)
+            && let Some(value) = self.store.get_hot(key)
         {
             let metadata = self
                 .store

@@ -760,7 +760,7 @@ struct GeoSearchOptions {
 /// valid for GEOSEARCHSTORE, not for GEOSEARCH).
 fn parse_geosearch_options(
     args: &[Bytes],
-    ctx: &CommandContext,
+    ctx: &mut CommandContext,
     key: &Bytes,
     allow_storedist: bool,
 ) -> Result<GeoSearchOptions, CommandError> {
@@ -1051,7 +1051,7 @@ fn parse_georadius_options(args: &[Bytes]) -> Result<GeoRadiusOptions, CommandEr
 /// NE, NW, SE, SW). Within each cell, members appear in ascending score order.
 /// This produces the same default iteration order as Redis.
 fn execute_geosearch(
-    ctx: &CommandContext,
+    ctx: &mut CommandContext,
     key: &Bytes,
     opts: &GeoSearchOptions,
 ) -> Result<Vec<GeoSearchResult>, CommandError> {

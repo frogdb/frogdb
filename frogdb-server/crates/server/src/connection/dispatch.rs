@@ -275,7 +275,7 @@ impl ConnectionHandler {
             _ => Some(vec![Response::error(format!(
                 "ERR Unknown DEBUG subcommand '{}'",
                 String::from_utf8_lossy(&subcommand)
-            ))])
+            ))]),
         }
     }
 

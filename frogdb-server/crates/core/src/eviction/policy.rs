@@ -32,6 +32,12 @@ pub enum EvictionPolicy {
 
     /// Evict keys with the shortest remaining TTL first.
     VolatileTtl,
+
+    /// Demote least recently used values to warm tier instead of deleting.
+    TieredLru,
+
+    /// Demote least frequently used values to warm tier instead of deleting.
+    TieredLfu,
 }
 
 impl EvictionPolicy {
@@ -46,11 +52,16 @@ impl EvictionPolicy {
         )
     }
 
+    /// Returns true if this is a tiered policy (demotes instead of deletes).
+    pub fn is_tiered(&self) -> bool {
+        matches!(self, EvictionPolicy::TieredLru | EvictionPolicy::TieredLfu)
+    }
+
     /// Returns true if this policy uses LRU (least recently used) ordering.
     pub fn uses_lru(&self) -> bool {
         matches!(
             self,
-            EvictionPolicy::VolatileLru | EvictionPolicy::AllkeysLru
+            EvictionPolicy::VolatileLru | EvictionPolicy::AllkeysLru | EvictionPolicy::TieredLru
         )
     }
 
@@ -58,7 +69,7 @@ impl EvictionPolicy {
     pub fn uses_lfu(&self) -> bool {
         matches!(
             self,
-            EvictionPolicy::VolatileLfu | EvictionPolicy::AllkeysLfu
+            EvictionPolicy::VolatileLfu | EvictionPolicy::AllkeysLfu | EvictionPolicy::TieredLfu
         )
     }
 
@@ -86,6 +97,8 @@ impl EvictionPolicy {
             EvictionPolicy::VolatileRandom => "volatile-random",
             EvictionPolicy::AllkeysRandom => "allkeys-random",
             EvictionPolicy::VolatileTtl => "volatile-ttl",
+            EvictionPolicy::TieredLru => "tiered-lru",
+            EvictionPolicy::TieredLfu => "tiered-lfu",
         }
     }
 
@@ -100,6 +113,8 @@ impl EvictionPolicy {
             "volatile-random",
             "allkeys-random",
             "volatile-ttl",
+            "tiered-lru",
+            "tiered-lfu",
         ]
     }
 }
@@ -142,6 +157,8 @@ impl FromStr for EvictionPolicy {
             "volatile-random" => Ok(EvictionPolicy::VolatileRandom),
             "allkeys-random" => Ok(EvictionPolicy::AllkeysRandom),
             "volatile-ttl" => Ok(EvictionPolicy::VolatileTtl),
+            "tiered-lru" => Ok(EvictionPolicy::TieredLru),
+            "tiered-lfu" => Ok(EvictionPolicy::TieredLfu),
             _ => Err(ParseEvictionPolicyError {
                 invalid_value: s.to_string(),
             }),
@@ -168,6 +185,16 @@ mod tests {
         assert!(EvictionPolicy::VolatileRandom.is_volatile());
         assert!(!EvictionPolicy::AllkeysRandom.is_volatile());
         assert!(EvictionPolicy::VolatileTtl.is_volatile());
+        assert!(!EvictionPolicy::TieredLru.is_volatile());
+        assert!(!EvictionPolicy::TieredLfu.is_volatile());
+    }
+
+    #[test]
+    fn test_is_tiered() {
+        assert!(!EvictionPolicy::NoEviction.is_tiered());
+        assert!(!EvictionPolicy::AllkeysLru.is_tiered());
+        assert!(EvictionPolicy::TieredLru.is_tiered());
+        assert!(EvictionPolicy::TieredLfu.is_tiered());
     }
 
     #[test]
@@ -180,6 +207,8 @@ mod tests {
         assert!(!EvictionPolicy::VolatileRandom.uses_lru());
         assert!(!EvictionPolicy::AllkeysRandom.uses_lru());
         assert!(!EvictionPolicy::VolatileTtl.uses_lru());
+        assert!(EvictionPolicy::TieredLru.uses_lru());
+        assert!(!EvictionPolicy::TieredLfu.uses_lru());
     }
 
     #[test]
@@ -192,6 +221,8 @@ mod tests {
         assert!(!EvictionPolicy::VolatileRandom.uses_lfu());
         assert!(!EvictionPolicy::AllkeysRandom.uses_lfu());
         assert!(!EvictionPolicy::VolatileTtl.uses_lfu());
+        assert!(!EvictionPolicy::TieredLru.uses_lfu());
+        assert!(EvictionPolicy::TieredLfu.uses_lfu());
     }
 
     #[test]

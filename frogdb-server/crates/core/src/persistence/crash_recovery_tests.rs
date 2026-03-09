@@ -57,7 +57,7 @@ mod durability_mode {
         harness.crash();
 
         // Reopen and verify ALL N keys are present
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
         assert_eq!(
             stats.keys_loaded, n,
             "All {} keys must survive with sync mode",
@@ -69,7 +69,7 @@ mod durability_mode {
             let key = format!("sync_key_{:05}", i);
             let expected = format!("sync_value_{:05}", i);
             assert!(
-                verify_string_value(&stores, 0, key.as_bytes(), &expected),
+                verify_string_value(&mut stores, 0, key.as_bytes(), &expected),
                 "Key {} must be recovered with correct value",
                 key
             );
@@ -102,7 +102,7 @@ mod durability_mode {
         harness.crash();
 
         // Recover and verify
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
         assert_eq!(
             stats.keys_loaded, n,
             "All keys should survive after flush and interval"
@@ -112,7 +112,7 @@ mod durability_mode {
             let key = format!("periodic_key_{:05}", i);
             let expected = format!("periodic_value_{:05}", i);
             assert!(
-                verify_string_value(&stores, 0, key.as_bytes(), &expected),
+                verify_string_value(&mut stores, 0, key.as_bytes(), &expected),
                 "Key {} must be recovered",
                 key
             );
@@ -143,11 +143,11 @@ mod durability_mode {
         harness.crash();
 
         // Recover
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
 
         // Baseline key MUST be present (it was flushed)
         assert!(
-            verify_string_value(&stores, 0, b"baseline_key", "baseline_value"),
+            verify_string_value(&mut stores, 0, b"baseline_key", "baseline_value"),
             "Flushed baseline key must survive"
         );
 
@@ -178,11 +178,11 @@ mod durability_mode {
         harness.crash();
 
         // Recover
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
 
         // key1 MUST be present (it was flushed)
         assert!(
-            verify_string_value(&stores, 0, b"key1", "value1"),
+            verify_string_value(&mut stores, 0, b"key1", "value1"),
             "Flushed key1 must survive"
         );
 
@@ -242,7 +242,7 @@ mod atomicity {
         harness.crash();
 
         // Recover
-        let (stores, _stats) = harness.recover();
+        let (mut stores, _stats) = harness.recover();
 
         // Key either exists with full value or doesn't exist
         if let Some(value) = stores[0].0.get(b"large_key") {
@@ -288,7 +288,7 @@ mod atomicity {
 
         // Reopen and recover
         let rocks = Arc::new(RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap());
-        let (stores, _stats) = recover_all_shards(&rocks).unwrap();
+        let (mut stores, _stats) = recover_all_shards(&rocks).unwrap();
 
         // Count how many keys are present
         let present_count = keys
@@ -336,11 +336,11 @@ mod atomicity {
 
         // Reopen
         let rocks = Arc::new(RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap());
-        let (stores, _stats) = recover_all_shards(&rocks).unwrap();
+        let (mut stores, _stats) = recover_all_shards(&rocks).unwrap();
 
         // All shards should have their key, or none should
         let mut found_count = 0;
-        for (shard_id, store) in stores.iter().enumerate().take(4) {
+        for (shard_id, store) in stores.iter_mut().enumerate().take(4) {
             let key = format!("shard_{}_key", shard_id);
             if store.0.get(key.as_bytes()).is_some() {
                 found_count += 1;
@@ -387,7 +387,7 @@ mod atomicity {
 
         // Reopen
         let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (stores, _stats) = recover_all_shards(&rocks).unwrap();
+        let (mut stores, _stats) = recover_all_shards(&rocks).unwrap();
 
         // Either all keys deleted or none deleted
         let present_count = (0..5)
@@ -427,7 +427,7 @@ mod recovery_correctness {
         harness.crash();
 
         // Recover
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
         assert_eq!(stats.keys_loaded, test_data.len() as u64);
 
         // Verify each type
@@ -494,7 +494,7 @@ mod recovery_correctness {
         harness.crash();
 
         // Recover
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
 
         // Should have 2 keys (future_key and no_expiry_key)
         assert_eq!(stats.keys_loaded, 2, "Should load 2 non-expired keys");
@@ -524,7 +524,7 @@ mod recovery_correctness {
         harness.crash();
 
         // Recover
-        let (stores, _stats) = harness.recover();
+        let (mut stores, _stats) = harness.recover();
 
         // Expiry index should contain the 2 keys with expiry
         let expiry_index = &stores[0].1;
@@ -555,7 +555,7 @@ mod recovery_correctness {
         harness.crash();
 
         // Recover
-        let (stores, _stats) = harness.recover();
+        let (mut stores, _stats) = harness.recover();
 
         let zset_value = stores[0].0.get(b"myzset").expect("myzset missing");
         let zset = zset_value.as_sorted_set().expect("not a sorted set");
@@ -618,7 +618,7 @@ mod recovery_correctness {
         harness.flush();
         harness.crash();
 
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
 
         // Total should be 10 + 20 + 30 + 40 = 100
         assert_eq!(stats.keys_loaded, 100);
@@ -640,7 +640,7 @@ mod recovery_correctness {
         harness.flush();
         harness.crash();
 
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
 
         assert_eq!(stats.keys_loaded, 1);
         assert_eq!(stores[0].0.len(), 1);
@@ -746,7 +746,7 @@ mod fault_injection {
 
         // Reopen - RocksDB should replay WAL
         let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (stores, stats) = recover_all_shards(&rocks).unwrap();
+        let (mut stores, stats) = recover_all_shards(&rocks).unwrap();
 
         // All sync'd keys should be present
         assert_eq!(stats.keys_loaded, 50);
@@ -784,7 +784,7 @@ mod fault_injection {
 
         // Reopen and recover
         let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (stores, stats) = recover_all_shards(&rocks).unwrap();
+        let (mut stores, stats) = recover_all_shards(&rocks).unwrap();
 
         // 10 valid keys should be loaded, 1 should fail
         assert_eq!(stats.keys_loaded, 10);
@@ -819,7 +819,7 @@ mod stress {
         harness.crash();
 
         let start = Instant::now();
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
         let duration = start.elapsed();
 
         assert_eq!(stats.keys_loaded, n);
@@ -854,7 +854,7 @@ mod stress {
         harness.flush();
         harness.crash();
 
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
 
         // Should have 500 keys (the odd-numbered ones)
         assert_eq!(stats.keys_loaded, 500);
@@ -933,7 +933,7 @@ mod stress {
         harness.flush();
         harness.crash();
 
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
         assert_eq!(stats.keys_loaded, 4);
 
         // Verify each value has correct size
@@ -1020,7 +1020,7 @@ mod disk_failure {
 
         // Reopen and recover from WAL (no snapshots involved)
         let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (stores, stats) = recover_all_shards(&rocks).unwrap();
+        let (mut stores, stats) = recover_all_shards(&rocks).unwrap();
 
         assert_eq!(stats.keys_loaded, 30);
         assert_eq!(stores[0].0.len(), 30);
@@ -1045,7 +1045,7 @@ mod disk_failure {
         harness.crash();
 
         // Recover
-        let (stores, _stats) = harness.recover();
+        let (mut stores, _stats) = harness.recover();
 
         // Verify binary data is intact
         let recovered = stores[0].0.get(&binary_key).expect("binary key missing");
@@ -1073,7 +1073,7 @@ mod disk_failure {
         harness.flush();
         harness.crash();
 
-        let (stores, _stats) = harness.recover();
+        let (mut stores, _stats) = harness.recover();
 
         for (key, expected) in &unicode_data {
             let value = stores[0].0.get(key.as_bytes()).expect("key missing");
@@ -1103,7 +1103,7 @@ mod edge_cases {
         // Don't write anything, just crash
         harness.crash();
 
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
 
         assert_eq!(stats.keys_loaded, 0);
         assert_eq!(stats.keys_expired_skipped, 0);
@@ -1124,10 +1124,15 @@ mod edge_cases {
         harness.flush();
         harness.crash();
 
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
 
         assert_eq!(stats.keys_loaded, 1);
-        assert!(verify_string_value(&stores, 0, b"only_key", "only_value"));
+        assert!(verify_string_value(
+            &mut stores,
+            0,
+            b"only_key",
+            "only_value"
+        ));
     }
 
     /// Test 7.3: Key with maximum length (64KB).
@@ -1141,7 +1146,7 @@ mod edge_cases {
         harness.flush();
         harness.crash();
 
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
 
         assert_eq!(stats.keys_loaded, 1);
         assert!(stores[0].0.get(large_key.as_bytes()).is_some());
@@ -1165,7 +1170,7 @@ mod edge_cases {
         harness.flush();
         harness.crash();
 
-        let (stores, _stats) = harness.recover();
+        let (mut stores, _stats) = harness.recover();
 
         let zset_value = stores[0].0.get(b"special_zset").unwrap();
         let zset = zset_value.as_sorted_set().unwrap();
@@ -1192,10 +1197,15 @@ mod edge_cases {
 
         harness.crash();
 
-        let (stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
 
         assert_eq!(stats.keys_loaded, 1);
-        assert!(verify_string_value(&stores, 0, b"overwrite_key", "updated"));
+        assert!(verify_string_value(
+            &mut stores,
+            0,
+            b"overwrite_key",
+            "updated"
+        ));
     }
 
     /// Test 7.6: Immediate expiry recovery.
@@ -1223,7 +1233,7 @@ mod edge_cases {
 
         // Recover
         let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (stores, stats) = recover_all_shards(&rocks).unwrap();
+        let (mut stores, stats) = recover_all_shards(&rocks).unwrap();
 
         // Key should be filtered out
         assert_eq!(stats.keys_expired_skipped, 1);
@@ -1273,7 +1283,7 @@ mod async_wal {
 
         // Reopen and recover
         let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (stores, stats) = recover_all_shards(&rocks).unwrap();
+        let (mut stores, stats) = recover_all_shards(&rocks).unwrap();
 
         assert_eq!(stats.keys_loaded, 50);
         assert_eq!(stores[0].0.len(), 50);

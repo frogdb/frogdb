@@ -156,7 +156,7 @@ impl ShardWorker {
 
     /// Check if a list key has non-empty data.
     fn list_is_non_empty(&self, key: &Bytes) -> bool {
-        if let Some(value) = self.store.get(key)
+        if let Some(value) = self.store.get_hot(key)
             && let Some(list) = value.as_list()
         {
             return !list.is_empty();
@@ -166,7 +166,7 @@ impl ShardWorker {
 
     /// Check if a sorted set key has non-empty data.
     fn zset_is_non_empty(&self, key: &Bytes) -> bool {
-        if let Some(value) = self.store.get(key)
+        if let Some(value) = self.store.get_hot(key)
             && let Some(zset) = value.as_sorted_set()
         {
             return !zset.is_empty();

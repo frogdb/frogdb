@@ -1,6 +1,7 @@
 //! HashMap-based store implementation.
 
 use bytes::Bytes;
+use frogdb_persistence::{RocksStore, deserialize, serialize};
 use griddle::HashMap;
 use rand::prelude::IteratorRandom;
 use std::sync::Arc;
@@ -15,20 +16,70 @@ use crate::types::{KeyMetadata, KeyType, SetCondition, SetOptions, SetResult, Va
 
 use super::Store;
 
-/// Entry in the store with value and metadata.
+/// Where a key's value currently resides.
+#[derive(Debug)]
+enum ValueLocation {
+    /// Value is in RAM (normal case).
+    Hot(Arc<Value>),
+    /// Value has been demoted to RocksDB warm tier.
+    Warm,
+}
+
+/// Entry in the store with value location and metadata.
 ///
-/// Values are wrapped in `Arc` for copy-on-write semantics:
+/// Keys and metadata are ALWAYS in RAM. Only the value may be on disk.
+///
+/// Hot values are wrapped in `Arc` for copy-on-write semantics:
 /// - Reads: cheap ref-count bump via `Arc::clone()`
 /// - Writes with no readers: zero-copy (refcount == 1)
 /// - Writes with outstanding readers: clone-on-write via `Arc::make_mut()`
 #[derive(Debug)]
 struct Entry {
-    value: Arc<Value>,
+    location: ValueLocation,
     metadata: KeyMetadata,
+    /// Cached key type so TYPE/SCAN work without promotion.
+    key_type: KeyType,
+}
+
+impl Entry {
+    /// Returns the in-memory value, or None if demoted to warm tier.
+    fn hot_value(&self) -> Option<&Arc<Value>> {
+        match &self.location {
+            ValueLocation::Hot(v) => Some(v),
+            ValueLocation::Warm => None,
+        }
+    }
+
+    /// Returns true if the value is currently in RAM.
+    fn is_hot(&self) -> bool {
+        matches!(self.location, ValueLocation::Hot(_))
+    }
+
+    /// Memory size of this entry for accounting purposes.
+    /// Warm entries contribute zero value bytes (value is on disk).
+    fn memory_size(&self, key: &[u8]) -> usize {
+        let value_size = match &self.location {
+            ValueLocation::Hot(v) => v.memory_size(),
+            ValueLocation::Warm => 0,
+        };
+        key.len() + value_size + std::mem::size_of::<KeyMetadata>() + std::mem::size_of::<Entry>()
+    }
+}
+
+/// Error returned by `demote_key()`.
+#[derive(Debug, thiserror::Error)]
+pub enum DemotionError {
+    #[error("key not found")]
+    KeyNotFound,
+    #[error("key is already warm")]
+    AlreadyWarm,
+    #[error("warm tier not configured")]
+    NoWarmStore,
+    #[error("RocksDB error: {0}")]
+    Rocks(#[from] frogdb_persistence::rocks::RocksError),
 }
 
 /// Default store implementation using griddle::HashMap.
-#[derive(Debug)]
 pub struct HashMapStore {
     data: HashMap<Bytes, Entry>,
     expiry_index: ExpiryIndex,
@@ -36,6 +87,29 @@ pub struct HashMapStore {
     memory_used: usize,
     /// Number of changes since last save (for INFO persistence rdb_changes_since_last_save).
     dirty: u64,
+    /// RocksDB store for warm tier (None when tiered storage is disabled).
+    warm_store: Option<Arc<RocksStore>>,
+    /// Shard ID for warm CF lookups.
+    warm_shard_id: usize,
+    /// Number of keys currently in the warm tier.
+    warm_keys: usize,
+    /// Total number of hot→warm demotions.
+    total_demotions: u64,
+    /// Total number of warm→hot promotions.
+    total_promotions: u64,
+    /// Keys that were expired during promotion attempt.
+    expired_on_promote: u64,
+}
+
+impl std::fmt::Debug for HashMapStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HashMapStore")
+            .field("keys", &self.data.len())
+            .field("memory_used", &self.memory_used)
+            .field("warm_keys", &self.warm_keys)
+            .field("warm_enabled", &self.warm_store.is_some())
+            .finish()
+    }
 }
 
 impl HashMapStore {
@@ -47,6 +121,12 @@ impl HashMapStore {
             label_index: LabelIndex::new(),
             memory_used: 0,
             dirty: 0,
+            warm_store: None,
+            warm_shard_id: 0,
+            warm_keys: 0,
+            total_demotions: 0,
+            total_promotions: 0,
+            expired_on_promote: 0,
         }
     }
 
@@ -60,6 +140,12 @@ impl HashMapStore {
             label_index: LabelIndex::new(),
             memory_used: 0,
             dirty: 0,
+            warm_store: None,
+            warm_shard_id: 0,
+            warm_keys: 0,
+            total_demotions: 0,
+            total_promotions: 0,
+            expired_on_promote: 0,
         }
     }
 
@@ -69,7 +155,7 @@ impl HashMapStore {
     /// its full metadata. The expiry index should be updated separately
     /// or use `with_expiry_index` to provide a pre-built index.
     pub fn restore_entry(&mut self, key: Bytes, value: Value, metadata: KeyMetadata) {
-        let size = Self::entry_memory_size(&key, &value);
+        let size = Self::hot_entry_memory_size(&key, &value);
         self.memory_used += size;
 
         // Update expiry index if key has expiry
@@ -82,15 +168,45 @@ impl HashMapStore {
             self.label_index.add(key.clone(), ts.labels());
         }
 
+        let key_type = value.key_type();
         let entry = Entry {
-            value: Arc::new(value),
+            location: ValueLocation::Hot(Arc::new(value)),
             metadata,
+            key_type,
         };
         self.data.insert(key, entry);
     }
 
-    /// Calculate memory size for an entry.
-    fn entry_memory_size(key: &[u8], value: &Value) -> usize {
+    /// Restore a warm entry during recovery.
+    ///
+    /// Inserts a key with metadata as a `Warm` entry — no value in RAM.
+    /// Does NOT insert if the key already exists (hot copy wins).
+    pub fn restore_warm_entry(&mut self, key: Bytes, metadata: KeyMetadata, key_type: KeyType) {
+        // Hot copy wins — don't overwrite existing entries
+        if self.data.contains_key(&key) {
+            return;
+        }
+
+        // Warm entries: key + metadata in RAM, value on disk
+        let size = key.len() + std::mem::size_of::<KeyMetadata>() + std::mem::size_of::<Entry>();
+        self.memory_used += size;
+
+        // Update expiry index if key has expiry
+        if let Some(expires_at) = metadata.expires_at {
+            self.expiry_index.set(key.clone(), expires_at);
+        }
+
+        let entry = Entry {
+            location: ValueLocation::Warm,
+            metadata,
+            key_type,
+        };
+        self.data.insert(key, entry);
+        self.warm_keys += 1;
+    }
+
+    /// Calculate memory size for a new hot entry.
+    fn hot_entry_memory_size(key: &[u8], value: &Value) -> usize {
         key.len()
             + value.memory_size()
             + std::mem::size_of::<KeyMetadata>()
@@ -105,10 +221,18 @@ impl HashMapStore {
             && entry.metadata.is_expired()
         {
             debug!(key_len = key.len(), "Key expired via lazy deletion");
+            let was_warm = !entry.is_hot();
             // Remove from both data and expiry index
             if let Some(entry) = self.data.remove(key) {
-                let size = Self::entry_memory_size(key, &entry.value);
+                let size = entry.memory_size(key);
                 self.memory_used = self.memory_used.saturating_sub(size);
+            }
+            // Clean up warm CF if needed
+            if was_warm {
+                if let Some(warm_store) = &self.warm_store {
+                    let _ = warm_store.delete_warm(self.warm_shard_id, key);
+                }
+                self.warm_keys = self.warm_keys.saturating_sub(1);
             }
             self.expiry_index.remove(key);
             self.label_index.remove(key);
@@ -124,18 +248,171 @@ impl Default for HashMapStore {
     }
 }
 
+impl HashMapStore {
+    /// Get a value only if it's hot (in-memory). Does not promote warm values.
+    ///
+    /// Use this for WAL persistence and diagnostics where promotion is unnecessary.
+    pub fn get_hot(&self, key: &[u8]) -> Option<Arc<Value>> {
+        self.data.get(key).and_then(|e| e.hot_value().cloned())
+    }
+
+    /// Configure the warm (RocksDB) tier for this store.
+    pub fn set_warm_store(&mut self, rocks: Arc<RocksStore>, shard_id: usize) {
+        self.warm_store = Some(rocks);
+        self.warm_shard_id = shard_id;
+    }
+
+    /// Demote a key's value from hot (RAM) to warm (RocksDB).
+    ///
+    /// Returns the number of value bytes freed from RAM.
+    pub fn demote_key(&mut self, key: &[u8]) -> Result<usize, DemotionError> {
+        let warm_store = self.warm_store.as_ref().ok_or(DemotionError::NoWarmStore)?;
+
+        let entry = self.data.get(key).ok_or(DemotionError::KeyNotFound)?;
+        let value = entry.hot_value().ok_or(DemotionError::AlreadyWarm)?;
+
+        // Serialize using existing persistence format
+        let serialized = serialize(value, &entry.metadata);
+        let value_bytes = value.memory_size();
+
+        // Write to warm CF
+        warm_store.put_warm(self.warm_shard_id, key, &serialized)?;
+
+        // Replace location with Warm
+        let entry = self.data.get_mut(key).unwrap();
+        entry.location = ValueLocation::Warm;
+
+        // Update memory accounting — value bytes freed, metadata stays in RAM
+        self.memory_used = self.memory_used.saturating_sub(value_bytes);
+        self.warm_keys += 1;
+        self.total_demotions += 1;
+
+        Ok(value_bytes)
+    }
+
+    /// Promote a key's value from warm (RocksDB) back to hot (RAM).
+    ///
+    /// Returns None if the key doesn't exist, isn't warm, or is expired.
+    fn promote_key(&mut self, key: &[u8]) -> Option<Arc<Value>> {
+        // Check that entry exists and is warm
+        let entry = self.data.get(key)?;
+        if entry.is_hot() {
+            return entry.hot_value().cloned();
+        }
+
+        // Check TTL before promoting — don't waste work on expired keys
+        if entry.metadata.is_expired() {
+            debug!(key_len = key.len(), "Warm key expired during promotion");
+            self.expired_on_promote += 1;
+            // Clean up: remove from RAM, warm CF, and expiry index
+            if let Some(warm_store) = &self.warm_store {
+                let _ = warm_store.delete_warm(self.warm_shard_id, key);
+            }
+            if let Some(entry) = self.data.remove(key) {
+                let size = entry.memory_size(key);
+                self.memory_used = self.memory_used.saturating_sub(size);
+            }
+            self.expiry_index.remove(key);
+            self.label_index.remove(key);
+            self.warm_keys = self.warm_keys.saturating_sub(1);
+            return None;
+        }
+
+        // Read from warm CF
+        let warm_store = self.warm_store.as_ref()?;
+        let data = match warm_store.get_warm(self.warm_shard_id, key) {
+            Ok(Some(data)) => data,
+            Ok(None) => {
+                warn!(key_len = key.len(), "Warm key missing from RocksDB");
+                return None;
+            }
+            Err(e) => {
+                warn!(key_len = key.len(), error = %e, "Failed to read warm key");
+                return None;
+            }
+        };
+
+        // Deserialize
+        let (value, _metadata) = match deserialize(&data) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(key_len = key.len(), error = %e, "Failed to deserialize warm key");
+                return None;
+            }
+        };
+
+        // Replace location with Hot
+        let value_arc = Arc::new(value);
+        let value_bytes = value_arc.memory_size();
+
+        let entry = self.data.get_mut(key).unwrap();
+        entry.location = ValueLocation::Hot(value_arc.clone());
+
+        // Update memory accounting
+        self.memory_used += value_bytes;
+        self.warm_keys = self.warm_keys.saturating_sub(1);
+        self.total_promotions += 1;
+
+        // Delete from warm CF
+        let _ = warm_store.delete_warm(self.warm_shard_id, key);
+
+        Some(value_arc)
+    }
+
+    /// Number of keys currently in the warm tier.
+    pub fn warm_key_count(&self) -> usize {
+        self.warm_keys
+    }
+
+    /// Number of hot (in-memory) keys.
+    pub fn hot_key_count(&self) -> usize {
+        self.data.len().saturating_sub(self.warm_keys)
+    }
+
+    /// Total number of warm→hot promotions.
+    pub fn promotion_count(&self) -> u64 {
+        self.total_promotions
+    }
+
+    /// Total number of hot→warm demotions.
+    pub fn demotion_count(&self) -> u64 {
+        self.total_demotions
+    }
+
+    /// Keys that were found expired during promotion.
+    pub fn expired_on_promote_count(&self) -> u64 {
+        self.expired_on_promote
+    }
+}
+
 impl Store for HashMapStore {
-    fn get(&self, key: &[u8]) -> Option<Arc<Value>> {
-        self.data.get(key).map(|e| Arc::clone(&e.value))
+    fn get(&mut self, key: &[u8]) -> Option<Arc<Value>> {
+        // Fast path: hot value
+        if let Some(entry) = self.data.get(key)
+            && let Some(v) = entry.hot_value()
+        {
+            return Some(v.clone());
+        }
+        // Slow path: promote from warm tier
+        self.promote_key(key)
     }
 
     fn set(&mut self, key: Bytes, value: Value) -> Option<Value> {
-        let new_size = Self::entry_memory_size(&key, &value);
+        let new_size = Self::hot_entry_memory_size(&key, &value);
 
         let old_value = if let Some(old_entry) = self.data.get(&key) {
-            let old_size = Self::entry_memory_size(&key, &old_entry.value);
+            let old_size = old_entry.memory_size(&key);
             self.memory_used = self.memory_used.saturating_sub(old_size);
-            Some(Arc::try_unwrap(old_entry.value.clone()).unwrap_or_else(|arc| (*arc).clone()))
+            // Clean up warm CF if overwriting a warm key
+            if !old_entry.is_hot() {
+                if let Some(warm_store) = &self.warm_store {
+                    let _ = warm_store.delete_warm(self.warm_shard_id, &key);
+                }
+                self.warm_keys = self.warm_keys.saturating_sub(1);
+            }
+            old_entry
+                .hot_value()
+                .map(|v| Arc::try_unwrap(v.clone()).unwrap_or_else(|arc| (*arc).clone()))
         } else {
             None
         };
@@ -150,9 +427,11 @@ impl Store for HashMapStore {
 
         self.memory_used += new_size;
 
+        let key_type = value.key_type();
         let entry = Entry {
-            value: Arc::new(value),
+            location: ValueLocation::Hot(Arc::new(value)),
             metadata: KeyMetadata::new(new_size),
+            key_type,
         };
         self.data.insert(key, entry);
 
@@ -161,7 +440,7 @@ impl Store for HashMapStore {
 
     fn delete(&mut self, key: &[u8]) -> bool {
         if let Some(entry) = self.data.remove(key) {
-            let size = Self::entry_memory_size(key, &entry.value);
+            let size = entry.memory_size(key);
             if size > self.memory_used {
                 warn!(
                     key_len = key.len(),
@@ -170,6 +449,13 @@ impl Store for HashMapStore {
                 );
             }
             self.memory_used = self.memory_used.saturating_sub(size);
+            // Clean up warm CF if this was a warm key
+            if !entry.is_hot() {
+                if let Some(warm_store) = &self.warm_store {
+                    let _ = warm_store.delete_warm(self.warm_shard_id, key);
+                }
+                self.warm_keys = self.warm_keys.saturating_sub(1);
+            }
             self.expiry_index.remove(key);
             self.label_index.remove(key);
             true
@@ -185,7 +471,7 @@ impl Store for HashMapStore {
     fn key_type(&self, key: &[u8]) -> KeyType {
         self.data
             .get(key)
-            .map(|e| e.value.key_type())
+            .map(|e| e.key_type)
             .unwrap_or(KeyType::None)
     }
 
@@ -233,7 +519,7 @@ impl Store for HashMapStore {
             };
 
             let type_matches = match key_type {
-                Some(filter_type) => entry.value.key_type() == filter_type,
+                Some(filter_type) => entry.key_type == filter_type,
                 None => true,
             };
 
@@ -256,10 +542,21 @@ impl Store for HashMapStore {
     }
 
     fn clear(&mut self) {
+        // Clean up all warm entries from RocksDB
+        if self.warm_keys > 0
+            && let Some(warm_store) = &self.warm_store
+        {
+            for (key, entry) in &self.data {
+                if !entry.is_hot() {
+                    let _ = warm_store.delete_warm(self.warm_shard_id, key.as_ref());
+                }
+            }
+        }
         self.data.clear();
         self.expiry_index = ExpiryIndex::new();
         self.label_index = LabelIndex::new();
         self.memory_used = 0;
+        self.warm_keys = 0;
     }
 
     fn all_keys(&self) -> Vec<Bytes> {
@@ -276,13 +573,20 @@ impl Store for HashMapStore {
             return None;
         }
 
-        // Update last access time and return value
+        // Fast path: hot value
         if let Some(entry) = self.data.get_mut(key) {
             entry.metadata.touch();
-            Some(Arc::clone(&entry.value))
-        } else {
-            None
+            if let Some(v) = entry.hot_value() {
+                return Some(v.clone());
+            }
         }
+
+        // Slow path: promote from warm tier
+        let value = self.promote_key(key)?;
+        if let Some(entry) = self.data.get_mut(key) {
+            entry.metadata.touch();
+        }
+        Some(value)
     }
 
     fn set_with_options(&mut self, key: Bytes, value: Value, opts: SetOptions) -> SetResult {
@@ -297,7 +601,9 @@ impl Store for HashMapStore {
 
         // Get old value if needed (convert Arc<Value> to owned Value)
         let old_value: Option<Value> = if opts.return_old {
-            self.get(&key)
+            self.data
+                .get(&key)
+                .and_then(|e| e.hot_value().cloned())
                 .map(|arc| Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone()))
         } else {
             None
@@ -314,12 +620,19 @@ impl Store for HashMapStore {
         };
 
         // Perform the set
-        let new_size = Self::entry_memory_size(&key, &value);
+        let new_size = Self::hot_entry_memory_size(&key, &value);
 
         // Update memory accounting
         if let Some(old_entry) = self.data.get(&key) {
-            let old_size = Self::entry_memory_size(&key, &old_entry.value);
+            let old_size = old_entry.memory_size(&key);
             self.memory_used = self.memory_used.saturating_sub(old_size);
+            // Clean up warm CF if overwriting a warm key
+            if !old_entry.is_hot() {
+                if let Some(warm_store) = &self.warm_store {
+                    let _ = warm_store.delete_warm(self.warm_shard_id, &key);
+                }
+                self.warm_keys = self.warm_keys.saturating_sub(1);
+            }
         }
 
         self.memory_used += new_size;
@@ -327,9 +640,11 @@ impl Store for HashMapStore {
         let mut metadata = KeyMetadata::new(new_size);
         metadata.expires_at = new_expiry;
 
+        let key_type = value.key_type();
         let entry = Entry {
-            value: Arc::new(value),
+            location: ValueLocation::Hot(Arc::new(value)),
             metadata,
+            key_type,
         };
         self.data.insert(key.clone(), entry);
 
@@ -399,10 +714,27 @@ impl Store for HashMapStore {
         }
 
         if let Some(entry) = self.data.remove(key) {
-            let size = Self::entry_memory_size(key, &entry.value);
+            let size = entry.memory_size(key);
             self.memory_used = self.memory_used.saturating_sub(size);
             self.expiry_index.remove(key);
-            Some(Arc::try_unwrap(entry.value).unwrap_or_else(|arc| (*arc).clone()))
+            self.label_index.remove(key);
+            match entry.location {
+                ValueLocation::Hot(arc) => {
+                    Some(Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone()))
+                }
+                ValueLocation::Warm => {
+                    self.warm_keys = self.warm_keys.saturating_sub(1);
+                    // Read from warm CF before deleting
+                    if let Some(warm_store) = &self.warm_store {
+                        let data = warm_store.get_warm(self.warm_shard_id, key).ok().flatten();
+                        let _ = warm_store.delete_warm(self.warm_shard_id, key);
+                        data.and_then(|d| deserialize(&d).ok())
+                            .map(|(value, _metadata)| value)
+                    } else {
+                        None
+                    }
+                }
+            }
         } else {
             None
         }
@@ -414,10 +746,19 @@ impl Store for HashMapStore {
             return None;
         }
 
-        self.data.get_mut(key).map(|e| {
+        // Promote warm values before returning mutable reference
+        if let Some(entry) = self.data.get(key)
+            && !entry.is_hot()
+        {
+            self.promote_key(key);
+        }
+
+        self.data.get_mut(key).and_then(|e| {
             e.metadata.touch();
-            // Copy-on-write: clones the Value only if refcount > 1
-            Arc::make_mut(&mut e.value)
+            match &mut e.location {
+                ValueLocation::Hot(arc) => Some(Arc::make_mut(arc)),
+                ValueLocation::Warm => None,
+            }
         })
     }
 
@@ -449,7 +790,13 @@ impl Store for HashMapStore {
         }
 
         let mut rng = rand::thread_rng();
-        self.data.keys().choose(&mut rng).cloned()
+        // Skip warm entries — they're already demoted
+        self.data
+            .iter()
+            .filter(|(_, e)| e.is_hot())
+            .map(|(k, _)| k)
+            .choose(&mut rng)
+            .cloned()
     }
 
     fn sample_keys(&self, count: usize) -> Vec<Bytes> {
@@ -458,8 +805,11 @@ impl Store for HashMapStore {
         }
 
         let mut rng = rand::thread_rng();
+        // Skip warm entries — they're already demoted
         self.data
-            .keys()
+            .iter()
+            .filter(|(_, e)| e.is_hot())
+            .map(|(k, _)| k)
             .choose_multiple(&mut rng, count)
             .into_iter()
             .cloned()
@@ -533,6 +883,26 @@ impl Store for HashMapStore {
 
     fn ts_label_index_mut(&mut self) -> Option<&mut LabelIndex> {
         Some(&mut self.label_index)
+    }
+
+    fn warm_key_count(&self) -> usize {
+        self.warm_keys
+    }
+
+    fn hot_key_count(&self) -> usize {
+        self.data.len().saturating_sub(self.warm_keys)
+    }
+
+    fn demotion_count(&self) -> u64 {
+        self.total_demotions
+    }
+
+    fn promotion_count(&self) -> u64 {
+        self.total_promotions
+    }
+
+    fn expired_on_promote_count(&self) -> u64 {
+        self.expired_on_promote
     }
 }
 

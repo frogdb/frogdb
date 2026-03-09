@@ -22,6 +22,7 @@ pub mod security;
 pub mod server;
 pub mod slowlog;
 pub mod status;
+pub mod tiered;
 pub mod vll;
 
 // Re-export all config types
@@ -44,6 +45,7 @@ pub use security::{AclFileConfig, SecurityConfig};
 pub use server::ServerConfig;
 pub use slowlog::SlowlogConfig;
 pub use status::{HotShardsConfig, StatusConfig};
+pub use tiered::TieredStorageConfig;
 pub use vll::VllConfig;
 
 use anyhow::{Context, Result};
@@ -147,6 +149,10 @@ pub struct Config {
     /// Compatibility configuration.
     #[serde(default)]
     pub compat: CompatConfig,
+
+    /// Tiered storage configuration (hot/warm two-tier storage).
+    #[serde(default)]
+    pub tiered_storage: TieredStorageConfig,
 }
 
 /// Validate a bind address (IP address or hostname).
@@ -381,6 +387,19 @@ impl Config {
 
         // Validate admin config
         self.admin.validate()?;
+
+        // Validate tiered storage config
+        self.tiered_storage.validate()?;
+        if self.tiered_storage.enabled && !self.persistence.enabled {
+            anyhow::bail!("tiered_storage.enabled=true requires persistence.enabled=true");
+        }
+        let policy = self.memory.maxmemory_policy.to_lowercase();
+        if (policy == "tiered-lru" || policy == "tiered-lfu") && !self.tiered_storage.enabled {
+            anyhow::bail!(
+                "maxmemory_policy '{}' requires tiered_storage.enabled=true",
+                self.memory.maxmemory_policy
+            );
+        }
 
         // Validate bind addresses
         validate_bind_address(&self.server.bind, "server.bind")?;

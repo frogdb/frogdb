@@ -46,15 +46,9 @@ pub enum ClusterRpcRequest {
     /// Forwarded client write (follower to leader).
     ForwardedWrite(ClusterCommand),
     /// Broadcast pub/sub message to all nodes.
-    PubSubBroadcast {
-        channel: Vec<u8>,
-        message: Vec<u8>,
-    },
+    PubSubBroadcast { channel: Vec<u8>, message: Vec<u8> },
     /// Forward sharded pub/sub message to the slot-owning node.
-    PubSubForward {
-        channel: Vec<u8>,
-        message: Vec<u8>,
-    },
+    PubSubForward { channel: Vec<u8>, message: Vec<u8> },
     /// Lightweight health probe for failover scoring.
     HealthProbe,
 }

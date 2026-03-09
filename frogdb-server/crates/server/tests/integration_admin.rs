@@ -1628,10 +1628,7 @@ async fn test_debug_unsafe_commands_rejected() {
                     err_str
                 );
             }
-            _ => panic!(
-                "DEBUG {} should return error, got {:?}",
-                subcmd, response
-            ),
+            _ => panic!("DEBUG {} should return error, got {:?}", subcmd, response),
         }
     }
 

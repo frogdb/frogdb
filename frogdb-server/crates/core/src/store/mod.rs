@@ -40,7 +40,7 @@ mod traits;
 pub use traits::{ClusterSlotOps, EvictionOps, ExpiryOps, ScanOps, StorageOps};
 
 // Re-export HashMapStore implementation
-pub use hashmap::HashMapStore;
+pub use hashmap::{DemotionError, HashMapStore};
 
 use bytes::Bytes;
 use std::sync::Arc;
@@ -196,11 +196,11 @@ pub trait Store: Send {
     // StorageOps - Core CRUD
     // ========================================================================
 
-    /// Get a value by key.
+    /// Get a value by key. May promote warm values to hot (requires `&mut self`).
     ///
     /// Returns an `Arc<Value>` for zero-copy reads. The Arc ref-count bump
     /// is much cheaper than deep-cloning large values like hashes or lists.
-    fn get(&self, key: &[u8]) -> Option<Arc<Value>>;
+    fn get(&mut self, key: &[u8]) -> Option<Arc<Value>>;
 
     /// Set a value, returns previous value if any.
     fn set(&mut self, key: Bytes, value: Value) -> Option<Value>;
@@ -418,5 +418,34 @@ pub trait Store: Send {
     /// Mutably access the label index (for TS.ALTER label updates).
     fn ts_label_index_mut(&mut self) -> Option<&mut LabelIndex> {
         None
+    }
+
+    // ========================================================================
+    // Tiered storage stats
+    // ========================================================================
+
+    /// Number of warm (demoted) keys. Returns 0 if tiered storage is disabled.
+    fn warm_key_count(&self) -> usize {
+        0
+    }
+
+    /// Number of hot (in-memory) keys.
+    fn hot_key_count(&self) -> usize {
+        self.len()
+    }
+
+    /// Total hot→warm demotions.
+    fn demotion_count(&self) -> u64 {
+        0
+    }
+
+    /// Total warm→hot promotions.
+    fn promotion_count(&self) -> u64 {
+        0
+    }
+
+    /// Keys expired during promotion attempt.
+    fn expired_on_promote_count(&self) -> u64 {
+        0
     }
 }
