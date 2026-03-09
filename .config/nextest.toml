@@ -1,3 +1,5 @@
 [profile.default]
 # Mark tests as slow after 5s, terminate after 15s (3 × 5s)
 slow-timeout = { period = "5s", terminate-after = 3 }
+# Run all tests even if some fail
+fail-fast = false
