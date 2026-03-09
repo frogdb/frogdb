@@ -141,6 +141,9 @@ pub struct Acceptor {
 
     /// Optional pub/sub forwarder for cross-node message delivery.
     pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
+
+    /// MONITOR command broadcaster.
+    monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
 }
 
 impl Acceptor {
@@ -176,6 +179,7 @@ impl Acceptor {
         quorum_checker: Option<Arc<dyn QuorumChecker>>,
         conn_monitor: Option<tokio_metrics::TaskMonitor>,
         pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
+        monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         let per_request_spans = config_manager.per_request_spans_flag();
@@ -212,6 +216,7 @@ impl Acceptor {
             quorum_checker,
             conn_monitor,
             pubsub_forwarder,
+            monitor_broadcaster,
         }
     }
 
@@ -301,6 +306,7 @@ impl Acceptor {
                         shared_tracer: self.shared_tracer.clone(),
                         tracing_config: self.tracing_config.clone(),
                         band_tracker: self.band_tracker.clone(),
+                        monitor_broadcaster: self.monitor_broadcaster.clone(),
                     };
 
                     let metrics_recorder = self.metrics_recorder.clone();

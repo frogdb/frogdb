@@ -540,7 +540,10 @@ impl ConnectionHandler {
         // 3. Reset protocol to RESP2 (per Redis behavior)
         self.state.protocol_version = ProtocolVersion::Resp2;
 
-        // 4. Clear client name
+        // 4. Exit MONITOR mode
+        self.monitor_rx = None;
+
+        // 5. Clear client name
         self.state.name = None;
 
         // Return RESET acknowledgment

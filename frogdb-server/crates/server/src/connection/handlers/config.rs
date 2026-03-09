@@ -31,7 +31,9 @@ impl ConnectionHandler {
             "GET" => self.handle_config_get(&args[1..]),
             "SET" => self.handle_config_set(&args[1..]).await,
             "RESETSTAT" => self.handle_config_resetstat().await,
-            "REWRITE" => Response::error("ERR CONFIG REWRITE is not supported. Use the configuration file to persist changes."),
+            "REWRITE" => Response::error(
+                "ERR CONFIG REWRITE is not supported. Use the configuration file to persist changes.",
+            ),
             "HELP" => self.handle_config_help(),
             _ => Response::error(format!(
                 "ERR unknown subcommand '{}'. Try CONFIG HELP.",

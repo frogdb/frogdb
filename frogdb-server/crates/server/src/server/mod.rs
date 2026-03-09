@@ -1549,6 +1549,11 @@ impl Server {
                 None
             };
 
+        // Create MONITOR broadcaster (shared across all connections)
+        let monitor_broadcaster = Arc::new(crate::monitor::MonitorBroadcaster::new(
+            self.config.monitor.channel_capacity,
+        ));
+
         // Create main acceptor (regular client connections)
         // When admin port is enabled, this acceptor blocks admin commands
         let is_replica = self.config.replication.is_replica();
@@ -1582,6 +1587,7 @@ impl Server {
             quorum_checker.clone(),
             self.conn_monitor.clone(),
             pubsub_forwarder.clone(),
+            monitor_broadcaster.clone(),
         );
 
         // Spawn main acceptor task
@@ -1623,6 +1629,7 @@ impl Server {
                 quorum_checker.clone(),
                 self.conn_monitor.clone(),
                 pubsub_forwarder.clone(),
+                monitor_broadcaster.clone(),
             );
 
             Some(spawn(async move {

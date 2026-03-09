@@ -13,6 +13,7 @@ pub mod connection;
 pub mod failure_detector;
 pub mod latency_test;
 pub mod migrate;
+pub mod monitor;
 pub mod net;
 pub mod observability_server;
 pub mod operations;

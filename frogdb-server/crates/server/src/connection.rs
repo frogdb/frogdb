@@ -185,6 +185,12 @@ pub struct ConnectionHandler {
 
     /// Optional pub/sub forwarder for cross-node message delivery in cluster mode.
     cluster_pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
+
+    /// MONITOR command broadcaster (shared across all connections).
+    monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
+
+    /// MONITOR subscription receiver (set when MONITOR command is executed).
+    monitor_rx: Option<tokio::sync::broadcast::Receiver<Arc<crate::monitor::MonitorEvent>>>,
 }
 
 /// Result of processing a single command frame.
@@ -275,6 +281,8 @@ impl ConnectionHandler {
             is_replica: config.is_replica,
             quorum_checker: cluster.quorum_checker,
             cluster_pubsub_forwarder: cluster.pubsub_forwarder,
+            monitor_broadcaster: observability.monitor_broadcaster,
+            monitor_rx: None,
         }
     }
 
@@ -358,6 +366,7 @@ impl ConnectionHandler {
             shared_tracer,
             tracing_config,
             band_tracker,
+            monitor_broadcaster: Arc::new(crate::monitor::MonitorBroadcaster::new(4096)),
         };
 
         Self::from_deps(
@@ -593,6 +602,16 @@ impl ConnectionHandler {
         // Compute the uppercase command name once for the entire pipeline
         let cmd_name = cmd.name_uppercase_string();
 
+        // Broadcast to MONITOR subscribers (skip MONITOR itself)
+        if cmd_name != "MONITOR" && self.monitor_broadcaster.has_subscribers() {
+            self.monitor_broadcaster
+                .send(crate::monitor::MonitorEvent::new(
+                    self.state.addr,
+                    &cmd_name,
+                    &cmd.args,
+                ));
+        }
+
         // Wait if server is paused (for non-exempt commands)
         self.wait_if_paused(&cmd_name).await;
 
@@ -751,6 +770,48 @@ impl ConnectionHandler {
                     }
                 }
 
+                // Handle MONITOR events
+                result = async {
+                    match self.monitor_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    match result {
+                        Ok(event) => {
+                            // Collect first event + drain buffered events
+                            let mut events = vec![event];
+                            if let Some(ref mut rx) = self.monitor_rx {
+                                while let Ok(event) = rx.try_recv() {
+                                    events.push(event);
+                                }
+                            }
+                            // Feed all events
+                            let mut write_err = false;
+                            for event in &events {
+                                let formatted = crate::monitor::MonitorBroadcaster::format_event(event);
+                                if self.feed_response(Response::Simple(bytes::Bytes::from(formatted))).await.is_err() {
+                                    write_err = true;
+                                    break;
+                                }
+                            }
+                            if write_err {
+                                break;
+                            }
+                            if self.flush_responses().await.is_err() {
+                                debug!(conn_id = self.state.id, "Failed to flush MONITOR responses");
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            debug!(conn_id = self.state.id, skipped = n, "MONITOR subscriber lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            self.monitor_rx = None;
+                        }
+                    }
+                }
+
                 // Handle client commands
                 frame_result = async {
                     if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
@@ -890,6 +951,9 @@ impl ConnectionHandler {
 
     /// Notify all shards that this connection is closed.
     async fn notify_connection_closed(&mut self) {
+        // Drop MONITOR subscription (auto-decrements broadcast receiver count)
+        self.monitor_rx = None;
+
         // Final stats sync before closing
         self.sync_stats_to_registry();
 

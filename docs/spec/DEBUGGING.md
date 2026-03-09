@@ -385,7 +385,10 @@ MONITOR
 +1705312245.345678 [0 192.168.1.10:54321] "ZADD" "scores" "100" "player1"
 ```
 
-**Warning:** MONITOR has significant performance impact (~50% throughput reduction). Use sparingly in production.
+**Implementation:** Uses a bounded `tokio::sync::broadcast` channel (default capacity 4096). Slow
+subscribers automatically skip ahead via `Lagged` rather than blocking the server. Zero overhead
+when no subscribers (single atomic load per command). Configure channel capacity via
+`monitor.channel_capacity` in the config file.
 
 **Use cases:**
 - Debugging application command patterns

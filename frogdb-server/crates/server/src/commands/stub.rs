@@ -152,13 +152,6 @@ stub_command!(
     CommandFlags::ADMIN | CommandFlags::NOSCRIPT
 );
 
-stub_command!(
-    MonitorCommand,
-    "MONITOR",
-    Arity::Fixed(0),
-    CommandFlags::ADMIN | CommandFlags::NOSCRIPT
-);
-
 // =============================================================================
 // List Commands (deprecated)
 // =============================================================================

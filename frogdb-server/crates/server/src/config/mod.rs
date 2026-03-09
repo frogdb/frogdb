@@ -16,6 +16,7 @@ pub mod latency;
 pub mod logging;
 pub mod memory;
 pub mod metrics;
+pub mod monitor;
 pub mod persistence;
 pub mod replication;
 pub mod security;
@@ -39,6 +40,7 @@ pub use latency::{LatencyBandsConfig, LatencyConfig};
 pub use logging::{LogOutput, LoggingConfig, LoggingGuard, RotationConfig, RotationFrequency};
 pub use memory::MemoryConfig;
 pub use metrics::MetricsConfig;
+pub use monitor::MonitorConfig;
 pub use persistence::{PersistenceConfig, SnapshotConfig};
 pub use replication::ReplicationConfigSection;
 pub use security::{AclFileConfig, SecurityConfig};
@@ -153,6 +155,10 @@ pub struct Config {
     /// Tiered storage configuration (hot/warm two-tier storage).
     #[serde(default)]
     pub tiered_storage: TieredStorageConfig,
+
+    /// MONITOR command configuration.
+    #[serde(default)]
+    pub monitor: MonitorConfig,
 }
 
 /// Validate a bind address (IP address or hostname).

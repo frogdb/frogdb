@@ -86,6 +86,8 @@ pub enum ConnectionLevelHandler {
     Latency,
     /// Status commands.
     Status,
+    /// Monitor command (MONITOR).
+    Monitor,
     /// Connection state commands (RESET, SELECT, QUIT).
     ConnectionState,
     /// Cluster commands.

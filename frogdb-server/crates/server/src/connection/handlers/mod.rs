@@ -22,6 +22,7 @@ pub mod config;
 pub mod debug;
 pub mod latency;
 pub mod memory;
+pub mod monitor;
 pub mod persistence;
 pub mod pubsub;
 pub mod scatter;

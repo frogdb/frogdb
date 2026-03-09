@@ -251,3 +251,15 @@ metadata_command!(
     CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE,
     ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence)
 );
+
+// =============================================================================
+// Monitor Command (handled at connection level)
+// =============================================================================
+
+metadata_command!(
+    MonitorMetadata,
+    "MONITOR",
+    Arity::Fixed(0),
+    CommandFlags::ADMIN,
+    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
+);

@@ -108,6 +108,6 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // RPOPLPUSH now registered via frogdb_commands::list::RpoplpushCommand
     registry.register(crate::commands::stub::SyncCommand);
     registry.register(crate::commands::stub::SaveCommand);
-    registry.register(crate::commands::stub::MonitorCommand);
+    registry.register_metadata(crate::commands::metadata::MonitorMetadata);
     registry.register(crate::commands::stub::MoveCommand);
 }

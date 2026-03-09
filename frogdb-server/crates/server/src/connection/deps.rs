@@ -194,7 +194,7 @@ impl ConnectionConfig {
 // ============================================================================
 
 /// Optional observability dependencies.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ObservabilityDeps {
     /// Shared tracer for distributed tracing.
     pub shared_tracer: Option<SharedTracer>,
@@ -204,6 +204,20 @@ pub struct ObservabilityDeps {
 
     /// Latency band tracker for SLO monitoring.
     pub band_tracker: Option<Arc<LatencyBandTracker>>,
+
+    /// MONITOR command broadcaster.
+    pub monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
+}
+
+impl Default for ObservabilityDeps {
+    fn default() -> Self {
+        Self {
+            shared_tracer: None,
+            tracing_config: TracingConfig::default(),
+            band_tracker: None,
+            monitor_broadcaster: Arc::new(crate::monitor::MonitorBroadcaster::new(4096)),
+        }
+    }
 }
 
 // ============================================================================
