@@ -21,7 +21,7 @@ have been annotated with `[Not Yet Implemented]` markers.
 
 | Item               | Description                                                                                                 | Spec                                            |
 | ------------------ | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| DTrace/USDT probes | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Feature does not exist in Cargo.toml. | [DEBUGGING.md](../spec/DEBUGGING.md#dtrace-usdt-probes) |
+| DTrace/USDT probes | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Implementation exists on `origin/nathan/usdt-probes` but is not yet merged to main (may be unstable). | [DEBUGGING.md](../spec/DEBUGGING.md#dtrace-usdt-probes) |
 
 ---
 
