@@ -216,7 +216,7 @@ DUMP key
 
 The serialized format is opaque and intended only for use with RESTORE.
 
-**Known Limitation:** DUMP/RESTORE serialization for Stream, BloomFilter, and TimeSeries values currently returns empty bytes — data is silently lost. See [NOT_YET_IMPLEMENTED.md](../NOT_YET_IMPLEMENTED.md) for details.
+**Known Limitation:** DUMP/RESTORE serialization for Stream, BloomFilter, and TimeSeries values currently returns empty bytes — data is silently lost. See [NOT_YET_IMPLEMENTED.md](../../todo/NOT_YET_IMPLEMENTED.md) for details.
 
 **Example:**
 ```

@@ -185,7 +185,7 @@ fn get_register(data: &[u8], index: u16) -> u8 {
 `std::time::Instant` (monotonic clock) during recovery. See [STORAGE.md](STORAGE.md#key-metadata)
 for the in-memory `KeyMetadata` structure and time handling details.
 
-**LRU/LFU Metadata (Matches Redis Behavior):**
+### LRU/LFU Metadata (Matches Redis Behavior)
 - `lfu_counter` persisted with value
 - `last_access` (LRU) **NOT persisted** - reset to recovery time on startup
 

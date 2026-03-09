@@ -163,7 +163,7 @@ Types split into `crates/types/` crate. Specialized types extracted to individua
 
 **Goal**: Comprehensive performance profiling and optimization.
 
-See [optimizations/](optimizations/INDEX.md) for detailed profiling infrastructure, optimization strategies, and implementation guidance.
+See [optimizations/](../todo/optimizations/INDEX.md) for detailed profiling infrastructure, optimization strategies, and implementation guidance.
 
 **Subsections:**
 
@@ -221,4 +221,4 @@ These must exist from the initial foundation to avoid refactoring:
 - [PERSISTENCE.md](PERSISTENCE.md) - RocksDB integration
 - [CONFIGURATION.md](CONFIGURATION.md) - Configuration system
 - [TESTING.md](TESTING.md) - Test strategy
-- [optimizations/](optimizations/INDEX.md) - Performance profiling and optimization
+- [optimizations/](../todo/optimizations/INDEX.md) - Performance profiling and optimization

@@ -405,7 +405,7 @@ snapshot_eviction_skipped: 150  # Keys skipped due to COW
 | maxmemory includes COW | No (operators provision headroom) | Yes (prevents OOM) |
 | Memory predictability | Can spike to 2x | Bounded by `cow_buffer_max_bytes` |
 
-See [PERSISTENCE.md](PERSISTENCE.md#forkless-snapshots) for snapshot implementation details.
+See [PERSISTENCE.md](PERSISTENCE.md#forkless-snapshot-algorithm) for snapshot implementation details.
 
 ---
 
