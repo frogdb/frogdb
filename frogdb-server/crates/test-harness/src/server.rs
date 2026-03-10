@@ -283,9 +283,34 @@ impl TestServer {
             }
         }
 
-        // Cluster configuration
+        // Pre-bind all listeners before creating Server to eliminate TOCTOU
+        // races and avoid SO_REUSEPORT cross-talk between concurrent tests.
         let mut listeners = ServerListeners::default();
 
+        let resp_listener = tcp_listener_reusable("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        listeners.resp = Some(resp_listener);
+
+        if config.metrics.enabled {
+            let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .unwrap();
+            listeners.metrics = Some(metrics_listener);
+        }
+
+        if test_config.admin_enabled {
+            let admin_resp_listener = tcp_listener_reusable("127.0.0.1:0".parse().unwrap())
+                .await
+                .unwrap();
+            let admin_http_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .unwrap();
+            listeners.admin_resp = Some(admin_resp_listener);
+            listeners.admin_http = Some(admin_http_listener);
+        }
+
+        // Cluster configuration
         if test_config.cluster_enabled {
             config.cluster.enabled = true;
 

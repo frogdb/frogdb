@@ -41,6 +41,11 @@ use std::net::SocketAddr;
 /// Creates a TcpListener with SO_REUSEADDR enabled.
 /// This allows rebinding to ports in TIME_WAIT state, which is essential
 /// for rapid server restarts in tests and production deployments.
+///
+/// SO_REUSEPORT is only enabled in release builds — it allows multiple
+/// processes to bind to the same port for hot-restart / rolling upgrades.
+/// In debug builds (including tests), SO_REUSEPORT is disabled to prevent
+/// the OS from assigning the same ephemeral port to concurrent test servers.
 #[cfg(not(feature = "turmoil"))]
 pub async fn tcp_listener_reusable(addr: SocketAddr) -> std::io::Result<TcpListener> {
     use socket2::{Domain, Protocol, Socket, Type};
@@ -52,6 +57,7 @@ pub async fn tcp_listener_reusable(addr: SocketAddr) -> std::io::Result<TcpListe
     };
     let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
     socket.set_reuse_address(true)?;
+    #[cfg(not(debug_assertions))]
     socket.set_reuse_port(true)?;
     socket.set_nonblocking(true)?;
     socket.bind(&addr.into())?;

@@ -55,6 +55,14 @@ use util::{
 /// read the actual port, then hand the listener to Server.
 #[derive(Default)]
 pub struct ServerListeners {
+    /// Pre-bound RESP protocol listener for client connections.
+    pub resp: Option<TcpListener>,
+    /// Pre-bound admin RESP protocol listener.
+    pub admin_resp: Option<TcpListener>,
+    /// Pre-bound metrics HTTP listener.
+    pub metrics: Option<tokio::net::TcpListener>,
+    /// Pre-bound admin HTTP API listener.
+    pub admin_http: Option<tokio::net::TcpListener>,
     /// Pre-bound cluster bus (Raft RPC) listener.
     pub cluster_bus: Option<TcpListener>,
 }
@@ -239,17 +247,22 @@ impl Server {
             (Arc::new(frogdb_core::NoopMetricsRecorder::new()), None)
         };
 
-        // Bind TCP listener with SO_REUSEADDR for rapid restarts
-        let bind_addr: std::net::SocketAddr = config.bind_addr().parse()?;
-        let listener = tcp_listener_reusable(bind_addr).await?;
-
-        info!(
-            addr = %bind_addr,
-            "TCP listener bound"
-        );
+        // Bind TCP listener — use pre-bound if provided, otherwise bind from config.
+        let listener = if let Some(l) = listeners.resp {
+            info!(addr = %l.local_addr()?, "RESP using pre-bound listener");
+            l
+        } else {
+            let bind_addr: std::net::SocketAddr = config.bind_addr().parse()?;
+            let l = tcp_listener_reusable(bind_addr).await?;
+            info!(addr = %bind_addr, "TCP listener bound");
+            l
+        };
 
         // Bind admin TCP listener if enabled
-        let admin_listener = if config.admin.enabled {
+        let admin_listener = if let Some(l) = listeners.admin_resp {
+            info!(addr = %l.local_addr()?, "Admin RESP using pre-bound listener");
+            Some(l)
+        } else if config.admin.enabled {
             let admin_bind_addr: std::net::SocketAddr = config.admin.bind_addr().parse()?;
             let admin_listener = tcp_listener_reusable(admin_bind_addr).await?;
             info!(
@@ -262,7 +275,10 @@ impl Server {
         };
 
         // Bind metrics HTTP listener if metrics are enabled
-        let metrics_listener = if config.metrics.enabled {
+        let metrics_listener = if let Some(l) = listeners.metrics {
+            info!(addr = %l.local_addr()?, "Metrics using pre-bound listener");
+            Some(l)
+        } else if config.metrics.enabled {
             let metrics_bind_addr: std::net::SocketAddr = config.metrics.bind_addr().parse()?;
             let listener = tokio::net::TcpListener::bind(metrics_bind_addr).await?;
             info!(
@@ -275,7 +291,10 @@ impl Server {
         };
 
         // Bind admin HTTP listener if admin API is enabled
-        let admin_http_listener = if config.admin.enabled {
+        let admin_http_listener = if let Some(l) = listeners.admin_http {
+            info!(addr = %l.local_addr()?, "Admin HTTP using pre-bound listener");
+            Some(l)
+        } else if config.admin.enabled {
             let admin_http_bind_addr: std::net::SocketAddr = config.admin.bind_addr().parse()?;
             let listener = tokio::net::TcpListener::bind(admin_http_bind_addr).await?;
             info!(

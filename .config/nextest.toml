@@ -3,6 +3,8 @@
 slow-timeout = { period = "5s", terminate-after = 3 }
 # Run all tests even if some fail
 fail-fast = false
-# Cap parallelism to CPU count to prevent resource exhaustion
-# (ephemeral port pool, file descriptors, CPU) under full suite runs
-test-threads = "num-cpus"
+# Each test spawns a multi-shard server consuming ~10+ ephemeral ports.
+# macOS has only ~16K ephemeral ports (49152-65535) with 60s TIME_WAIT,
+# so high parallelism exhausts the pool (EADDRNOTAVAIL). Cap at 8 threads
+# to keep steady-state port usage well under the limit.
+test-threads = 8
