@@ -5,7 +5,7 @@
 //! - CLUSTER FAILOVER
 
 use frogdb_core::ClusterRaft;
-use frogdb_core::cluster::{ClusterCommand, NodeRole};
+use frogdb_core::cluster::{ClusterCommand, ClusterResponse, NodeRole};
 use frogdb_protocol::{RaftClusterOp, Response};
 use openraft::error::{ClientWriteError, RaftError};
 
@@ -50,7 +50,12 @@ impl ConnectionHandler {
 
         // Execute the Raft command
         match raft.client_write(cmd).await {
-            Ok(_) => {
+            Ok(resp) => {
+                // Check if the state machine returned an error
+                if let ClusterResponse::Error(msg) = &resp.data {
+                    return Response::error(format!("ERR {}", msg));
+                }
+
                 // Update NetworkFactory after successful Raft commit
                 if let Some((node_id, addr)) = register_node
                     && let Some(ref factory) = self.network_factory

@@ -806,6 +806,79 @@ impl Server {
                 });
             }
 
+            // Replicate bootstrap slot assignments via Raft so follower nodes receive them.
+            // The local assign_slots() above only updates the bootstrap node's ClusterState;
+            // followers have separate ClusterState instances and need Raft log replication.
+            if should_bootstrap && !initial_members.is_empty() {
+                let raft_clone = raft.clone();
+                let network_factory = network_factory_clone.clone();
+                let node_ids: Vec<u64> = initial_members.keys().copied().collect();
+                tokio::spawn(async move {
+                    let num_nodes = node_ids.len();
+                    let slots_per_node = 16384 / num_nodes;
+
+                    for (i, &nid) in node_ids.iter().enumerate() {
+                        let start = (i * slots_per_node) as u16;
+                        let end = if i == num_nodes - 1 {
+                            16383u16
+                        } else {
+                            ((i + 1) * slots_per_node - 1) as u16
+                        };
+                        let cmd = frogdb_core::cluster::ClusterCommand::AssignSlots {
+                            node_id: nid,
+                            slots: vec![frogdb_core::cluster::SlotRange::new(start, end)],
+                        };
+
+                        for attempt in 0..30 {
+                            match raft_clone.client_write(cmd.clone()).await {
+                                Ok(_) => {
+                                    info!(
+                                        node_id = nid,
+                                        start = start,
+                                        end = end,
+                                        "Replicated slot assignment via Raft"
+                                    );
+                                    break;
+                                }
+                                Err(e) => {
+                                    use openraft::error::{ClientWriteError, RaftError};
+                                    if let RaftError::APIError(
+                                        ClientWriteError::ForwardToLeader(fwd),
+                                    ) = &e
+                                        && let Some(leader_id) = fwd.leader_id
+                                        && let Some(leader_addr) =
+                                            network_factory.get_node_addr(leader_id)
+                                    {
+                                        let net = frogdb_core::cluster::ClusterNetwork::new(
+                                            leader_id,
+                                            leader_addr,
+                                        );
+                                        if net.forward_write(cmd.clone()).await.is_ok() {
+                                            info!(
+                                                node_id = nid,
+                                                start = start,
+                                                end = end,
+                                                "Replicated slot assignment via leader forward"
+                                            );
+                                            break;
+                                        }
+                                    }
+                                    if attempt < 29 {
+                                        tokio::time::sleep(Duration::from_millis(500)).await;
+                                    } else {
+                                        warn!(
+                                            node_id = nid,
+                                            error = %e,
+                                            "Failed to replicate slot assignment after 30 attempts"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
             // Spawn split-brain demotion handler if enabled
             if let Some(mut demotion_rx) = demotion_rx {
                 let data_dir = config.persistence.data_dir.clone();

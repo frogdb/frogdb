@@ -199,15 +199,21 @@ impl ClusterState {
             }
 
             ClusterCommand::RemoveSlots { node_id, slots } => {
-                for range in slots {
+                // Validate all slots are currently assigned before removing any
+                for range in &slots {
                     for slot in range.iter() {
-                        if let Some(&owner) = inner.slot_assignment.get(&slot)
-                            && owner == node_id
-                        {
-                            inner.slot_assignment.remove(&slot);
+                        if !inner.slot_assignment.contains_key(&slot) {
+                            return Err(ClusterError::SlotNotAssigned(slot));
                         }
                     }
                 }
+                // Remove validated slots
+                for range in slots {
+                    for slot in range.iter() {
+                        inner.slot_assignment.remove(&slot);
+                    }
+                }
+                tracing::debug!(node_id, "Removed slots from node");
                 Ok(ClusterResponse::Ok)
             }
 
