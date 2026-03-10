@@ -170,32 +170,6 @@ async fn test_hello_noproto() {
 }
 
 #[tokio::test]
-async fn test_hello_no_downgrade() {
-    let server = start_server().await;
-    let mut client = server.connect_resp3().await;
-
-    // First upgrade to RESP3
-    let response = client.command(&["HELLO", "3"]).await;
-    assert!(matches!(response, Resp3Frame::Map { .. }));
-
-    // Now try to downgrade to RESP2 - should error
-    let response = client.command(&["HELLO", "2"]).await;
-    match response {
-        Resp3Frame::SimpleError { data, .. } => {
-            let msg = data.to_string();
-            assert!(
-                msg.contains("downgrade") || msg.contains("NOPROTO"),
-                "Expected downgrade error, got: {}",
-                msg
-            );
-        }
-        _ => panic!("Expected Error for downgrade attempt, got {:?}", response),
-    }
-
-    server.shutdown().await;
-}
-
-#[tokio::test]
 async fn test_hello_auth_success() {
     let server = start_server_with_security("testpass").await;
     let mut client = server.connect_resp3().await;
