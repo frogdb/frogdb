@@ -1,0 +1,51 @@
+[package]
+name = "frogdb-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Prevent this from being part of the parent workspace
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bytes = "1"
+serde_json = "1"
+
+# Path deps to fuzzed crates
+frogdb-protocol = { path = "../frogdb-server/crates/protocol" }
+frogdb-persistence = { path = "../frogdb-server/crates/persistence" }
+frogdb-cluster = { path = "../frogdb-server/crates/cluster" }
+frogdb-acl = { path = "../frogdb-server/crates/acl" }
+frogdb-scripting = { path = "../frogdb-server/crates/scripting" }
+
+# Also pull in redis-protocol for raw RESP decoding
+redis-protocol = { version = "5", features = ["bytes", "codec", "resp3"] }
+
+[[bin]]
+name = "resp_parse"
+path = "fuzz_targets/resp_parse.rs"
+doc = false
+
+[[bin]]
+name = "deserialize"
+path = "fuzz_targets/deserialize.rs"
+doc = false
+
+[[bin]]
+name = "rpc_parse"
+path = "fuzz_targets/rpc_parse.rs"
+doc = false
+
+[[bin]]
+name = "acl_parse"
+path = "fuzz_targets/acl_parse.rs"
+doc = false
+
+[[bin]]
+name = "script_parse"
+path = "fuzz_targets/script_parse.rs"
+doc = false
