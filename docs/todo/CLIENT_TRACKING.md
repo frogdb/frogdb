@@ -466,7 +466,7 @@ Add to server config (`crates/server/src/config/mod.rs`):
 | `crates/server/tests/integration_client.rs` | Add integration tests for tracking lifecycle | 1 |
 | `docs/spec/PROTOCOL.md` | Update "Deferred" → "Implemented" in status tables | 1 |
 | `docs/spec/COMPATIBILITY.md` | Update tracking status | 1 |
-| `docs/todo/NOT_YET_IMPLEMENTED.md` | Remove tracking entry | 1 |
+| `docs/todo/INDEX.md` | Remove tracking entry | 1 |
 
 ---
 
@@ -516,4 +516,4 @@ just test frogdb-redis-regression    # regression tests
 - [PROTOCOL.md](../spec/PROTOCOL.md) — RESP3 types, Push frame format, client tracking status
 - [COMPATIBILITY.md](../spec/COMPATIBILITY.md) — feature status table
 - [PUBSUB.md](../spec/PUBSUB.md) — pub/sub infrastructure (reused for REDIRECT mode)
-- [NOT_YET_IMPLEMENTED.md](NOT_YET_IMPLEMENTED.md) — deferred features list
+- [INDEX.md](INDEX.md) — roadmap index

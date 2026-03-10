@@ -733,7 +733,7 @@ patterns.
 | **Key patterns** | Route specific key patterns to always stay hot |
 | **Warm-only writes** | Write large values directly to warm tier |
 | **Per-field tiering** | Demote individual field values within collections, keeping scaffolding in RAM |
-| **Cold tier** | S3/DynamoDB backends for archival (see [NOT_YET_IMPLEMENTED.md](../todo/NOT_YET_IMPLEMENTED.md)) |
+| **Cold tier** | S3/DynamoDB backends for archival (see [INDEX.md](../todo/INDEX.md)) |
 
 ---
 

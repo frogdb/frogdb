@@ -406,6 +406,6 @@ These sources document how similar systems handle edge cases and can be consulte
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Docker, K8s deployment |
 | [ROLLING_UPGRADE.md](ROLLING_UPGRADE.md) | Zero-downtime rolling upgrade for replication and cluster modes |
 | [COMPATIBILITY.md](COMPATIBILITY.md) | Redis incompatibilities and migration guide |
-| [NOT_YET_IMPLEMENTED.md](../todo/NOT_YET_IMPLEMENTED.md) | Tracking document for known unimplemented spec areas |
+| [INDEX.md](../todo/INDEX.md) | FrogDB roadmap — remaining work and intentional omissions |
 | [optimizations/](../todo/optimizations/INDEX.md) | Performance profiling and optimization strategies |
 | [SOURCES.md](SOURCES.md) | External references (Redis, DragonflyDB, papers) |

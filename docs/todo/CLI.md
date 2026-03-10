@@ -1227,10 +1227,10 @@ Features the CLI depends on that may not yet be fully implemented server-side.
 | CLI Feature | Server Dependency | Gap | Reference |
 |-------------|-------------------|-----|-----------|
 | `frog cluster create` | `CLUSTER MEET`, `CLUSTER ADDSLOTS`, `CLUSTER REPLICATE` | Raft-based bootstrap sequence needs validation | [CLUSTER.md](../spec/CLUSTER.md) |
-| `frog cluster reshard` | Slot migration protocol (`MIGRATE`, `IMPORTING`/`MIGRATING` state) | Atomic slot migration not yet implemented | [NOT_YET_IMPLEMENTED.md](NOT_YET_IMPLEMENTED.md#cluster-phases-46) |
+| `frog cluster reshard` | Slot migration protocol (`MIGRATE`, `IMPORTING`/`MIGRATING` state) | Atomic slot migration not yet implemented | [INDEX.md](INDEX.md) |
 | `frog cluster rebalance` | Slot migration + hot shard data | Depends on slot migration | [CLUSTER_REBALANCING.md](CLUSTER_REBALANCING.md) |
 | `frog cluster fix` | Various cluster repair commands | Depends on slot migration for reassignment | [CLUSTER.md](../spec/CLUSTER.md) |
-| TLS flags (`--tls`, `--tls-cert`, etc.) | Server TLS support | TLS not yet implemented | [NOT_YET_IMPLEMENTED.md](NOT_YET_IMPLEMENTED.md#deferred-features), [TLS_PLAN.md](TLS_PLAN.md) |
+| TLS flags (`--tls`, `--tls-cert`, etc.) | Server TLS support | TLS not yet implemented | [INDEX.md](INDEX.md), [TLS_PLAN.md](TLS_PLAN.md) |
 | `frog config generate` | Embedded config template | CLI needs to embed/duplicate server defaults | — |
 
 ### Cross-References
