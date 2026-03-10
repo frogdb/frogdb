@@ -20,16 +20,15 @@
 - Grafana dashboard templates (overview, performance, shards, persistence — `dashboard-gen` exists)
 - Automated alert rule generation (`/alerts/prometheus` endpoint)
 - Enhanced `LATENCY DOCTOR` (correlation detection, SLOWLOG cross-reference, scatter-gather analysis)
-- Rolling upgrades — spec at `docs/spec/ROLLING_UPGRADE.md`
+- [ROLLING_UPGRADE.md](ROLLING_UPGRADE.md) — Rolling upgrades (not yet implemented)
 
 ## Performance
 
-- [optimizations/INDEX.md](optimizations/INDEX.md) — io_uring, arena allocator, lock-free WAL, SIMD, single-shard mode
+- [optimizations/INDEX.md](optimizations/INDEX.md) — io_uring, arena allocator, SIMD, single-shard mode
 
 ## Code Quality
 
-- `types.rs` decomposition (string, list, set, hash, sorted_set, stream modules)
-- Config magic numbers → named constants
+- `types.rs` decomposition — extract `stream` (~860 lines) and `sorted_set` (~1,202 lines) into own modules
 - Sorted set parsing helper extraction (`parse_score_bound`, `parse_lex_bound`, `parse_set_op_options`)
 - Spec file audit for accuracy against implementation
 
