@@ -268,6 +268,7 @@ impl ConnectionHandler {
                     )])
                 }
             }
+            b"HASHING" => Some(vec![self.handle_debug_hashing(args)]),
             // Dangerous commands — intentionally not supported
             b"SEGFAULT" | b"RELOAD" | b"CRASH-AND-RECOVER" | b"SET-ACTIVE-EXPIRE" | b"OOM"
             | b"PANIC" => Some(vec![Response::error(format!(

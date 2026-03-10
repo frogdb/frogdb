@@ -14,6 +14,7 @@ use std::mem;
 use std::time::Duration;
 
 use bytes::Bytes;
+use frogdb_core::shard::{extract_hash_tag, shard_for_key, slot_for_key};
 use frogdb_core::{
     BloomFilterValue, HashValue, HyperLogLogValue, JsonValue, KeyMetadata, ListValue, SetValue,
     SortedSetValue, StreamValue, StringValue, TimeSeriesValue, Value,
@@ -447,5 +448,49 @@ impl ConnectionHandler {
             .collect();
 
         Response::Array(entries)
+    }
+
+    /// Handle DEBUG HASHING <key> [key ...] command.
+    ///
+    /// Shows hash slot and shard mapping for the given keys.
+    pub(crate) fn handle_debug_hashing(&self, args: &[Bytes]) -> Response {
+        // args[0] = "HASHING", args[1..] = keys
+        if args.len() < 2 {
+            return Response::error(
+                "ERR wrong number of arguments for 'DEBUG HASHING' command",
+            );
+        }
+        let keys = &args[1..];
+
+        let format_key = |key: &Bytes| -> String {
+            let slot = slot_for_key(key);
+            let shard = shard_for_key(key, self.num_shards);
+            let hash_tag = extract_hash_tag(key);
+            let tag_str = match hash_tag {
+                Some(tag) => String::from_utf8_lossy(tag).to_string(),
+                None => "(none)".to_string(),
+            };
+            let hash_key = hash_tag.unwrap_or(key.as_ref());
+            let crc = crc16::State::<crc16::XMODEM>::calculate(hash_key);
+            format!(
+                "key:{} hash_tag:{} hash:0x{:04x} slot:{} shard:{} num_shards:{}",
+                String::from_utf8_lossy(key),
+                tag_str,
+                crc,
+                slot,
+                shard,
+                self.num_shards,
+            )
+        };
+
+        if keys.len() == 1 {
+            Response::Simple(Bytes::from(format_key(&keys[0])))
+        } else {
+            Response::Array(
+                keys.iter()
+                    .map(|key| Response::Bulk(Some(Bytes::from(format_key(key)))))
+                    .collect(),
+            )
+        }
     }
 }
