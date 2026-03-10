@@ -46,7 +46,7 @@ This document consolidates the remaining work into two phases:
 
 ## Phase 1: Atomic Slot Migration
 
-Replaces the DFLYMIGRATE spec from [CLUSTER_PLAN.md Phase 5](../spec/CLUSTER_PLAN.md#phase-5-slot-migration--partial)
+Replaces the DFLYMIGRATE spec from the former CLUSTER_PLAN.md Phase 5 (now merged into [CLUSTER.md](../spec/CLUSTER.md#implementation-status))
 with a Valkey 9-inspired approach adapted for FrogDB's architecture.
 
 ### Design
@@ -154,7 +154,7 @@ snapshots.
 
 ## Phase 2: Auto-Rebalancing Intelligence
 
-Source: [NEW_FEATURES.md — Feature 2: Auto-Rebalancing](../spec/NEW_FEATURES.md#feature-2-auto-rebalancing)
+Source: [NEW_FEATURES.md — Feature 2: Auto-Rebalancing](NEW_FEATURES.md#feature-2-auto-rebalancing)
 
 ### The gap
 
@@ -236,6 +236,6 @@ CockroachDB-inspired continuous background rebalancer:
 
 ### FrogDB specs
 
-- [CLUSTER_PLAN.md — Phase 5: Slot Migration](../spec/CLUSTER_PLAN.md#phase-5-slot-migration--partial) — Original DFLYMIGRATE design (superseded by this document)
-- [NEW_FEATURES.md — Feature 2: Auto-Rebalancing](../spec/NEW_FEATURES.md#feature-2-auto-rebalancing) — Original auto-rebalancing design
-- [CLUSTER_PLAN.md — What Needs to Be Built](../spec/CLUSTER_PLAN.md#what-needs-to-be-built) — High-level remaining work
+- [CLUSTER.md — Implementation Status](../spec/CLUSTER.md#implementation-status) — Phase status and remaining work (formerly CLUSTER_PLAN.md)
+- [NEW_FEATURES.md — Feature 2: Auto-Rebalancing](NEW_FEATURES.md#feature-2-auto-rebalancing) — Original auto-rebalancing design
+- [POTENTIAL.md](POTENTIAL.md) — High-level remaining cluster work

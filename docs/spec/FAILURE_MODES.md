@@ -790,8 +790,6 @@ fn create_snapshot(&self) -> Result<()> {
 
 ### Too Many Requests (Rate Limiting)
 
-*Note: Built-in rate limiting is planned for future implementation.*
-
 **Current Behavior:** Server processes all requests (no rate limiting).
 
 **Mitigation:**

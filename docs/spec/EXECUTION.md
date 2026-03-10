@@ -72,7 +72,7 @@ Error type returned by command execution. Maps to RESP error responses.
 
 ```rust
 /// Core error variants for command execution.
-/// This enum will expand as more commands are implemented.
+/// This enum expands as commands are added.
 #[derive(Debug, Clone)]
 pub enum CommandError {
     // === Syntax/Argument Errors ===
@@ -151,7 +151,7 @@ impl CommandError {
 }
 ```
 
-**Note:** This enum will expand during implementation as new error cases are discovered.
+**Note:** This enum expands as new error cases are discovered.
 Additional variants to add as needed:
 - `CrossSlot` - For multi-key operations across hash slots
 - `NoAuth` / `NoPerm` - For authentication/authorization

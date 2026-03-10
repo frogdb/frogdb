@@ -530,21 +530,7 @@ id=123 addr=192.168.1.10:54321 ... tls-version=TLSv1.3 tls-cipher=TLS_AES_256_GC
 | `tls-client-cn` | Client certificate CN (empty if no client cert) |
 | `tls-client-san` | Client certificate SAN (first DNS name, empty if none) |
 
-### Future: CN/SAN to ACL User Mapping
-
-**[Not Yet Implemented]** A future enhancement will allow mapping client certificate identity to ACL users, enabling certificate-based authentication without passwords:
-
-```toml
-# Future configuration (not yet implemented)
-[tls.cert_auth]
-enabled = false
-# Map client cert CN to ACL user
-cn_user_map = { "app-service" = "app", "admin-tool" = "admin" }
-# Or use a pattern: CN becomes the ACL username directly
-cn_as_username = false
-```
-
-This would allow mTLS to serve as the sole authentication mechanism, with the certificate identity determining the ACL user and permissions. See [AUTH.md](AUTH.md) for the ACL system.
+See [POTENTIAL.md](../todo/POTENTIAL.md) for planned mTLS CN/SAN to ACL user mapping.
 
 ---
 

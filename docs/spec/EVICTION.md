@@ -40,7 +40,7 @@ When `max_memory` is exceeded, FrogDB must decide how to handle new writes:
 - Proven algorithm with well-understood accuracy characteristics
 - Simple implementation without custom data structures
 - ~95% accuracy with 5 samples, ~98% with 10 samples
-- If FrogDB implements Dashtable in the future, DragonflyDB's 2Q approach becomes viable
+- See [POTENTIAL.md](../todo/POTENTIAL.md) for DragonflyDB's 2Q approach (requires Dashtable)
 
 ### Algorithm Details
 
@@ -381,34 +381,7 @@ fn lfu_decay(counter: u8, minutes_since_access: u64) -> u8 {
 
 ---
 
-## DragonflyDB 2Q LFRU (Future Consideration)
-
-DragonflyDB uses a different approach based on the "2Q" algorithm (1994 paper):
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     2Q Algorithm Flow                        │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│   New Item ──▶ [Probationary Buffer] ──access──▶ [Protected]│
-│                    (~10% of cache)                (~90%)    │
-│                         │                            │       │
-│                    evict if                     demote LRU   │
-│                    not accessed                  back to     │
-│                         │                      probationary  │
-│                         ▼                                    │
-│                    (removed)                                 │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Key advantages:**
-- Zero per-key memory overhead (integrated with Dashtable segments)
-- Eviction happens at segment boundaries in O(1) time
-- Naturally filters out "scan pollution" (one-time accesses don't evict hot data)
-- Claims higher hit rates than pure LRU or LFU
-
-**FrogDB consideration:** If FrogDB implements a custom Dashtable (see [STORAGE.md](STORAGE.md#hashmap-implementation-choice)),
-the 2Q algorithm becomes a natural fit. Until then, Redis-style sampling provides proven, compatible behavior.
+See [POTENTIAL.md](../todo/POTENTIAL.md) for DragonflyDB's 2Q LFRU algorithm notes (requires Dashtable).
 
 ---
 

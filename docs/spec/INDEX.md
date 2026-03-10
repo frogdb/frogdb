@@ -28,14 +28,6 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for a complete list of Redis incompatib
 
 ---
 
-## Specification vs Implementation Status
-
-This specification describes the **desired end-state** of FrogDB. Not all features are implemented yet. See [ROADMAP.md](ROADMAP.md) for current implementation status and phasing.
-
-The absence of implementation does not affect the specification's validity - specs define *what* the system should do, not *when* it will be built.
-
----
-
 ## Architecture
 
 ```
@@ -404,7 +396,7 @@ These sources document how similar systems handle edge cases and can be consulte
 | [FAILURE_MODES.md](FAILURE_MODES.md) | Error handling, recovery |
 | [CONSISTENCY.md](CONSISTENCY.md) | Consistency guarantees |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Docker, K8s deployment |
-| [ROLLING_UPGRADE.md](ROLLING_UPGRADE.md) | Zero-downtime rolling upgrade for replication and cluster modes |
+| [ROLLING_UPGRADE.md](../todo/ROLLING_UPGRADE.md) | Zero-downtime rolling upgrade (not yet implemented, in todo/) |
 | [COMPATIBILITY.md](COMPATIBILITY.md) | Redis incompatibilities and migration guide |
 | [INDEX.md](../todo/INDEX.md) | FrogDB roadmap — remaining work and intentional omissions |
 | [optimizations/](../todo/optimizations/INDEX.md) | Performance profiling and optimization strategies |

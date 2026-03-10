@@ -561,9 +561,9 @@ redis-cli -h localhost -p 6379 get testkey  # Should return "testvalue"
 
 ### Rolling Upgrade (Replication & Cluster Mode)
 
-See [ROLLING_UPGRADE.md](ROLLING_UPGRADE.md) for the full specification covering
+See [ROLLING_UPGRADE.md](../todo/ROLLING_UPGRADE.md) for the full specification covering
 mixed-version rolling upgrades, version negotiation, feature gating, and finalization
-semantics for both replication-mode and Raft cluster-mode topologies.
+semantics for both replication-mode and Raft cluster-mode topologies (not yet implemented).
 
 ### Single Node Upgrade
 

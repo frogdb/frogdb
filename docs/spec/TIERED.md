@@ -684,30 +684,7 @@ For most workloads, the partial-access cost is negligible:
    and never touch it again is a case where application-level partitioning (splitting the hash into
    smaller keys) is the right solution regardless of tiering.
 
-### Future: Per-Field Tiering
-
-A more sophisticated approach keeps collection scaffolding in RAM and demotes individual field values:
-
-```
-Hash "user:123" (10K fields)
-  RAM:  HashMap<field_name → FieldLocation>   ← scaffolding stays in memory
-  Disk: individual field values               ← only values on disk
-
-HGET user:123 email → scaffolding lookup (RAM) → read one value (disk)
-```
-
-This would be more efficient for partial access to large collections, but dramatically increases
-complexity:
-
-- Every collection type needs its own tiering strategy (HashMap, VecDeque, SkipList, etc.)
-- RocksDB key scheme becomes `{key}\x00{field}` — many more RocksDB keys, more compaction overhead
-- `HGETALL` on a demoted hash becomes N disk reads instead of 1 whole-value read
-- Sorted set range queries need the score index (SkipList/BTreeMap) in RAM with values on disk
-- Per-field serialization format diverges from persistence serialization
-
-This is a potential future optimization once whole-value tiering proves its value in production. It
-would primarily benefit workloads with very large collections (10K+ elements) and partial-access
-patterns.
+See [POTENTIAL.md](../todo/POTENTIAL.md) for per-field tiering design notes.
 
 ---
 
@@ -724,16 +701,7 @@ patterns.
 
 ---
 
-## Future Enhancements
-
-| Enhancement | Description |
-|-------------|-------------|
-| **Lazy promotion** | Option to read warm values without promoting (saves memory for one-off reads) |
-| **Compression** | Per-tier compression settings (heavier for warm) |
-| **Key patterns** | Route specific key patterns to always stay hot |
-| **Warm-only writes** | Write large values directly to warm tier |
-| **Per-field tiering** | Demote individual field values within collections, keeping scaffolding in RAM |
-| **Cold tier** | S3/DynamoDB backends for archival (see [INDEX.md](../todo/INDEX.md)) |
+See [POTENTIAL.md](../todo/POTENTIAL.md) for planned tiered storage enhancements (lazy promotion, compression, key patterns, warm-only writes, per-field tiering, cold tier).
 
 ---
 

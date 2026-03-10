@@ -1,5 +1,11 @@
 # FrogDB Roadmap
 
+## Cross-Cutting
+
+- [POTENTIAL.md](POTENTIAL.md) — Speculative features and future enhancements extracted from spec docs
+- [NEW_FEATURES.md](NEW_FEATURES.md) — Competitive analysis + 6 unimplemented feature proposals
+- [TOKIO_CAUSAL_PROFILER.md](TOKIO_CAUSAL_PROFILER.md) — Research: causal profiler for async Rust
+
 ## Cluster & Reliability
 
 - [CLUSTER_REBALANCING.md](CLUSTER_REBALANCING.md) — Atomic slot migration + auto-rebalancing (Valkey 9-style)

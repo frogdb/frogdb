@@ -603,12 +603,7 @@ When reporting issues, include:
 6. **Memory state:** `MEMORY DOCTOR`
 7. **Latency state:** `LATENCY DOCTOR`
 
-### Diagnostic Bundle `[FrogDB]`
-
-```bash
-# Generate diagnostic bundle (future feature)
-frogdb-admin diagnostic-bundle --output /tmp/frogdb-diag.tar.gz
-```
+See [POTENTIAL.md](../todo/POTENTIAL.md) for a planned `frogdb-admin diagnostic-bundle` CLI tool.
 
 ### References
 

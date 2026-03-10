@@ -244,8 +244,7 @@ WAL writes can fail due to disk full, I/O errors, or RocksDB internal errors. Fr
 > - Handle WAL errors by logging and alerting, potentially retrying the operation
 > - Consider the write "at risk" until the next successful write confirms WAL health
 >
-> **Future Enhancement:** A configurable `wal_failure_policy: rollback` mode may be added
-> to provide stricter consistency at the cost of performance.
+> See [POTENTIAL.md](../todo/POTENTIAL.md) for a planned `wal_failure_policy: rollback` mode.
 
 **Critical Behavior:** In `Async` and `Periodic` modes, the in-memory write is applied **before** WAL durability is guaranteed. This matches Redis AOF behavior where:
 - Writes are immediately visible to other clients

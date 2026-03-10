@@ -1171,7 +1171,7 @@ Future subcommand groups (not in this spec):
 
 | Command | Purpose | Status |
 |---------|---------|--------|
-| `frog upgrade` | Rolling upgrade orchestration | Spec exists: [ROLLING_UPGRADE.md](../spec/ROLLING_UPGRADE.md) |
+| `frog upgrade` | Rolling upgrade orchestration | Spec exists: [ROLLING_UPGRADE.md](ROLLING_UPGRADE.md) |
 | `frog cert` | TLS certificate management | Spec exists: [TLS.md](../spec/TLS.md), [TLS_PLAN.md](TLS_PLAN.md) |
 | `frog tiered` | Two-tier storage inspection | Spec exists: [TIERED.md](../spec/TIERED.md) |
 | `frog shell` | Interactive REPL / query client | Separate spec TBD |
@@ -1245,5 +1245,5 @@ Features the CLI depends on that may not yet be fully implemented server-side.
 - Deployment guide: [DEPLOYMENT.md](../spec/DEPLOYMENT.md)
 - Slot migration: [CLUSTER_REBALANCING.md](CLUSTER_REBALANCING.md)
 - TLS: [TLS.md](../spec/TLS.md), [TLS_PLAN.md](TLS_PLAN.md)
-- Rolling upgrade: [ROLLING_UPGRADE.md](../spec/ROLLING_UPGRADE.md)
+- Rolling upgrade: [ROLLING_UPGRADE.md](ROLLING_UPGRADE.md)
 - Tiered storage: [TIERED.md](../spec/TIERED.md)

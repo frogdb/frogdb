@@ -294,16 +294,7 @@ let mut store: HashMap<Bytes, Value> = HashMap::new();
 store.insert(key, value);
 ```
 
-> **Future Optimization: Dashtable**
->
-> DragonflyDB achieves even better memory efficiency with a custom "Dashtable" structure
-> based on the paper "Dash: Scalable Hashing on Persistent Memory". Key benefits:
-> - Per-entry overhead: ~20 bits (vs 64 bits in Redis)
-> - No resize spikes: segments split independently
-> - 30-60% less memory than Redis
->
-> A custom Dashtable implementation for FrogDB could be considered if memory efficiency
-> becomes critical. No existing Rust crate implements this algorithm.
+See [POTENTIAL.md](../todo/POTENTIAL.md) for Dashtable optimization notes.
 
 ### Value Memory
 

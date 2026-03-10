@@ -106,7 +106,7 @@ The `FlameLayer` is set up in `crates/server/src/main.rs`, following the same `#
 
 ## Causal Profiling (tokio-coz)
 
-See [TOKIO_CAUSAL_PROFILER.md](../../spec/TOKIO_CAUSAL_PROFILER.md) for the async-adapted causal profiling
+See [TOKIO_CAUSAL_PROFILER.md](../TOKIO_CAUSAL_PROFILER.md) for the async-adapted causal profiling
 design.
 
 ```bash

@@ -14,7 +14,7 @@ pub struct HashValue {
 
 **Design Notes:**
 - Standard HashMap for O(1) field access
-- Consider ziplist-style encoding for small hashes (< 64 entries)
+- See [POTENTIAL.md](../../todo/POTENTIAL.md) for ziplist-style encoding optimization
 
 ## Commands
 

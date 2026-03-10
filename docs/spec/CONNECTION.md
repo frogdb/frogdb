@@ -731,16 +731,7 @@ Use a Redis-compatible proxy with rate limiting:
 - **Twemproxy** with connection pooling
 - **Redis Cluster Proxy** with traffic shaping
 
-### Future Consideration
-
-Per-ACL-user rate limiting is not currently planned but could be added:
-
-```toml
-# Hypothetical future syntax
-[acl.users.limited_user]
-commands_per_second = 1000
-bytes_per_second = 10485760  # 10MB/s
-```
+See [POTENTIAL.md](../todo/POTENTIAL.md) for per-ACL-user rate limiting design notes.
 
 ---
 

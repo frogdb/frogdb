@@ -2831,6 +2831,47 @@ This enables applications to selectively wait for stronger replication on critic
 
 ---
 
+## Architectural Decisions
+
+| Decision | Choice | Rationale | Status |
+|----------|--------|-----------|--------|
+| **Phasing** | Replication first | Lower risk, incremental delivery. Phase 1 = standalone replication | Followed — Phase 1 complete |
+| **Orchestrator** | Raft consensus (replaced reference orchestrator) | Raft provides built-in leader election, log replication, and consistency — eliminates need for external orchestrator | Implemented via `crates/cluster/` |
+| **Testing** | Unit tests first | Write unit tests as each component is built | 136 cluster + 76 replication integration tests |
+| **Blocking Cmds** | Client timeouts | Matches Redis/Valkey behavior. Document known edge cases | Adopted |
+| **Control Plane** | Orchestrated (not gossip) | Deterministic updates, simpler impl, like DragonflyDB | Implemented |
+| **Replication Scope** | Full dataset per replica | Simpler protocol, any replica can be promoted | Implemented |
+| **WAL Streaming** | RocksDB `GetUpdatesSince()` | Native integration, efficient delta transfer | Implemented |
+| **Partial Failure** | No rollback | Matches Redis/DragonflyDB, use hash tags for atomicity | Implemented |
+| **Blocking Failover** | Client timeouts | Matches Redis/Valkey, document edge cases | Implemented |
+
+---
+
+## Implementation Status
+
+```
+Phase 1: Replication ✅ COMPLETE
+   └── REPLICAOF, PSYNC, REPLCONF, WAIT, WAL streaming, full sync
+Phase 2: Admin API & Topology ⚠️ PARTIAL
+   └── ✅ Raft state machine, CLUSTER commands, admin read API
+   └── ❌ Admin write endpoints (superseded by Raft), reference orchestrator (superseded by Raft)
+Phase 3: Client Protocol ✅ COMPLETE
+   └── MOVED, ASK, ASKING, READONLY, CROSSSLOT
+Phase 4: Failover ⚠️ PARTIAL
+   └── ✅ CLUSTER FAILOVER, Raft leader election, failure detector, quorum checking, self-fencing
+   └── ❌ Split-brain discarded-writes log, replica-lag scoring
+Phase 5: Migration ⚠️ PARTIAL
+   └── ✅ Raft migration metadata, CLUSTER SETSLOT, standard MIGRATE (DUMP/RESTORE)
+   └── ❌ DFLYMIGRATE high-throughput streaming protocol
+Phase 6: Testing ⚠️ PARTIAL
+   └── ✅ 136 cluster + 76 replication integration tests
+   └── ❌ Chaos testing (Jepsen/Turmoil for cluster)
+```
+
+See [POTENTIAL.md](../todo/POTENTIAL.md) for remaining cluster work (DFLYMIGRATE, replica-lag scoring, split-brain log, chaos testing).
+
+---
+
 ## References
 
 - [Redis Cluster Specification](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/)
