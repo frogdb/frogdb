@@ -1048,11 +1048,13 @@ async fn test_replica_reconnect_outside_buffer(#[case] persistence: bool) {
 
     // Write more data to advance the offset
     // (Reduced count to avoid timeout - actual buffer overflow test would need many more)
+    let mut client = primary.connect().await;
     for i in 0..100 {
         let key = format!("overflow_key_{}", i);
         let value = format!("overflow_value_{}", i);
-        primary.send("SET", &[&key, &value]).await;
+        client.command(&["SET", &key, &value]).await;
     }
+    drop(client);
 
     // Restart replica - should need full resync (or partial if buffer large enough)
     let replica2 = TestServer::start_replica_with_config(&primary, config).await;
@@ -1458,10 +1460,12 @@ async fn test_wal_overflow_triggers_full_resync(#[case] persistence: bool) {
     );
 
     let start = std::time::Instant::now();
+    let mut client = primary.connect().await;
     for i in 0..overflow_count {
         let key = format!("overflow_{}", i);
-        primary.send("SET", &[&key, &overflow_value]).await;
+        client.command(&["SET", &key, &overflow_value]).await;
     }
+    drop(client);
     let write_time = start.elapsed();
     eprintln!("Wrote {} keys in {:?}", overflow_count, write_time);
 
@@ -1597,14 +1601,13 @@ async fn test_wait_during_replica_resync(#[case] persistence: bool) {
     let primary = TestServer::start_primary_with_config(config.clone()).await;
 
     // Write lots of initial data to ensure full resync takes time
+    let mut client = primary.connect().await;
     for i in 0..500 {
-        primary
-            .send(
-                "SET",
-                &[&format!("initial_key_{}", i), &format!("value_{}", i)],
-            )
+        client
+            .command(&["SET", &format!("initial_key_{}", i), &format!("value_{}", i)])
             .await;
     }
+    drop(client);
 
     // Start first replica and wait for full sync
     let replica = TestServer::start_replica_with_config(&primary, config.clone()).await;
@@ -1630,11 +1633,13 @@ async fn test_wait_during_replica_resync(#[case] persistence: bool) {
     // Write lots of data to overflow WAL buffer (force full resync on reconnect)
     eprintln!("Writing data to overflow WAL buffer...");
     let overflow_value: String = "x".repeat(200);
+    let mut client = primary.connect().await;
     for i in 0..5000 {
-        primary
-            .send("SET", &[&format!("overflow_key_{}", i), &overflow_value])
+        client
+            .command(&["SET", &format!("overflow_key_{}", i), &overflow_value])
             .await;
     }
+    drop(client);
     eprintln!("Finished writing overflow data");
 
     // Shutdown replica (disconnect cleanly)
@@ -2556,11 +2561,13 @@ async fn test_proactive_lag_threshold_triggers_fullresync() {
     let (primary, replica) = start_primary_replica_pair(config).await;
 
     // Write a large amount of data to create significant lag
+    let mut client = primary.connect().await;
     for i in 0..1000 {
-        primary
-            .send("SET", &[&format!("lag_threshold_{}", i), &"x".repeat(1000)])
+        client
+            .command(&["SET", &format!("lag_threshold_{}", i), &"x".repeat(1000)])
             .await;
     }
+    drop(client);
 
     // In a properly implemented system, the primary would detect that
     // the replica has fallen behind by more than the configured threshold
