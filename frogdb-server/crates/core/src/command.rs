@@ -142,6 +142,14 @@ pub trait QuorumChecker: Send + Sync {
     fn count_reachable_nodes(&self) -> usize;
 }
 
+/// What kind of blocking waiter a write command may satisfy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaiterKind {
+    List,
+    SortedSet,
+    Stream,
+}
+
 /// Declares how a write command's effects should be persisted to the WAL.
 ///
 /// Commands override `wal_strategy()` to declare their persistence behavior.
@@ -210,6 +218,14 @@ pub trait Command: Send + Sync {
     /// persistence behavior.
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::default()
+    }
+
+    /// If this write command may unblock waiting clients, return the waiter kind.
+    ///
+    /// Defaults to `None`. Override on commands that push data into structures
+    /// that have blocking readers (e.g. LPUSH → `Some(WaiterKind::List)`).
+    fn wakes_waiters(&self) -> Option<WaiterKind> {
+        None
     }
 
     /// Execute the command.
@@ -324,6 +340,9 @@ bitflags! {
 
         /// Command should not be propagated to replicas.
         const NO_PROPAGATE = 0b0100_0000_0000_0000;
+
+        /// Command tracks keyspace hits/misses metrics.
+        const TRACKS_KEYSPACE = 0b1_0000_0000_0000_0000;
     }
 }
 

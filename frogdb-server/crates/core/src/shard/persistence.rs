@@ -55,8 +55,8 @@ impl ShardWorker {
         }
     }
 
-    /// Persist command changes to WAL based on command type.
-    pub(crate) async fn persist_command_to_wal(&self, cmd_name: &str, args: &[Bytes]) {
+    /// Legacy string-match WAL persistence. Only called from the `Infer` fallback path.
+    pub(crate) async fn persist_command_to_wal_legacy(&self, cmd_name: &str, args: &[Bytes]) {
         if self.persistence.wal_writer.is_none() {
             return;
         }

@@ -391,7 +391,7 @@ impl Command for GetdelCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
+        CommandFlags::WRITE | CommandFlags::FAST | CommandFlags::TRACKS_KEYSPACE
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -438,7 +438,7 @@ impl Command for GetexCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
+        CommandFlags::WRITE | CommandFlags::FAST | CommandFlags::TRACKS_KEYSPACE
     }
 
     fn wal_strategy(&self) -> WalStrategy {

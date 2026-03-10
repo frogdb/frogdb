@@ -36,6 +36,7 @@ mod functions;
 mod helpers;
 pub mod message;
 mod persistence;
+mod pipeline;
 mod pubsub;
 mod scripting;
 pub mod types;

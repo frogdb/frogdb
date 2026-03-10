@@ -8,7 +8,6 @@ use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
 use crate::{Aggregation, LabelFilter, TimeSeriesValue};
 
-use super::helpers::REPLICA_INTERNAL_CONN_ID;
 use super::message::ScatterOp;
 use super::types::{PartialResult, TransactionResult};
 use super::worker::ShardWorker;
@@ -82,81 +81,9 @@ impl ShardWorker {
             (response, ctx.dirty_delta)
         };
 
-        // Track keyspace hits/misses for GET-like commands
-        let is_get_command = matches!(
-            cmd_name_str.as_ref(),
-            "GET" | "GETEX" | "GETDEL" | "HGET" | "LINDEX"
-        );
-        if is_get_command {
-            if matches!(response, Response::Null) {
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_keyspace_misses_total",
-                    1,
-                    &[],
-                );
-            } else {
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_keyspace_hits_total",
-                    1,
-                    &[],
-                );
-            }
-        }
-
-        // Increment version and dirty counter on write operations
-        if is_write {
-            self.increment_version();
-            // Use the command's dirty_delta for dirty tracking.
-            // - dirty_delta == 0 (default): command didn't set it, count as 1
-            // - dirty_delta > 0: command explicitly set dirty count
-            // - dirty_delta < 0: command explicitly says "no dirty change"
-            let dirty_amount = if dirty_delta > 0 {
-                dirty_delta as u64
-            } else if dirty_delta < 0 {
-                0
-            } else {
-                1 // Default: most write commands count as 1 dirty change
-            };
-            self.store.increment_dirty(dirty_amount);
-
-            // Try to satisfy any blocking waiters after list/zset write operations
-            let keys = handler.keys(&command.args);
-            match cmd_name_str.as_ref() {
-                // List push commands that may satisfy BLPOP/BRPOP/BLMOVE/BLMPOP waiters
-                "LPUSH" | "RPUSH" | "LPUSHX" | "RPUSHX" | "LINSERT" => {
-                    for key in keys {
-                        let key_bytes = Bytes::copy_from_slice(key);
-                        self.try_satisfy_list_waiters(&key_bytes);
-                    }
-                }
-                // Sorted set commands that may satisfy BZPOPMIN/BZPOPMAX/BZMPOP waiters
-                "ZADD" => {
-                    for key in keys {
-                        let key_bytes = Bytes::copy_from_slice(key);
-                        self.try_satisfy_zset_waiters(&key_bytes);
-                    }
-                }
-                // Stream commands that may satisfy XREAD/XREADGROUP waiters
-                "XADD" => {
-                    for key in keys {
-                        let key_bytes = Bytes::copy_from_slice(key);
-                        self.try_satisfy_stream_waiters(&key_bytes);
-                    }
-                }
-                _ => {}
-            }
-
-            // Persist to WAL for write operations
-            self.persist_command_to_wal(&cmd_name_str, &command.args)
-                .await;
-
-            // Broadcast to replicas (if running as primary with connected replicas)
-            // Skip broadcast if this command came from replication (to avoid infinite loops)
-            if conn_id != REPLICA_INTERNAL_CONN_ID && self.replication_broadcaster.is_active() {
-                self.replication_broadcaster
-                    .broadcast_command(&cmd_name_str, &command.args);
-            }
-        }
+        // Run post-execution pipeline (metrics, dirty tracking, waiters, WAL, replication)
+        self.run_post_execution(handler.as_ref(), &command.args, &response, dirty_delta, conn_id)
+            .await;
 
         response
     }

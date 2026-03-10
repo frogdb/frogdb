@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, StreamId, WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, StreamId, WaiterKind, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -28,6 +28,10 @@ impl Command for XaddCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::PersistFirstKey
+    }
+
+    fn wakes_waiters(&self) -> Option<WaiterKind> {
+        Some(WaiterKind::Stream)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

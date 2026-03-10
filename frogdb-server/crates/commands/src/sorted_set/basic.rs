@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy, impl_keys_first,
+    Arity, Command, CommandContext, CommandError, CommandFlags, WaiterKind, WalStrategy,
+    impl_keys_first,
 };
 use frogdb_protocol::Response;
 
@@ -27,6 +28,10 @@ impl Command for ZaddCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::PersistFirstKey
+    }
+
+    fn wakes_waiters(&self) -> Option<WaiterKind> {
+        Some(WaiterKind::SortedSet)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

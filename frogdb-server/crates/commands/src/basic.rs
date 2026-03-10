@@ -263,7 +263,7 @@ impl Command for GetCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+        CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::TRACKS_KEYSPACE
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

@@ -13,7 +13,7 @@
 //! Note: Blocking commands (BLPOP, BRPOP, BLMOVE) deferred to Phase 11.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, WaiterKind, WalStrategy};
 use frogdb_protocol::Response;
 
 use super::utils::{get_or_create_list, parse_i64, parse_usize};
@@ -39,6 +39,10 @@ impl Command for LpushCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::PersistFirstKey
+    }
+
+    fn wakes_waiters(&self) -> Option<WaiterKind> {
+        Some(WaiterKind::List)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -85,6 +89,10 @@ impl Command for RpushCommand {
         WalStrategy::PersistFirstKey
     }
 
+    fn wakes_waiters(&self) -> Option<WaiterKind> {
+        Some(WaiterKind::List)
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let list = get_or_create_list(ctx, key)?;
@@ -126,6 +134,10 @@ impl Command for LpushxCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::PersistFirstKey
+    }
+
+    fn wakes_waiters(&self) -> Option<WaiterKind> {
+        Some(WaiterKind::List)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -180,6 +192,10 @@ impl Command for RpushxCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::PersistFirstKey
+    }
+
+    fn wakes_waiters(&self) -> Option<WaiterKind> {
+        Some(WaiterKind::List)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -505,7 +521,7 @@ impl Command for LindexCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+        CommandFlags::READONLY | CommandFlags::TRACKS_KEYSPACE
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -619,6 +635,10 @@ impl Command for LinsertCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::PersistFirstKey
+    }
+
+    fn wakes_waiters(&self) -> Option<WaiterKind> {
+        Some(WaiterKind::List)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
