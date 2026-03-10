@@ -31,7 +31,9 @@ have been annotated with `[Not Yet Implemented]` markers.
 | Command         | Status        | Notes                                                                               | Spec                                                                                               |
 | --------------- | ------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | MODULE commands | Not planned   | No modular architecture                                                             | [COMPATIBILITY.md](../spec/COMPATIBILITY.md)                                                       |
-| SELECT          | Not supported | Intentional: single database per instance                                           | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#single-database)                                       |
+| SELECT          | Not supported | `SELECT 0` accepted as no-op; non-zero returns `DatabaseNotSupported`               | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#single-database)                                       |
+| SWAPDB          | Not supported | Returns `DatabaseNotSupported` — single database per instance                       | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#database-model)                                        |
+| MOVE            | Not supported | Returns `DatabaseNotSupported` — single database per instance                       | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#database-model)                                        |
 
 ---
 

@@ -106,33 +106,85 @@ impl Command for ModuleCommand {
 }
 
 // =============================================================================
-// Generic/Keys Commands
+// Database-specifying commands (FrogDB is single-database-per-instance)
 // =============================================================================
 
-stub_command!(
+/// Macro to generate commands that reject with DatabaseNotSupported.
+macro_rules! db_not_supported_command {
+    ($name:ident, $cmd:literal, $arity:expr, $flags:expr) => {
+        pub struct $name;
+
+        impl Command for $name {
+            fn name(&self) -> &'static str {
+                $cmd
+            }
+
+            fn arity(&self) -> Arity {
+                $arity
+            }
+
+            fn flags(&self) -> CommandFlags {
+                $flags
+            }
+
+            fn execute(
+                &self,
+                _ctx: &mut CommandContext,
+                _args: &[Bytes],
+            ) -> Result<Response, CommandError> {
+                Err(CommandError::DatabaseNotSupported { command: $cmd })
+            }
+
+            fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+                vec![]
+            }
+        }
+    };
+}
+
+db_not_supported_command!(
     MoveCommand,
     "MOVE",
     Arity::Fixed(2),
     CommandFlags::WRITE | CommandFlags::FAST
 );
 
-// =============================================================================
-// Connection Commands
-// =============================================================================
-
-stub_command!(
-    SelectCommand,
-    "SELECT",
-    Arity::Fixed(1),
-    CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
-);
-
-stub_command!(
+db_not_supported_command!(
     SwapdbCommand,
     "SWAPDB",
     Arity::Fixed(2),
     CommandFlags::WRITE | CommandFlags::FAST
 );
+
+/// SELECT 0 is accepted as a no-op (returns OK).
+/// SELECT <non-zero> returns DatabaseNotSupported.
+pub struct SelectCommand;
+
+impl Command for SelectCommand {
+    fn name(&self) -> &'static str {
+        "SELECT"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(1)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    }
+
+    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        if args[0].as_ref() == b"0" {
+            Ok(Response::ok())
+        } else {
+            Err(CommandError::DatabaseNotSupported { command: "SELECT" })
+        }
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
 
 // =============================================================================
 // Server Commands

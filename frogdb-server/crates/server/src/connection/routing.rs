@@ -177,12 +177,7 @@ impl ConnectionHandler {
                     i += 1;
                 }
                 b"DB" => {
-                    // DB option is accepted but ignored
-                    if i + 1 >= args.len() {
-                        return Response::error("ERR DB requires an argument");
-                    }
-                    tracing::warn!("COPY DB option not supported, ignoring");
-                    i += 2; // Skip DB and its argument
+                    return Response::error("ERR COPY is not supported with DB. FrogDB uses a single database per instance.");
                 }
                 _ => {
                     return Response::error(format!(

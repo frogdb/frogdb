@@ -216,20 +216,23 @@ async fn test_copy_sorted_set() {
 }
 
 #[tokio::test]
-async fn test_copy_db_option_ignored() {
+async fn test_copy_db_option_rejected() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     // SET source key
     client.command(&["SET", "src", "hello"]).await;
 
-    // COPY with DB option (should be accepted but ignored)
+    // COPY with DB option should be rejected (single database per instance)
     let response = client.command(&["COPY", "src", "dst", "DB", "1"]).await;
-    assert_eq!(response, Response::Integer(1));
-
-    // Verify copy succeeded in same DB
-    let dst_val = client.command(&["GET", "dst"]).await;
-    assert_eq!(dst_val, Response::Bulk(Some(Bytes::from("hello"))));
+    match &response {
+        Response::Error(err) => {
+            let msg = String::from_utf8_lossy(err);
+            assert!(msg.contains("not supported"), "Expected 'not supported' in error: {msg}");
+            assert!(msg.contains("single database"), "Expected 'single database' in error: {msg}");
+        }
+        other => panic!("Expected error response, got: {other:?}"),
+    }
 
     server.shutdown().await;
 }

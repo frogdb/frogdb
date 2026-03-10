@@ -8,6 +8,7 @@ mod integration_basic;
 mod integration_client;
 mod integration_cluster;
 mod integration_copy;
+mod integration_database;
 mod integration_debug_bundle;
 mod integration_debug_http;
 mod integration_dump_restore;

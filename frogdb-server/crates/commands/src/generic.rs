@@ -17,7 +17,6 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use crate::utils::parse_i64;
 
 // ============================================================================
 // TYPE - Get key type
@@ -664,13 +663,7 @@ impl Command for CopyCommand {
                     i += 1;
                 }
                 b"DB" | b"DESTINATION-DB" => {
-                    // DB option is accepted but we validate the argument is an integer
-                    if i + 1 >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    // Validate DB number is a valid integer (even though we ignore it)
-                    let _db = parse_i64(&args[i + 1])?;
-                    i += 2; // Skip DB and its argument
+                    return Err(CommandError::DatabaseNotSupported { command: "COPY" });
                 }
                 _ => {
                     return Err(CommandError::InvalidArgument {
