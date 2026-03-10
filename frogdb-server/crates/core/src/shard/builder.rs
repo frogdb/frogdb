@@ -83,6 +83,7 @@ pub struct ShardWorkerBuilder {
     enable_vll: bool,
     queue_depth: Option<Arc<AtomicUsize>>,
     per_request_spans: Option<Arc<AtomicBool>>,
+    is_replica: bool,
 }
 
 impl ShardWorkerBuilder {
@@ -112,6 +113,7 @@ impl ShardWorkerBuilder {
             enable_vll: false,
             queue_depth: None,
             per_request_spans: None,
+            is_replica: false,
         }
     }
 
@@ -221,6 +223,12 @@ impl ShardWorkerBuilder {
         self
     }
 
+    /// Mark this shard as belonging to a replica server.
+    pub fn as_replica(mut self) -> Self {
+        self.is_replica = true;
+        self
+    }
+
     /// Set the per-request spans toggle (shared with connections and ConfigManager).
     pub fn with_per_request_spans(mut self, flag: Arc<AtomicBool>) -> Self {
         self.per_request_spans = Some(flag);
@@ -326,6 +334,8 @@ impl ShardWorkerBuilder {
         if let Some(per_request_spans) = self.per_request_spans {
             worker.per_request_spans = per_request_spans;
         }
+
+        worker.identity.is_replica.store(self.is_replica, std::sync::atomic::Ordering::Relaxed);
 
         // VLL initialization is handled separately via enable_vll() method on ShardWorker
         // since it requires runtime configuration

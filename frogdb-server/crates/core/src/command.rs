@@ -494,6 +494,11 @@ pub struct CommandContext<'a> {
     /// Optional command registry for introspection commands (COMMAND GETKEYS).
     pub command_registry: Option<&'a Arc<CommandRegistry>>,
 
+    /// Whether this server is running as a replica.
+    ///
+    /// Used by ROLE and INFO replication to report the correct role.
+    pub is_replica: bool,
+
     /// Number of dirty changes made by this command (for rdb_changes_since_last_save).
     ///
     /// Defaults to 0. Write commands that modify data should set this to indicate
@@ -530,6 +535,7 @@ impl<'a> CommandContext<'a> {
             network_factory: None,
             quorum_checker: None,
             command_registry: None,
+            is_replica: false,
             dirty_delta: 0,
         }
     }
@@ -566,6 +572,7 @@ impl<'a> CommandContext<'a> {
             network_factory,
             quorum_checker,
             command_registry: None,
+            is_replica: false,
             dirty_delta: 0,
         }
     }

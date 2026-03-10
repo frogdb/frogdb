@@ -1104,6 +1104,11 @@ impl Server {
                 worker.set_quorum_checker(rqc.clone());
             }
 
+            // Mark shard as replica if configured
+            if config.replication.is_replica() {
+                worker.set_is_replica(true);
+            }
+
             // Share the per-request spans toggle with shard workers
             worker.per_request_spans = config_manager.per_request_spans_flag();
 

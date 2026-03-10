@@ -70,6 +70,7 @@ impl ShardWorker {
                 self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
             );
             ctx.command_registry = Some(&self.registry);
+            ctx.is_replica = self.identity.is_replica.load(std::sync::atomic::Ordering::Relaxed);
 
             let response = match handler.execute(&mut ctx, &command.args) {
                 Ok(response) => response,

@@ -418,10 +418,11 @@ fn build_replication_info(ctx: &CommandContext) -> String {
         info
     } else {
         // Standalone mode or replica mode - return default info
+        let role = if ctx.is_replica { "slave" } else { "master" };
         let repl_id = format!("{:040x}", ctx.node_id.unwrap_or(0));
         format!(
             "# Replication\r\n\
-             role:master\r\n\
+             role:{}\r\n\
              connected_slaves:0\r\n\
              master_failover_state:no-failover\r\n\
              master_replid:{}\r\n\
@@ -432,7 +433,7 @@ fn build_replication_info(ctx: &CommandContext) -> String {
              repl_backlog_size:1048576\r\n\
              repl_backlog_first_byte_offset:0\r\n\
              repl_backlog_histlen:0\r\n\r\n",
-            repl_id,
+            role, repl_id,
         )
     }
 }

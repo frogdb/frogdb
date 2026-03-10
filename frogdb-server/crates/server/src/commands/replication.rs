@@ -441,16 +441,47 @@ impl Command for RoleCommand {
 
     fn execute(
         &self,
-        _ctx: &mut CommandContext,
+        ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // For now, return master role with no replicas
-        // The full implementation will check the replication configuration
-        Ok(Response::Array(vec![
-            Response::bulk(Bytes::from_static(b"master")),
-            Response::Integer(0),    // replication offset
-            Response::Array(vec![]), // no replicas yet
-        ]))
+        if ctx.is_replica {
+            // Replica role: ["slave", <master_host>, <master_port>, <state>, <offset>]
+            Ok(Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"slave")),
+                Response::bulk(Bytes::from_static(b"")),  // master_host (not tracked in context)
+                Response::Integer(0),                      // master_port
+                Response::bulk(Bytes::from_static(b"connected")),
+                Response::Integer(0),                      // replication offset
+            ]))
+        } else {
+            // Master/standalone role: ["master", <offset>, [<replicas>]]
+            let offset = ctx
+                .replication_tracker
+                .map(|t| t.current_offset() as i64)
+                .unwrap_or(0);
+
+            let replicas = ctx
+                .replication_tracker
+                .map(|t| {
+                    t.get_streaming_replicas()
+                        .iter()
+                        .map(|r| {
+                            Response::Array(vec![
+                                Response::bulk(Bytes::from(r.address.ip().to_string())),
+                                Response::Integer(r.listening_port as i64),
+                                Response::Integer(r.acked_offset as i64),
+                            ])
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            Ok(Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"master")),
+                Response::Integer(offset),
+                Response::Array(replicas),
+            ]))
+        }
     }
 
     fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {

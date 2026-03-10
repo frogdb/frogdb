@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
@@ -26,6 +26,7 @@ use super::message::{ScatterOp, ShardMessage};
 pub(crate) struct ShardIdentity {
     pub shard_id: usize,
     pub num_shards: usize,
+    pub is_replica: Arc<AtomicBool>,
 }
 
 /// Observability: metrics, slowlog, latency, counters, queue depth, peak memory.

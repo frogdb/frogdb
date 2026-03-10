@@ -96,6 +96,18 @@ impl ShardWorker {
         self.identity.num_shards
     }
 
+    /// Set whether this shard belongs to a replica server.
+    pub fn set_is_replica(&mut self, is_replica: bool) {
+        self.identity
+            .is_replica
+            .store(is_replica, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Get a shared handle to the is_replica flag.
+    pub fn is_replica_flag(&self) -> Arc<AtomicBool> {
+        self.identity.is_replica.clone()
+    }
+
     /// Create a new shard worker without persistence.
     pub fn new(
         shard_id: usize,
@@ -151,6 +163,7 @@ impl ShardWorker {
             identity: ShardIdentity {
                 shard_id,
                 num_shards,
+                is_replica: Arc::new(AtomicBool::new(false)),
             },
             store: HashMapStore::new(),
             message_rx,
@@ -245,6 +258,7 @@ impl ShardWorker {
             identity: ShardIdentity {
                 shard_id,
                 num_shards,
+                is_replica: Arc::new(AtomicBool::new(false)),
             },
             store,
             message_rx,
