@@ -232,9 +232,15 @@ async fn test_pubsub_mode_restrictions() {
     let response = client.command(&["GET", "foo"]).await;
     assert!(matches!(response, Response::Error(ref e) if e.starts_with(b"ERR Can't execute")));
 
-    // PING should still work
+    // PING should still work (RESP2 pubsub mode returns array ["pong", ""])
     let response = client.command(&["PING"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("PONG")));
+    assert_eq!(
+        response,
+        Response::Array(vec![
+            Response::Bulk(Some(Bytes::from("pong"))),
+            Response::Bulk(Some(Bytes::from(""))),
+        ])
+    );
 
     server.shutdown().await;
 }
