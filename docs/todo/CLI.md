@@ -1186,7 +1186,7 @@ The following are explicitly excluded from this spec:
 | Feature | Reason |
 |---------|--------|
 | Interactive REPL / query client | Separate spec — different UX concerns (completion, history, multi-line) |
-| Benchmarking (`frog bench`) | Existing loadtest infrastructure (`frogdb-loadtest`) is sufficient |
+| Benchmarking (`frog bench`) | Existing load-test infrastructure (`frogdb-load-test`) is sufficient |
 | ACL tooling (`frog acl`) | Standard ACL RESP commands (`ACL LIST`, `ACL SETUSER`, etc.) are sufficient |
 
 ---

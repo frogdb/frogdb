@@ -18,8 +18,8 @@
 #     172.30.0.11:6379 172.30.0.12:6379 172.30.0.13:6379 --cluster-yes
 #
 # Usage:
-#   docker compose -f loadtest/docker-compose.cluster-benchmarks.yml up -d
-#   docker compose -f loadtest/docker-compose.cluster-benchmarks.yml down
+#   docker compose -f load-test/docker-compose.cluster-benchmarks.yml up -d
+#   docker compose -f load-test/docker-compose.cluster-benchmarks.yml down
 
 networks:
   benchnet:

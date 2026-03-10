@@ -186,17 +186,17 @@ profile-heap *args:
 # Usage: just profile-load [workload] [requests]
 # Example: just profile-load mixed 50000
 profile-load workload="mixed" requests="10000" *args:
-    uv run testing/loadtest/scripts/profile_load.py -w {{workload}} -n {{requests}} {{args}}
+    uv run testing/load-test/scripts/profile_load.py -w {{workload}} -n {{requests}} {{args}}
 
 # Run Docker benchmarks against FrogDB, Redis, Valkey, and Dragonfly
 # Usage: just benchmark [workload] [requests]
 benchmark workload="ycsb-a" requests="100000" *args:
-    uv run testing/loadtest/scripts/benchmark.py -w {{workload}} --all --start-docker -n {{requests}} {{args}}
+    uv run testing/load-test/scripts/benchmark.py -w {{workload}} --all --start-docker -n {{requests}} {{args}}
 
 # Causal-profile FrogDB under load (tokio-coz)
 # Usage: just causal-profile [workload] [duration_secs] [--profile release]
 causal-profile workload="mixed" duration="90" *args:
-    uv run testing/loadtest/scripts/causal_profile.py -w {{workload}} --duration {{duration}} {{args}}
+    uv run testing/load-test/scripts/causal_profile.py -w {{workload}} --duration {{duration}} {{args}}
 
 # =============================================================================
 # Redis Compatibility Testing

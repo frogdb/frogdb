@@ -11,12 +11,12 @@
 #   Dragonfly: 16382 (Docker)
 #
 # Usage:
-#   docker compose -f loadtest/docker-compose.benchmarks.yml up -d
-#   docker compose -f loadtest/docker-compose.benchmarks.yml ps
-#   docker compose -f loadtest/docker-compose.benchmarks.yml down
+#   docker compose -f load-test/docker-compose.benchmarks.yml up -d
+#   docker compose -f load-test/docker-compose.benchmarks.yml ps
+#   docker compose -f load-test/docker-compose.benchmarks.yml down
 #
 # Build FrogDB image:
-#   docker compose -f loadtest/docker-compose.benchmarks.yml build frogdb
+#   docker compose -f load-test/docker-compose.benchmarks.yml build frogdb
 
 services:
   frogdb:

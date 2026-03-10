@@ -19,7 +19,7 @@ Prerequisites:
     - FrogDB cross-compiled binary: just cross-build-arm
 
 Usage:
-    cd loadtest/scripts
+    cd load-test/scripts
     uv run compare_cluster.py [OPTIONS]
 
 Options:
@@ -876,7 +876,7 @@ def main() -> None:
         stop_services()
     else:
         print("\n--keep specified, containers left running.")
-        print(f"To stop: docker compose -f loadtest/{COMPOSE_FILE} -p {COMPOSE_PROJECT} down")
+        print(f"To stop: docker compose -f load-test/{COMPOSE_FILE} -p {COMPOSE_PROJECT} down")
 
 
 if __name__ == "__main__":
