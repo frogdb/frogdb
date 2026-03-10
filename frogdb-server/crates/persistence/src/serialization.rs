@@ -124,14 +124,14 @@ pub fn deserialize(data: &[u8]) -> Result<(Value, KeyMetadata), SerializationErr
     // Skip padding (5 bytes)
     let payload_len = u64::from_le_bytes(data[16..24].try_into().unwrap()) as usize;
 
-    let total_len = HEADER_SIZE + payload_len;
-    if data.len() < total_len {
+    if payload_len > data.len() - HEADER_SIZE {
         return Err(SerializationError::Truncated {
-            expected: total_len,
+            expected: HEADER_SIZE.saturating_add(payload_len),
             actual: data.len(),
         });
     }
 
+    let total_len = HEADER_SIZE + payload_len;
     let payload = &data[HEADER_SIZE..total_len];
 
     // Deserialize value
@@ -578,7 +578,7 @@ fn deserialize_sorted_set(payload: &[u8]) -> Result<SortedSetValue, Serializatio
 
     for _ in 0..len {
         // Read score (8 bytes)
-        if offset + 8 > payload.len() {
+        if 8 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Sorted set payload truncated at score".to_string(),
             ));
@@ -587,7 +587,7 @@ fn deserialize_sorted_set(payload: &[u8]) -> Result<SortedSetValue, Serializatio
         offset += 8;
 
         // Read member length (4 bytes)
-        if offset + 4 > payload.len() {
+        if 4 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Sorted set payload truncated at member length".to_string(),
             ));
@@ -597,7 +597,7 @@ fn deserialize_sorted_set(payload: &[u8]) -> Result<SortedSetValue, Serializatio
         offset += 4;
 
         // Read member bytes
-        if offset + member_len > payload.len() {
+        if member_len > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Sorted set payload truncated at member data".to_string(),
             ));
@@ -625,7 +625,7 @@ fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
 
     for _ in 0..len {
         // Read field length (4 bytes)
-        if offset + 4 > payload.len() {
+        if 4 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Hash payload truncated at field length".to_string(),
             ));
@@ -635,7 +635,7 @@ fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
         offset += 4;
 
         // Read field bytes
-        if offset + field_len > payload.len() {
+        if field_len > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Hash payload truncated at field data".to_string(),
             ));
@@ -644,7 +644,7 @@ fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
         offset += field_len;
 
         // Read value length (4 bytes)
-        if offset + 4 > payload.len() {
+        if 4 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Hash payload truncated at value length".to_string(),
             ));
@@ -654,7 +654,7 @@ fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
         offset += 4;
 
         // Read value bytes
-        if offset + value_len > payload.len() {
+        if value_len > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Hash payload truncated at value data".to_string(),
             ));
@@ -682,7 +682,7 @@ fn deserialize_list(payload: &[u8]) -> Result<ListValue, SerializationError> {
 
     for _ in 0..len {
         // Read element length (4 bytes)
-        if offset + 4 > payload.len() {
+        if 4 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "List payload truncated at element length".to_string(),
             ));
@@ -691,7 +691,7 @@ fn deserialize_list(payload: &[u8]) -> Result<ListValue, SerializationError> {
         offset += 4;
 
         // Read element bytes
-        if offset + elem_len > payload.len() {
+        if elem_len > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "List payload truncated at element data".to_string(),
             ));
@@ -719,7 +719,7 @@ fn deserialize_set(payload: &[u8]) -> Result<SetValue, SerializationError> {
 
     for _ in 0..len {
         // Read member length (4 bytes)
-        if offset + 4 > payload.len() {
+        if 4 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Set payload truncated at member length".to_string(),
             ));
@@ -729,7 +729,7 @@ fn deserialize_set(payload: &[u8]) -> Result<SetValue, SerializationError> {
         offset += 4;
 
         // Read member bytes
-        if offset + member_len > payload.len() {
+        if member_len > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Set payload truncated at member data".to_string(),
             ));
@@ -763,7 +763,7 @@ fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError>
 
     for _ in 0..num_entries {
         // Read entry ID
-        if offset + 20 > payload.len() {
+        if 20 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Stream payload truncated at entry header".to_string(),
             ));
@@ -782,7 +782,7 @@ fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError>
         let mut fields = Vec::with_capacity(num_fields);
         for _ in 0..num_fields {
             // Read field length
-            if offset + 4 > payload.len() {
+            if 4 > payload.len() - offset {
                 return Err(SerializationError::InvalidPayload(
                     "Stream payload truncated at field length".to_string(),
                 ));
@@ -792,7 +792,7 @@ fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError>
             offset += 4;
 
             // Read field bytes
-            if offset + field_len > payload.len() {
+            if field_len > payload.len() - offset {
                 return Err(SerializationError::InvalidPayload(
                     "Stream payload truncated at field data".to_string(),
                 ));
@@ -801,7 +801,7 @@ fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError>
             offset += field_len;
 
             // Read value length
-            if offset + 4 > payload.len() {
+            if 4 > payload.len() - offset {
                 return Err(SerializationError::InvalidPayload(
                     "Stream payload truncated at value length".to_string(),
                 ));
@@ -811,7 +811,7 @@ fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError>
             offset += 4;
 
             // Read value bytes
-            if offset + value_len > payload.len() {
+            if value_len > payload.len() - offset {
                 return Err(SerializationError::InvalidPayload(
                     "Stream payload truncated at value data".to_string(),
                 ));
@@ -854,7 +854,7 @@ fn deserialize_bloom_filter(payload: &[u8]) -> Result<BloomFilterValue, Serializ
 
     for _ in 0..num_layers {
         // Read k (4 bytes)
-        if offset + 4 > payload.len() {
+        if 4 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Bloom filter payload truncated at k".to_string(),
             ));
@@ -863,7 +863,7 @@ fn deserialize_bloom_filter(payload: &[u8]) -> Result<BloomFilterValue, Serializ
         offset += 4;
 
         // Read count (8 bytes)
-        if offset + 8 > payload.len() {
+        if 8 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Bloom filter payload truncated at count".to_string(),
             ));
@@ -872,7 +872,7 @@ fn deserialize_bloom_filter(payload: &[u8]) -> Result<BloomFilterValue, Serializ
         offset += 8;
 
         // Read capacity (8 bytes)
-        if offset + 8 > payload.len() {
+        if 8 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Bloom filter payload truncated at capacity".to_string(),
             ));
@@ -881,7 +881,7 @@ fn deserialize_bloom_filter(payload: &[u8]) -> Result<BloomFilterValue, Serializ
         offset += 8;
 
         // Read bits_len (8 bytes)
-        if offset + 8 > payload.len() {
+        if 8 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Bloom filter payload truncated at bits_len".to_string(),
             ));
@@ -891,7 +891,7 @@ fn deserialize_bloom_filter(payload: &[u8]) -> Result<BloomFilterValue, Serializ
 
         // Read bits bytes (bits_len / 8 rounded up)
         let bytes_needed = bits_len.div_ceil(8);
-        if offset + bytes_needed > payload.len() {
+        if bytes_needed > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "Bloom filter payload truncated at bits data".to_string(),
             ));
@@ -936,7 +936,12 @@ fn deserialize_hyperloglog(payload: &[u8]) -> Result<HyperLogLogValue, Serializa
             let num_entries = u32::from_le_bytes(payload[1..5].try_into().unwrap()) as usize;
 
             // Each entry is 3 bytes (u16 index + u8 value)
-            let expected_len = 5 + num_entries * 3;
+            let expected_len = num_entries
+                .checked_mul(3)
+                .and_then(|v| v.checked_add(5))
+                .ok_or(SerializationError::InvalidPayload(
+                    "HyperLogLog sparse payload size overflow".to_string(),
+                ))?;
             if payload.len() < expected_len {
                 return Err(SerializationError::InvalidPayload(
                     "HyperLogLog sparse payload truncated".to_string(),
@@ -1006,7 +1011,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
     offset += 4;
 
     // Labels
-    if offset + 4 > payload.len() {
+    if 4 > payload.len() - offset {
         return Err(SerializationError::InvalidPayload(
             "TimeSeries payload truncated at labels count".to_string(),
         ));
@@ -1017,7 +1022,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
     let mut labels = Vec::with_capacity(num_labels);
     for _ in 0..num_labels {
         // Name
-        if offset + 4 > payload.len() {
+        if 4 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "TimeSeries payload truncated at label name length".to_string(),
             ));
@@ -1025,7 +1030,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
         let name_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
-        if offset + name_len > payload.len() {
+        if name_len > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "TimeSeries payload truncated at label name".to_string(),
             ));
@@ -1034,7 +1039,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
         offset += name_len;
 
         // Value
-        if offset + 4 > payload.len() {
+        if 4 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "TimeSeries payload truncated at label value length".to_string(),
             ));
@@ -1043,7 +1048,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
             u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
-        if offset + value_len > payload.len() {
+        if value_len > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "TimeSeries payload truncated at label value".to_string(),
             ));
@@ -1055,7 +1060,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
     }
 
     // Chunks
-    if offset + 4 > payload.len() {
+    if 4 > payload.len() - offset {
         return Err(SerializationError::InvalidPayload(
             "TimeSeries payload truncated at chunks count".to_string(),
         ));
@@ -1065,7 +1070,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
 
     let mut chunks = Vec::with_capacity(num_chunks);
     for _ in 0..num_chunks {
-        if offset + 24 > payload.len() {
+        if 24 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "TimeSeries payload truncated at chunk header".to_string(),
             ));
@@ -1083,7 +1088,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
         let data_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
-        if offset + data_len > payload.len() {
+        if data_len > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "TimeSeries payload truncated at chunk data".to_string(),
             ));
@@ -1100,7 +1105,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
     }
 
     // Active samples
-    if offset + 4 > payload.len() {
+    if 4 > payload.len() - offset {
         return Err(SerializationError::InvalidPayload(
             "TimeSeries payload truncated at active samples count".to_string(),
         ));
@@ -1110,7 +1115,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
 
     let mut active_samples = std::collections::BTreeMap::new();
     for _ in 0..num_active {
-        if offset + 16 > payload.len() {
+        if 16 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
                 "TimeSeries payload truncated at active sample".to_string(),
             ));
