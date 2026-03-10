@@ -3,3 +3,6 @@
 slow-timeout = { period = "5s", terminate-after = 3 }
 # Run all tests even if some fail
 fail-fast = false
+# Cap parallelism to CPU count to prevent resource exhaustion
+# (ephemeral port pool, file descriptors, CPU) under full suite runs
+test-threads = "num-cpus"
