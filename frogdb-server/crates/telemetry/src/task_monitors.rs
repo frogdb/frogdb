@@ -55,9 +55,8 @@ impl TaskMonitorRegistry {
                 ticker.tick().await;
 
                 for (idx, (name, _monitor)) in self.monitors.iter().enumerate() {
-                    // Drain all accumulated intervals, keeping only the last
-                    // (most recent complete interval).
-                    let interval = iters[idx].by_ref().last();
+                    // Get the metrics delta since the last collection.
+                    let interval = iters[idx].next();
                     let Some(stats) = interval else {
                         continue;
                     };
