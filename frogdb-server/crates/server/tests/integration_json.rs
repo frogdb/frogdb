@@ -554,20 +554,20 @@ async fn test_json_mget() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    // Set multiple documents
+    // Set multiple documents (use hash tags to colocate keys on same shard)
     client
-        .command(&["JSON.SET", "doc1", "$", r#"{"name":"one"}"#])
+        .command(&["JSON.SET", "{k}doc1", "$", r#"{"name":"one"}"#])
         .await;
     client
-        .command(&["JSON.SET", "doc2", "$", r#"{"name":"two"}"#])
+        .command(&["JSON.SET", "{k}doc2", "$", r#"{"name":"two"}"#])
         .await;
     client
-        .command(&["JSON.SET", "doc3", "$", r#"{"name":"three"}"#])
+        .command(&["JSON.SET", "{k}doc3", "$", r#"{"name":"three"}"#])
         .await;
 
     // MGET from multiple keys
     let response = client
-        .command(&["JSON.MGET", "doc1", "doc2", "doc3", "$.name"])
+        .command(&["JSON.MGET", "{k}doc1", "{k}doc2", "{k}doc3", "$.name"])
         .await;
     match response {
         Response::Array(arr) => {

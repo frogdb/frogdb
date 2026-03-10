@@ -14,14 +14,14 @@ async fn test_multi_exec_basic() {
     let response = client.command(&["MULTI"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("OK")));
 
-    // Queue commands
-    let response = client.command(&["SET", "key1", "value1"]).await;
+    // Queue commands (use hash tags to colocate keys on same shard)
+    let response = client.command(&["SET", "{k}key1", "value1"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
 
-    let response = client.command(&["SET", "key2", "value2"]).await;
+    let response = client.command(&["SET", "{k}key2", "value2"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
 
-    let response = client.command(&["GET", "key1"]).await;
+    let response = client.command(&["GET", "{k}key1"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
 
     // Execute transaction
@@ -37,10 +37,10 @@ async fn test_multi_exec_basic() {
     }
 
     // Verify values are persisted
-    let response = client.command(&["GET", "key1"]).await;
+    let response = client.command(&["GET", "{k}key1"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("value1"))));
 
-    let response = client.command(&["GET", "key2"]).await;
+    let response = client.command(&["GET", "{k}key2"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("value2"))));
 
     server.shutdown().await;
@@ -280,23 +280,23 @@ async fn test_transaction_with_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    // Set a string key
-    client.command(&["SET", "mystring", "hello"]).await;
+    // Set a string key (use hash tags to colocate keys on same shard)
+    client.command(&["SET", "{k}mystring", "hello"]).await;
 
     // Start transaction
     let response = client.command(&["MULTI"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("OK")));
 
     // Queue a command that will succeed
-    let response = client.command(&["SET", "foo", "bar"]).await;
+    let response = client.command(&["SET", "{k}foo", "bar"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
 
     // Queue a command that will fail at runtime (LPUSH on a string)
-    let response = client.command(&["LPUSH", "mystring", "value"]).await;
+    let response = client.command(&["LPUSH", "{k}mystring", "value"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
 
     // Queue another command that will succeed
-    let response = client.command(&["SET", "baz", "qux"]).await;
+    let response = client.command(&["SET", "{k}baz", "qux"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
 
     // Execute - all commands run, one returns error
@@ -304,18 +304,18 @@ async fn test_transaction_with_error() {
     match response {
         Response::Array(results) => {
             assert_eq!(results.len(), 3);
-            assert_eq!(results[0], Response::Simple(Bytes::from("OK"))); // SET foo bar
-            assert!(matches!(results[1], Response::Error(ref e) if e.starts_with(b"WRONGTYPE"))); // LPUSH mystring
-            assert_eq!(results[2], Response::Simple(Bytes::from("OK"))); // SET baz qux
+            assert_eq!(results[0], Response::Simple(Bytes::from("OK"))); // SET {k}foo bar
+            assert!(matches!(results[1], Response::Error(ref e) if e.starts_with(b"WRONGTYPE"))); // LPUSH {k}mystring
+            assert_eq!(results[2], Response::Simple(Bytes::from("OK"))); // SET {k}baz qux
         }
         _ => panic!("Expected array response from EXEC"),
     }
 
     // Verify the successful commands did execute
-    let response = client.command(&["GET", "foo"]).await;
+    let response = client.command(&["GET", "{k}foo"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("bar"))));
 
-    let response = client.command(&["GET", "baz"]).await;
+    let response = client.command(&["GET", "{k}baz"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("qux"))));
 
     server.shutdown().await;
