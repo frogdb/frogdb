@@ -629,6 +629,7 @@ impl ClusterTestHarness {
         while start.elapsed() < timeout_duration {
             let mut all_ok = true;
             let mut known_nodes_counts = Vec::new();
+            let mut all_slots_assigned = true;
 
             for &node_id in &self.node_order {
                 if let Some(node) = self.nodes.get(&node_id) {
@@ -642,6 +643,9 @@ impl ClusterTestHarness {
                                 all_ok = false;
                                 break;
                             }
+                            if info.cluster_slots_assigned != 16384 {
+                                all_slots_assigned = false;
+                            }
                             known_nodes_counts.push(info.cluster_known_nodes);
                         }
                         Err(_) => {
@@ -652,8 +656,8 @@ impl ClusterTestHarness {
                 }
             }
 
-            // Check if all running nodes agree on the cluster size
-            if all_ok && !known_nodes_counts.is_empty() {
+            // Check if all running nodes agree on the cluster size and have all slots assigned
+            if all_ok && all_slots_assigned && !known_nodes_counts.is_empty() {
                 let first = known_nodes_counts[0];
                 if known_nodes_counts.iter().all(|&c| c == first) {
                     return Ok(());
