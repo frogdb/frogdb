@@ -6,11 +6,10 @@
 //! tests that assert the *correct* behaviour so they can be enabled once
 //! serialization is implemented.
 
-mod common;
 
 use bytes::Bytes;
-use common::response_helpers::{unwrap_bulk, unwrap_integer};
-use common::test_server::{TestServer, is_error};
+use crate::common::response_helpers::{unwrap_bulk, unwrap_integer};
+use crate::common::test_server::{TestServer, is_error};
 use frogdb_protocol::Response;
 
 // ============================================================================

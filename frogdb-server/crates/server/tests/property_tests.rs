@@ -3,10 +3,9 @@
 //! These tests use proptest to verify mathematical properties of increment/decrement
 //! operations through the RESP protocol.
 
-mod common;
 
 use bytes::Bytes;
-use common::test_server::{TestServer, TestServerConfig};
+use crate::common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot};
 use proptest::prelude::*;

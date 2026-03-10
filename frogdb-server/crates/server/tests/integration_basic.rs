@@ -1,9 +1,8 @@
 //! Integration tests for basic Redis commands (PING, ECHO, SET, GET, DEL, EXISTS).
 
-mod common;
 
 use bytes::Bytes;
-use common::test_server::TestServer;
+use crate::common::test_server::TestServer;
 use frogdb_protocol::Response;
 use frogdb_telemetry::testing::get_counter;
 use std::time::Duration;

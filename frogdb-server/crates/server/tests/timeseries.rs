@@ -1,8 +1,7 @@
 //! Integration tests for TimeSeries commands.
 
-mod common;
 
-use common::test_server::{TestServer, TestServerConfig};
+use crate::common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
 use std::time::Duration;

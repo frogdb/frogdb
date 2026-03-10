@@ -21,12 +21,11 @@
 
 #![cfg(feature = "turmoil")]
 
-mod common;
 
 use bytes::Bytes;
-use common::chaos_configs::ChaosPreset;
-use common::sim_harness::{OperationHistory, OperationResult};
-use common::sim_helpers::{
+use crate::common::chaos_configs::ChaosPreset;
+use crate::common::sim_harness::{OperationHistory, OperationResult};
+use crate::common::sim_helpers::{
     SERVER_HOST, SERVER_PORT, encode_command, parse_simple_response, real_frogdb_server,
     real_frogdb_server_with_chaos,
 };
@@ -524,7 +523,7 @@ fn test_sharded_mset_mget_distribution_full_matrix(
 #[test]
 fn test_sharded_hash_tags() {
     // Keys with {tag} should go to the same shard
-    use common::sim_harness::hash_slot;
+    use crate::common::sim_harness::hash_slot;
 
     // Verify hash tag extraction works
     let slot1 = hash_slot(b"{user}:profile");

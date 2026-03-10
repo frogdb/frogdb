@@ -5,14 +5,13 @@
 //!
 //! Run with: cargo test -p frogdb-core --features shuttle --test concurrency
 
-mod common;
 
-use common::mock_cluster::*;
-use common::mock_json::*;
-use common::mock_snapshot::*;
-use common::mock_streams::*;
-use common::mock_watch::*;
-use common::{assert_all_unique, spawn_collect};
+use crate::common::mock_cluster::*;
+use crate::common::mock_json::*;
+use crate::common::mock_snapshot::*;
+use crate::common::mock_streams::*;
+use crate::common::mock_watch::*;
+use crate::common::{assert_all_unique, spawn_collect};
 use shuttle::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use shuttle::sync::{Arc, Mutex};
 use shuttle::{check_pct, check_random, thread};

@@ -14,13 +14,12 @@
 //! ### Tier 3: Edge Cases
 //! Tests for reconnection, REPLICAOF NO ONE, large values, etc.
 
-mod common;
 
-use common::replication_helpers::{
+use crate::common::replication_helpers::{
     get_replication_state, parse_info_replication, start_primary_replica_pair, wait_for_replication,
 };
-use common::response_helpers::assert_ok;
-use common::test_server::{
+use crate::common::response_helpers::assert_ok;
+use crate::common::test_server::{
     TestServer, TestServerConfig, is_error, parse_integer, parse_simple_string,
 };
 use frogdb_protocol::Response;
@@ -3237,7 +3236,7 @@ async fn test_replica_readonly_enforcement() {
     // Write commands should be rejected with READONLY error
     let set_resp = replica.send("SET", &["key1", "value1"]).await;
     assert!(is_error(&set_resp), "SET on replica should return error");
-    let err_msg = common::test_server::get_error_message(&set_resp).unwrap();
+    let err_msg = crate::common::test_server::get_error_message(&set_resp).unwrap();
     assert!(
         err_msg.starts_with("READONLY"),
         "Expected READONLY error, got: {}",
@@ -3246,7 +3245,7 @@ async fn test_replica_readonly_enforcement() {
 
     let del_resp = replica.send("DEL", &["key1"]).await;
     assert!(is_error(&del_resp), "DEL on replica should return error");
-    let err_msg = common::test_server::get_error_message(&del_resp).unwrap();
+    let err_msg = crate::common::test_server::get_error_message(&del_resp).unwrap();
     assert!(
         err_msg.starts_with("READONLY"),
         "Expected READONLY error, got: {}",
@@ -3255,7 +3254,7 @@ async fn test_replica_readonly_enforcement() {
 
     let zadd_resp = replica.send("ZADD", &["zkey", "1", "member1"]).await;
     assert!(is_error(&zadd_resp), "ZADD on replica should return error");
-    let err_msg = common::test_server::get_error_message(&zadd_resp).unwrap();
+    let err_msg = crate::common::test_server::get_error_message(&zadd_resp).unwrap();
     assert!(
         err_msg.starts_with("READONLY"),
         "Expected READONLY error, got: {}",

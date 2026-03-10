@@ -1,9 +1,8 @@
 //! Integration tests for Redis Functions (FUNCTION, FCALL, FCALL_RO).
 
-mod common;
 
 use bytes::Bytes;
-use common::test_server::{TestServer, TestServerConfig};
+use crate::common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
 use std::time::Duration;

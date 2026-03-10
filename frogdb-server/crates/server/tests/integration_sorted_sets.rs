@@ -1,9 +1,8 @@
 //! Integration tests for sorted set commands (ZADD, ZSCORE, ZRANGE, etc.)
 
-mod common;
 
 use bytes::Bytes;
-use common::test_server::{TestServer, TestServerConfig};
+use crate::common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
 use frogdb_server::config::server::SortedSetIndexConfig;
 use rstest::rstest;

@@ -3,9 +3,8 @@
 //! These tests verify that the debug HTTP server exposes the debug dashboard,
 //! static assets, JSON APIs, and HTML partials correctly.
 
-mod common;
 
-use common::test_server::TestServer;
+use crate::common::test_server::TestServer;
 use frogdb_protocol::Response;
 use reqwest::StatusCode;
 

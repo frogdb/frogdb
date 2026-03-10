@@ -1,8 +1,7 @@
 //! Integration tests for stream commands (XREAD, XREADGROUP with blocking).
 
-mod common;
 
-use common::test_server::TestServer;
+use crate::common::test_server::TestServer;
 use frogdb_protocol::Response;
 use std::time::Duration;
 use tokio::time::timeout;

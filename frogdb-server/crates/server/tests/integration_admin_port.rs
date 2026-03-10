@@ -5,9 +5,8 @@
 //! 2. Admin commands work on admin port
 //! 3. All commands work on regular port when admin port is disabled (backward compat)
 
-mod common;
 
-use common::test_server::{TestServer, get_error_message, is_error, is_ok};
+use crate::common::test_server::{TestServer, get_error_message, is_error, is_ok};
 
 // ============================================================================
 // Admin port enabled - blocking tests

@@ -1,10 +1,9 @@
 //! Integration tests for persistence: write → shutdown → restart → read cycles.
 
-mod common;
 
 use bytes::Bytes;
-use common::response_helpers::{assert_ok, unwrap_array, unwrap_bulk, unwrap_integer};
-use common::test_server::{TestServer, TestServerConfig};
+use crate::common::response_helpers::{assert_ok, unwrap_array, unwrap_bulk, unwrap_integer};
+use crate::common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
 use std::time::Duration;
 

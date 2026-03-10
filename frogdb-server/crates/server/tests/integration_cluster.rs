@@ -8,7 +8,6 @@
 //! responses. These tests verify the harness works correctly and will be enabled
 //! once the cluster state machine is integrated with the CLUSTER commands.
 
-mod common;
 
 use frogdb_test_harness::cluster_harness::{ClusterNodeConfig, ClusterTestHarness};
 use frogdb_test_harness::cluster_helpers::{

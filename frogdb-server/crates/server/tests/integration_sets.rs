@@ -1,9 +1,8 @@
 //! Integration tests for set commands (SADD, SMEMBERS, SINTER, SUNION, etc.)
 
-mod common;
 
 use bytes::Bytes;
-use common::test_server::TestServer;
+use crate::common::test_server::TestServer;
 use frogdb_protocol::Response;
 
 #[tokio::test]

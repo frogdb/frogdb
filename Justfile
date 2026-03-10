@@ -63,8 +63,8 @@ test crate="" pattern="":
 
 # Run concurrency tests (Shuttle + Turmoil)
 concurrency:
-    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-core --features shuttle --test concurrency
-    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil --test simulation
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'
 
 # Run the full test suite (unit + integration + concurrency + simulation)
 test-all: test concurrency

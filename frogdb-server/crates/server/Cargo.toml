@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "FrogDB server binary"
+autotests = false
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
 
 [[bin]]
 name = "frogdb-server"

@@ -1,8 +1,7 @@
 //! Integration tests for HTTP metrics and health endpoints.
 
-mod common;
 
-use common::test_server::TestServer;
+use crate::common::test_server::TestServer;
 use frogdb_protocol::Response;
 use frogdb_telemetry::assert_gauge_gte;
 use frogdb_telemetry::testing::{get_counter, get_histogram_count};
