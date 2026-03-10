@@ -61,7 +61,7 @@ impl ShardWorker {
                 self.identity.num_shards,
                 conn_id,
                 protocol_version,
-                None, // replication_tracker - not available in shard
+                self.cluster.replication_tracker.as_ref(),
                 None, // replication_state - not available in shard
                 self.cluster.cluster_state.as_ref(),
                 self.cluster.node_id,
@@ -71,6 +71,9 @@ impl ShardWorker {
             );
             ctx.command_registry = Some(&self.registry);
             ctx.is_replica = self.identity.is_replica.load(std::sync::atomic::Ordering::Relaxed);
+            ctx.is_replica_flag = Some(self.identity.is_replica.clone());
+            ctx.master_host = self.identity.master_host.clone();
+            ctx.master_port = self.identity.master_port;
 
             let response = match handler.execute(&mut ctx, &command.args) {
                 Ok(response) => response,

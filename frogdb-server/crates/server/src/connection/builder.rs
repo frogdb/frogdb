@@ -261,6 +261,6 @@ pub fn standalone_config(num_shards: usize) -> ConnectionConfig {
         hotshards_config: HotShardConfig::default(),
         memory_diag_config: MemoryDiagConfig::default(),
         per_request_spans: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        is_replica: false,
+        is_replica: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }

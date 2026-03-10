@@ -11,7 +11,7 @@ use crate::eviction::{EvictionConfig, EvictionPool};
 use crate::latency::LatencyMonitor;
 use crate::persistence::{RocksStore, RocksWalWriter, SnapshotCoordinator};
 use crate::registry::CommandRegistry;
-use crate::replication::SharedBroadcaster;
+use crate::replication::{ReplicationTrackerImpl, SharedBroadcaster};
 use crate::scripting::ScriptingConfig;
 use crate::slowlog::SlowLog;
 
@@ -27,6 +27,10 @@ pub(crate) struct ShardIdentity {
     pub shard_id: usize,
     pub num_shards: usize,
     pub is_replica: Arc<AtomicBool>,
+    /// Primary host (set when this server is a replica).
+    pub master_host: Option<String>,
+    /// Primary port (set when this server is a replica).
+    pub master_port: Option<u16>,
 }
 
 /// Observability: metrics, slowlog, latency, counters, queue depth, peak memory.
@@ -69,13 +73,14 @@ pub(crate) struct ShardVll {
     pub pending_continuation_release: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
-/// Cluster: raft, cluster state, node ID, network factory, quorum checker.
+/// Cluster: raft, cluster state, node ID, network factory, quorum checker, replication.
 pub(crate) struct ShardCluster {
     pub raft: Option<Arc<ClusterRaft>>,
     pub cluster_state: Option<Arc<ClusterState>>,
     pub node_id: Option<u64>,
     pub network_factory: Option<Arc<ClusterNetworkFactory>>,
     pub quorum_checker: Option<Arc<dyn QuorumChecker>>,
+    pub replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
 }
 
 // ============================================================================

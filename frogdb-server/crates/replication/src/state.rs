@@ -36,6 +36,14 @@ pub struct ReplicationState {
     /// Replicas can use secondary_id for PSYNC if their offset is <= this value.
     #[serde(default)]
     pub secondary_offset: i64,
+
+    /// Primary host (runtime-only, not persisted). Set when running as a replica.
+    #[serde(skip)]
+    pub master_host: Option<String>,
+
+    /// Primary port (runtime-only, not persisted). Set when running as a replica.
+    #[serde(skip)]
+    pub master_port: Option<u16>,
 }
 
 impl Default for ReplicationState {
@@ -52,6 +60,8 @@ impl ReplicationState {
             secondary_id: None,
             replication_offset: 0,
             secondary_offset: -1,
+            master_host: None,
+            master_port: None,
         }
     }
 

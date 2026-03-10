@@ -168,7 +168,8 @@ pub struct ConnectionConfig {
     pub per_request_spans: Arc<AtomicBool>,
 
     /// Whether this server is a replica (rejects write commands from clients).
-    pub is_replica: bool,
+    /// Shared across all connections so REPLICAOF NO ONE takes effect immediately.
+    pub is_replica: Arc<AtomicBool>,
 }
 
 impl ConnectionConfig {
@@ -184,7 +185,7 @@ impl ConnectionConfig {
             hotshards_config: HotShardConfig::default(),
             memory_diag_config: MemoryDiagConfig::default(),
             per_request_spans: Arc::new(AtomicBool::new(false)),
-            is_replica: false,
+            is_replica: Arc::new(AtomicBool::new(false)),
         }
     }
 }

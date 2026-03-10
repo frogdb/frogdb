@@ -186,6 +186,11 @@ pub struct Server {
 
     /// Shared replication offset for cluster bus HealthProbe responses.
     shared_replication_offset: Option<Arc<AtomicU64>>,
+
+    /// Shared is_replica flag. Toggled by REPLICAOF NO ONE to promote from
+    /// replica to primary. Shared across all shard workers, acceptors, and
+    /// connection handlers.
+    is_replica_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Server {
@@ -1051,6 +1056,13 @@ impl Server {
             (None, None)
         };
 
+        // Create shared is_replica flag. This single AtomicBool is shared by all
+        // shard workers, the acceptor, and all connection handlers. REPLICAOF NO ONE
+        // toggles this flag to promote from replica to primary server-wide.
+        let is_replica_flag = Arc::new(std::sync::atomic::AtomicBool::new(
+            config.replication.is_replica(),
+        ));
+
         for (shard_id, (msg_rx, conn_rx)) in shard_receivers
             .into_iter()
             .zip(new_conn_receivers.into_iter())
@@ -1123,9 +1135,20 @@ impl Server {
                 worker.set_quorum_checker(rqc.clone());
             }
 
-            // Mark shard as replica if configured
+            // Share the server-wide is_replica flag with this shard worker
+            worker.set_is_replica_flag(is_replica_flag.clone());
+
+            // Share replication tracker with shard workers for INFO replication
+            if let Some(ref tracker) = replication_tracker {
+                worker.set_replication_tracker(tracker.clone());
+            }
+
+            // Set master address on replica shard workers for INFO replication
             if config.replication.is_replica() {
-                worker.set_is_replica(true);
+                worker.set_master_address(
+                    config.replication.primary_host.clone(),
+                    config.replication.primary_port,
+                );
             }
 
             // Share the per-request spans toggle with shard workers
@@ -1226,6 +1249,7 @@ impl Server {
             conn_monitor: Some(conn_monitor),
             _task_monitor_handle: Some(task_monitor_handle),
             shared_replication_offset,
+            is_replica_flag,
         })
     }
 
@@ -1609,8 +1633,9 @@ impl Server {
 
             // Spawn frame consumer task (applies replicated commands to shards)
             let executor = ReplicaCommandExecutor::new(shard_senders, num_shards);
+            let is_replica_for_consumer = self.is_replica_flag.clone();
             let frame_consumer_handle = spawn(async move {
-                consume_frames(frame_rx, executor).await;
+                consume_frames(frame_rx, executor, is_replica_for_consumer).await;
             });
 
             info!("Replica replication tasks started");
@@ -1653,7 +1678,6 @@ impl Server {
 
         // Create main acceptor (regular client connections)
         // When admin port is enabled, this acceptor blocks admin commands
-        let is_replica = self.config.replication.is_replica();
         let acceptor = Acceptor::new(
             self.listener,
             self.new_conn_senders.clone(),
@@ -1680,7 +1704,7 @@ impl Server {
             self.raft.clone(),
             self.network_factory.clone(),
             self.primary_replication_handler.clone(),
-            is_replica,
+            self.is_replica_flag.clone(),
             quorum_checker.clone(),
             self.conn_monitor.clone(),
             pubsub_forwarder.clone(),
@@ -1722,7 +1746,7 @@ impl Server {
                 self.raft.clone(),
                 self.network_factory.clone(),
                 self.primary_replication_handler.clone(),
-                is_replica,
+                self.is_replica_flag.clone(),
                 quorum_checker.clone(),
                 self.conn_monitor.clone(),
                 pubsub_forwarder.clone(),

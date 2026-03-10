@@ -193,6 +193,15 @@ impl FailureDetector {
             Ok(_) => {
                 tracing::warn!(node_id, "Marked node as FAIL via Raft");
 
+                // Increment epoch for the topology change
+                if let Err(e) = self
+                    .raft
+                    .client_write(ClusterCommand::IncrementEpoch)
+                    .await
+                {
+                    tracing::warn!(error = %e, "Failed to increment epoch after node failure");
+                }
+
                 // Trigger automatic failover if enabled
                 if self.config.auto_failover {
                     self.trigger_auto_failover(node_id).await;
@@ -321,6 +330,15 @@ impl FailureDetector {
             if let Err(e) = self.raft.client_write(cmd).await {
                 tracing::error!(error = %e, slot_range = ?range, "Failed to transfer slots during auto-failover");
             }
+        }
+
+        // Increment config epoch to signal the cluster topology change
+        if let Err(e) = self
+            .raft
+            .client_write(ClusterCommand::IncrementEpoch)
+            .await
+        {
+            tracing::error!(error = %e, "Failed to increment epoch during auto-failover");
         }
 
         tracing::info!(new_primary = new_primary.id, "Automatic failover completed");

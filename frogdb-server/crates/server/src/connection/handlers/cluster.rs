@@ -142,6 +142,11 @@ impl ConnectionHandler {
             }
         }
 
+        // 3. Increment config epoch to signal the cluster topology change
+        if let Err(e) = raft.client_write(ClusterCommand::IncrementEpoch).await {
+            tracing::warn!(error = %e, "Failed to increment epoch during failover");
+        }
+
         tracing::info!(
             new_primary = replica_id,
             old_primary = primary_id,

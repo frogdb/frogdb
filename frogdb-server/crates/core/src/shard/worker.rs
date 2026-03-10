@@ -108,6 +108,15 @@ impl ShardWorker {
         self.identity.is_replica.clone()
     }
 
+    /// Replace this shard's is_replica flag with a shared one.
+    ///
+    /// This allows all shards, the acceptor, and connection handlers to share
+    /// a single `Arc<AtomicBool>` so that `REPLICAOF NO ONE` can toggle replica
+    /// status server-wide with a single atomic store.
+    pub fn set_is_replica_flag(&mut self, flag: Arc<AtomicBool>) {
+        self.identity.is_replica = flag;
+    }
+
     /// Create a new shard worker without persistence.
     pub fn new(
         shard_id: usize,
@@ -164,6 +173,8 @@ impl ShardWorker {
                 shard_id,
                 num_shards,
                 is_replica: Arc::new(AtomicBool::new(false)),
+                master_host: None,
+                master_port: None,
             },
             store: HashMapStore::new(),
             message_rx,
@@ -205,6 +216,7 @@ impl ShardWorker {
                 node_id: None,
                 network_factory: None,
                 quorum_checker: None,
+                replication_tracker: None,
             },
             subscriptions: ShardSubscriptions::new(),
             script_executor,
@@ -259,6 +271,8 @@ impl ShardWorker {
                 shard_id,
                 num_shards,
                 is_replica: Arc::new(AtomicBool::new(false)),
+                master_host: None,
+                master_port: None,
             },
             store,
             message_rx,
@@ -300,6 +314,7 @@ impl ShardWorker {
                 node_id: None,
                 network_factory: None,
                 quorum_checker: None,
+                replication_tracker: None,
             },
             subscriptions: ShardSubscriptions::new(),
             script_executor,
@@ -343,6 +358,17 @@ impl ShardWorker {
     /// Set the quorum checker for local cluster health detection.
     pub fn set_quorum_checker(&mut self, quorum_checker: Arc<dyn QuorumChecker>) {
         self.cluster.quorum_checker = Some(quorum_checker);
+    }
+
+    /// Set the replication tracker for INFO replication / WAIT support.
+    pub fn set_replication_tracker(&mut self, tracker: Arc<crate::replication::ReplicationTrackerImpl>) {
+        self.cluster.replication_tracker = Some(tracker);
+    }
+
+    /// Set the primary address for INFO replication (replica mode).
+    pub fn set_master_address(&mut self, host: String, port: u16) {
+        self.identity.master_host = Some(host);
+        self.identity.master_port = Some(port);
     }
 
     /// Get the snapshot coordinator.

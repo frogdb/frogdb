@@ -164,7 +164,15 @@ impl TestServer {
             .unwrap()
             .as_nanos();
 
-        let dir = PathBuf::from(format!("/tmp/claude/frogdb_test_{}_{}", timestamp, id));
+        // Nest the actual data dir one level deep so that each test server
+        // has its own isolated parent directory.  The replication checkpoint
+        // staging area (`checkpoint_ready`) is placed as a sibling of the
+        // data dir (in its parent), so without isolation parallel tests race
+        // on a shared `/tmp/claude/checkpoint_ready`.
+        let dir = PathBuf::from(format!(
+            "/tmp/claude/frogdb_test_{}_{}/data",
+            timestamp, id
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -575,7 +583,9 @@ impl TestServer {
     }
 
     /// Shutdown the test server (non-consuming).
-    /// Shuts down raft first if present, then sends the shutdown signal.
+    /// Shuts down raft first if present, then sends the shutdown signal
+    /// and waits for the server task to fully complete (including RocksDB
+    /// flush and lock release).
     pub async fn shutdown_mut(&mut self) {
         if let Some(ref raft) = self.raft {
             let _ = raft.shutdown().await;
@@ -583,8 +593,10 @@ impl TestServer {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
-        // Give the server a moment to shut down gracefully
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Wait for the server task to fully complete so all resources
+        // (RocksDB locks, file handles, etc.) are released before any
+        // restart on the same data directory.
+        let _ = timeout(Duration::from_secs(10), &mut self.handle).await;
     }
 
     /// Shutdown the test server (consuming).

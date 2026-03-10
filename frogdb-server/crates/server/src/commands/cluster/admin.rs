@@ -157,6 +157,20 @@ pub(super) fn cluster_addslots(
         parsed_slots.push(slot);
     }
 
+    // Redis-compatible check: reject if any slot is already assigned (even to this node).
+    // Internal slot transfers (failover, migration) bypass this by using Raft directly.
+    if let Some(cluster_state) = &ctx.cluster_state {
+        let snapshot = cluster_state.snapshot();
+        for &slot in &parsed_slots {
+            if let Some(owner) = snapshot.get_slot_owner(slot) {
+                return Ok(Response::error(format!(
+                    "ERR Slot {} is already busy (owned by node {})",
+                    slot, owner
+                )));
+            }
+        }
+    }
+
     // Return RaftNeeded - the connection handler will execute this asynchronously
     Ok(Response::RaftNeeded {
         op: RaftClusterOp::AssignSlots {

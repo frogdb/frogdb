@@ -37,7 +37,7 @@ impl Command for ReplicaofCommand {
         CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::STALE
     }
 
-    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() != 2 {
             return Err(CommandError::WrongArity {
                 command: "replicaof",
@@ -54,13 +54,16 @@ impl Command for ReplicaofCommand {
 
         // Check for "NO ONE" to stop replication
         if arg1.eq_ignore_ascii_case("no") && arg2.eq_ignore_ascii_case("one") {
-            // Stop replication, become standalone
-            // Note: The actual state change will be handled by the server's
-            // replication manager which has access to the connection state
-            tracing::info!("REPLICAOF NO ONE - stopping replication");
+            // Stop replication, become standalone primary
+            tracing::info!("REPLICAOF NO ONE - stopping replication, promoting to primary");
 
-            // Return OK - the actual reconfiguration happens asynchronously
-            // The server's replication manager will pick up this change
+            // Clear the replica flag so ROLE, INFO, and write guards
+            // all reflect the new primary status immediately.
+            ctx.is_replica = false;
+            if let Some(ref flag) = ctx.is_replica_flag {
+                flag.store(false, std::sync::atomic::Ordering::Release);
+            }
+
             return Ok(Response::ok());
         }
 

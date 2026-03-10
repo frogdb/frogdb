@@ -178,7 +178,8 @@ pub struct ConnectionHandler {
     per_request_spans: Arc<std::sync::atomic::AtomicBool>,
 
     /// Whether this server is a replica (rejects write commands from clients).
-    is_replica: bool,
+    /// Shared across all connections so REPLICAOF NO ONE takes effect immediately.
+    is_replica: Arc<std::sync::atomic::AtomicBool>,
 
     /// Optional quorum checker for self-fencing (write rejection on quorum loss).
     quorum_checker: Option<Arc<dyn QuorumChecker>>,
@@ -360,7 +361,7 @@ impl ConnectionHandler {
             hotshards_config,
             memory_diag_config,
             per_request_spans: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            is_replica: false,
+            is_replica: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let observability = ObservabilityDeps {
             shared_tracer,

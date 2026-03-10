@@ -280,7 +280,11 @@ impl ClusterState {
                 source_node,
                 target_node,
             } => {
-                if inner.migrations.contains_key(&slot) {
+                // Idempotent: if the exact same migration is already in progress, succeed.
+                if let Some(existing) = inner.migrations.get(&slot) {
+                    if existing.source_node == source_node && existing.target_node == target_node {
+                        return Ok(ClusterResponse::Ok);
+                    }
                     return Err(ClusterError::MigrationInProgress(slot));
                 }
 

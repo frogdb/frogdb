@@ -139,11 +139,15 @@ impl ReplicaReplicationHandler {
     pub fn new(
         primary_addr: SocketAddr,
         listening_port: u16,
-        state: ReplicationState,
+        mut state: ReplicationState,
         data_dir: PathBuf,
     ) -> (Self, mpsc::Receiver<ReplicationFrame>) {
         let (frame_tx, frame_rx) = mpsc::channel(10000);
         let (shutdown, _) = tokio::sync::watch::channel(false);
+
+        // Set master_host/master_port in the replication state for INFO replication
+        state.master_host = Some(primary_addr.ip().to_string());
+        state.master_port = Some(primary_addr.port());
 
         let handler = Self {
             primary_addr,

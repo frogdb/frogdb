@@ -1,6 +1,7 @@
 //! Command trait and related types.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use bitflags::bitflags;
@@ -499,6 +500,19 @@ pub struct CommandContext<'a> {
     /// Used by ROLE and INFO replication to report the correct role.
     pub is_replica: bool,
 
+    /// Shared flag for the server's replica status.
+    ///
+    /// Commands like REPLICAOF NO ONE can set this to update the server-wide
+    /// replica status atomically. This is the same `Arc<AtomicBool>` shared
+    /// by shard workers, the acceptor, and all connection handlers.
+    pub is_replica_flag: Option<Arc<AtomicBool>>,
+
+    /// Primary host (set when running as a replica, for INFO replication).
+    pub master_host: Option<String>,
+
+    /// Primary port (set when running as a replica, for INFO replication).
+    pub master_port: Option<u16>,
+
     /// Number of dirty changes made by this command (for rdb_changes_since_last_save).
     ///
     /// Defaults to 0. Write commands that modify data should set this to indicate
@@ -536,6 +550,9 @@ impl<'a> CommandContext<'a> {
             quorum_checker: None,
             command_registry: None,
             is_replica: false,
+            is_replica_flag: None,
+            master_host: None,
+            master_port: None,
             dirty_delta: 0,
         }
     }
@@ -573,6 +590,9 @@ impl<'a> CommandContext<'a> {
             quorum_checker,
             command_registry: None,
             is_replica: false,
+            is_replica_flag: None,
+            master_host: None,
+            master_port: None,
             dirty_delta: 0,
         }
     }

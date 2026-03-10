@@ -190,6 +190,12 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
         // Check if we can form a quorum with reachable nodes (local perspective)
         let has_local_quorum = ctx.quorum_checker.map(|qc| qc.has_quorum()).unwrap_or(true); // If no quorum checker, assume healthy
 
+        // Extract Raft term to incorporate into epoch (leader elections bump the term)
+        let raft_term: u64 = ctx
+            .raft
+            .map(|r| r.metrics().borrow().current_term)
+            .unwrap_or(0);
+
         let cluster_state_str = if has_failed_primary || !has_local_quorum {
             "fail"
         } else if let Some(raft) = ctx.raft {
@@ -215,6 +221,11 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             "ok" // No Raft = standalone mode, always ok
         };
 
+        // Effective epoch: max of config epoch and Raft term.  Raft leader
+        // elections bump the term, which represents a cluster topology event
+        // (new coordinator), matching Redis's epoch-on-failover semantics.
+        let effective_epoch = snapshot.config_epoch.max(raft_term);
+
         let info = format!(
             "\
 cluster_state:{}\r\n\
@@ -238,7 +249,7 @@ total_cluster_links_buffer_limit_exceeded:0\r\n",
             slots_assigned, // slots_ok = slots_assigned for now
             known_nodes,
             cluster_size,
-            snapshot.config_epoch,
+            effective_epoch,
             my_epoch,
         );
 

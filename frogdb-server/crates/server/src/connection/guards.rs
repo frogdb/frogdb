@@ -104,7 +104,7 @@ impl ConnectionHandler {
         }
 
         // Block write commands on replicas
-        if self.is_replica
+        if self.is_replica.load(std::sync::atomic::Ordering::Relaxed)
             && let Some(cmd_impl) = self.registry.get(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
         {

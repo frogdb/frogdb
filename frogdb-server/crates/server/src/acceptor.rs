@@ -131,7 +131,8 @@ pub struct Acceptor {
     per_request_spans: Arc<std::sync::atomic::AtomicBool>,
 
     /// Whether this server is a replica (rejects write commands from clients).
-    is_replica: bool,
+    /// Shared across all connections so REPLICAOF NO ONE takes effect immediately.
+    is_replica: Arc<std::sync::atomic::AtomicBool>,
 
     /// Optional quorum checker for self-fencing (write rejection on quorum loss).
     quorum_checker: Option<Arc<dyn QuorumChecker>>,
@@ -175,7 +176,7 @@ impl Acceptor {
         raft: Option<Arc<ClusterRaft>>,
         network_factory: Option<Arc<ClusterNetworkFactory>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
-        is_replica: bool,
+        is_replica: Arc<std::sync::atomic::AtomicBool>,
         quorum_checker: Option<Arc<dyn QuorumChecker>>,
         conn_monitor: Option<tokio_metrics::TaskMonitor>,
         pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
@@ -303,7 +304,7 @@ impl Acceptor {
                         hotshards_config: self.hotshards_config.clone(),
                         memory_diag_config: self.memory_diag_config.clone(),
                         per_request_spans: self.per_request_spans.clone(),
-                        is_replica: self.is_replica,
+                        is_replica: self.is_replica.clone(),
                     };
                     let observability = ObservabilityDeps {
                         shared_tracer: self.shared_tracer.clone(),

@@ -10,6 +10,7 @@ use frogdb_core::{REPLICA_INTERNAL_CONN_ID, ReplicationFrame, ShardMessage, shar
 use frogdb_protocol::{ParsedCommand, ProtocolVersion};
 use redis_protocol::resp2::decode::decode_bytes_mut;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::{mpsc, oneshot};
 use tracing;
 
@@ -123,6 +124,7 @@ pub fn parse_frame_payload(payload: &[u8]) -> Result<ParsedCommand, ReplicationE
 pub async fn consume_frames(
     mut frame_rx: mpsc::Receiver<ReplicationFrame>,
     executor: ReplicaCommandExecutor,
+    is_replica_flag: Arc<AtomicBool>,
 ) {
     tracing::info!("Replica frame consumer started");
 
@@ -130,6 +132,11 @@ pub async fn consume_frames(
     let mut errors: u64 = 0;
 
     while let Some(frame) = frame_rx.recv().await {
+        // Stop consuming frames if we've been promoted to primary
+        if !is_replica_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::info!("Replica promoted to primary, stopping frame consumer");
+            break;
+        }
         match parse_frame_payload(&frame.payload) {
             Ok(cmd) => {
                 let cmd_name = String::from_utf8_lossy(&cmd.name).to_uppercase();

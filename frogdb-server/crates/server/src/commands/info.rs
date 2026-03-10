@@ -420,10 +420,25 @@ fn build_replication_info(ctx: &CommandContext) -> String {
         // Standalone mode or replica mode - return default info
         let role = if ctx.is_replica { "slave" } else { "master" };
         let repl_id = format!("{:040x}", ctx.node_id.unwrap_or(0));
-        format!(
+        let mut info = format!(
             "# Replication\r\n\
-             role:{}\r\n\
-             connected_slaves:0\r\n\
+             role:{}\r\n",
+            role,
+        );
+
+        // For replicas, include master_host, master_port, and master_link_status
+        if ctx.is_replica {
+            if let Some(ref host) = ctx.master_host {
+                info.push_str(&format!("master_host:{}\r\n", host));
+            }
+            if let Some(port) = ctx.master_port {
+                info.push_str(&format!("master_port:{}\r\n", port));
+            }
+            info.push_str("master_link_status:up\r\n");
+        }
+
+        info.push_str(&format!(
+            "connected_slaves:0\r\n\
              master_failover_state:no-failover\r\n\
              master_replid:{}\r\n\
              master_replid2:0000000000000000000000000000000000000000\r\n\
@@ -433,8 +448,10 @@ fn build_replication_info(ctx: &CommandContext) -> String {
              repl_backlog_size:1048576\r\n\
              repl_backlog_first_byte_offset:0\r\n\
              repl_backlog_histlen:0\r\n\r\n",
-            role, repl_id,
-        )
+            repl_id,
+        ));
+
+        info
     }
 }
 
