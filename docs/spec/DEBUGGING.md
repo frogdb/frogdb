@@ -552,27 +552,11 @@ info threads               # See all thread states
 thread apply all bt        # Backtrace for all threads
 ```
 
-### DTrace/USDT Probes `[FrogDB]` **[Not Yet Implemented]**
+### DTrace/USDT Probes `[FrogDB]`
 
-> The USDT probe infrastructure described below is an aspirational design. The `usdt` Cargo feature does not yet exist in the codebase.
-
-FrogDB can be compiled with USDT (User Statically Defined Tracing) probes for zero-overhead-when-disabled tracing.
-
-#### Enabling USDT Probes
-
-```toml
-# Cargo.toml
-[features]
-usdt = ["dep:usdt"]
-
-[dependencies]
-usdt = { version = "0.5", optional = true }
-```
-
-Build:
-```bash
-cargo build --release --features usdt
-```
+FrogDB includes always-on USDT (User Statically Defined Tracing) probes. When no tracer is
+attached, each probe is a single NOP instruction with zero runtime overhead. No feature flags
+or special build options are needed.
 
 #### Probe Definitions
 
@@ -618,16 +602,10 @@ frogdb:::shard-message-sent {
 
 #### Registering Probes
 
-Probes must be registered at startup:
+Probes are registered unconditionally at server startup in `main.rs`:
 
 ```rust
-fn main() {
-    // Register USDT probes with the system
-    #[cfg(feature = "usdt")]
-    frogdb::probes::register().expect("Failed to register USDT probes");
-
-    // Start server...
-}
+frogdb_core::probes::register().expect("Failed to register USDT probes");
 ```
 
 ### eBPF/bpftrace (Linux)

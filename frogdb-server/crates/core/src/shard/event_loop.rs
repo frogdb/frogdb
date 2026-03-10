@@ -33,6 +33,13 @@ impl ShardWorker {
 
                 // Handle shard messages
                 Some(msg) = self.message_rx.recv() => {
+                    // Fire USDT probe: shard-message-received
+                    crate::probes::fire_shard_message_received(
+                        self.shard_id() as u64,
+                        msg.probe_type_str(),
+                        self.message_rx.len() as u64,
+                    );
+
                     match msg {
                         ShardMessage::Execute { command, conn_id, txid: _, protocol_version, response_tx } => {
                             // Check if this connection can execute during continuation lock
@@ -98,6 +105,11 @@ impl ShardWorker {
                         }
                         ShardMessage::Publish { channel, message, response_tx } => {
                             let count = self.subscriptions.publish(&channel, &message);
+                            // Fire USDT probe: pubsub-publish
+                            crate::probes::fire_pubsub_publish(
+                                std::str::from_utf8(&channel).unwrap_or("<binary>"),
+                                count as u64,
+                            );
                             let _ = response_tx.send(count);
                         }
                         ShardMessage::ShardedSubscribe { channels, conn_id, sender, response_tx } => {
@@ -371,6 +383,13 @@ impl ShardWorker {
             // Delete the key
             if self.store.delete(&key) {
                 deleted_count += 1;
+
+                // Fire USDT probe: key-expired
+                crate::probes::fire_key_expired(
+                    std::str::from_utf8(&key).unwrap_or("<binary>"),
+                    self.shard_id() as u64,
+                );
+
                 tracing::trace!(
                     shard_id = self.shard_id(),
                     key = %String::from_utf8_lossy(&key),

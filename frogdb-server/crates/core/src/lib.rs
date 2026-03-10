@@ -22,6 +22,7 @@ pub mod latency;
 pub mod metrics;
 pub mod noop;
 pub mod persistence;
+pub mod probes;
 pub mod pubsub;
 pub mod registry;
 // Re-export frogdb-replication as the replication module for backward compatibility.

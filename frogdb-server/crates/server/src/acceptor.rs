@@ -254,6 +254,9 @@ impl Acceptor {
                         &[],
                     );
 
+                    // Fire USDT probe: connection-accept
+                    frogdb_core::probes::fire_connection_accept(conn_id, &addr.to_string());
+
                     debug!(
                         conn_id,
                         shard_id,

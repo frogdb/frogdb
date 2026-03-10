@@ -15,17 +15,6 @@ description, and a cross-reference to the relevant spec.
 
 ---
 
-## Spec-Described but Unimplemented
-
-Items described in spec documentation as if implemented, but not present in the codebase. Spec files
-have been annotated with `[Not Yet Implemented]` markers.
-
-| Item               | Description                                                                                                                                                                 | Spec                                                    |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| DTrace/USDT probes | `usdt` Cargo feature and probe definitions for zero-overhead tracing. Implementation exists on `origin/nathan/usdt-probes` but is not yet merged to main (may be unstable). | [DEBUGGING.md](../spec/DEBUGGING.md#dtrace-usdt-probes) |
-
----
-
 ## Stub / Unimplemented Commands
 
 | Command         | Status        | Notes                                                                               | Spec                                                                                               |

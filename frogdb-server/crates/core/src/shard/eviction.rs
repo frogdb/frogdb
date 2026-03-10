@@ -30,6 +30,13 @@ impl ShardWorker {
             return Ok(());
         }
 
+        // Fire USDT probe: memory-pressure
+        crate::probes::fire_memory_pressure(
+            self.store.memory_used() as u64,
+            self.eviction.memory_limit,
+            if self.eviction.config.policy == EvictionPolicy::NoEviction { "reject" } else { "evict" },
+        );
+
         // Try to evict if policy allows
         if self.eviction.config.policy == EvictionPolicy::NoEviction {
             tracing::warn!(
@@ -297,6 +304,13 @@ impl ShardWorker {
                     "frogdb_tiered_bytes_demoted_total",
                     bytes_freed as u64,
                     &[("shard", &shard_label)],
+                );
+
+                // Fire USDT probe: key-evicted
+                crate::probes::fire_key_evicted(
+                    std::str::from_utf8(key).unwrap_or("<binary>"),
+                    self.shard_id() as u64,
+                    &self.eviction.config.policy.to_string(),
                 );
 
                 tracing::debug!(
