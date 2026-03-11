@@ -615,28 +615,125 @@ async fn discard_should_not_fail_during_oom() {
     assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "0"]).await);
 }
 
+/// MULTI should succeed even while a script timeout is configured.
 #[tokio::test]
-#[ignore = "needs CONFIG SET lua-time-limit support"]
 async fn multi_and_script_timeout() {
-    todo!()
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Set a very low lua-time-limit
+    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "1"]).await);
+
+    // MULTI should work fine — the script timeout only applies during EVAL
+    assert_ok(&client.command(&["MULTI"]).await);
+    assert_ok(&client.command(&["DISCARD"]).await);
+
+    // Restore
+    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "5000"]).await);
 }
 
+/// Running a busy script via EVAL should time out when lua-time-limit is exceeded.
 #[tokio::test]
-#[ignore = "needs CONFIG SET lua-time-limit support"]
 async fn exec_and_script_timeout() {
-    todo!()
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Set a very low lua-time-limit (1ms)
+    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "1"]).await);
+
+    // Run an infinite-loop script — it should be killed by the timeout hook
+    let r = client
+        .command(&["EVAL", "while true do end", "0"])
+        .await;
+    match &r {
+        Response::Error(e) => {
+            let msg = String::from_utf8_lossy(e);
+            assert!(msg.contains("BUSY"), "expected BUSY error, got: {msg}");
+        }
+        other => panic!("expected error, got: {other:?}"),
+    }
+
+    // Restore
+    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "5000"]).await);
 }
 
+/// A busy script queued inside MULTI should time out at EXEC time.
 #[tokio::test]
-#[ignore = "needs CONFIG SET lua-time-limit support"]
 async fn multi_exec_body_and_script_timeout() {
-    todo!()
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Set a very low lua-time-limit (1ms)
+    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "1"]).await);
+
+    // Queue a busy script inside MULTI
+    assert_ok(&client.command(&["MULTI"]).await);
+    let r = client.command(&["EVAL", "while true do end", "0"]).await;
+    assert!(
+        matches!(&r, Response::Simple(s) if s == "QUEUED"),
+        "expected QUEUED, got {r:?}"
+    );
+
+    // EXEC should execute the script and hit the timeout
+    let r = client.command(&["EXEC"]).await;
+    match &r {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Error(e) => {
+                    let msg = String::from_utf8_lossy(e);
+                    assert!(msg.contains("BUSY"), "expected BUSY error, got: {msg}");
+                }
+                other => panic!("expected error in EXEC array, got: {other:?}"),
+            }
+        }
+        Response::Error(e) => {
+            // EXEC itself might return an error if the script blocks the shard
+            let msg = String::from_utf8_lossy(e);
+            assert!(msg.contains("BUSY"), "expected BUSY error, got: {msg}");
+        }
+        other => panic!("expected array or error, got: {other:?}"),
+    }
+
+    // Restore
+    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "5000"]).await);
 }
 
+/// Just EXEC with a script timeout configured — non-script commands should succeed.
 #[tokio::test]
-#[ignore = "needs CONFIG SET lua-time-limit support"]
 async fn just_exec_and_script_timeout() {
-    todo!()
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Set a very low lua-time-limit
+    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "1"]).await);
+
+    // Queue non-script commands in MULTI
+    assert_ok(&client.command(&["MULTI"]).await);
+    let r = client.command(&["SET", "{k}x", "hello"]).await;
+    assert!(
+        matches!(&r, Response::Simple(s) if s == "QUEUED"),
+        "expected QUEUED, got {r:?}"
+    );
+    let r = client.command(&["GET", "{k}x"]).await;
+    assert!(
+        matches!(&r, Response::Simple(s) if s == "QUEUED"),
+        "expected QUEUED, got {r:?}"
+    );
+
+    // EXEC should succeed — the lua-time-limit only affects EVAL
+    let r = client.command(&["EXEC"]).await;
+    match &r {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 2);
+            assert_ok(&items[0]);
+            assert_eq!(&items[1], &Response::bulk("hello"));
+        }
+        other => panic!("expected array, got: {other:?}"),
+    }
+
+    // Restore
+    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "5000"]).await);
 }
 
 #[tokio::test]

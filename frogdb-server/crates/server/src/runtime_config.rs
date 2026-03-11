@@ -9,7 +9,7 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use frogdb_core::{EvictionConfig, EvictionPolicy, ShardMessage, glob_match};
 use tokio::sync::{mpsc, oneshot};
@@ -183,6 +183,8 @@ pub struct ConfigManager {
     /// Whether per-request tracing spans are enabled.
     /// Shared with all connections and shard workers via Arc.
     per_request_spans: Arc<AtomicBool>,
+    /// Shared lua-time-limit value (readable by LuaVm timeout hooks).
+    lua_time_limit: Arc<AtomicU64>,
     /// Parameter metadata registry.
     params: Vec<ParamMeta>,
     /// Optional notifier for shard config updates.
@@ -200,6 +202,7 @@ impl ConfigManager {
             static_config,
             log_reload_handle: None,
             per_request_spans: Arc::new(AtomicBool::new(config.logging.per_request_spans)),
+            lua_time_limit: Arc::new(AtomicU64::new(5000)),
             params: Self::build_param_registry(),
             shard_notifier: RwLock::new(None),
         }
@@ -571,9 +574,16 @@ impl ConfigManager {
             ParamMeta {
                 name: "lua-time-limit",
                 mutable: true,
-                noop: true,
-                getter: |_| "5000".to_string(),
-                setter: Some(|_, _| Ok(())),
+                noop: false,
+                getter: |mgr| mgr.lua_time_limit.load(Ordering::Relaxed).to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "lua-time-limit".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.lua_time_limit.store(parsed, Ordering::Relaxed);
+                    Ok(())
+                }),
             },
             ParamMeta {
                 name: "busy-reply-threshold",
@@ -856,6 +866,11 @@ impl ConfigManager {
     /// Get the number of shards from static config.
     pub fn num_shards(&self) -> usize {
         self.static_config.num_shards
+    }
+
+    /// Get the shared lua-time-limit atomic for use in ScriptingConfig.
+    pub fn lua_time_limit(&self) -> Arc<AtomicU64> {
+        self.lua_time_limit.clone()
     }
 
     /// Set a config parameter, notifying shards if needed (async).

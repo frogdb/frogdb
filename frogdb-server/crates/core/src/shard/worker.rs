@@ -325,6 +325,20 @@ impl ShardWorker {
         }
     }
 
+    /// Replace the script executor with one using the given scripting config.
+    pub fn set_scripting_config(&mut self, config: ScriptingConfig) {
+        match ScriptExecutor::new(config) {
+            Ok(executor) => self.script_executor = Some(executor),
+            Err(e) => {
+                tracing::warn!(
+                    shard_id = self.identity.shard_id,
+                    error = %e,
+                    "Failed to reinitialize script executor with new config"
+                );
+            }
+        }
+    }
+
     /// Set the function registry for this shard.
     pub fn set_function_registry(&mut self, registry: SharedFunctionRegistry) {
         self.function_registry = Some(registry);

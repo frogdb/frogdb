@@ -1154,6 +1154,15 @@ impl Server {
             // Share the per-request spans toggle with shard workers
             worker.per_request_spans = config_manager.per_request_spans_flag();
 
+            // Set scripting config with shared lua-time-limit override
+            {
+                use frogdb_core::ScriptingConfig;
+                let mut scripting_config = ScriptingConfig::default();
+                scripting_config.lua_time_limit_override =
+                    Some(config_manager.lua_time_limit());
+                worker.set_scripting_config(scripting_config);
+            }
+
             let handle = spawn(shard_monitor.instrument(async move {
                 worker.run().await;
             }));

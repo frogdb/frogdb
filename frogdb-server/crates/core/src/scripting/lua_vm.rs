@@ -322,7 +322,7 @@ for _, k in ipairs(_keys) do _rawset(_G, k, nil) end
 
     /// Set up hook for timeout checking.
     fn setup_timeout_hook(&self, start_time: Instant) {
-        let timeout_ms = self.config.lua_time_limit_ms;
+        let timeout_ms = self.config.effective_lua_time_limit_ms();
         let grace_ms = self.config.lua_timeout_grace_ms;
         let kill_flag = self.kill_flag.clone();
 
@@ -364,7 +364,7 @@ for _, k in ipairs(_keys) do _rawset(_G, k, nil) end
             let mut state = self.state.try_lock_err()?;
             state.reset();
             state.start_time = Some(start_time);
-            state.timeout_ms = self.config.lua_time_limit_ms;
+            state.timeout_ms = self.config.effective_lua_time_limit_ms();
             state.grace_ms = self.config.lua_timeout_grace_ms;
             state.declared_keys = keys.to_vec();
         }
@@ -448,7 +448,7 @@ for _, k in ipairs(_keys) do _rawset(_G, k, nil) end
             mlua::Error::RuntimeError(msg) => {
                 if msg.contains("BUSY") {
                     ScriptError::Timeout {
-                        timeout_ms: self.config.lua_time_limit_ms,
+                        timeout_ms: self.config.effective_lua_time_limit_ms(),
                     }
                 } else if msg.contains("killed") {
                     ScriptError::Killed
