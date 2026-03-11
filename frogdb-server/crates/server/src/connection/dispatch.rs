@@ -452,6 +452,18 @@ impl ConnectionHandler {
         // Blocking commands (BLPOP, BRPOP, etc.) are also queued — at EXEC time they
         // execute with timeout=0 (non-blocking), matching Redis semantics.
         if self.state.transaction.queue.is_some() {
+            // Validate cluster slot ownership before queuing — commands that would
+            // get MOVED should fail immediately rather than succeeding at EXEC time.
+            if let Some(cluster_error) = self.validate_cluster_slots(cmd) {
+                self.state.transaction.exec_abort = true;
+                if let Response::Error(ref e) = cluster_error {
+                    self.state
+                        .transaction
+                        .queued_errors
+                        .push(String::from_utf8_lossy(e).to_string());
+                }
+                return vec![cluster_error];
+            }
             return vec![self.queue_command(cmd)];
         }
 

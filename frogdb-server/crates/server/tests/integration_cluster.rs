@@ -5774,7 +5774,6 @@ async fn test_cluster_info_gossip_stats_nonzero() {
 /// but validate_cluster_slots() in guards.rs doesn't consult it — it always
 /// returns MOVED for non-owned slots regardless of the READONLY flag.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: readonly flag not consulted in validate_cluster_slots (guards.rs:234)"]
 async fn test_readonly_allows_reads_on_non_owner_node() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -5830,7 +5829,6 @@ async fn test_readonly_allows_reads_on_non_owner_node() {
 
 /// Tests that READWRITE restores MOVED redirects after READONLY.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: readonly flag not consulted in validate_cluster_slots (guards.rs:234)"]
 async fn test_readwrite_restores_moved_redirects() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -6654,7 +6652,6 @@ async fn test_cluster_remains_writable_during_concurrent_writes_and_failover() {
 ///
 /// Inspired by Redis `16-transactions-on-replica.tcl`.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: READONLY flag not consulted during MULTI/EXEC — always returns MOVED"]
 async fn test_multi_exec_reads_succeed_on_replica_with_readonly() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -6715,7 +6712,6 @@ async fn test_multi_exec_reads_succeed_on_replica_with_readonly() {
 ///
 /// Inspired by Redis `16-transactions-on-replica.tcl`.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: READONLY flag not consulted during MULTI/EXEC — writes not differentiated"]
 async fn test_multi_exec_write_inside_readonly_session_returns_moved() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();

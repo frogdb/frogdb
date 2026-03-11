@@ -259,6 +259,18 @@ impl ConnectionHandler {
                     self.state.asking = false;
                 }
 
+                // READONLY mode: allow read-only commands to execute locally
+                // even though we don't own the slot (replica reads).
+                if self.state.readonly {
+                    let is_read_cmd = self
+                        .registry
+                        .get(&cmd_name)
+                        .is_some_and(|c| c.flags().contains(CommandFlags::READONLY));
+                    if is_read_cmd {
+                        return None; // Serve read locally
+                    }
+                }
+
                 if let Some(owner_node) = snapshot.nodes.get(&owner) {
                     Some(Response::error(format!(
                         "MOVED {} {}:{}",
