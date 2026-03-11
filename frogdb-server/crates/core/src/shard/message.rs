@@ -129,7 +129,7 @@ pub enum ShardMessage {
     // =========================================================================
     // Scripting messages
     // =========================================================================
-    /// Execute a Lua script (EVAL).
+    /// Execute a Lua script (EVAL / EVAL_RO).
     EvalScript {
         /// Script source code.
         script_source: Bytes,
@@ -141,11 +141,13 @@ pub enum ShardMessage {
         conn_id: u64,
         /// Protocol version for response encoding.
         protocol_version: ProtocolVersion,
+        /// Read-only mode (EVAL_RO) — rejects write commands in the script.
+        read_only: bool,
         /// Response channel.
         response_tx: oneshot::Sender<Response>,
     },
 
-    /// Execute a cached Lua script (EVALSHA).
+    /// Execute a cached Lua script (EVALSHA / EVALSHA_RO).
     EvalScriptSha {
         /// SHA1 hash of the script (hex string).
         script_sha: Bytes,
@@ -157,6 +159,8 @@ pub enum ShardMessage {
         conn_id: u64,
         /// Protocol version for response encoding.
         protocol_version: ProtocolVersion,
+        /// Read-only mode (EVALSHA_RO) — rejects write commands in the script.
+        read_only: bool,
         /// Response channel.
         response_tx: oneshot::Sender<Response>,
     },

@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::debug;
 
+use crate::connection::router::ConnectionLevelHandler;
 use crate::connection::state::TransactionTarget;
 use crate::connection::{
     ConnectionHandler, TransactionState, extract_subcommand, key_access_type_for_flags,
@@ -100,6 +101,25 @@ impl ConnectionHandler {
             return Response::Array(vec![]);
         }
 
+        // Partition commands into shard-executable and connection-level-deferred.
+        // Connection-level commands (CLIENT, CONFIG, INFO, etc.) can't execute on
+        // the shard — their Command::execute() is a placeholder. We extract them
+        // and run them after the shard transaction, matching Redis semantics where
+        // admin commands inside MULTI take effect after EXEC.
+        let mut shard_commands = Vec::new();
+        // (original_index, cmd_name, args) for deferred connection-level commands
+        let mut deferred: Vec<(usize, String, Vec<Bytes>)> = Vec::new();
+
+        for (i, cmd) in queue.iter().enumerate() {
+            let name = cmd.name_uppercase();
+            let name_str = String::from_utf8_lossy(&name).to_string();
+            if self.connection_level_handler_for(&name_str).is_some() {
+                deferred.push((i, name_str, cmd.args.clone()));
+            } else {
+                shard_commands.push(cmd.clone());
+            }
+        }
+
         // Get target shard
         let target_shard = match &self.state.transaction.target {
             TransactionTarget::None => {
@@ -122,74 +142,106 @@ impl ConnectionHandler {
         // Clear transaction state before executing
         self.clear_transaction_state();
 
-        // Send ExecTransaction to the target shard
-        let (response_tx, response_rx) = oneshot::channel();
+        // Execute shard commands (may be empty if all commands are connection-level)
+        let shard_results = if shard_commands.is_empty() {
+            // Check watches even with no shard commands
+            if !watches.is_empty() {
+                // Need the shard to check watches
+                let (response_tx, response_rx) = oneshot::channel();
+                let msg = ShardMessage::ExecTransaction {
+                    commands: vec![],
+                    watches,
+                    conn_id: self.state.id,
+                    protocol_version: self.state.protocol_version,
+                    response_tx,
+                };
+                if self.shard_senders[target_shard].send(msg).await.is_err() {
+                    record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                    return Response::error("ERR shard unavailable");
+                }
+                match response_rx.await {
+                    Ok(TransactionResult::WatchAborted) => {
+                        record_transaction_metrics(&self.metrics_recorder, "watch_aborted", queued_count, start_time);
+                        return Response::null();
+                    }
+                    Ok(TransactionResult::Error(e)) => {
+                        record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                        return Response::error(e);
+                    }
+                    Err(_) => {
+                        record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                        return Response::error("ERR shard dropped request");
+                    }
+                    Ok(TransactionResult::Success(_)) => {}
+                }
+            }
+            vec![]
+        } else {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ExecTransaction {
+                commands: shard_commands,
+                watches,
+                conn_id: self.state.id,
+                protocol_version: self.state.protocol_version,
+                response_tx,
+            };
 
-        let msg = ShardMessage::ExecTransaction {
-            commands: queue,
-            watches,
-            conn_id: self.state.id,
-            protocol_version: self.state.protocol_version,
-            response_tx,
+            if self.shard_senders[target_shard].send(msg).await.is_err() {
+                record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                return Response::error("ERR shard unavailable");
+            }
+
+            match response_rx.await {
+                Ok(TransactionResult::Success(results)) => results,
+                Ok(TransactionResult::WatchAborted) => {
+                    debug!(conn_id = self.state.id, "Transaction aborted due to WATCH conflict");
+                    record_transaction_metrics(&self.metrics_recorder, "watch_aborted", queued_count, start_time);
+                    return Response::null();
+                }
+                Ok(TransactionResult::Error(e)) => {
+                    record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                    return Response::error(e);
+                }
+                Err(_) => {
+                    record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                    return Response::error("ERR shard dropped request");
+                }
+            }
         };
 
-        if self.shard_senders[target_shard].send(msg).await.is_err() {
-            record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
-            return Response::error("ERR shard unavailable");
+        // Merge shard results with deferred connection-level command results.
+        // Execute deferred commands now (post-transaction, matching Redis semantics).
+        let mut final_results = Vec::with_capacity(queued_count);
+        let mut shard_idx = 0;
+
+        for i in 0..queued_count {
+            if let Some(pos) = deferred.iter().position(|(idx, ..)| *idx == i) {
+                let (_, ref name, ref args) = deferred[pos];
+                let response =
+                    self.execute_connection_level_in_transaction(name, args).await;
+                final_results.push(response);
+            } else {
+                final_results.push(shard_results[shard_idx].clone());
+                shard_idx += 1;
+            }
         }
 
-        // Wait for result
-        match response_rx.await {
-            Ok(TransactionResult::Success(results)) => {
-                let duration_ms = start_time
-                    .map(|s| s.elapsed().as_millis() as u64)
-                    .unwrap_or(0);
-                debug!(
-                    conn_id = self.state.id,
-                    commands_count = queued_count,
-                    duration_ms,
-                    "Transaction executed"
-                );
-                record_transaction_metrics(
-                    &self.metrics_recorder,
-                    "committed",
-                    queued_count,
-                    start_time,
-                );
-                Response::Array(results)
-            }
-            Ok(TransactionResult::WatchAborted) => {
-                debug!(
-                    conn_id = self.state.id,
-                    "Transaction aborted due to WATCH conflict"
-                );
-                record_transaction_metrics(
-                    &self.metrics_recorder,
-                    "watch_aborted",
-                    queued_count,
-                    start_time,
-                );
-                Response::null()
-            }
-            Ok(TransactionResult::Error(e)) => {
-                record_transaction_metrics(
-                    &self.metrics_recorder,
-                    "error",
-                    queued_count,
-                    start_time,
-                );
-                Response::error(e)
-            }
-            Err(_) => {
-                record_transaction_metrics(
-                    &self.metrics_recorder,
-                    "error",
-                    queued_count,
-                    start_time,
-                );
-                Response::error("ERR shard dropped request")
-            }
-        }
+        let duration_ms = start_time
+            .map(|s| s.elapsed().as_millis() as u64)
+            .unwrap_or(0);
+        debug!(
+            conn_id = self.state.id,
+            commands_count = queued_count,
+            duration_ms,
+            "Transaction executed"
+        );
+        record_transaction_metrics(
+            &self.metrics_recorder,
+            "committed",
+            queued_count,
+            start_time,
+        );
+        Response::Array(final_results)
     }
 
     /// Handle DISCARD command - abort the transaction.
@@ -383,5 +435,77 @@ impl ConnectionHandler {
         self.state.transaction.exec_abort = false;
         self.state.transaction.queued_errors.clear();
         // Note: watches are cleared separately, not here (they're consumed by EXEC)
+    }
+
+    /// Execute a connection-level command that was deferred from a transaction.
+    ///
+    /// This directly dispatches to the appropriate handler without going through
+    /// `dispatch_connection_level` (which would create a recursive async cycle
+    /// via dispatch_transaction → handle_exec).
+    async fn execute_connection_level_in_transaction(
+        &mut self,
+        cmd_name: &str,
+        args: &[Bytes],
+    ) -> Response {
+        let handler = match self.connection_level_handler_for(cmd_name) {
+            Some(h) => h,
+            None => return Response::ok(),
+        };
+        match handler {
+            ConnectionLevelHandler::Client => self.handle_client_command(args).await,
+            ConnectionLevelHandler::Config => self.handle_config_command(args).await,
+            ConnectionLevelHandler::Info => self.handle_info(args).await,
+            ConnectionLevelHandler::Slowlog => self.handle_slowlog_command(args).await,
+            ConnectionLevelHandler::Memory => self.handle_memory_command(args).await,
+            ConnectionLevelHandler::Latency => self.handle_latency_command(args).await,
+            ConnectionLevelHandler::Status => self.handle_status_command(args).await,
+            ConnectionLevelHandler::Scripting => {
+                match cmd_name {
+                    "EVAL" => self.handle_eval(args, false).await,
+                    "EVAL_RO" => self.handle_eval(args, true).await,
+                    "EVALSHA" => self.handle_evalsha(args, false).await,
+                    "EVALSHA_RO" => self.handle_evalsha(args, true).await,
+                    "SCRIPT" => self.handle_script(args).await,
+                    _ => Response::ok(),
+                }
+            }
+            ConnectionLevelHandler::Function => {
+                match cmd_name {
+                    "FCALL" => self.handle_fcall(args, false).await,
+                    "FCALL_RO" => self.handle_fcall(args, true).await,
+                    "FUNCTION" => self.handle_function(args).await,
+                    _ => Response::ok(),
+                }
+            }
+            ConnectionLevelHandler::Persistence => {
+                match cmd_name {
+                    "BGSAVE" => self.handle_bgsave(args),
+                    "LASTSAVE" => self.handle_lastsave(),
+                    _ => Response::ok(),
+                }
+            }
+            ConnectionLevelHandler::PubSub => {
+                match cmd_name {
+                    "PUBLISH" => self.handle_publish(args).await,
+                    _ => Response::error("ERR command not supported inside MULTI"),
+                }
+            }
+            ConnectionLevelHandler::ShardedPubSub => {
+                match cmd_name {
+                    "SPUBLISH" => self.handle_spublish(args).await,
+                    _ => Response::error("ERR command not supported inside MULTI"),
+                }
+            }
+            ConnectionLevelHandler::Debug => {
+                match self.dispatch_debug(args).await {
+                    Some(responses) => {
+                        responses.into_iter().next().unwrap_or_else(Response::ok)
+                    }
+                    None => Response::ok(),
+                }
+            }
+            // These shouldn't appear in a transaction but handle gracefully
+            _ => Response::ok(),
+        }
     }
 }

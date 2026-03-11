@@ -21,7 +21,7 @@ impl ConnectionHandler {
     /// Returns `Some(handler)` if the command declares a `ConnectionLevel` strategy,
     /// with the handler refined by command name (e.g., `Admin` + `CONFIG` → `Config`).
     /// Returns `None` if the command uses `Standard` or another non-connection-level strategy.
-    fn connection_level_handler_for(&self, cmd_name: &str) -> Option<ConnectionLevelHandler> {
+    pub(crate) fn connection_level_handler_for(&self, cmd_name: &str) -> Option<ConnectionLevelHandler> {
         let entry = self.registry.get_entry(cmd_name)?;
         match entry.execution_strategy() {
             ExecutionStrategy::ConnectionLevel(op) => Some(Self::refine_handler(&op, cmd_name)),
@@ -208,8 +208,10 @@ impl ConnectionHandler {
         args: &[Bytes],
     ) -> Option<Vec<Response>> {
         match cmd_name {
-            "EVAL" => Some(vec![self.handle_eval(args).await]),
-            "EVALSHA" => Some(vec![self.handle_evalsha(args).await]),
+            "EVAL" => Some(vec![self.handle_eval(args, false).await]),
+            "EVAL_RO" => Some(vec![self.handle_eval(args, true).await]),
+            "EVALSHA" => Some(vec![self.handle_evalsha(args, false).await]),
+            "EVALSHA_RO" => Some(vec![self.handle_evalsha(args, true).await]),
             "SCRIPT" => Some(vec![self.handle_script(args).await]),
             _ => None,
         }
@@ -226,7 +228,7 @@ impl ConnectionHandler {
     }
 
     /// Dispatch debug commands.
-    async fn dispatch_debug(&mut self, args: &[Bytes]) -> Option<Vec<Response>> {
+    pub(crate) async fn dispatch_debug(&mut self, args: &[Bytes]) -> Option<Vec<Response>> {
         if args.is_empty() {
             return None; // Fall through to standard routing
         }
@@ -432,8 +434,37 @@ impl ConnectionHandler {
             return responses;
         }
 
+        // Transaction control commands (MULTI/EXEC/DISCARD/WATCH/UNWATCH) are always
+        // dispatched directly, never queued or blocked by pause.
+        if matches!(cmd_name, "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH") {
+            if let Some(handler) = self.connection_level_handler_for(cmd_name)
+                && let Some(responses) = self
+                    .dispatch_connection_level(handler, cmd_name, &cmd.args)
+                    .await
+            {
+                return responses;
+            }
+        }
+
+        // If in transaction mode, queue the command instead of executing.
+        // This must happen BEFORE connection-level dispatch so that commands like
+        // CLIENT PAUSE, EVAL, etc. are queued during MULTI (not executed immediately).
+        if self.state.transaction.queue.is_some() {
+            // Check if it's a blocking command - not allowed in MULTI
+            if self.is_blocking_command(cmd_name) {
+                return vec![Response::error(
+                    "ERR Blocking commands are not allowed inside a transaction",
+                )];
+            }
+            return vec![self.queue_command(cmd)];
+        }
+
+        // Wait if server is paused (CLIENT PAUSE). This is checked AFTER transaction
+        // queuing so commands inside MULTI are queued without blocking.
+        self.wait_if_paused(cmd_name).await;
+
         // Category-based dispatch using registry-driven handler lookup
-        // This handles: pub/sub, transactions, scripting, functions, admin commands
+        // This handles: pub/sub, scripting, functions, admin commands
         if let Some(handler) = self.connection_level_handler_for(cmd_name)
             && let Some(responses) = self
                 .dispatch_connection_level(handler, cmd_name, &cmd.args)
@@ -453,19 +484,6 @@ impl ConnectionHandler {
             }
             // Execute PSYNC command which will return PSYNC_HANDOFF signal
             return vec![self.route_and_execute(cmd, cmd_name).await];
-        }
-
-        // If in transaction mode, queue the command instead of executing
-        // (must be checked BEFORE scatter-gather routing so FLUSHALL/FLUSHDB etc. get queued)
-        if self.state.transaction.queue.is_some() {
-            // Check if it's a blocking command - not allowed in MULTI
-            // Use execution_strategy() for type-safe blocking detection
-            if self.is_blocking_command(cmd_name) {
-                return vec![Response::error(
-                    "ERR Blocking commands are not allowed inside a transaction",
-                )];
-            }
-            return vec![self.queue_command(cmd)];
         }
 
         // Server-wide commands (registry-driven: SCAN, KEYS, DBSIZE, RANDOMKEY, FLUSHDB, FLUSHALL, MIGRATE, SHUTDOWN)

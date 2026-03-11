@@ -120,6 +120,84 @@ impl Command for EvalshaCommand {
     }
 }
 
+/// EVAL_RO command - execute a Lua script in read-only mode.
+///
+/// EVAL_RO script numkeys [key ...] [arg ...]
+///
+/// Identical to EVAL but declares read-only intent. This allows:
+/// - Execution on replicas in cluster mode
+/// - Not being blocked by CLIENT PAUSE WRITE
+pub struct EvalRoCommand;
+
+impl Command for EvalRoCommand {
+    fn name(&self) -> &'static str {
+        "EVAL_RO"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::SCRIPT | CommandFlags::READONLY | CommandFlags::NONDETERMINISTIC
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Err(CommandError::Internal {
+            message: "EVAL_RO should be handled by connection handler".to_string(),
+        })
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        EvalCommand.keys(args)
+    }
+}
+
+/// EVALSHA_RO command - execute a cached Lua script by SHA in read-only mode.
+///
+/// EVALSHA_RO sha1 numkeys [key ...] [arg ...]
+pub struct EvalshaRoCommand;
+
+impl Command for EvalshaRoCommand {
+    fn name(&self) -> &'static str {
+        "EVALSHA_RO"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::SCRIPT | CommandFlags::READONLY | CommandFlags::NONDETERMINISTIC
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Err(CommandError::Internal {
+            message: "EVALSHA_RO should be handled by connection handler".to_string(),
+        })
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        EvalshaCommand.keys(args)
+    }
+}
+
 /// SCRIPT command - manage Lua scripts.
 ///
 /// Subcommands:

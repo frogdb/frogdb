@@ -134,22 +134,22 @@ impl ShardWorker {
                         }
 
                         // Scripting message handlers
-                        ShardMessage::EvalScript { script_source, keys, argv, conn_id, protocol_version, response_tx } => {
+                        ShardMessage::EvalScript { script_source, keys, argv, conn_id, protocol_version, read_only, response_tx } => {
                             // Check if this connection can execute during continuation lock
                             if let Err(err) = self.can_execute_during_lock(conn_id) {
                                 let _ = response_tx.send(err);
                                 continue;
                             }
-                            let response = self.handle_eval_script(&script_source, &keys, &argv, conn_id, protocol_version);
+                            let response = self.handle_eval_script(&script_source, &keys, &argv, conn_id, protocol_version, read_only);
                             let _ = response_tx.send(response);
                         }
-                        ShardMessage::EvalScriptSha { script_sha, keys, argv, conn_id, protocol_version, response_tx } => {
+                        ShardMessage::EvalScriptSha { script_sha, keys, argv, conn_id, protocol_version, read_only, response_tx } => {
                             // Check if this connection can execute during continuation lock
                             if let Err(err) = self.can_execute_during_lock(conn_id) {
                                 let _ = response_tx.send(err);
                                 continue;
                             }
-                            let response = self.handle_evalsha(&script_sha, &keys, &argv, conn_id, protocol_version);
+                            let response = self.handle_evalsha(&script_sha, &keys, &argv, conn_id, protocol_version, read_only);
                             let _ = response_tx.send(response);
                         }
                         ShardMessage::ScriptLoad { script_source, response_tx } => {

@@ -31,6 +31,8 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Scripting commands
     registry.register(crate::commands::scripting::EvalCommand);
     registry.register(crate::commands::scripting::EvalshaCommand);
+    registry.register(crate::commands::scripting::EvalRoCommand);
+    registry.register(crate::commands::scripting::EvalshaRoCommand);
     registry.register(crate::commands::scripting::ScriptCommand);
 
     // Server commands

@@ -9,7 +9,7 @@ use crate::store::Store;
 use super::worker::ShardWorker;
 
 impl ShardWorker {
-    /// Handle EVAL - execute a Lua script.
+    /// Handle EVAL / EVAL_RO - execute a Lua script.
     pub(crate) fn handle_eval_script(
         &mut self,
         script_source: &Bytes,
@@ -17,6 +17,7 @@ impl ShardWorker {
         argv: &[Bytes],
         conn_id: u64,
         protocol_version: ProtocolVersion,
+        read_only: bool,
     ) -> Response {
         let start = Instant::now();
         let shard_label = self.identity.shard_id.to_string();
@@ -57,7 +58,7 @@ impl ShardWorker {
             self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
-        let result = executor.eval(script_source, keys, argv, &mut ctx, &self.registry);
+        let result = executor.eval(script_source, keys, argv, &mut ctx, &self.registry, read_only);
         let elapsed = start.elapsed().as_secs_f64();
 
         // Record metrics
@@ -85,7 +86,7 @@ impl ShardWorker {
         }
     }
 
-    /// Handle EVALSHA - execute a cached Lua script by SHA.
+    /// Handle EVALSHA / EVALSHA_RO - execute a cached Lua script by SHA.
     pub(crate) fn handle_evalsha(
         &mut self,
         script_sha: &Bytes,
@@ -93,6 +94,7 @@ impl ShardWorker {
         argv: &[Bytes],
         conn_id: u64,
         protocol_version: ProtocolVersion,
+        read_only: bool,
     ) -> Response {
         let start = Instant::now();
         let shard_label = self.identity.shard_id.to_string();
@@ -126,7 +128,7 @@ impl ShardWorker {
             self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
-        let result = executor.evalsha(script_sha, keys, argv, &mut ctx, &self.registry);
+        let result = executor.evalsha(script_sha, keys, argv, &mut ctx, &self.registry, read_only);
         let elapsed = start.elapsed().as_secs_f64();
 
         // Record metrics based on result

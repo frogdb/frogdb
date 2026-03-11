@@ -133,7 +133,6 @@ async fn clients_with_syntax_errors_get_immediate_response_during_pause() {
 }
 
 #[tokio::test]
-#[ignore = "known FrogDB behavior: CLIENT PAUSE inside MULTI executes immediately (not queued)"]
 async fn pause_starts_at_end_of_transaction() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -170,7 +169,6 @@ async fn unpause_with_no_pause_active_is_ok() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "known FrogDB bug: EVAL with write commands not blocked by PAUSE WRITE"]
 async fn scripts_blocked_by_pause_write() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -184,7 +182,12 @@ async fn scripts_blocked_by_pause_write() {
 
     // EVAL with write commands should be blocked
     client
-        .send_only(&["EVAL", "return redis.call('set','foo','bar')", "0"])
+        .send_only(&[
+            "EVAL",
+            "return redis.call('set',KEYS[1],'bar')",
+            "1",
+            "foo",
+        ])
         .await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -202,7 +205,6 @@ async fn scripts_blocked_by_pause_write() {
 }
 
 #[tokio::test]
-#[ignore = "EVAL_RO command not yet implemented in FrogDB"]
 async fn ro_scripts_not_blocked_by_pause_write() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -295,7 +297,6 @@ async fn new_pause_time_preserved_over_smaller() {
 }
 
 #[tokio::test]
-#[ignore = "known FrogDB bug: write commands not correctly identified during WRITE pause"]
 async fn write_commands_paused_by_write_mode() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -324,7 +325,6 @@ async fn write_commands_paused_by_write_mode() {
 }
 
 #[tokio::test]
-#[ignore = "known FrogDB bug: special commands (PFCOUNT, PUBLISH) not correctly paused by WRITE mode"]
 async fn special_commands_paused_by_write_pfcount_publish() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;

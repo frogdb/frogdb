@@ -59,6 +59,7 @@ impl ScriptExecutor {
         argv: &[Bytes],
         ctx: &mut CommandContext,
         registry: &CommandRegistry,
+        read_only: bool,
     ) -> Result<Response, ScriptError> {
         // Check if already running
         if self.running.load(Ordering::Relaxed) {
@@ -69,7 +70,7 @@ impl ScriptExecutor {
         let sha = self.cache.load(Bytes::copy_from_slice(source));
 
         // Execute
-        self.execute_script(source, &sha, keys, argv, ctx, registry)
+        self.execute_script(source, &sha, keys, argv, ctx, registry, read_only)
     }
 
     /// Execute a script by SHA.
@@ -80,6 +81,7 @@ impl ScriptExecutor {
         argv: &[Bytes],
         ctx: &mut CommandContext,
         registry: &CommandRegistry,
+        read_only: bool,
     ) -> Result<Response, ScriptError> {
         // Check if already running
         if self.running.load(Ordering::Relaxed) {
@@ -94,7 +96,7 @@ impl ScriptExecutor {
         let source = script.source.clone();
 
         // Execute
-        self.execute_script(&source, &sha, keys, argv, ctx, registry)
+        self.execute_script(&source, &sha, keys, argv, ctx, registry, read_only)
     }
 
     /// Execute a script.
@@ -106,6 +108,7 @@ impl ScriptExecutor {
         argv: &[Bytes],
         ctx: &mut CommandContext,
         registry: &CommandRegistry,
+        read_only: bool,
     ) -> Result<Response, ScriptError> {
         let script_sha = sha_to_hex(sha);
         let start_time = Instant::now();
@@ -149,6 +152,16 @@ impl ScriptExecutor {
 
         // Execute the script
         let result = self.vm.execute(source);
+
+        // Check for read-only violations
+        if read_only && self.vm.has_writes() {
+            self.vm.clear_command_context();
+            self.vm.cleanup_execution();
+            self.running.store(false, Ordering::Relaxed);
+            return Err(ScriptError::Runtime(
+                "Write commands are not allowed from read-only scripts".to_string(),
+            ));
+        }
 
         // Cleanup - clear context BEFORE cleanup_execution
         self.vm.clear_command_context();

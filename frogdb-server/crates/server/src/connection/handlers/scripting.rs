@@ -23,8 +23,8 @@ use crate::connection::{ConnectionHandler, next_txid};
 // ============================================================================
 
 impl ConnectionHandler {
-    /// Handle EVAL command.
-    pub(crate) async fn handle_eval(&self, args: &[Bytes]) -> Response {
+    /// Handle EVAL / EVAL_RO command.
+    pub(crate) async fn handle_eval(&self, args: &[Bytes], read_only: bool) -> Response {
         if args.len() < 2 {
             return Response::error("ERR wrong number of arguments for 'eval' command");
         }
@@ -52,7 +52,7 @@ impl ConnectionHandler {
         if keys.is_empty() {
             // No keys -> single shard (shard 0)
             return self
-                .execute_single_shard_script(script_source, keys, argv, 0)
+                .execute_single_shard_script(script_source, keys, argv, 0, read_only)
                 .await;
         }
 
@@ -66,11 +66,11 @@ impl ConnectionHandler {
 
         if shards.len() == 1 {
             // Single shard - use simple path
-            self.execute_single_shard_script(script_source, keys, argv, shards[0])
+            self.execute_single_shard_script(script_source, keys, argv, shards[0], read_only)
                 .await
         } else if self.allow_cross_slot {
             // Cross-shard script - use VLL continuation locks
-            self.execute_cross_shard_script(script_source, keys, argv, shards)
+            self.execute_cross_shard_script(script_source, keys, argv, shards, read_only)
                 .await
         } else {
             // Cross-slot not allowed
@@ -85,6 +85,7 @@ impl ConnectionHandler {
         keys: Vec<Bytes>,
         argv: Vec<Bytes>,
         shard_id: usize,
+        read_only: bool,
     ) -> Response {
         let (response_tx, response_rx) = oneshot::channel();
         let msg = ShardMessage::EvalScript {
@@ -93,6 +94,7 @@ impl ConnectionHandler {
             argv,
             conn_id: self.state.id,
             protocol_version: self.state.protocol_version,
+            read_only,
             response_tx,
         };
 
@@ -117,6 +119,7 @@ impl ConnectionHandler {
         keys: Vec<Bytes>,
         argv: Vec<Bytes>,
         shards: Vec<usize>, // Already sorted and deduplicated
+        read_only: bool,
     ) -> Response {
         use std::time::Duration;
 
@@ -193,6 +196,7 @@ impl ConnectionHandler {
             argv,
             conn_id: self.state.id,
             protocol_version: self.state.protocol_version,
+            read_only,
             response_tx,
         };
 
@@ -213,8 +217,8 @@ impl ConnectionHandler {
         response
     }
 
-    /// Handle EVALSHA command.
-    pub(crate) async fn handle_evalsha(&self, args: &[Bytes]) -> Response {
+    /// Handle EVALSHA / EVALSHA_RO command.
+    pub(crate) async fn handle_evalsha(&self, args: &[Bytes], read_only: bool) -> Response {
         if args.len() < 2 {
             return Response::error("ERR wrong number of arguments for 'evalsha' command");
         }
@@ -242,7 +246,7 @@ impl ConnectionHandler {
         if keys.is_empty() {
             // No keys -> single shard (shard 0)
             return self
-                .execute_single_shard_script_sha(script_sha, keys, argv, 0)
+                .execute_single_shard_script_sha(script_sha, keys, argv, 0, read_only)
                 .await;
         }
 
@@ -256,11 +260,11 @@ impl ConnectionHandler {
 
         if shards.len() == 1 {
             // Single shard - use simple path
-            self.execute_single_shard_script_sha(script_sha, keys, argv, shards[0])
+            self.execute_single_shard_script_sha(script_sha, keys, argv, shards[0], read_only)
                 .await
         } else if self.allow_cross_slot {
             // Cross-shard script - use VLL continuation locks
-            self.execute_cross_shard_script_sha(script_sha, keys, argv, shards)
+            self.execute_cross_shard_script_sha(script_sha, keys, argv, shards, read_only)
                 .await
         } else {
             // Cross-slot not allowed
@@ -275,6 +279,7 @@ impl ConnectionHandler {
         keys: Vec<Bytes>,
         argv: Vec<Bytes>,
         shard_id: usize,
+        read_only: bool,
     ) -> Response {
         let (response_tx, response_rx) = oneshot::channel();
         let msg = ShardMessage::EvalScriptSha {
@@ -283,6 +288,7 @@ impl ConnectionHandler {
             argv,
             conn_id: self.state.id,
             protocol_version: self.state.protocol_version,
+            read_only,
             response_tx,
         };
 
@@ -303,6 +309,7 @@ impl ConnectionHandler {
         keys: Vec<Bytes>,
         argv: Vec<Bytes>,
         shards: Vec<usize>, // Already sorted and deduplicated
+        read_only: bool,
     ) -> Response {
         use std::time::Duration;
 
@@ -373,6 +380,7 @@ impl ConnectionHandler {
             argv,
             conn_id: self.state.id,
             protocol_version: self.state.protocol_version,
+            read_only,
             response_tx,
         };
 

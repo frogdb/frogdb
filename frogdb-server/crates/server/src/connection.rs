@@ -619,9 +619,6 @@ impl ConnectionHandler {
                 ));
         }
 
-        // Wait if server is paused (for non-exempt commands)
-        self.wait_if_paused(&cmd_name).await;
-
         // Start timing for both metrics and slowlog (reuse captured timestamp)
         let timer = frogdb_telemetry::CommandTimer::with_start_time(
             now,
@@ -1057,12 +1054,20 @@ impl ConnectionHandler {
 
     /// Wait if the server is paused (CLIENT PAUSE).
     /// This queues commands (not drops them) by blocking until pause ends.
-    async fn wait_if_paused(&self, cmd_name: &str) {
-        // Get command flags to determine if this is a write command
-        let is_write_command = match self.registry.get(cmd_name) {
-            Some(handler) => handler.flags().contains(CommandFlags::WRITE),
-            None => false, // Unknown commands treated as non-write
-        };
+    ///
+    /// Called from `route_and_execute_with_transaction` after transaction-control
+    /// dispatch and transaction queuing, so it only blocks commands outside MULTI.
+    pub(crate) async fn wait_if_paused(&self, cmd_name: &str) {
+        // Get command flags to determine if this is a write/script command
+        let flags = self
+            .registry
+            .get(cmd_name)
+            .map(|h| h.flags())
+            .unwrap_or(CommandFlags::empty());
+
+        let is_write_command = flags.contains(CommandFlags::WRITE);
+        let is_script_command = flags.contains(CommandFlags::SCRIPT);
+        let is_readonly_script = is_script_command && flags.contains(CommandFlags::READONLY);
 
         // Certain commands are always exempt from pause
         let is_exempt = matches!(
@@ -1074,6 +1079,13 @@ impl ConnectionHandler {
             return;
         }
 
+        // For PAUSE WRITE: block writes, scripts (conservatively), and special
+        // commands that replicate or have write side-effects. Read-only script
+        // variants (EVAL_RO, EVALSHA_RO, FCALL_RO) are exempt.
+        let is_write_for_pause = is_write_command
+            || (is_script_command && !is_readonly_script)
+            || matches!(cmd_name, "PFCOUNT" | "PUBLISH" | "SPUBLISH");
+
         // Check pause state and wait if necessary
         loop {
             match self.client_registry.check_pause() {
@@ -1081,7 +1093,7 @@ impl ConnectionHandler {
                     // All commands are paused
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                Some(PauseMode::Write) if is_write_command => {
+                Some(PauseMode::Write) if is_write_for_pause => {
                     // Write commands are paused
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
