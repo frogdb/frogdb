@@ -10,6 +10,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, ServerWideOp,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -70,6 +71,10 @@ impl Command for FlushdbCommand {
         ExecutionStrategy::ServerWide(ServerWideOp::FlushDb)
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::NoOp
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Parse optional ASYNC/SYNC argument
         // Note: We only support SYNC for now
@@ -117,6 +122,10 @@ impl Command for FlushallCommand {
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide(ServerWideOp::FlushAll)
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::NoOp
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
