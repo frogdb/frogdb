@@ -1,6 +1,6 @@
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
-use frogdb_test_harness::server::TestServer;
+use frogdb_test_harness::server::{TestServer, TestServerConfig};
 
 // ---------------------------------------------------------------------------
 // Basic MULTI / EXEC / DISCARD
@@ -536,10 +536,36 @@ async fn blocking_commands_ignore_timeout_in_multi() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "needs CONFIG SET maxmemory support"]
 async fn exec_fails_with_queuing_error_oom() {
-    // CONFIG SET maxmemory 1 → then MULTI with SET → EXEC should return EXECABORT
-    todo!()
+    // Use single shard to avoid maxmemory / num_shards rounding to 0
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Pre-populate so the store has some memory usage
+    assert_ok(&client.command(&["SET", "x", "hello"]).await);
+
+    // Set maxmemory to 1 byte — any write should be rejected
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "1"]).await);
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    let r = client.command(&["SET", "y", "world"]).await;
+    assert!(
+        matches!(&r, Response::Simple(s) if s == "QUEUED"),
+        "SET inside MULTI should queue, got {r:?}"
+    );
+
+    // EXEC should return the OOM error for the SET command
+    let resp = client.command(&["EXEC"]).await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 1);
+    assert_error_prefix(&results[0], "OOM");
+
+    // Clean up
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "0"]).await);
 }
 
 #[tokio::test]
@@ -568,9 +594,25 @@ async fn flushdb_while_watching_stale_keys_should_not_fail_exec() {
 }
 
 #[tokio::test]
-#[ignore = "needs CONFIG SET maxmemory support"]
 async fn discard_should_not_fail_during_oom() {
-    todo!()
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["SET", "x", "hello"]).await);
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "1"]).await);
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["SET", "y", "world"]).await;
+
+    // DISCARD should always succeed, even during OOM
+    assert_ok(&client.command(&["DISCARD"]).await);
+
+    // Clean up
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "0"]).await);
 }
 
 #[tokio::test]
@@ -598,7 +640,33 @@ async fn just_exec_and_script_timeout() {
 }
 
 #[tokio::test]
-#[ignore = "needs CONFIG SET maxmemory support"]
 async fn exec_with_only_read_commands_not_rejected_when_oom() {
-    todo!()
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Pre-populate a key before going OOM
+    assert_ok(&client.command(&["SET", "x", "hello"]).await);
+
+    // Set maxmemory to 1 byte to trigger OOM
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "1"]).await);
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    let r = client.command(&["GET", "x"]).await;
+    assert!(
+        matches!(&r, Response::Simple(s) if s == "QUEUED"),
+        "GET inside MULTI should queue, got {r:?}"
+    );
+
+    // EXEC with only read commands should succeed even during OOM
+    let resp = client.command(&["EXEC"]).await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 1);
+    assert_bulk_eq(&results[0], b"hello");
+
+    // Clean up
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "0"]).await);
 }
