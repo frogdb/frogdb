@@ -120,11 +120,13 @@ impl ConnectionHandler {
             }
         }
 
-        // Get target shard
+        // Get target shard. If no command keys determined a target, fall back to
+        // the watched-key shard (watches are all same-slot, so at most one shard).
+        let watched_shard = watches.first().map(|(key, _)| shard_for_key(key, self.num_shards));
         let target_shard = match &self.state.transaction.target {
             TransactionTarget::None => {
-                // No keys in any command - execute on local shard
-                self.shard_id
+                // No keys in any command - prefer watched shard, then local shard
+                watched_shard.unwrap_or(self.shard_id)
             }
             TransactionTarget::Single(shard) => *shard,
             TransactionTarget::Multi(_) => {

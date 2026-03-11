@@ -449,13 +449,9 @@ impl ConnectionHandler {
         // If in transaction mode, queue the command instead of executing.
         // This must happen BEFORE connection-level dispatch so that commands like
         // CLIENT PAUSE, EVAL, etc. are queued during MULTI (not executed immediately).
+        // Blocking commands (BLPOP, BRPOP, etc.) are also queued — at EXEC time they
+        // execute with timeout=0 (non-blocking), matching Redis semantics.
         if self.state.transaction.queue.is_some() {
-            // Check if it's a blocking command - not allowed in MULTI
-            if self.is_blocking_command(cmd_name) {
-                return vec![Response::error(
-                    "ERR Blocking commands are not allowed inside a transaction",
-                )];
-            }
             return vec![self.queue_command(cmd)];
         }
 

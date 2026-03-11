@@ -132,7 +132,6 @@ async fn after_exec_abort_client_multi_state_cleared() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "known FrogDB bug: WATCH on existing key + no modification → EXEC incorrectly returns nil"]
 async fn exec_works_on_unwatched_key_not_modified() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -234,7 +233,6 @@ async fn exec_fail_on_watched_key_modified_by_sort_store() {
 }
 
 #[tokio::test]
-#[ignore = "known FrogDB bug: WATCH on existing key + no modification → EXEC incorrectly returns nil"]
 async fn after_successful_exec_key_no_longer_watched() {
     let server = TestServer::start_standalone().await;
     let mut c1 = server.connect().await;
@@ -393,7 +391,6 @@ async fn watch_considers_expire_on_watched_key() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "known FrogDB bug: FLUSHALL does not dirty watched keys — EXEC returns non-nil"]
 async fn flushall_touches_watched_keys() {
     let server = TestServer::start_standalone().await;
     let mut c1 = server.connect().await;
@@ -439,7 +436,6 @@ async fn flushall_does_not_touch_non_affected_keys() {
 }
 
 #[tokio::test]
-#[ignore = "known FrogDB bug: FLUSHDB does not dirty watched keys — EXEC returns non-nil"]
 async fn flushdb_touches_watched_keys() {
     let server = TestServer::start_standalone().await;
     let mut c1 = server.connect().await;
@@ -484,18 +480,17 @@ async fn flushdb_does_not_touch_unaffected_watched_keys() {
 }
 
 #[tokio::test]
-#[ignore = "known FrogDB bug: FLUSHALL does not dirty watched keys for multiple watchers"]
 async fn flushall_watching_several_keys() {
     let server = TestServer::start_standalone().await;
     let mut c1 = server.connect().await;
     let mut c2 = server.connect().await;
 
     for i in 1..=5 {
-        c1.command(&["SET", &format!("key{i}"), &i.to_string()])
+        c1.command(&["SET", &format!("{{k}}key{i}"), &i.to_string()])
             .await;
     }
     assert_ok(
-        &c1.command(&["WATCH", "key1", "key2", "key3", "key4", "key5"])
+        &c1.command(&["WATCH", "{k}key1", "{k}key2", "{k}key3", "{k}key4", "{k}key5"])
             .await,
     );
 
@@ -517,7 +512,6 @@ async fn flushall_watching_several_keys() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "known FrogDB behavior: blocking commands are rejected inside MULTI (Redis queues them)"]
 async fn blocking_commands_ignore_timeout_in_multi() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

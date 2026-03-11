@@ -1,7 +1,6 @@
 //! Pre-execution checks and validation guards.
 //!
 //! This module handles command pre-checks before routing:
-//! - `is_blocking_command` - Check if command uses blocking execution
 //! - `is_allowed_in_pubsub_mode` - Check if command is allowed in pub/sub mode
 //! - `is_auth_exempt` - Check if command is exempt from authentication
 //! - `validate_channel_access` - ACL channel permission check
@@ -19,16 +18,6 @@ use crate::connection::ConnectionHandler;
 use crate::connection::util::extract_subcommand;
 
 impl ConnectionHandler {
-    /// Check if a command is a blocking command.
-    pub(crate) fn is_blocking_command(&self, cmd_name: &str) -> bool {
-        self.registry.get_entry(cmd_name).is_some_and(|entry| {
-            matches!(
-                entry.execution_strategy(),
-                ExecutionStrategy::Blocking { .. }
-            )
-        })
-    }
-
     /// Check if a command is allowed in pub/sub mode.
     pub(crate) fn is_allowed_in_pubsub_mode(&self, cmd_name: &str) -> bool {
         // PING and QUIT are special cases - always allowed
