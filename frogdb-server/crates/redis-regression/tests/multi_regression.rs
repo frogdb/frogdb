@@ -568,30 +568,6 @@ async fn exec_fails_with_queuing_error_oom() {
     assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "0"]).await);
 }
 
-#[tokio::test]
-#[ignore = "needs DEBUG set-active-expire support"]
-async fn exec_fails_on_lazy_expired_watched_key() {
-    // DEBUG set-active-expire 0 → SET x EX 1 → WATCH x → sleep → MULTI/EXEC
-    todo!()
-}
-
-#[tokio::test]
-#[ignore = "needs DEBUG set-active-expire support"]
-async fn watch_stale_keys_should_not_fail_exec() {
-    todo!()
-}
-
-#[tokio::test]
-#[ignore = "needs DEBUG set-active-expire support"]
-async fn delete_watched_stale_keys_should_not_fail_exec() {
-    todo!()
-}
-
-#[tokio::test]
-#[ignore = "needs DEBUG set-active-expire support"]
-async fn flushdb_while_watching_stale_keys_should_not_fail_exec() {
-    todo!()
-}
 
 #[tokio::test]
 async fn discard_should_not_fail_during_oom() {
