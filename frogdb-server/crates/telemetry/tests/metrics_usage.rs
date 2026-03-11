@@ -16,7 +16,7 @@ use std::process::Command;
 /// This test uses grep to search for metric name strings in the crates/ directory,
 /// excluding the definitions file itself.
 #[test]
-#[ignore = "requires grep and may be slow"]
+#[ignore = "many metrics defined but unused — needs cleanup before enabling"]
 fn all_metrics_are_used() {
     let mut unused = Vec::new();
 

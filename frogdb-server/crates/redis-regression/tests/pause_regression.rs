@@ -234,7 +234,6 @@ async fn may_replicate_commands_rejected_in_ro_scripts() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "known FrogDB bug: old pause-all does not take precedence over new pause-write"]
 async fn old_pause_all_over_new_pause_write() {
     // Redis semantics: PAUSE ALL always takes precedence over PAUSE WRITE.
     // If PAUSE ALL is active and you issue PAUSE WRITE with a shorter timeout,
@@ -265,7 +264,6 @@ async fn old_pause_all_over_new_pause_write() {
 }
 
 #[tokio::test]
-#[ignore = "known FrogDB bug: new pause time not preserved when a smaller pause follows"]
 async fn new_pause_time_preserved_over_smaller() {
     // A PAUSE WRITE 60000 followed by PAUSE WRITE 100 should keep the 60000 timeout.
     let server = TestServer::start_standalone().await;
