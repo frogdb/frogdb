@@ -8,3 +8,24 @@ fail-fast = false
 # so high parallelism exhausts the pool (EADDRNOTAVAIL). Cap at 8 threads
 # to keep steady-state port usage well under the limit.
 test-threads = 8
+
+# Cluster tests spin up multi-node Raft clusters (3-7 nodes each) that are
+# CPU- and port-intensive. Limit concurrency so they don't starve each other
+# or lighter tests for resources.
+[test-groups.cluster]
+max-threads = 2
+
+# Cluster integration tests need 5-80s solo and even longer under parallel
+# load. Give them 30s slow / 120s hard kill, cap concurrency via test group,
+# and allow retries for transient resource-contention failures.
+[[profile.default.overrides]]
+filter = "test(integration_cluster::)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+test-group = "cluster"
+retries = 2
+
+# Replication tests also spin up multi-server topologies and can exceed the
+# default 15s timeout under load.
+[[profile.default.overrides]]
+filter = "test(integration_replication::)"
+slow-timeout = { period = "15s", terminate-after = 3 }
