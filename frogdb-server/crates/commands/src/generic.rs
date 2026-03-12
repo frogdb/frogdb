@@ -380,29 +380,28 @@ impl Command for ObjectCommand {
                 }
             }
             b"FREQ" => {
-                // LFU frequency counter (placeholder - always returns 0)
                 if args.len() < 2 {
                     return Err(CommandError::WrongArity { command: "object" });
                 }
                 let key = &args[1];
 
-                if ctx.store.contains(key) {
-                    Ok(Response::Integer(0))
-                } else {
-                    Ok(Response::null())
+                match ctx.store.get_metadata(key) {
+                    Some(meta) => Ok(Response::Integer(meta.lfu_counter as i64)),
+                    None => Ok(Response::null()),
                 }
             }
             b"IDLETIME" => {
-                // Return 0 for now (we don't track idle time accurately yet)
                 if args.len() < 2 {
                     return Err(CommandError::WrongArity { command: "object" });
                 }
                 let key = &args[1];
 
-                if ctx.store.contains(key) {
-                    Ok(Response::Integer(0))
-                } else {
-                    Ok(Response::null())
+                match ctx.store.get_metadata(key) {
+                    Some(meta) => {
+                        let idle_secs = meta.last_access.elapsed().as_secs();
+                        Ok(Response::Integer(idle_secs as i64))
+                    }
+                    None => Ok(Response::null()),
                 }
             }
             b"REFCOUNT" => {

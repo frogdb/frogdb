@@ -516,7 +516,6 @@ async fn evicted_keys_stat_tracked() {
 }
 
 #[tokio::test]
-#[ignore = "OBJECT IDLETIME always returns 0 (stub)"]
 async fn object_idletime_tracks_lru() {
     let server = start_maxmemory_server().await;
     let mut client = server.connect().await;
@@ -535,7 +534,6 @@ async fn object_idletime_tracks_lru() {
 }
 
 #[tokio::test]
-#[ignore = "OBJECT FREQ always returns 0 (stub)"]
 async fn object_freq_tracks_lfu() {
     let server = start_maxmemory_server().await;
     let mut client = server.connect().await;
