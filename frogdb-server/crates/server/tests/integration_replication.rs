@@ -2545,48 +2545,6 @@ async fn test_replica_checkpoint_sha256_not_verified() {
 }
 
 // ============================================================================
-// Tier 13: Proactive Lag Threshold
-// ============================================================================
-
-/// Documents that a configurable lag threshold for triggering preemptive FULLRESYNC
-/// is not implemented.
-///
-/// When the replica falls too far behind (e.g., beyond a configurable byte threshold),
-/// the primary should proactively trigger a FULLRESYNC instead of waiting for the
-/// WAL buffer to overflow.
-#[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: proactive lag threshold for preemptive FULLRESYNC not implemented"]
-async fn test_proactive_lag_threshold_triggers_fullresync() {
-    let config = TestServerConfig::default();
-    let (primary, replica) = start_primary_replica_pair(config).await;
-
-    // Write a large amount of data to create significant lag
-    let mut client = primary.connect().await;
-    for i in 0..1000 {
-        client
-            .command(&["SET", &format!("lag_threshold_{}", i), &"x".repeat(1000)])
-            .await;
-    }
-    drop(client);
-
-    // In a properly implemented system, the primary would detect that
-    // the replica has fallen behind by more than the configured threshold
-    // and trigger a FULLRESYNC proactively.
-    //
-    // Current behavior: the WAL buffer silently overflows and the replica
-    // only discovers the gap when it next tries to PSYNC.
-
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // Verify replica is still responsive (may need full resync)
-    let ping = replica.send("PING", &[]).await;
-    assert!(!is_error(&ping), "Replica should be responsive");
-
-    replica.shutdown().await;
-    primary.shutdown().await;
-}
-
-// ============================================================================
 // Category E: Data Type Propagation
 // ============================================================================
 

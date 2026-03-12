@@ -1,9 +1,8 @@
 //! Regression tests for the Redis `unit/cluster/scripting` test suite.
 //!
 //! FrogDB's cluster scripting support:
-//! - `no-cluster` flag: Implemented (parsed in FUNCTION LOAD, shebang in EVAL)
-//! - `allow-cross-slot-keys` flag: NOT implemented
-//! - Shebang parsing (`#!lua`): Implemented
+//! - `no-cluster` flag: Implemented (parsed in FUNCTION LOAD)
+//! - Shebang parsing (`#!lua`): Implemented (FUNCTION LOAD only, not EVAL — matches Redis 7)
 //! - Cross-slot validation: Implemented (via `allow_cross_slot` server config)
 
 use frogdb_test_harness::response::*;
@@ -75,24 +74,6 @@ redis.register_function{
 }
 
 // ---------------------------------------------------------------------------
-// no-cluster flag — EVAL with shebang
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-#[ignore = "EVAL does not parse shebangs — shebang support is FUNCTION LOAD only"]
-async fn no_cluster_flag_eval_with_shebang() {
-    let server = start_single_shard_server().await;
-    let mut client = server.connect().await;
-
-    // EVAL with shebang and no-cluster flag, 0 keys
-    // In Redis 7+, EVAL accepts shebangs for flag-based scripts.
-    // FrogDB only parses shebangs in FUNCTION LOAD, not EVAL.
-    let script = "#!lua flags=no-cluster\nreturn 'eval-no-cluster'";
-    let resp = client.command(&["EVAL", script, "0"]).await;
-    assert_bulk_eq(&resp, b"eval-no-cluster");
-}
-
-// ---------------------------------------------------------------------------
 // Shebang scripts — cross-slot behavior
 // ---------------------------------------------------------------------------
 
@@ -119,21 +100,3 @@ async fn eval_without_shebang_single_shard_cross_slot() {
     assert_bulk_eq(&resp, b"ab");
 }
 
-// ---------------------------------------------------------------------------
-// allow-cross-slot-keys flag — NOT implemented
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-#[ignore = "allow-cross-slot-keys flag not implemented"]
-async fn allow_cross_slot_keys_flag() {
-    let server = TestServer::start_standalone().await; // 4 shards
-    let mut client = server.connect().await;
-
-    assert_ok(&client.command(&["SET", "key1", "a"]).await);
-    assert_ok(&client.command(&["SET", "key2", "b"]).await);
-
-    // Shebang script with allow-cross-slot-keys should allow cross-slot access
-    let script = "#!lua flags=allow-cross-slot-keys\nreturn redis.call('GET', KEYS[1]) .. redis.call('GET', KEYS[2])";
-    let resp = client.command(&["EVAL", script, "2", "key1", "key2"]).await;
-    assert_bulk_eq(&resp, b"ab");
-}

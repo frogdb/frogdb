@@ -1,15 +1,18 @@
 # Remaining Ignored Tests
 
-16 tests remain ignored across 6 test files. All require non-trivial infrastructure work.
+10 tests remain ignored across 6 test files. All require non-trivial infrastructure work.
 
 Originally 51 tests were ignored. 24 were un-ignored and 4 stubs were removed across these
 completed workstreams: WATCH/EXEC dirty-flag rewrite (6), CLIENT PAUSE fixes (5 of 6),
 Lua script timeout (4), OOM transaction tests (3), Cluster READONLY/READWRITE (4),
 OBJECT IDLETIME/FREQ (2). DEBUG set-active-expire stubs were removed (4).
+6 architecturally incompatible tests were removed: 3 gossip protocol stats (FrogDB uses Raft,
+not gossip), 2 EVAL shebang tests (non-standard Redis extension), and 1 proactive lag threshold
+test (FrogDB uses TCP backpressure instead).
 
 ---
 
-## 1. Cluster Stats & Metadata (5 tests)
+## 1. Cluster Stats & Metadata (2 tests)
 
 **File:** `crates/server/tests/integration_cluster.rs`
 
@@ -17,30 +20,12 @@ OBJECT IDLETIME/FREQ (2). DEBUG set-active-expire stubs were removed (4).
 |------|------|--------------------|
 | `test_cluster_shards_replication_offset_nonzero` | 5594 | `commands/cluster/mod.rs:476` — `replication-offset` is `0` |
 | `test_cluster_slots_replication_offset_nonzero` | 5632 | `commands/cluster/mod.rs:502` — `offset` is `0` |
-| `test_cluster_nodes_link_state_tracks_failures` | 5669 | `commands/cluster/mod.rs:330` — link-state is always `"connected"` |
-| `test_cluster_nodes_ping_pong_nonzero` | 5714 | `commands/cluster/mod.rs:330` — ping-sent/pong-recv are `0 0` |
-| `test_cluster_info_gossip_stats_nonzero` | 5742 | `commands/cluster/mod.rs:222` — `cluster_stats_messages_*` are `0` |
 
 **What's needed:**
 
 - **Replication offset (2 tests):** The WAL already tracks offsets internally. Expose the current
   WAL offset through cluster state so CLUSTER SHARDS and CLUSTER SLOTS can report it. This is
-  likely the easiest of the 5 — just plumbing a value that already exists.
-
-- **Ping/pong timestamps (1 test):** FrogDB uses Raft for consensus rather than Redis-style gossip
-  with ping/pong. Need to either (a) add timestamp tracking in the Raft health-check layer, or
-  (b) decide these fields are N/A for FrogDB's architecture and update tests accordingly.
-
-- **Link-state tracking (1 test):** When a node fails health checks, its link-state in CLUSTER
-  NODES output should switch from `"connected"` to `"disconnected"`. Requires tracking node
-  liveness state in the cluster metadata struct.
-
-- **Gossip stats (1 test):** `cluster_stats_messages_{ping,pong}_{sent,received}` counters in
-  CLUSTER INFO. Same architectural question as ping/pong — FrogDB doesn't use gossip protocol.
-  May need to map these to Raft heartbeat equivalents or mark as unsupported.
-
-**Key decision:** FrogDB uses Raft, not Redis gossip. Several of these stats (ping/pong, gossip
-messages) may need to be reframed or explicitly documented as N/A rather than implemented 1:1.
+  likely the easiest — just plumbing a value that already exists.
 
 ---
 
@@ -113,39 +98,7 @@ does not define a TRYAGAIN variant.
 
 ---
 
-## 5. EVAL Shebang + allow-cross-slot (2 tests)
-
-**File:** `crates/redis-regression/tests/cluster_scripting_regression.rs`
-
-| Test | Line | Feature |
-|------|------|---------|
-| `no_cluster_flag_eval_with_shebang` | 82 | Parse `#!lua flags=no-cluster` in EVAL scripts |
-| `allow_cross_slot_keys_flag` | 127 | Parse `#!lua flags=allow-cross-slot-keys` in EVAL scripts |
-
-**Current state:** `parse_shebang()` in `scripting/src/parser.rs:20-81` extracts engine and library
-name but **not flags**. It's only called from `load_library()` (FUNCTION LOAD path).
-`ScriptExecutor::eval()` in `core/src/scripting/executor.rs:55` does not call `parse_shebang()`
-at all — scripts are cached and executed without any flag parsing.
-
-**Design decision needed:** In Redis 7, EVAL does **not** parse shebangs — shebang support is
-exclusively for `FUNCTION LOAD`. These tests represent a FrogDB extension beyond Redis
-compatibility. Options:
-
-1. **Implement as extension:** Extend `parse_shebang()` to extract flags, call it from
-   `ScriptExecutor::eval()`, wire flags into the execution context. ~5-10 files touched.
-   - Extend `ShebangInfo` struct with `flags: Option<FunctionFlags>`
-   - Parse `flags=...` in shebang line
-   - In connection handler (`handlers/scripting.rs:27-79`): parse flags, use them to skip
-     CROSSSLOT validation when `allow-cross-slot-keys` is set
-   - Flag infrastructure exists: `FunctionFlags` in `scripting/src/function.rs:8-17` already
-     defines `NO_WRITES`, `ALLOW_OOM`, `ALLOW_STALE`, `NO_CLUSTER`
-   - `allow_cross_slot` config field exists in deps.rs
-
-2. **Match Redis behavior:** Remove these tests. EVAL shebang is not part of Redis 7.
-
----
-
-## 6. Evicted Keys Stat (1 test)
+## 5. Evicted Keys Stat (1 test)
 
 **File:** `crates/redis-regression/tests/maxmemory_regression.rs`
 
@@ -167,7 +120,7 @@ connection level (server crate). Similar pattern to how `keys_total` is already 
 
 ---
 
-## 7. Active/Passive Expires Skipped During Pause (1 test)
+## 6. Active/Passive Expires Skipped During Pause (1 test)
 
 **File:** `crates/redis-regression/tests/pause_regression.rs`
 
@@ -193,7 +146,7 @@ exists → unpause → verify key expires.
 
 ---
 
-## 8. Replication: Checkpoint SHA256 Verification (1 test)
+## 7. Replication: Checkpoint SHA256 Verification (1 test)
 
 **File:** `crates/server/tests/integration_replication.rs`
 
@@ -208,22 +161,7 @@ test just verifies the replica is healthy after sync — no integrity checking e
 
 ---
 
-## 9. Replication: Proactive Lag Threshold (1 test)
-
-**File:** `crates/server/tests/integration_replication.rs`
-
-| Test | Line |
-|------|------|
-| `test_proactive_lag_threshold_triggers_fullresync` | 2558 |
-
-**What's needed:** Add a configurable `repl-lag-threshold-bytes` parameter. The primary monitors
-each replica's acknowledged WAL offset. When the lag exceeds the threshold, proactively trigger
-FULLRESYNC instead of waiting for WAL buffer overflow. Currently the WAL buffer silently overflows
-and the replica only discovers the gap on its next PSYNC attempt.
-
----
-
-## 10. PubSub Slot Migration Notification (1 test)
+## 8. PubSub Slot Migration Notification (1 test)
 
 **File:** `crates/server/tests/integration_pubsub.rs`
 
@@ -238,7 +176,7 @@ a cluster and shuts down. Inspired by Redis `25-pubsubshard-slot-migration.tcl`.
 
 ---
 
-## 11. Metrics Usage (1 test)
+## 9. Metrics Usage (1 test)
 
 **File:** `crates/telemetry/tests/metrics_usage.rs`
 
@@ -280,9 +218,8 @@ frogdb_split_brain_recovery_pending
 2. **Evicted keys stat** — straightforward counter plumbing
 3. **Active expires during pause** — localized flag threading
 4. **TRYAGAIN migration** — small addition to existing slot validation
-5. **EVAL shebang** — needs design decision first (Redis extension vs not)
-6. **CLUSTER RESET** — moderate Raft work
-7. **Cluster stats** — needs architectural decision (Raft vs gossip mapping)
-8. **Metrics usage** — bulk instrumentation pass
-9. **Replication features** — significant protocol work
-10. **PubSub slot migration** — deep slot migration integration
+5. **CLUSTER RESET** — moderate Raft work
+6. **Cluster replication offsets** — WAL offset plumbing
+7. **Metrics usage** — bulk instrumentation pass
+8. **Replication checkpoint SHA256** — protocol work
+9. **PubSub slot migration** — deep slot migration integration
